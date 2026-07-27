@@ -270,6 +270,19 @@ struct BLEUnlockSettings: Codable {
     var turnOffScreen: Bool = false
 }
 
+struct BLEWakeRecoveryPlan: Equatable {
+    let monitoringRestartDelays: [TimeInterval]
+    let unlockRetryDelays: [TimeInterval]
+
+    static func make(isEnabled: Bool, hasMonitoredDevice: Bool) -> BLEWakeRecoveryPlan? {
+        guard isEnabled, hasMonitoredDevice else { return nil }
+        return BLEWakeRecoveryPlan(
+            monitoringRestartDelays: [0, 1, 3, 6, 10],
+            unlockRetryDelays: [1, 3, 6, 10]
+        )
+    }
+}
+
 // MARK: - Model
 
 @MainActor
@@ -308,11 +321,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var activeModeTimer: Timer?
     private var connectionTimer: Timer?
     private var wakeRetryTask: Task<Void, Never>?
+    private var systemWakeRecoveryTask: Task<Void, Never>?
     private var latestRSSIs: [Double] = []
     private let latestN = 5
 
     private var displaySleep = false
     private var systemSleep = false
+    private var recoveringFromSystemSleep = false
     private var manualLock = false
     private var inScreensaver = false
     private var unlockedAt: TimeInterval = 0
@@ -416,6 +431,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         connectionTimer?.invalidate(); connectionTimer = nil
         scanCleanupTimer?.invalidate(); scanCleanupTimer = nil
         deviceRefreshTask?.cancel(); deviceRefreshTask = nil
+        wakeRetryTask?.cancel(); wakeRetryTask = nil
+        systemWakeRecoveryTask?.cancel(); systemWakeRecoveryTask = nil
         centralMgr?.stopScan()
         if let p = monitoredPeripheral { centralMgr?.cancelPeripheralConnection(p) }
         monitoredPeripheral = nil
@@ -423,6 +440,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         lastRSSI = nil
         connected = false
         activeMode = false
+        recoveringFromSystemSleep = false
     }
 
     private func scanForPeripherals() {
@@ -707,7 +725,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private func tryUnlockScreen() {
         guard !manualLock, presence,
               settings.unlockRSSI != Self.unlockDisabled,
-              !systemSleep, !displaySleep else { return }
+              !systemSleep, !displaySleep, !recoveringFromSystemSleep else { return }
 
         if inScreensaver {
             let src = CGEventSource(stateID: .hidSystemState)
@@ -731,14 +749,18 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     func updatePresence(presence: Bool, reason: String) {
         if presence {
             if settings.unlockRSSI != Self.unlockDisabled {
-                if displaySleep && !systemSleep && settings.wakeOnProximity {
+                if displaySleep && !systemSleep && !recoveringFromSystemSleep && settings.wakeOnProximity {
                     bleWakeDisplay()
                     wakeRetryTask?.cancel()
-                    wakeRetryTask = Task {
-                        while !Task.isCancelled {
+                    wakeRetryTask = Task { [weak self] in
+                        // A missing screensDidWake notification must not leave
+                        // an endless user-activity assertion running overnight.
+                        for _ in 0..<10 {
                             try? await Task.sleep(for: .seconds(1))
-                            await MainActor.run { bleWakeDisplay() }
+                            guard !Task.isCancelled, self != nil else { return }
+                            bleWakeDisplay()
                         }
+                        self?.wakeRetryTask = nil
                     }
                 }
                 tryUnlockScreen()
@@ -864,6 +886,96 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
     private var observers: [NSObjectProtocol] = []
 
+    func handleSystemWillSleep() {
+        systemSleep = true
+        recoveringFromSystemSleep = true
+        wakeRetryTask?.cancel(); wakeRetryTask = nil
+        systemWakeRecoveryTask?.cancel(); systemWakeRecoveryTask = nil
+
+        // Run-loop timers become immediately overdue after a long sleep. Stop
+        // them here so they cannot turn a pre-sleep sample into a false wake
+        // decision before CoreBluetooth has produced a fresh RSSI value.
+        activeModeTimer?.invalidate(); activeModeTimer = nil
+        proximityTimer?.invalidate(); proximityTimer = nil
+        signalTimer?.invalidate(); signalTimer = nil
+        connectionTimer?.invalidate(); connectionTimer = nil
+        activeMode = false
+    }
+
+    private func prepareMonitoringForWakeRecovery() {
+        guard settings.isEnabled, monitoredUUID != nil else { return }
+
+        activeModeTimer?.invalidate(); activeModeTimer = nil
+        proximityTimer?.invalidate(); proximityTimer = nil
+        signalTimer?.invalidate(); signalTimer = nil
+        connectionTimer?.invalidate(); connectionTimer = nil
+        latestRSSIs.removeAll()
+
+        // A CBPeripheral or scan that survived ordinary display sleep can be
+        // stale after deep idle. Discard both and wait for a fresh sample.
+        if let peripheral = monitoredPeripheral {
+            centralMgr?.cancelPeripheralConnection(peripheral)
+        }
+        monitoredPeripheral = nil
+        centralMgr?.stopScan()
+        presence = false
+        lastRSSI = nil
+        connected = false
+        activeMode = false
+    }
+
+    private func restartMonitoringAfterWake() {
+        guard settings.isEnabled, let uuid = monitoredUUID else { return }
+        ensureCentralManager()
+        guard let central = centralMgr, central.state == .poweredOn else { return }
+
+        if monitoredPeripheral == nil,
+           let peripheral = central.retrievePeripherals(withIdentifiers: [uuid]).first {
+            monitoredPeripheral = peripheral
+            if !settings.passiveMode {
+                connectMonitoredPeripheral()
+            }
+        }
+
+        // CoreBluetooth can continue reporting isScanning after deep idle even
+        // though no discoveries arrive. A stop/start creates a fresh session.
+        central.stopScan()
+        scanForPeripherals()
+    }
+
+    private func handleSystemDidWake() {
+        systemSleep = false
+        recoveringFromSystemSleep = true
+        guard let plan = BLEWakeRecoveryPlan.make(
+            isEnabled: settings.isEnabled,
+            hasMonitoredDevice: monitoredUUID != nil
+        ) else { return }
+
+        prepareMonitoringForWakeRecovery()
+        systemWakeRecoveryTask?.cancel()
+        systemWakeRecoveryTask = Task { [weak self] in
+            let deadlines = Set(plan.monitoringRestartDelays + plan.unlockRetryDelays).sorted()
+            var previousDeadline: TimeInterval = 0
+
+            for deadline in deadlines {
+                let wait = deadline - previousDeadline
+                if wait > 0 {
+                    try? await Task.sleep(for: .milliseconds(Int64(wait * 1_000)))
+                }
+                guard !Task.isCancelled, let self else { return }
+
+                if plan.monitoringRestartDelays.contains(deadline), self.lastRSSI == nil {
+                    self.restartMonitoringAfterWake()
+                }
+                if plan.unlockRetryDelays.contains(deadline) {
+                    self.tryUnlockScreen()
+                }
+                previousDeadline = deadline
+            }
+            self?.systemWakeRecoveryTask = nil
+        }
+    }
+
     func startObservingSystemState() {
         guard observers.isEmpty else { return }
         let nc = NSWorkspace.shared.notificationCenter
@@ -871,15 +983,15 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         observers.append(nc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.displaySleep = false
+                self?.recoveringFromSystemSleep = false
                 self?.wakeRetryTask?.cancel()
                 self?.tryUnlockScreen()
             }
         })
-        observers.append(nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.systemSleep = true } })
+        observers.append(nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.handleSystemWillSleep() } })
         observers.append(nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.systemSleep = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.tryUnlockScreen() }
+                self?.handleSystemDidWake()
             }
         })
 
