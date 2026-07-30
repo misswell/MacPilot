@@ -1461,8 +1461,7 @@ struct FileCompressionView: View {
     @State private var extensionText = ""
     @State private var folderPendingRemoval: String?
     @State private var showsAutomaticCompressionInfo = false
-    @State private var showsAllCompressedFiles = false
-    @State private var compressedFilesForInspection: [FileCompressionCandidate] = []
+    @State private var compressedFileInspection: CompressedFileInspection?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1508,9 +1507,9 @@ struct FileCompressionView: View {
         } message: { path in
             Text(t("compressionRemoveFolderMessage", path))
         }
-        .sheet(isPresented: $showsAllCompressedFiles) {
+        .sheet(item: $compressedFileInspection) { inspection in
             CompressedFileListSheet(
-                files: compressedFilesForInspection,
+                files: inspection.files,
                 language: appModel.language
             )
         }
@@ -1831,8 +1830,7 @@ struct FileCompressionView: View {
                 if !scan.compressedFiles.isEmpty {
                     Divider()
                     Button {
-                        compressedFilesForInspection = scan.compressedFiles
-                        showsAllCompressedFiles = true
+                        compressedFileInspection = CompressedFileInspection(files: scan.compressedFiles)
                     } label: {
                         HStack(spacing: 7) {
                             Image(systemName: "list.bullet.rectangle.portrait.fill")
@@ -1967,22 +1965,41 @@ struct FileCompressionView: View {
     }
 }
 
+private struct CompressedFileInspection: Identifiable {
+    let id = UUID()
+    let files: [FileCompressionCandidate]
+}
+
 private struct CompressedFileListSheet: View {
+    private enum SortOrder: String, CaseIterable, Identifiable {
+        case logicalSize
+        case allocatedSize
+
+        var id: Self { self }
+    }
+
     let files: [FileCompressionCandidate]
     let language: AppLanguage
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
+    @State private var sortOrder = SortOrder.logicalSize
 
     private var filteredFiles: [FileCompressionCandidate] {
-        guard !searchText.isEmpty else { return files }
-        return files.filter {
+        let matchingFiles = searchText.isEmpty ? files : files.filter {
             $0.displayPath.localizedCaseInsensitiveContains(searchText)
+        }
+        return matchingFiles.sorted { lhs, rhs in
+            let lhsSize = sortOrder == .logicalSize ? lhs.logicalSize : lhs.allocatedSize
+            let rhsSize = sortOrder == .logicalSize ? rhs.logicalSize : rhs.allocatedSize
+            if lhsSize != rhsSize { return lhsSize > rhsSize }
+            return lhs.displayPath.localizedStandardCompare(rhs.displayPath) == .orderedAscending
         }
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        let displayedFiles = filteredFiles
+        return VStack(spacing: 0) {
             HStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10)
@@ -2005,54 +2022,73 @@ private struct CompressedFileListSheet: View {
             }
             .padding(18)
 
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField(t("compressionSearchFiles"), text: $searchText)
-                    .textFieldStyle(.plain)
+            HStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField(t("compressionSearchFiles"), text: $searchText)
+                        .textFieldStyle(.plain)
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 8)
+                .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 9))
+
+                Picker(t("compressionSortBy"), selection: $sortOrder) {
+                    Text(t("compressionSortLogicalSize")).tag(SortOrder.logicalSize)
+                    Text(t("compressionSortActualSize")).tag(SortOrder.allocatedSize)
+                }
+                .pickerStyle(.menu)
+                .fixedSize()
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 8)
-            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 9))
             .padding(.horizontal, 18)
             .padding(.bottom, 12)
 
             Divider()
-            if filteredFiles.isEmpty {
+            if displayedFiles.isEmpty {
                 ContentUnavailableView(
                     t("compressionNoMatchingFiles"),
                     systemImage: "doc.text.magnifyingglass"
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(filteredFiles) { file in
-                    HStack(spacing: 11) {
-                        Image(systemName: "archivebox.fill")
-                            .foregroundStyle(.indigo)
-                            .frame(width: 18)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(file.url.lastPathComponent)
-                                .lineLimit(1)
-                            Text(file.displayPath)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(displayedFiles.enumerated()), id: \.element.id) { index, file in
+                            HStack(spacing: 11) {
+                                Image(systemName: "archivebox.fill")
+                                    .foregroundStyle(.indigo)
+                                    .frame(width: 18)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(file.url.lastPathComponent)
+                                        .lineLimit(1)
+                                    Text(file.displayPath)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Spacer(minLength: 12)
+                                Text(sizeDetail(file))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                Button {
+                                    NSWorkspace.shared.activateFileViewerSelecting([file.url])
+                                } label: {
+                                    Image(systemName: "folder")
+                                }
+                                .buttonStyle(.borderless)
+                                .help(t("revealInFinder"))
+                            }
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 8)
+                            if index < displayedFiles.count - 1 {
+                                Divider().padding(.leading, 47)
+                            }
                         }
-                        Spacer(minLength: 12)
-                        Text(sizeDetail(file))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        Button {
-                            NSWorkspace.shared.activateFileViewerSelecting([file.url])
-                        } label: {
-                            Image(systemName: "folder")
-                        }
-                        .buttonStyle(.borderless)
-                        .help(t("revealInFinder"))
                     }
-                    .padding(.vertical, 3)
                 }
-                .listStyle(.inset(alternatesRowBackgrounds: true))
+                .background(Color(nsColor: .controlBackgroundColor))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(width: 760, height: 520)

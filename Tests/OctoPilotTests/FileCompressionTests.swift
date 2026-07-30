@@ -44,6 +44,8 @@ struct FileCompressionTests {
         #expect(AppText.value("compressionErrorMonitoringUnavailable", language: .english).contains("Folder change monitoring"))
         #expect(AppText.value("compressionViewAllCompressed", language: .simplifiedChinese, 32) == "查看全部 32 个已压缩文件")
         #expect(AppText.value("compressionViewAllCompressed", language: .english, 32) == "View All 32 Compressed Files")
+        #expect(AppText.value("compressionSortLogicalSize", language: .simplifiedChinese) == "逻辑大小（从大到小）")
+        #expect(AppText.value("compressionSortActualSize", language: .english) == "Actual Size (Largest First)")
     }
 
     @Test func selectsOnlyStableMatchingFiles() {
