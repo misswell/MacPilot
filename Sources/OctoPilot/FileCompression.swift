@@ -1266,7 +1266,16 @@ struct FileCompressionView: View {
                 .padding(.vertical, 18)
             }
 
-            if let result = compression.lastResult {
+            if compression.isProcessing {
+                Divider()
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(t(compression.lastActionWasRestore ? "compressionRestoring" : "compressionCompressing"))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+            } else if let result = compression.lastResult {
                 Divider()
                 Label(resultText(result), systemImage: result.failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                     .font(.subheadline.weight(.medium))

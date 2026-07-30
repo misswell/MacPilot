@@ -32,6 +32,10 @@ struct FileCompressionTests {
         #expect(AppText.value("compressionFolderCount", language: .english, 2) == "Monitoring 2 folders")
         #expect(AppText.value("compressionRemoveFolderTitle", language: .simplifiedChinese) == "移除监控文件夹？")
         #expect(AppText.value("compressionRemoveFolderTitle", language: .english) == "Remove Monitored Folder?")
+        #expect(AppText.value("compressionCompressing", language: .simplifiedChinese) == "正在压缩文件…")
+        #expect(AppText.value("compressionRestoring", language: .simplifiedChinese) == "正在恢复文件…")
+        #expect(AppText.value("compressionCompressing", language: .english) == "Compressing files…")
+        #expect(AppText.value("compressionRestoring", language: .english) == "Restoring files…")
     }
 
     @Test func selectsOnlyStableMatchingFiles() {
