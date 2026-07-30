@@ -416,7 +416,23 @@ enum AppText {
         "updateErrorVerification": "更新包未通过版本、开发者签名或 Gatekeeper 验证。",
         "updateErrorLocation": "无法从当前位置自动更新。请先将 OctoPilot 移到可写的“应用程序”文件夹。",
         "updateErrorHelper": "当前 OctoPilot 安装中缺少更新 helper。", "updateErrorNetwork": "网络请求失败：%@",
-        "updateErrorCommand": "准备更新失败：%@"
+        "updateErrorCommand": "准备更新失败：%@",
+        "fileCompression": "存储压缩", "fileCompressionSubtitle": "安全地减少文本类文件的实际磁盘占用，并保留内容、创建时间和修改时间。",
+        "compressionFolder": "监控文件夹", "compressionNoFolder": "尚未选择文件夹", "compressionChooseFolder": "选择文件夹…",
+        "compressionChoose": "选择", "compressionAutomatic": "定期自动压缩", "compressionAutomaticHint": "每 5 分钟扫描一次；只处理已稳定且实际节省达到阈值的文件。",
+        "compressionRules": "压缩规则", "compressionExtensions": "文件后缀", "compressionRecommended": "使用推荐后缀",
+        "compressionApply": "应用", "compressionExtensionsHint": "使用逗号或空格分隔。默认推荐文本、日志与结构化数据文件。",
+        "compressionMinimumSize": "最小文件大小", "compressionStableFor": "保持未修改", "compressionMinimumSavings": "最低节省比例",
+        "compressionMinutesValue": "%d 分钟", "compressionSafetyHint": "自动跳过正在使用的文件、Resource Fork、符号/硬链接、稀疏文件、云端占位文件、应用包和隐藏目录。替换前会校验内容与元数据。",
+        "compressionAnalysis": "空间分析", "compressionScanNow": "立即扫描", "compressionScanPrompt": "选择文件夹并扫描，查看可安全压缩的文件。",
+        "compressionCandidates": "待压缩文件", "compressionAlreadyCompressed": "已压缩文件", "compressionSpaceSaved": "已节省空间",
+        "compressionUses": "实际占用 %@", "compressionLogical": "逻辑大小 %@", "compressionSizeDetail": "逻辑 %@ · 实际 %@", "compressionCompressFiles": "压缩 %d 个文件",
+        "compressionRestoreFiles": "恢复 %d 个文件", "compressionCompressResult": "已压缩 %d 个文件，节省 %@；跳过 %d 个，失败 %d 个。",
+        "compressionRestoreResult": "已恢复 %d 个文件，失败 %d 个。", "compressionFailedFile": "未处理：%@", "compressionRecoveryPreserved": "已保留原文件用于恢复：%@",
+        "compressionErrorNoFolder": "请先选择文件夹。", "compressionErrorFolderUnavailable": "所选文件夹不可用。", "compressionErrorFileSystem": "所选文件夹使用 %@ 文件系统；透明压缩需要 APFS 或 HFS+。",
+        "compressionErrorScan": "无法扫描文件夹：%@", "compressionErrorFileChanged": "文件在扫描后发生了变化。",
+        "compressionErrorUnavailable": "macOS 未能压缩此文件。", "compressionErrorVerification": "压缩副本与原文件校验不一致。",
+        "compressionErrorCommand": "macOS 压缩命令失败：%@", "compressionErrorCoordination": "无法安全协调文件访问：%@", "compressionErrorFileInUse": "文件正被其他进程使用，已跳过。", "compressionErrorReplacement": "无法原子替换原文件。"
     ]
 
     static func value(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
@@ -524,7 +540,23 @@ enum AppText {
             "updateErrorVerification": "The update failed its version, developer signature, or Gatekeeper verification.",
             "updateErrorLocation": "OctoPilot cannot update itself from this location. Move it to a writable Applications folder first.",
             "updateErrorHelper": "The updater helper is missing from this OctoPilot installation.", "updateErrorNetwork": "Network request failed: %@",
-            "updateErrorCommand": "Couldn’t prepare the update: %@"
+            "updateErrorCommand": "Couldn’t prepare the update: %@",
+            "fileCompression": "Storage Compression", "fileCompressionSubtitle": "Safely reduce the disk space used by text-based files while preserving content and visible dates.",
+            "compressionFolder": "Monitored folder", "compressionNoFolder": "No folder selected", "compressionChooseFolder": "Choose Folder…",
+            "compressionChoose": "Choose", "compressionAutomatic": "Compress periodically", "compressionAutomaticHint": "Scans every 5 minutes and only changes stable files that meet the actual savings threshold.",
+            "compressionRules": "Compression Rules", "compressionExtensions": "File extensions", "compressionRecommended": "Use Recommended",
+            "compressionApply": "Apply", "compressionExtensionsHint": "Separate extensions with commas or spaces. The defaults cover text, logs, and structured data.",
+            "compressionMinimumSize": "Minimum file size", "compressionStableFor": "Unmodified for", "compressionMinimumSavings": "Minimum savings",
+            "compressionMinutesValue": "%d min", "compressionSafetyHint": "Skips open files, resource forks, symbolic and hard links, sparse files, cloud placeholders, app bundles, and hidden folders. Content and metadata are verified before replacement.",
+            "compressionAnalysis": "Space Analysis", "compressionScanNow": "Scan Now", "compressionScanPrompt": "Choose a folder and scan it to find files that are safe to compress.",
+            "compressionCandidates": "Ready to compress", "compressionAlreadyCompressed": "Compressed files", "compressionSpaceSaved": "Space saved",
+            "compressionUses": "%@ on disk", "compressionLogical": "%@ logical", "compressionSizeDetail": "%@ logical · %@ on disk", "compressionCompressFiles": "Compress %d Files",
+            "compressionRestoreFiles": "Restore %d Files", "compressionCompressResult": "Compressed %d files and saved %@; skipped %d, failed %d.",
+            "compressionRestoreResult": "Restored %d files; %d failed.", "compressionFailedFile": "Not processed: %@", "compressionRecoveryPreserved": "The original file was preserved for recovery at %@",
+            "compressionErrorNoFolder": "Choose a folder first.", "compressionErrorFolderUnavailable": "The selected folder is unavailable.", "compressionErrorFileSystem": "The selected folder uses %@; filesystem compression requires APFS or HFS+.",
+            "compressionErrorScan": "Could not scan the folder: %@", "compressionErrorFileChanged": "A file changed after it was scanned.",
+            "compressionErrorUnavailable": "macOS could not compress this file.", "compressionErrorVerification": "The compressed copy did not match the original file.",
+            "compressionErrorCommand": "The macOS compression command failed: %@", "compressionErrorCoordination": "The file could not be coordinated safely: %@", "compressionErrorFileInUse": "The file is open in another process and was skipped.", "compressionErrorReplacement": "The original file could not be replaced atomically."
         ]
 }
 
@@ -542,9 +574,10 @@ final class OctoPilotModel: ObservableObject {
         var isLaunchSchedulingEnabled: Bool
         var lastScheduledBootSession: String?
         var bleUnlock: BLEUnlockSettings
+        var fileCompression: FolderCompressionSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings) {
-            version = 5
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings) {
+            version = 6
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -552,6 +585,7 @@ final class OctoPilotModel: ObservableObject {
             self.isLaunchSchedulingEnabled = isLaunchSchedulingEnabled
             self.lastScheduledBootSession = lastScheduledBootSession
             self.bleUnlock = bleUnlock
+            self.fileCompression = fileCompression
         }
 
         init(from decoder: Decoder) throws {
@@ -564,6 +598,7 @@ final class OctoPilotModel: ObservableObject {
             isLaunchSchedulingEnabled = try container.decodeIfPresent(Bool.self, forKey: .isLaunchSchedulingEnabled) ?? true
             lastScheduledBootSession = try container.decodeIfPresent(String.self, forKey: .lastScheduledBootSession)
             bleUnlock = try container.decodeIfPresent(BLEUnlockSettings.self, forKey: .bleUnlock) ?? BLEUnlockSettings()
+            fileCompression = try container.decodeIfPresent(FolderCompressionSettings.self, forKey: .fileCompression) ?? FolderCompressionSettings()
         }
     }
 
@@ -580,6 +615,7 @@ final class OctoPilotModel: ObservableObject {
     @Published var language: AppLanguage = .system { didSet { saveIfReady() } }
     let ble = BLEUnlockModel()
     let updater = SoftwareUpdater()
+    let fileCompression = FolderCompressionModel()
     @Published var requestedSection: MainSection?
     private var launchTasks: [UUID: Task<Void, Never>] = [:]
     private let launchGate = LaunchGate(minimumStartInterval: 3)
@@ -612,8 +648,10 @@ final class OctoPilotModel: ObservableObject {
         scheduleLaunchPlanForCurrentBootIfNeeded()
         requestAccessibilityAfterResetIfNeeded()
         ble.persist = { [weak self] in self?.saveIfReady() }
+        fileCompression.persist = { [weak self] in self?.saveIfReady() }
         ble.startObservingSystemState()
         ble.activateFromConfiguration()
+        fileCompression.activateFromConfiguration()
         Task { [weak updater] in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
@@ -1186,6 +1224,7 @@ final class OctoPilotModel: ObservableObject {
         isLaunchSchedulingEnabled = configuration.isLaunchSchedulingEnabled
         lastScheduledBootSession = configuration.lastScheduledBootSession
         ble.applyLoadedSettings(configuration.bleUnlock)
+        fileCompression.applyLoadedSettings(configuration.fileCompression)
     }
 
     private func save() {
@@ -1196,7 +1235,8 @@ final class OctoPilotModel: ObservableObject {
             launchRules: launchRules,
             isLaunchSchedulingEnabled: isLaunchSchedulingEnabled,
             lastScheduledBootSession: lastScheduledBootSession,
-            bleUnlock: ble.settings
+            bleUnlock: ble.settings,
+            fileCompression: fileCompression.settings
         )
         do {
             let directory = configurationURL.deletingLastPathComponent()
@@ -1413,7 +1453,7 @@ final class OctoPilotModel: ObservableObject {
     var timeString: String { lastChecked.formatted(.dateTime.hour().minute().locale(language.locale)) }
 }
 
-enum MainSection { case exit, launch, ble, settings }
+enum MainSection { case exit, launch, ble, compression, settings }
 
 struct ContentView: View {
     @EnvironmentObject private var model: OctoPilotModel
@@ -1437,6 +1477,8 @@ struct ContentView: View {
                     LaunchRulesView(showingAdd: $showingLaunchAdd, editingRule: $editingLaunchRule)
                 } else if section == .ble {
                     BLEUnlockView(ble: model.ble)
+                } else if section == .compression {
+                    FileCompressionView(compression: model.fileCompression)
                 } else {
                     SettingsView()
                 }
@@ -1581,6 +1623,15 @@ struct Sidebar: View {
             }
             .buttonStyle(.plain)
             .background(section == .ble ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            Button { section = .compression } label: {
+                Label(model.t("fileCompression"), systemImage: "archivebox")
+                    .padding(.vertical, 9).padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(section == .compression ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             Button { section = .settings } label: {
                 Label(model.t("settings"), systemImage: "gearshape")
