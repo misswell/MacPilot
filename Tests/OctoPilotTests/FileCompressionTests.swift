@@ -3,11 +3,33 @@ import Testing
 @testable import OctoPilot
 
 struct FileCompressionTests {
+    @Test func migratesLegacySingleFolderCompressionSettings() throws {
+        let json = """
+        {
+          "folderPath": "/tmp/legacy",
+          "fileExtensions": ["log"],
+          "minimumFileSize": 1024,
+          "stableSeconds": 600,
+          "minimumSavingsPercent": 10,
+          "automaticallyCompress": true
+        }
+        """
+
+        let settings = try JSONDecoder().decode(FolderCompressionSettings.self, from: Data(json.utf8))
+
+        #expect(settings.folderPaths == ["/tmp/legacy"])
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+        #expect(encoded["folderPaths"] as? [String] == ["/tmp/legacy"])
+        #expect(encoded["folderPath"] == nil)
+    }
+
     @Test func localizesStorageCompressionActions() {
         #expect(AppText.value("fileCompression", language: .simplifiedChinese) == "存储压缩")
         #expect(AppText.value("fileCompression", language: .english) == "Storage Compression")
         #expect(AppText.value("compressionRestoreFiles", language: .simplifiedChinese, 3) == "恢复 3 个文件")
         #expect(AppText.value("compressionRestoreFiles", language: .english, 3) == "Restore 3 Files")
+        #expect(AppText.value("compressionFolderCount", language: .simplifiedChinese, 2) == "已添加 2 个文件夹")
+        #expect(AppText.value("compressionFolderCount", language: .english, 2) == "Monitoring 2 folders")
     }
 
     @Test func selectsOnlyStableMatchingFiles() {
@@ -90,7 +112,7 @@ struct FileCompressionTests {
         try runXattr(["-w", "com.apple.ResourceFork", "legacy", root.appendingPathComponent("resource-fork.log").path])
 
         let settings = FolderCompressionSettings(
-            folderPath: root.path,
+            folderPaths: [root.path],
             fileExtensions: ["log", "json"],
             minimumFileSize: 1_024,
             stableSeconds: 600
@@ -100,6 +122,116 @@ struct FileCompressionTests {
         #expect(scan.candidates.map(\.relativePath).sorted() == ["eligible.log", "nested/data.json"])
         #expect(scan.compressedFiles.isEmpty)
         #expect(scan.candidateBytes == 4_096)
+    }
+
+    @Test func scansMultipleFoldersWithoutDuplicatingOverlappingFiles() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+        let secondRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: secondRoot)
+        }
+        let nested = root.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondRoot, withIntermediateDirectories: true)
+        let oldDate = Date(timeIntervalSinceNow: -3_600)
+        try writeFile(named: "first.log", in: root, modifiedAt: oldDate)
+        try writeFile(named: "nested/overlap.log", in: root, modifiedAt: oldDate)
+        try writeFile(named: "second.log", in: secondRoot, modifiedAt: oldDate)
+        let settings = FolderCompressionSettings(
+            folderPaths: [root.path, nested.path, secondRoot.path],
+            fileExtensions: ["log"],
+            minimumFileSize: 1_024,
+            stableSeconds: 600
+        )
+
+        let scan = try AppleFileCompressionEngine().scan(settings: settings)
+
+        #expect(scan.folderURLs.count == 3)
+        #expect(scan.folderIssues.isEmpty)
+        #expect(Set(scan.candidates.map(\.url.lastPathComponent)) == ["first.log", "overlap.log", "second.log"])
+        #expect(scan.candidates.count == 3)
+    }
+
+    @Test func continuesScanningAvailableFoldersAndReportsUnavailableFolders() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-missing-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try writeFile(named: "available.log", in: root, modifiedAt: Date(timeIntervalSinceNow: -3_600))
+        let settings = FolderCompressionSettings(
+            folderPaths: [missing.path, root.path],
+            fileExtensions: ["log"],
+            minimumFileSize: 1,
+            stableSeconds: 0
+        )
+
+        let scan = try AppleFileCompressionEngine().scan(settings: settings)
+
+        #expect(scan.candidates.map(\.url.lastPathComponent) == ["available.log"])
+        #expect(scan.folderIssues == [
+            FileCompressionFolderIssue(folderURL: missing, error: .folderUnavailable)
+        ])
+    }
+
+    @Test func distinguishesSameNamedFilesFromDifferentFolders() throws {
+        let firstParent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-first-\(UUID().uuidString)", isDirectory: true)
+        let secondParent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-second-\(UUID().uuidString)", isDirectory: true)
+        let firstRoot = firstParent.appendingPathComponent("Logs", isDirectory: true)
+        let secondRoot = secondParent.appendingPathComponent("Logs", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: firstParent)
+            try? FileManager.default.removeItem(at: secondParent)
+        }
+        try FileManager.default.createDirectory(at: firstRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondRoot, withIntermediateDirectories: true)
+        let oldDate = Date(timeIntervalSinceNow: -3_600)
+        try writeFile(named: "same.log", in: firstRoot, modifiedAt: oldDate)
+        try writeFile(named: "same.log", in: secondRoot, modifiedAt: oldDate)
+        let settings = FolderCompressionSettings(
+            folderPaths: [firstRoot.path, secondRoot.path],
+            fileExtensions: ["log"],
+            minimumFileSize: 1,
+            stableSeconds: 0
+        )
+
+        let scan = try AppleFileCompressionEngine().scan(settings: settings)
+
+        #expect(Set(scan.candidates.map(\.relativePath)) == ["same.log"])
+        #expect(Set(scan.candidates.map(\.displayPath)).count == 2)
+        #expect(scan.candidates.allSatisfy { $0.displayPath == $0.url.path })
+    }
+
+    @Test func deduplicatesFolderPathsThatResolveToTheSameDirectory() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let root = parent.appendingPathComponent("root", isDirectory: true)
+        let link = parent.appendingPathComponent("linked-root", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: root)
+
+        let settings = FolderCompressionSettings(folderPaths: [root.path, link.path])
+
+        #expect(settings.folderPaths == [root.path])
+    }
+
+    @Test @MainActor func modelAddsDeduplicatesAndRemovesFolders() {
+        let model = FolderCompressionModel()
+        let first = URL(fileURLWithPath: "/tmp/first", isDirectory: true)
+        let second = URL(fileURLWithPath: "/tmp/second", isDirectory: true)
+
+        model.addFolders([first, first, second])
+        #expect(model.settings.folderPaths == ["/tmp/first", "/tmp/second"])
+
+        model.removeFolder(path: first.path)
+        #expect(model.settings.folderPaths == ["/tmp/second"])
     }
 
     @Test func compressesWithoutChangingContentOrVisibleDates() throws {
@@ -120,7 +252,7 @@ struct FileCompressionTests {
         let datesBefore = try sourceURL.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
         let accessControlBefore = try runCommand("/bin/ls", ["-lde", sourceURL.path])
         let settings = FolderCompressionSettings(
-            folderPath: root.path,
+            folderPaths: [root.path],
             fileExtensions: ["log"],
             minimumFileSize: 1,
             stableSeconds: 0,
@@ -147,6 +279,80 @@ struct FileCompressionTests {
         #expect(try runCommand("/bin/ls", ["-lde", sourceURL.path]) == accessControlBefore)
     }
 
+    @Test func compressesDownloadedFilesWithoutChangingQuarantineMetadata() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let sourceURL = root.appendingPathComponent("downloaded.json")
+        let content = Data(repeating: 65, count: 2_000_000)
+        try content.write(to: sourceURL)
+        let quarantine = "0081;686d5080;Safari;A1B2C3D4-E5F6-47A8-9012-123456789ABC"
+        try runXattr(["-w", "com.apple.quarantine", quarantine, sourceURL.path])
+        let settings = FolderCompressionSettings(
+            folderPaths: [root.path],
+            fileExtensions: ["json"],
+            minimumFileSize: 1,
+            stableSeconds: 0,
+            minimumSavingsPercent: 10
+        )
+        let engine = AppleFileCompressionEngine()
+        let scan = try engine.scan(settings: settings)
+
+        let result = engine.compress(scan.candidates, settings: settings)
+
+        #expect(result.compressedCount == 1, "\(result.failures)")
+        #expect(result.failedCount == 0)
+        #expect(try Data(contentsOf: sourceURL) == content)
+        #expect(try runXattr(["-p", "com.apple.quarantine", sourceURL.path]) == quarantine)
+    }
+
+    @Test func verifiesExistingProvenanceButAllowsMacOSToSynthesizeIt() {
+        let provenance = Data([1, 2, 3])
+        let changedProvenance = Data([4, 5, 6])
+
+        #expect(AppleFileCompressionEngine.preservedExtendedAttributesMatch(
+            source: [:],
+            copy: ["com.apple.provenance": provenance]
+        ))
+        #expect(AppleFileCompressionEngine.preservedExtendedAttributesMatch(
+            source: ["com.apple.provenance": provenance],
+            copy: ["com.apple.provenance": provenance]
+        ))
+        #expect(!AppleFileCompressionEngine.preservedExtendedAttributesMatch(
+            source: ["com.apple.provenance": provenance],
+            copy: ["com.apple.provenance": changedProvenance]
+        ))
+    }
+
+    @Test func preservesExistingSystemProvenanceMetadata() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let seedURL = root.appendingPathComponent("seed.txt")
+        let sourceURL = root.appendingPathComponent("downloaded.json")
+        try Data(repeating: 65, count: 2_000_000).write(to: seedURL)
+        try runXattr(["-w", "com.apple.quarantine", "0081;686d5080;Safari;fixture", seedURL.path])
+        try runCommand("/usr/bin/ditto", ["--noclone", seedURL.path, sourceURL.path])
+        try FileManager.default.removeItem(at: seedURL)
+        let provenanceBefore = try runXattr(["-px", "com.apple.provenance", sourceURL.path])
+        let settings = FolderCompressionSettings(
+            folderPaths: [root.path],
+            fileExtensions: ["json"],
+            minimumFileSize: 1,
+            stableSeconds: 0,
+            minimumSavingsPercent: 10
+        )
+        let engine = AppleFileCompressionEngine()
+        let scan = try engine.scan(settings: settings)
+
+        let result = engine.compress(scan.candidates, settings: settings)
+
+        #expect(result.compressedCount == 1, "\(result.failures)")
+        #expect(try runXattr(["-px", "com.apple.provenance", sourceURL.path]) == provenanceBefore)
+    }
+
     @Test func restoresACompressedFileWithoutChangingItsContent() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
@@ -158,7 +364,7 @@ struct FileCompressionTests {
         let visibleDate = Date(timeIntervalSince1970: 1_700_000_000)
         try FileManager.default.setAttributes([.creationDate: visibleDate, .modificationDate: visibleDate], ofItemAtPath: sourceURL.path)
         let settings = FolderCompressionSettings(
-            folderPath: root.path,
+            folderPaths: [root.path],
             fileExtensions: ["log"],
             minimumFileSize: 1,
             stableSeconds: 0
@@ -197,7 +403,7 @@ struct FileCompressionTests {
         let content = Data(bytes)
         try content.write(to: sourceURL)
         let settings = FolderCompressionSettings(
-            folderPath: root.path,
+            folderPaths: [root.path],
             fileExtensions: ["log"],
             minimumFileSize: 1,
             stableSeconds: 0,
@@ -224,7 +430,7 @@ struct FileCompressionTests {
         let content = Data(repeating: 67, count: 1_000_000)
         try content.write(to: sourceURL)
         let settings = FolderCompressionSettings(
-            folderPath: root.path,
+            folderPaths: [root.path],
             fileExtensions: ["log"],
             minimumFileSize: 1,
             stableSeconds: 0
@@ -238,6 +444,7 @@ struct FileCompressionTests {
 
         #expect(result.compressedCount == 0)
         #expect(result.failedCount == 1)
+        #expect(result.failedFiles == [scan.candidates[0].displayPath])
         #expect(try Data(contentsOf: sourceURL) == content)
         #expect(try engine.scan(settings: settings).candidates.count == 1)
     }
@@ -250,7 +457,7 @@ struct FileCompressionTests {
         let sourceURL = root.appendingPathComponent("managed.log")
         try Data(repeating: 68, count: 1_000_000).write(to: sourceURL)
         let originalSettings = FolderCompressionSettings(
-            folderPath: root.path,
+            folderPaths: [root.path],
             fileExtensions: ["log"],
             minimumFileSize: 1,
             stableSeconds: 0
@@ -260,7 +467,7 @@ struct FileCompressionTests {
         let compressionResult = engine.compress(initialScan.candidates, settings: originalSettings)
         #expect(compressionResult.compressedCount == 1, "\(compressionResult.failures)")
         let changedSettings = FolderCompressionSettings(
-            folderPath: root.path,
+            folderPaths: [root.path],
             fileExtensions: ["json"],
             minimumFileSize: 10_000_000,
             stableSeconds: 86_400
@@ -282,7 +489,7 @@ struct FileCompressionTests {
         let content = Data(repeating: 69, count: 1_000_000)
         try content.write(to: sourceURL)
         let settings = FolderCompressionSettings(
-            folderPath: root.path,
+            folderPaths: [root.path],
             fileExtensions: ["log"],
             minimumFileSize: 1,
             stableSeconds: 0

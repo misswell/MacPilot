@@ -419,6 +419,7 @@ enum AppText {
         "updateErrorCommand": "准备更新失败：%@",
         "fileCompression": "存储压缩", "fileCompressionSubtitle": "安全地减少文本类文件的实际磁盘占用，并保留内容、创建时间和修改时间。",
         "compressionFolder": "监控文件夹", "compressionNoFolder": "尚未选择文件夹", "compressionChooseFolder": "选择文件夹…",
+        "compressionAddFolders": "添加文件夹…", "compressionRemoveFolder": "移除文件夹", "compressionFolderCount": "已添加 %d 个文件夹",
         "compressionChoose": "选择", "compressionAutomatic": "定期自动压缩", "compressionAutomaticHint": "每 5 分钟扫描一次；只处理已稳定且实际节省达到阈值的文件。",
         "compressionRules": "压缩规则", "compressionExtensions": "文件后缀", "compressionRecommended": "使用推荐后缀",
         "compressionApply": "应用", "compressionExtensionsHint": "使用逗号或空格分隔。默认推荐文本、日志与结构化数据文件。",
@@ -432,7 +433,8 @@ enum AppText {
         "compressionErrorNoFolder": "请先选择文件夹。", "compressionErrorFolderUnavailable": "所选文件夹不可用。", "compressionErrorFileSystem": "所选文件夹使用 %@ 文件系统；透明压缩需要 APFS 或 HFS+。",
         "compressionErrorScan": "无法扫描文件夹：%@", "compressionErrorFileChanged": "文件在扫描后发生了变化。",
         "compressionErrorUnavailable": "macOS 未能压缩此文件。", "compressionErrorVerification": "压缩副本与原文件校验不一致。",
-        "compressionErrorCommand": "macOS 压缩命令失败：%@", "compressionErrorCoordination": "无法安全协调文件访问：%@", "compressionErrorFileInUse": "文件正被其他进程使用，已跳过。", "compressionErrorReplacement": "无法原子替换原文件。"
+        "compressionErrorCommand": "macOS 压缩命令失败：%@", "compressionErrorCoordination": "无法安全协调文件访问：%@", "compressionErrorFileInUse": "文件正被其他进程使用，已跳过。", "compressionErrorReplacement": "无法原子替换原文件。",
+        "compressionFolderIssue": "%@：%@"
     ]
 
     static func value(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
@@ -542,7 +544,8 @@ enum AppText {
             "updateErrorHelper": "The updater helper is missing from this OctoPilot installation.", "updateErrorNetwork": "Network request failed: %@",
             "updateErrorCommand": "Couldn’t prepare the update: %@",
             "fileCompression": "Storage Compression", "fileCompressionSubtitle": "Safely reduce the disk space used by text-based files while preserving content and visible dates.",
-            "compressionFolder": "Monitored folder", "compressionNoFolder": "No folder selected", "compressionChooseFolder": "Choose Folder…",
+            "compressionFolder": "Monitored folders", "compressionNoFolder": "No folders selected", "compressionChooseFolder": "Choose Folder…",
+            "compressionAddFolders": "Add Folders…", "compressionRemoveFolder": "Remove folder", "compressionFolderCount": "Monitoring %d folders",
             "compressionChoose": "Choose", "compressionAutomatic": "Compress periodically", "compressionAutomaticHint": "Scans every 5 minutes and only changes stable files that meet the actual savings threshold.",
             "compressionRules": "Compression Rules", "compressionExtensions": "File extensions", "compressionRecommended": "Use Recommended",
             "compressionApply": "Apply", "compressionExtensionsHint": "Separate extensions with commas or spaces. The defaults cover text, logs, and structured data.",
@@ -556,7 +559,8 @@ enum AppText {
             "compressionErrorNoFolder": "Choose a folder first.", "compressionErrorFolderUnavailable": "The selected folder is unavailable.", "compressionErrorFileSystem": "The selected folder uses %@; filesystem compression requires APFS or HFS+.",
             "compressionErrorScan": "Could not scan the folder: %@", "compressionErrorFileChanged": "A file changed after it was scanned.",
             "compressionErrorUnavailable": "macOS could not compress this file.", "compressionErrorVerification": "The compressed copy did not match the original file.",
-            "compressionErrorCommand": "The macOS compression command failed: %@", "compressionErrorCoordination": "The file could not be coordinated safely: %@", "compressionErrorFileInUse": "The file is open in another process and was skipped.", "compressionErrorReplacement": "The original file could not be replaced atomically."
+            "compressionErrorCommand": "The macOS compression command failed: %@", "compressionErrorCoordination": "The file could not be coordinated safely: %@", "compressionErrorFileInUse": "The file is open in another process and was skipped.", "compressionErrorReplacement": "The original file could not be replaced atomically.",
+            "compressionFolderIssue": "%@: %@"
         ]
 }
 
@@ -577,7 +581,7 @@ final class OctoPilotModel: ObservableObject {
         var fileCompression: FolderCompressionSettings
 
         init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings) {
-            version = 6
+            version = 7
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -2680,6 +2684,7 @@ struct MenuBarView: View {
             showMainWindow()
         }
         Divider()
+        Text(AppVersionInfo.current().localizedDescription(language: model.language))
         Button(model.t("quitApp")) { NSApp.terminate(nil) }
     }
 
