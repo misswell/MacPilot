@@ -30,6 +30,8 @@ struct FileCompressionTests {
         #expect(AppText.value("compressionRestoreFiles", language: .english, 3) == "Restore 3 Files")
         #expect(AppText.value("compressionFolderCount", language: .simplifiedChinese, 2) == "已添加 2 个文件夹")
         #expect(AppText.value("compressionFolderCount", language: .english, 2) == "Monitoring 2 folders")
+        #expect(AppText.value("compressionRemoveFolderTitle", language: .simplifiedChinese) == "移除监控文件夹？")
+        #expect(AppText.value("compressionRemoveFolderTitle", language: .english) == "Remove Monitored Folder?")
     }
 
     @Test func selectsOnlyStableMatchingFiles() {
@@ -307,7 +309,7 @@ struct FileCompressionTests {
         #expect(try runXattr(["-p", "com.apple.quarantine", sourceURL.path]) == quarantine)
     }
 
-    @Test func verifiesExistingProvenanceButAllowsMacOSToSynthesizeIt() {
+    @Test func acceptsRegeneratedProvenanceButNeverAllowsItToDisappear() {
         let provenance = Data([1, 2, 3])
         let changedProvenance = Data([4, 5, 6])
 
@@ -319,9 +321,13 @@ struct FileCompressionTests {
             source: ["com.apple.provenance": provenance],
             copy: ["com.apple.provenance": provenance]
         ))
-        #expect(!AppleFileCompressionEngine.preservedExtendedAttributesMatch(
+        #expect(AppleFileCompressionEngine.preservedExtendedAttributesMatch(
             source: ["com.apple.provenance": provenance],
             copy: ["com.apple.provenance": changedProvenance]
+        ))
+        #expect(!AppleFileCompressionEngine.preservedExtendedAttributesMatch(
+            source: ["com.apple.provenance": provenance],
+            copy: [:]
         ))
     }
 

@@ -229,7 +229,7 @@ struct AppleFileCompressionEngine: Sendable {
         "com.apple.decmpfs",
         "com.apple.ResourceFork"
     ]
-    // macOS synthesizes this attribute when a source lacks it, but preserves its value once present.
+    // macOS synthesizes provenance for the new inode and may regenerate an existing value.
     private static let systemGeneratedExtendedAttributes = [
         "com.apple.provenance"
     ]
@@ -713,11 +713,14 @@ struct AppleFileCompressionEngine: Sendable {
     }
 
     static func preservedExtendedAttributesMatch(source: [String: Data], copy: [String: Data]) -> Bool {
+        var normalizedSource = source
         var normalizedCopy = copy
-        for name in Self.systemGeneratedExtendedAttributes where source[name] == nil {
+        for name in Self.systemGeneratedExtendedAttributes {
+            guard source[name] == nil || copy[name] != nil else { return false }
+            normalizedSource[name] = nil
             normalizedCopy[name] = nil
         }
-        return source == normalizedCopy
+        return normalizedSource == normalizedCopy
     }
 
     private func hasExtendedAttribute(_ name: String, at url: URL) -> Bool {
@@ -1040,6 +1043,7 @@ struct FileCompressionView: View {
     @EnvironmentObject private var appModel: OctoPilotModel
     @ObservedObject var compression: FolderCompressionModel
     @State private var extensionText = ""
+    @State private var folderPendingRemoval: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1066,6 +1070,24 @@ struct FileCompressionView: View {
         .onAppear { extensionText = compression.settings.fileExtensions.joined(separator: ", ") }
         .onChange(of: compression.settings.fileExtensions) { _, newValue in
             extensionText = newValue.joined(separator: ", ")
+        }
+        .alert(
+            t("compressionRemoveFolderTitle"),
+            isPresented: Binding(
+                get: { folderPendingRemoval != nil },
+                set: { if !$0 { folderPendingRemoval = nil } }
+            ),
+            presenting: folderPendingRemoval
+        ) { path in
+            Button(t("compressionRemoveFolder"), role: .destructive) {
+                compression.removeFolder(path: path)
+                folderPendingRemoval = nil
+            }
+            Button(t("cancel"), role: .cancel) {
+                folderPendingRemoval = nil
+            }
+        } message: { path in
+            Text(t("compressionRemoveFolderMessage", path))
         }
     }
 
@@ -1111,7 +1133,7 @@ struct FileCompressionView: View {
                                 .truncationMode(.middle)
                             Spacer()
                             Button {
-                                compression.removeFolder(path: path)
+                                folderPendingRemoval = path
                             } label: {
                                 Image(systemName: "minus.circle")
                             }
