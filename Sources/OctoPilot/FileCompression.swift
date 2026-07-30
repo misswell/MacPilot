@@ -1461,6 +1461,8 @@ struct FileCompressionView: View {
     @State private var extensionText = ""
     @State private var folderPendingRemoval: String?
     @State private var showsAutomaticCompressionInfo = false
+    @State private var showsAllCompressedFiles = false
+    @State private var compressedFilesForInspection: [FileCompressionCandidate] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1505,6 +1507,12 @@ struct FileCompressionView: View {
             }
         } message: { path in
             Text(t("compressionRemoveFolderMessage", path))
+        }
+        .sheet(isPresented: $showsAllCompressedFiles) {
+            CompressedFileListSheet(
+                files: compressedFilesForInspection,
+                language: appModel.language
+            )
         }
     }
 
@@ -1820,6 +1828,25 @@ struct FileCompressionView: View {
                     .padding(.vertical, 7)
                     if index < items.count - 1 { Divider() }
                 }
+                if !scan.compressedFiles.isEmpty {
+                    Divider()
+                    Button {
+                        compressedFilesForInspection = scan.compressedFiles
+                        showsAllCompressedFiles = true
+                    } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: "list.bullet.rectangle.portrait.fill")
+                            Text(t("compressionViewAllCompressed", scan.compressedFiles.count))
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.indigo)
+                    .padding(.vertical, 9)
+                }
             }
         }
     }
@@ -1937,6 +1964,110 @@ struct FileCompressionView: View {
 
     private func t(_ key: String, _ arguments: CVarArg...) -> String {
         AppText.value(key, language: appModel.language, arguments: arguments)
+    }
+}
+
+private struct CompressedFileListSheet: View {
+    let files: [FileCompressionCandidate]
+    let language: AppLanguage
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchText = ""
+
+    private var filteredFiles: [FileCompressionCandidate] {
+        guard !searchText.isEmpty else { return files }
+        return files.filter {
+            $0.displayPath.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.indigo.opacity(0.13))
+                    Image(systemName: "archivebox.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.indigo)
+                }
+                .frame(width: 42, height: 42)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(t("compressionCompressedListTitle"))
+                        .font(.title3.weight(.semibold))
+                    Text("\(files.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(t("compressionClose")) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(18)
+
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField(t("compressionSearchFiles"), text: $searchText)
+                    .textFieldStyle(.plain)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 9))
+            .padding(.horizontal, 18)
+            .padding(.bottom, 12)
+
+            Divider()
+            if filteredFiles.isEmpty {
+                ContentUnavailableView(
+                    t("compressionNoMatchingFiles"),
+                    systemImage: "doc.text.magnifyingglass"
+                )
+            } else {
+                List(filteredFiles) { file in
+                    HStack(spacing: 11) {
+                        Image(systemName: "archivebox.fill")
+                            .foregroundStyle(.indigo)
+                            .frame(width: 18)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(file.url.lastPathComponent)
+                                .lineLimit(1)
+                            Text(file.displayPath)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer(minLength: 12)
+                        Text(sizeDetail(file))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Button {
+                            NSWorkspace.shared.activateFileViewerSelecting([file.url])
+                        } label: {
+                            Image(systemName: "folder")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(t("revealInFinder"))
+                    }
+                    .padding(.vertical, 3)
+                }
+                .listStyle(.inset(alternatesRowBackgrounds: true))
+            }
+        }
+        .frame(width: 760, height: 520)
+    }
+
+    private func sizeDetail(_ file: FileCompressionCandidate) -> String {
+        t(
+            "compressionSizeDetail",
+            ByteCountFormatter.string(fromByteCount: file.logicalSize, countStyle: .file),
+            ByteCountFormatter.string(fromByteCount: file.allocatedSize, countStyle: .file)
+        )
+    }
+
+    private func t(_ key: String, _ arguments: CVarArg...) -> String {
+        AppText.value(key, language: language, arguments: arguments)
     }
 }
 

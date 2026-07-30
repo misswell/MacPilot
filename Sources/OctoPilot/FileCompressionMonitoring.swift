@@ -96,6 +96,7 @@ struct FileCompressionChangeBatch: Equatable, Sendable {
 }
 
 struct FileCompressionChangeDelivery: Sendable {
+    let id: UUID
     let batch: FileCompressionChangeBatch
     let eventID: FSEventStreamEventId
     let streamID: UUID
@@ -256,9 +257,9 @@ final class FileCompressionEventMonitor: @unchecked Sendable {
     private var handler: Handler?
     private var lastAcknowledgedEventID: FSEventStreamEventId?
     private var currentStreamID: UUID?
-    private var outstandingEventIDs: [FSEventStreamEventId] = []
+    private var outstandingDeliveries: [OutstandingDelivery] = []
     private var outstandingEventHead = 0
-    private var acknowledgedEventIDs = Set<FSEventStreamEventId>()
+    private var acknowledgedDeliveryIDs = Set<UUID>()
 
     init() {
         callbackQueue.setSpecific(key: callbackQueueKey, value: ())
@@ -284,9 +285,9 @@ final class FileCompressionEventMonitor: @unchecked Sendable {
                 self.handler = handler
                 lastAcknowledgedEventID = sinceWhen ?? FSEventsGetCurrentEventId()
                 currentStreamID = UUID()
-                outstandingEventIDs.removeAll(keepingCapacity: true)
+                outstandingDeliveries.removeAll(keepingCapacity: true)
                 outstandingEventHead = 0
-                acknowledgedEventIDs.removeAll(keepingCapacity: true)
+                acknowledgedDeliveryIDs.removeAll(keepingCapacity: true)
             }
             let callbackContext = CallbackContext(monitor: self)
             self.callbackContext = callbackContext
@@ -335,21 +336,21 @@ final class FileCompressionEventMonitor: @unchecked Sendable {
     func acknowledge(_ delivery: FileCompressionChangeDelivery) {
         stateLock.withLock {
             guard currentStreamID == delivery.streamID else { return }
-            acknowledgedEventIDs.insert(delivery.eventID)
+            acknowledgedDeliveryIDs.insert(delivery.id)
             advanceAcknowledgedEventID()
         }
     }
 
     private func advanceAcknowledgedEventID() {
-        while outstandingEventHead < outstandingEventIDs.count {
-            let eventID = outstandingEventIDs[outstandingEventHead]
-            guard acknowledgedEventIDs.remove(eventID) != nil else { break }
-            lastAcknowledgedEventID = max(lastAcknowledgedEventID ?? 0, eventID)
+        while outstandingEventHead < outstandingDeliveries.count {
+            let delivery = outstandingDeliveries[outstandingEventHead]
+            guard acknowledgedDeliveryIDs.remove(delivery.id) != nil else { break }
+            lastAcknowledgedEventID = max(lastAcknowledgedEventID ?? 0, delivery.eventID)
             outstandingEventHead += 1
         }
         if outstandingEventHead >= 256,
-           outstandingEventHead * 2 >= outstandingEventIDs.count {
-            outstandingEventIDs.removeFirst(outstandingEventHead)
+           outstandingEventHead * 2 >= outstandingDeliveries.count {
+            outstandingDeliveries.removeFirst(outstandingEventHead)
             outstandingEventHead = 0
         }
     }
@@ -381,9 +382,9 @@ final class FileCompressionEventMonitor: @unchecked Sendable {
             monitoredRoots = []
             self.handler = nil
             currentStreamID = nil
-            outstandingEventIDs.removeAll(keepingCapacity: true)
+            outstandingDeliveries.removeAll(keepingCapacity: true)
             outstandingEventHead = 0
-            acknowledgedEventIDs.removeAll(keepingCapacity: true)
+            acknowledgedDeliveryIDs.removeAll(keepingCapacity: true)
         }
     }
 
@@ -407,9 +408,13 @@ final class FileCompressionEventMonitor: @unchecked Sendable {
         _ events: [FileCompressionFileEvent],
         lastEventID: FSEventStreamEventId?
     ) {
+        let deliveryID = UUID()
         let snapshot = stateLock.withLock {
             if let lastEventID {
-                outstandingEventIDs.append(lastEventID)
+                outstandingDeliveries.append(OutstandingDelivery(
+                    id: deliveryID,
+                    eventID: lastEventID
+                ))
             }
             return (monitoredRoots, handler, currentStreamID)
         }
@@ -418,6 +423,7 @@ final class FileCompressionEventMonitor: @unchecked Sendable {
               let lastEventID else { return }
         let batch = FileCompressionChangeBatch.from(events: events, monitoredRoots: snapshot.0)
         let delivery = FileCompressionChangeDelivery(
+            id: deliveryID,
             batch: batch,
             eventID: lastEventID,
             streamID: streamID
@@ -429,3 +435,7 @@ final class FileCompressionEventMonitor: @unchecked Sendable {
         handler(delivery)
     }
 }
+    private struct OutstandingDelivery {
+        let id: UUID
+        let eventID: FSEventStreamEventId
+    }

@@ -42,6 +42,8 @@ struct FileCompressionTests {
         #expect(AppText.value("compressionAutomaticInfoBody", language: .english).contains("every 24 hours"))
         #expect(AppText.value("compressionErrorMonitoringUnavailable", language: .simplifiedChinese).contains("文件夹变化监控"))
         #expect(AppText.value("compressionErrorMonitoringUnavailable", language: .english).contains("Folder change monitoring"))
+        #expect(AppText.value("compressionViewAllCompressed", language: .simplifiedChinese, 32) == "查看全部 32 个已压缩文件")
+        #expect(AppText.value("compressionViewAllCompressed", language: .english, 32) == "View All 32 Compressed Files")
     }
 
     @Test func selectsOnlyStableMatchingFiles() {
