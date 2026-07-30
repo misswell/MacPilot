@@ -112,6 +112,7 @@ enum FileCompressionExclusion: Equatable, Sendable {
     case fileType
     case fileExtension
     case tooSmall
+    case tooLargeForSystemCompression
     case recentlyModified
     case hardLinked
     case cloudPlaceholder
@@ -124,6 +125,8 @@ enum FileCompressionEligibility: Equatable, Sendable {
 }
 
 struct FileCompressionPolicy: Sendable {
+    static let maximumCompressibleFileSize: Int64 = 512 * 1_024 * 1_024
+
     let settings: FolderCompressionSettings
 
     func eligibility(of facts: FileCompressionFacts, now: Date = Date()) -> FileCompressionEligibility {
@@ -137,6 +140,9 @@ struct FileCompressionPolicy: Sendable {
             return .excluded(.fileExtension)
         }
         guard facts.logicalSize >= settings.minimumFileSize else { return .excluded(.tooSmall) }
+        guard facts.logicalSize <= Self.maximumCompressibleFileSize else {
+            return .excluded(.tooLargeForSystemCompression)
+        }
         guard now.timeIntervalSince(facts.modifiedAt) >= settings.stableSeconds else {
             return .excluded(.recentlyModified)
         }
@@ -165,6 +171,15 @@ struct FileCompressionCandidate: Identifiable, Equatable, Sendable {
 struct FileCompressionFolderIssue: Equatable, Sendable {
     let folderURL: URL
     let error: AppleFileCompressionError
+
+    var isRetryableForAutomaticCompression: Bool {
+        switch error {
+        case .folderUnavailable, .scanFailed:
+            true
+        default:
+            false
+        }
+    }
 }
 
 struct FileCompressionScan: Equatable, Sendable {
@@ -188,6 +203,7 @@ struct FileCompressionOperationResult: Equatable, Sendable {
     var failedFiles: [String] = []
     var recoveryFiles: [String] = []
     var failures: [AppleFileCompressionError] = []
+    var retryableFiles: [String] = []
 }
 
 enum AppleFileCompressionError: LocalizedError, Equatable, Sendable {
@@ -201,6 +217,7 @@ enum AppleFileCompressionError: LocalizedError, Equatable, Sendable {
     case commandFailed(String)
     case coordinationFailed(String)
     case fileInUse
+    case monitoringUnavailable
     case recoveryCopyPreserved(String)
     case replacementFailed
 
@@ -216,6 +233,7 @@ enum AppleFileCompressionError: LocalizedError, Equatable, Sendable {
         case .commandFailed(let message): "The macOS compression command failed: \(message)"
         case .coordinationFailed(let message): "The file could not be coordinated safely: \(message)"
         case .fileInUse: "The file is open in another process."
+        case .monitoringUnavailable: "Folder change monitoring could not be started."
         case .recoveryCopyPreserved(let path): "The original file was preserved for recovery at \(path)."
         case .replacementFailed: "The original file could not be replaced atomically."
         }
@@ -262,6 +280,17 @@ struct AppleFileCompressionEngine: Sendable {
         let accessControlList: String?
         let extendedAttributes: [String: Data]
     }
+
+    private enum ScannedFile {
+        case candidate(FileCompressionCandidate)
+        case compressed(FileCompressionCandidate)
+
+        var candidate: FileCompressionCandidate {
+            switch self {
+            case .candidate(let candidate), .compressed(let candidate): candidate
+            }
+        }
+    }
     private static let resourceKeys: Set<URLResourceKey> = [
         .isRegularFileKey,
         .isSymbolicLinkKey,
@@ -275,9 +304,7 @@ struct AppleFileCompressionEngine: Sendable {
     func scan(settings: FolderCompressionSettings, now: Date = Date()) throws -> FileCompressionScan {
         guard !settings.folderPaths.isEmpty else { throw AppleFileCompressionError.folderNotSelected }
         let folderURLs = settings.folderPaths.map {
-            URL(fileURLWithPath: $0, isDirectory: true)
-                .standardizedFileURL
-                .resolvingSymlinksInPath()
+            URL(fileURLWithPath: FileCompressionPath.canonical($0), isDirectory: true)
         }
         let policy = FileCompressionPolicy(settings: settings)
         var candidates: [FileCompressionCandidate] = []
@@ -290,59 +317,20 @@ struct AppleFileCompressionEngine: Sendable {
                 let (enumerator, issueCollector) = try fileEnumerator(at: folderURL)
                 for case let url as URL in enumerator {
                     do {
-                        let values = try url.resourceValues(forKeys: Self.resourceKeys)
-                        var info = stat()
-                        guard lstat(url.path, &info) == 0 else {
-                            issueCollector.record(path: url.path, message: String(cString: strerror(errno)))
-                            continue
-                        }
-                        let protectedFlags = UInt32(UF_IMMUTABLE)
-                            | UInt32(SF_IMMUTABLE)
-                            | UInt32(SF_RESTRICTED)
-                            | UInt32(SF_DATALESS)
-                        guard info.st_flags & protectedFlags == 0 else { continue }
-                        let logicalSize = Int64(values.fileSize ?? Int(info.st_size))
-                        let allocatedSize = Int64(values.totalFileAllocatedSize ?? Int(info.st_blocks * 512))
-                        let compressed = isCompressed(info)
-                        guard compressed || !hasExtendedAttribute("com.apple.ResourceFork", at: url) else { continue }
-                        let facts = FileCompressionFacts(
-                            pathExtension: url.pathExtension,
-                            logicalSize: logicalSize,
-                            allocatedSize: compressed ? logicalSize : allocatedSize,
-                            modifiedAt: values.contentModificationDate ?? Date.distantPast,
-                            isRegularFile: values.isRegularFile == true,
-                            isSymbolicLink: values.isSymbolicLink == true,
-                            linkCount: UInt64(info.st_nlink),
-                            isCloudPlaceholder: values.isUbiquitousItem == true
-                                && values.ubiquitousItemDownloadingStatus != .current
-                        )
-                        if compressed {
-                            guard facts.isRegularFile,
-                                  !facts.isSymbolicLink,
-                                  facts.linkCount == 1,
-                                  !facts.isCloudPlaceholder,
-                                  hasManagedCompressionAttribute(at: url) else { continue }
-                        } else {
-                            guard policy.eligibility(of: facts, now: now) == .eligible else { continue }
-                        }
-                        let identity = FileIdentity(deviceID: UInt64(info.st_dev), inode: UInt64(info.st_ino))
-                        guard seenFiles.insert(identity).inserted else { continue }
-                        let candidate = FileCompressionCandidate(
-                            url: url,
+                        guard let scannedFile = try scannedFile(
+                            at: url,
                             monitoredFolderURL: folderURL,
-                            relativePath: relativePath(of: url, from: folderURL),
-                            logicalSize: logicalSize,
-                            allocatedSize: allocatedSize,
-                            modifiedAt: facts.modifiedAt,
-                            deviceID: identity.deviceID,
-                            inode: identity.inode,
-                            modificationNanoseconds: modificationNanoseconds(info),
-                            changeNanoseconds: changeNanoseconds(info)
-                        )
-                        if compressed {
-                            compressedFiles.append(candidate)
-                        } else {
+                            policy: policy,
+                            now: now
+                        ) else { continue }
+                        let candidate = scannedFile.candidate
+                        let identity = FileIdentity(deviceID: candidate.deviceID, inode: candidate.inode)
+                        guard seenFiles.insert(identity).inserted else { continue }
+                        switch scannedFile {
+                        case .candidate:
                             candidates.append(candidate)
+                        case .compressed:
+                            compressedFiles.append(candidate)
                         }
                     } catch {
                         issueCollector.record(path: url.path, error: error)
@@ -366,6 +354,58 @@ struct AppleFileCompressionEngine: Sendable {
         )
     }
 
+    func scanChangedPaths(
+        _ paths: Set<String>,
+        settings: FolderCompressionSettings,
+        now: Date = Date()
+    ) throws -> [FileCompressionCandidate] {
+        guard !settings.folderPaths.isEmpty else { throw AppleFileCompressionError.folderNotSelected }
+        let folderURLs = settings.folderPaths.map {
+            URL(fileURLWithPath: FileCompressionPath.canonical($0), isDirectory: true)
+        }
+        let policy = FileCompressionPolicy(settings: settings)
+        var candidates: [FileCompressionCandidate] = []
+        var seenFiles = Set<FileIdentity>()
+
+        func inspect(_ url: URL, monitoredFolderURL: URL) throws {
+            guard let scannedFile = try scannedFile(
+                at: url,
+                monitoredFolderURL: monitoredFolderURL,
+                policy: policy,
+                now: now
+            ), case .candidate(let candidate) = scannedFile else { return }
+            let identity = FileIdentity(deviceID: candidate.deviceID, inode: candidate.inode)
+            guard seenFiles.insert(identity).inserted else { return }
+            candidates.append(candidate)
+        }
+
+        for path in paths {
+            let url = URL(fileURLWithPath: FileCompressionPath.canonical(path))
+            guard let folderURL = monitoredRoot(containing: url, from: folderURLs) else { continue }
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
+            guard try !targetIsHiddenOrInsidePackage(url, root: folderURL, isDirectory: isDirectory.boolValue) else {
+                continue
+            }
+            if isDirectory.boolValue {
+                let (enumerator, issueCollector) = try fileEnumerator(at: url)
+                for case let childURL as URL in enumerator {
+                    do {
+                        try inspect(childURL, monitoredFolderURL: folderURL)
+                    } catch {
+                        issueCollector.record(path: childURL.path, error: error)
+                    }
+                }
+                if let message = issueCollector.message {
+                    throw AppleFileCompressionError.scanFailed(message)
+                }
+            } else {
+                try inspect(url, monitoredFolderURL: folderURL)
+            }
+        }
+        return candidates.sorted { $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending }
+    }
+
     func compress(
         _ candidates: [FileCompressionCandidate],
         settings: FolderCompressionSettings
@@ -382,9 +422,11 @@ struct AppleFileCompressionEngine: Sendable {
                 }
                 result.compressedCount += 1
                 result.bytesSaved += saved
-            } catch AppleFileCompressionError.compressionUnavailable,
-                    AppleFileCompressionError.fileInUse {
+            } catch AppleFileCompressionError.compressionUnavailable {
                 result.skippedCount += 1
+            } catch AppleFileCompressionError.fileInUse {
+                result.skippedCount += 1
+                result.retryableFiles.append(candidate.displayPath)
             } catch AppleFileCompressionError.recoveryCopyPreserved(let path) {
                 result.failedCount += 1
                 result.failedFiles.append(candidate.displayPath)
@@ -394,10 +436,17 @@ struct AppleFileCompressionEngine: Sendable {
                 result.failedCount += 1
                 result.failedFiles.append(candidate.displayPath)
                 result.failures.append(error)
+                switch error {
+                case .fileChanged, .commandFailed, .coordinationFailed, .replacementFailed:
+                    result.retryableFiles.append(candidate.displayPath)
+                default:
+                    break
+                }
             } catch {
                 result.failedCount += 1
                 result.failedFiles.append(candidate.displayPath)
                 result.failures.append(.commandFailed(error.localizedDescription))
+                result.retryableFiles.append(candidate.displayPath)
             }
         }
         return result
@@ -576,6 +625,84 @@ struct AppleFileCompressionEngine: Sendable {
             }
             throw error
         }
+    }
+
+    private func scannedFile(
+        at url: URL,
+        monitoredFolderURL: URL,
+        policy: FileCompressionPolicy,
+        now: Date
+    ) throws -> ScannedFile? {
+        let values = try url.resourceValues(forKeys: Self.resourceKeys)
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else {
+            throw AppleFileCompressionError.scanFailed(String(cString: strerror(errno)))
+        }
+        let protectedFlags = UInt32(UF_IMMUTABLE)
+            | UInt32(SF_IMMUTABLE)
+            | UInt32(SF_RESTRICTED)
+            | UInt32(SF_DATALESS)
+        guard info.st_flags & protectedFlags == 0 else { return nil }
+        let logicalSize = Int64(values.fileSize ?? Int(info.st_size))
+        let allocatedSize = Int64(values.totalFileAllocatedSize ?? Int(info.st_blocks * 512))
+        let compressed = isCompressed(info)
+        guard compressed || !hasExtendedAttribute("com.apple.ResourceFork", at: url) else { return nil }
+        let facts = FileCompressionFacts(
+            pathExtension: url.pathExtension,
+            logicalSize: logicalSize,
+            allocatedSize: compressed ? logicalSize : allocatedSize,
+            modifiedAt: values.contentModificationDate ?? Date.distantPast,
+            isRegularFile: values.isRegularFile == true,
+            isSymbolicLink: values.isSymbolicLink == true,
+            linkCount: UInt64(info.st_nlink),
+            isCloudPlaceholder: values.isUbiquitousItem == true
+                && values.ubiquitousItemDownloadingStatus != .current
+        )
+        if compressed {
+            guard facts.isRegularFile,
+                  !facts.isSymbolicLink,
+                  facts.linkCount == 1,
+                  !facts.isCloudPlaceholder,
+                  hasManagedCompressionAttribute(at: url) else { return nil }
+        } else {
+            guard policy.eligibility(of: facts, now: now) == .eligible else { return nil }
+        }
+        let candidate = FileCompressionCandidate(
+            url: url,
+            monitoredFolderURL: monitoredFolderURL,
+            relativePath: relativePath(of: url, from: monitoredFolderURL),
+            logicalSize: logicalSize,
+            allocatedSize: allocatedSize,
+            modifiedAt: facts.modifiedAt,
+            deviceID: UInt64(info.st_dev),
+            inode: UInt64(info.st_ino),
+            modificationNanoseconds: modificationNanoseconds(info),
+            changeNanoseconds: changeNanoseconds(info)
+        )
+        return compressed ? .compressed(candidate) : .candidate(candidate)
+    }
+
+    private func monitoredRoot(containing url: URL, from roots: [URL]) -> URL? {
+        roots
+            .filter { path(url.path, isInside: $0.path) }
+            .max { $0.path.count < $1.path.count }
+    }
+
+    private func targetIsHiddenOrInsidePackage(_ url: URL, root: URL, isDirectory: Bool) throws -> Bool {
+        let relative = relativePath(of: url, from: root)
+        guard !relative.split(separator: "/").contains(where: { $0.hasPrefix(".") }) else { return true }
+        var current = isDirectory ? url : url.deletingLastPathComponent()
+        while current.path != root.path, path(current.path, isInside: root.path) {
+            if try current.resourceValues(forKeys: [.isPackageKey]).isPackage == true { return true }
+            let parent = current.deletingLastPathComponent()
+            guard parent.path != current.path else { break }
+            current = parent
+        }
+        return false
+    }
+
+    private func path(_ path: String, isInside root: String) -> Bool {
+        path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
     }
 
     private func relativePath(of url: URL, from folderURL: URL) -> String {
@@ -891,6 +1018,22 @@ struct AppleFileCompressionEngine: Sendable {
 
 @MainActor
 final class FolderCompressionModel: ObservableObject {
+    private enum AutomaticScanScope: Sendable {
+        case allFolders
+        case folders(Set<String>)
+        case dueChanges(FileCompressionDueChanges)
+    }
+
+    private enum AutomaticScanOutcome: Sendable {
+        case completed(retryablePaths: Set<String>, retryableRoots: Set<String>)
+        case scanFailed(AppleFileCompressionError)
+    }
+
+    private struct AutomaticScanWork: Sendable {
+        var candidates: [FileCompressionCandidate] = []
+        var folderIssues: [FileCompressionFolderIssue] = []
+    }
+
     @Published private(set) var settings = FolderCompressionSettings()
     @Published private(set) var scan: FileCompressionScan?
     @Published private(set) var lastResult: FileCompressionOperationResult?
@@ -901,11 +1044,20 @@ final class FolderCompressionModel: ObservableObject {
 
     var persist: (() -> Void)?
     private var isLoading = false
-    private var monitoringTask: Task<Void, Never>?
     private let engine = AppleFileCompressionEngine()
+    private let eventMonitor = FileCompressionEventMonitor()
+    private var pendingChanges = FileCompressionPendingChanges()
+    private var pendingDeadlineTask: Task<Void, Never>?
+    private var initialScanTask: Task<Void, Never>?
+    private var reconciliationTask: Task<Void, Never>?
+    private var monitoringGeneration = UUID()
+    private var retryBackoff = FileCompressionRetryBackoff()
 
     deinit {
-        monitoringTask?.cancel()
+        eventMonitor.stop()
+        pendingDeadlineTask?.cancel()
+        initialScanTask?.cancel()
+        reconciliationTask?.cancel()
     }
 
     func applyLoadedSettings(_ settings: FolderCompressionSettings) {
@@ -915,26 +1067,37 @@ final class FolderCompressionModel: ObservableObject {
     }
 
     func activateFromConfiguration() {
-        updateMonitoring()
+        updateMonitoring(initialScanRoots: Set(settings.folderPaths))
     }
 
     func addFolders(_ urls: [URL]) {
         let paths = urls.map { $0.standardizedFileURL.path }
         guard !paths.isEmpty else { return }
+        let previousPaths = settings.folderPaths
         updateSettings {
             $0.folderPaths = FolderCompressionSettings(folderPaths: $0.folderPaths + paths).folderPaths
         }
         scan = nil
         lastResult = nil
         error = nil
+        if settings.folderPaths != previousPaths {
+            updateMonitoring(
+                initialScanRoots: Set(settings.folderPaths).subtracting(previousPaths),
+                preservePendingChanges: true
+            )
+        }
     }
 
     func removeFolder(path: String) {
         let normalizedPath = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+        let previousPaths = settings.folderPaths
         updateSettings { $0.folderPaths.removeAll { $0 == normalizedPath } }
         scan = nil
         lastResult = nil
         error = nil
+        if settings.folderPaths != previousPaths {
+            updateMonitoring(initialScanRoots: nil, preservePendingChanges: true)
+        }
     }
 
     func updateExtensions(_ text: String) {
@@ -956,6 +1119,9 @@ final class FolderCompressionModel: ObservableObject {
     func setStableSeconds(_ value: TimeInterval) {
         updateSettings { $0.stableSeconds = value }
         scan = nil
+        guard settings.automaticallyCompress else { return }
+        pendingChanges.rescheduleAll(stableSeconds: value)
+        schedulePendingChanges(generation: monitoringGeneration)
     }
 
     func setMinimumSavingsPercent(_ value: Int) {
@@ -964,6 +1130,7 @@ final class FolderCompressionModel: ObservableObject {
 
     func setAutomaticallyCompress(_ enabled: Bool) {
         updateSettings { $0.automaticallyCompress = enabled }
+        updateMonitoring(initialScanRoots: enabled ? Set(settings.folderPaths) : nil)
     }
 
     func scanNow() async {
@@ -1016,26 +1183,275 @@ final class FolderCompressionModel: ObservableObject {
         update(&settings)
         guard !isLoading else { return }
         persist?()
-        updateMonitoring()
     }
 
-    private func updateMonitoring() {
-        monitoringTask?.cancel()
-        monitoringTask = nil
+    private func updateMonitoring(
+        initialScanRoots: Set<String>?,
+        preservePendingChanges: Bool = false
+    ) {
+        let resumeEventID = preservePendingChanges ? eventMonitor.resumeEventID : nil
+        stopMonitoring(clearPendingChanges: !preservePendingChanges)
+        if preservePendingChanges {
+            pendingChanges.retainPaths(inside: Set(settings.folderPaths))
+        }
         guard settings.automaticallyCompress, !settings.folderPaths.isEmpty else { return }
-        monitoringTask = Task { [weak self] in
+
+        let generation = monitoringGeneration
+        let started = eventMonitor.start(
+            paths: settings.folderPaths,
+            sinceWhen: resumeEventID
+        ) { [weak self] delivery in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.receiveCompressionEvents(
+                        delivery.batch,
+                        generation: generation
+                      ) else { return }
+                self.eventMonitor.acknowledge(delivery)
+            }
+        }
+        guard started else {
+            error = .monitoringUnavailable
+            return
+        }
+        schedulePendingChanges(generation: generation)
+
+        if let initialScanRoots, !initialScanRoots.isEmpty {
+            initialScanTask = Task { [weak self] in
+                await self?.waitAndPerformAutomaticScan(
+                    .folders(initialScanRoots),
+                    generation: generation
+                )
+            }
+        }
+        reconciliationTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
-                    try await Task.sleep(for: .seconds(300))
+                    try await Task.sleep(for: .seconds(86_400))
                 } catch {
                     return
                 }
-                guard !Task.isCancelled, let self else { return }
-                await self.scanNow()
-                guard !Task.isCancelled else { return }
-                await self.compressCandidates()
+                guard let self else { return }
+                await self.waitAndPerformAutomaticScan(.allFolders, generation: generation)
             }
         }
+    }
+
+    private func stopMonitoring(clearPendingChanges: Bool = true) {
+        monitoringGeneration = UUID()
+        eventMonitor.stop()
+        pendingDeadlineTask?.cancel()
+        initialScanTask?.cancel()
+        reconciliationTask?.cancel()
+        pendingDeadlineTask = nil
+        initialScanTask = nil
+        reconciliationTask = nil
+        if clearPendingChanges {
+            pendingChanges.removeAll()
+        }
+        retryBackoff.reset()
+    }
+
+    private func receiveCompressionEvents(
+        _ batch: FileCompressionChangeBatch,
+        generation: UUID
+    ) -> Bool {
+        guard generation == monitoringGeneration, settings.automaticallyCompress else { return false }
+        retryBackoff.reset()
+        pendingChanges.record(batch, stableSeconds: settings.stableSeconds)
+        schedulePendingChanges(generation: generation)
+        return true
+    }
+
+    private func schedulePendingChanges(
+        generation: UUID,
+        notBefore: Date? = nil
+    ) {
+        pendingDeadlineTask?.cancel()
+        guard generation == monitoringGeneration, let nextDeadline = pendingChanges.nextDeadline else {
+            pendingDeadlineTask = nil
+            return
+        }
+        let deadline = max(nextDeadline, notBefore ?? .distantPast)
+        let delay = max(0, deadline.timeIntervalSinceNow)
+        pendingDeadlineTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                return
+            }
+            guard let self else { return }
+            await self.processPendingChanges(generation: generation)
+        }
+    }
+
+    private func processPendingChanges(generation: UUID) async {
+        guard generation == monitoringGeneration, settings.automaticallyCompress else { return }
+        guard !isScanning, !isProcessing else {
+            schedulePendingChanges(
+                generation: generation,
+                notBefore: Date().addingTimeInterval(2)
+            )
+            return
+        }
+        let dueChanges = pendingChanges.takeDue()
+        guard !dueChanges.isEmpty else {
+            schedulePendingChanges(generation: generation)
+            return
+        }
+        let scope = AutomaticScanScope.dueChanges(dueChanges)
+        let outcome = await performAutomaticScan(scope, generation: generation)
+        handleAutomaticScanOutcome(outcome, scope: scope, generation: generation)
+        schedulePendingChanges(generation: generation)
+    }
+
+    private func waitAndPerformAutomaticScan(
+        _ scope: AutomaticScanScope,
+        generation: UUID
+    ) async {
+        while !Task.isCancelled, generation == monitoringGeneration, settings.automaticallyCompress {
+            if !isScanning, !isProcessing {
+                let outcome = await performAutomaticScan(scope, generation: generation)
+                handleAutomaticScanOutcome(outcome, scope: scope, generation: generation)
+                schedulePendingChanges(generation: generation)
+                return
+            }
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func performAutomaticScan(
+        _ scope: AutomaticScanScope,
+        generation: UUID
+    ) async -> AutomaticScanOutcome {
+        guard generation == monitoringGeneration, !isScanning, !isProcessing else {
+            return .scanFailed(.scanFailed("Automatic compression is busy."))
+        }
+        isScanning = true
+        scan = nil
+        error = nil
+        let currentSettings = settings
+        let work: AutomaticScanWork
+        do {
+            work = try await Task.detached(priority: .utility) { [engine] in
+                switch scope {
+                case .allFolders:
+                    let scan = try engine.scan(settings: currentSettings)
+                    return AutomaticScanWork(
+                        candidates: scan.candidates,
+                        folderIssues: scan.folderIssues
+                    )
+                case .folders(let roots):
+                    var rootSettings = currentSettings
+                    rootSettings.folderPaths = roots.sorted()
+                    let scan = try engine.scan(settings: rootSettings)
+                    return AutomaticScanWork(
+                        candidates: scan.candidates,
+                        folderIssues: scan.folderIssues
+                    )
+                case .dueChanges(let changes):
+                    var found = try engine.scanChangedPaths(
+                        changes.changedPaths,
+                        settings: currentSettings
+                    )
+                    var folderIssues: [FileCompressionFolderIssue] = []
+                    if !changes.rootsRequiringFullScan.isEmpty {
+                        var rootSettings = currentSettings
+                        rootSettings.folderPaths = changes.rootsRequiringFullScan.sorted()
+                        let scan = try engine.scan(settings: rootSettings)
+                        found.append(contentsOf: scan.candidates)
+                        folderIssues.append(contentsOf: scan.folderIssues)
+                    }
+                    var seen = Set<String>()
+                    return AutomaticScanWork(
+                        candidates: found.filter {
+                            seen.insert("\($0.deviceID):\($0.inode)").inserted
+                        },
+                        folderIssues: folderIssues
+                    )
+                }
+            }.value
+        } catch let compressionError as AppleFileCompressionError {
+            error = compressionError
+            isScanning = false
+            return .scanFailed(compressionError)
+        } catch {
+            let scanError = AppleFileCompressionError.scanFailed(error.localizedDescription)
+            self.error = scanError
+            isScanning = false
+            return .scanFailed(scanError)
+        }
+        isScanning = false
+        if let firstIssue = work.folderIssues.first {
+            error = firstIssue.error
+        }
+
+        let retryableRoots = Set(work.folderIssues.compactMap { issue in
+            issue.isRetryableForAutomaticCompression ? issue.folderURL.path : nil
+        })
+
+        guard generation == monitoringGeneration, settings.automaticallyCompress else {
+            return .completed(retryablePaths: [], retryableRoots: [])
+        }
+        guard !work.candidates.isEmpty else {
+            return .completed(retryablePaths: [], retryableRoots: retryableRoots)
+        }
+        isProcessing = true
+        lastActionWasRestore = false
+        let result = await Task.detached(priority: .utility) { [engine] in
+            engine.compress(work.candidates, settings: currentSettings)
+        }.value
+        lastResult = result
+        scan = nil
+        isProcessing = false
+        return .completed(
+            retryablePaths: Set(result.retryableFiles),
+            retryableRoots: retryableRoots
+        )
+    }
+
+    private func handleAutomaticScanOutcome(
+        _ outcome: AutomaticScanOutcome,
+        scope: AutomaticScanScope,
+        generation: UUID
+    ) {
+        guard generation == monitoringGeneration, settings.automaticallyCompress else { return }
+        let retryChanges: FileCompressionDueChanges
+        switch outcome {
+        case .completed(let retryablePaths, let retryableRoots):
+            guard !retryablePaths.isEmpty || !retryableRoots.isEmpty else {
+                retryBackoff.reset()
+                return
+            }
+            retryChanges = FileCompressionDueChanges(
+                changedPaths: retryablePaths,
+                rootsRequiringFullScan: retryableRoots
+            )
+        case .scanFailed(let error):
+            switch error {
+            case .folderNotSelected, .unsupportedFileSystem, .monitoringUnavailable:
+                retryBackoff.reset()
+                return
+            default:
+                break
+            }
+            switch scope {
+            case .allFolders:
+                retryChanges = FileCompressionDueChanges(
+                    rootsRequiringFullScan: Set(settings.folderPaths)
+                )
+            case .folders(let roots):
+                retryChanges = FileCompressionDueChanges(rootsRequiringFullScan: roots)
+            case .dueChanges(let changes):
+                retryChanges = changes
+            }
+        }
+        guard let retryDelay = retryBackoff.consumeDelay() else { return }
+        pendingChanges.requeue(retryChanges, delaySeconds: retryDelay)
     }
 }
 
@@ -1044,6 +1460,7 @@ struct FileCompressionView: View {
     @ObservedObject var compression: FolderCompressionModel
     @State private var extensionText = ""
     @State private var folderPendingRemoval: String?
+    @State private var showsAutomaticCompressionInfo = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1148,16 +1565,42 @@ struct FileCompressionView: View {
                 Divider()
             }
 
-            Toggle(isOn: Binding(
-                get: { compression.settings.automaticallyCompress },
-                set: { compression.setAutomaticallyCompress($0) }
-            )) {
-                VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
                     Text(t("compressionAutomatic"))
-                    Text(t("compressionAutomaticHint"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Button {
+                        showsAutomaticCompressionInfo.toggle()
+                    } label: {
+                        Image(systemName: "info.circle.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.cyan)
+                    }
+                    .buttonStyle(.plain)
+                    .help(t("compressionAutomaticInfoHelp"))
+                    .popover(isPresented: $showsAutomaticCompressionInfo, arrowEdge: .trailing) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label(t("compressionAutomaticInfo"), systemImage: "wave.3.right.circle.fill")
+                                .font(.headline)
+                                .foregroundStyle(.cyan)
+                            Text(t("compressionAutomaticInfoBody"))
+                                .font(.callout)
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(18)
+                        .frame(width: 390, alignment: .leading)
+                    }
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { compression.settings.automaticallyCompress },
+                        set: { compression.setAutomaticallyCompress($0) }
+                    ))
+                    .labelsHidden()
+                    .accessibilityLabel(t("compressionAutomatic"))
                 }
+                Text(t("compressionAutomaticHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .disabled(compression.settings.folderPaths.isEmpty)
         }
@@ -1479,6 +1922,8 @@ struct FileCompressionView: View {
             t("compressionErrorCoordination", message)
         case .fileInUse:
             t("compressionErrorFileInUse")
+        case .monitoringUnavailable:
+            t("compressionErrorMonitoringUnavailable")
         case .recoveryCopyPreserved(let path):
             t("compressionRecoveryPreserved", path)
         case .replacementFailed:

@@ -36,6 +36,12 @@ struct FileCompressionTests {
         #expect(AppText.value("compressionRestoring", language: .simplifiedChinese) == "正在恢复文件…")
         #expect(AppText.value("compressionCompressing", language: .english) == "Compressing files…")
         #expect(AppText.value("compressionRestoring", language: .english) == "Restoring files…")
+        #expect(AppText.value("compressionAutomaticInfo", language: .simplifiedChinese) == "自动扫描方式")
+        #expect(AppText.value("compressionAutomaticInfo", language: .english) == "Automatic scanning")
+        #expect(AppText.value("compressionAutomaticInfoBody", language: .simplifiedChinese).contains("每 24 小时"))
+        #expect(AppText.value("compressionAutomaticInfoBody", language: .english).contains("every 24 hours"))
+        #expect(AppText.value("compressionErrorMonitoringUnavailable", language: .simplifiedChinese).contains("文件夹变化监控"))
+        #expect(AppText.value("compressionErrorMonitoringUnavailable", language: .english).contains("Folder change monitoring"))
     }
 
     @Test func selectsOnlyStableMatchingFiles() {
@@ -103,6 +109,48 @@ struct FileCompressionTests {
         #expect(policy.eligibility(of: dataless, now: now) == .excluded(.sparse))
     }
 
+    @Test func excludesFilesAboveTheMacOSFilesystemCompressionLimit() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let policy = FileCompressionPolicy(settings: FolderCompressionSettings(
+            fileExtensions: ["json"],
+            minimumFileSize: 1,
+            stableSeconds: 0
+        ))
+        let maximum = FileCompressionPolicy.maximumCompressibleFileSize
+        let supported = FileCompressionFacts(
+            pathExtension: "json",
+            logicalSize: maximum,
+            allocatedSize: maximum,
+            modifiedAt: now
+        )
+        let tooLarge = FileCompressionFacts(
+            pathExtension: "json",
+            logicalSize: maximum + 1,
+            allocatedSize: maximum + 1,
+            modifiedAt: now
+        )
+
+        #expect(policy.eligibility(of: supported, now: now) == .eligible)
+        #expect(policy.eligibility(of: tooLarge, now: now) == .excluded(.tooLargeForSystemCompression))
+    }
+
+    @Test func onlyTransientFolderScanIssuesAreRetriedAutomatically() {
+        let folderURL = URL(fileURLWithPath: "/tmp/monitored", isDirectory: true)
+
+        #expect(FileCompressionFolderIssue(
+            folderURL: folderURL,
+            error: .folderUnavailable
+        ).isRetryableForAutomaticCompression)
+        #expect(FileCompressionFolderIssue(
+            folderURL: folderURL,
+            error: .scanFailed("Temporary I/O error")
+        ).isRetryableForAutomaticCompression)
+        #expect(!FileCompressionFolderIssue(
+            folderURL: folderURL,
+            error: .unsupportedFileSystem("exFAT")
+        ).isRetryableForAutomaticCompression)
+    }
+
     @Test func recursivelyScansOnlyEligibleFiles() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
@@ -161,6 +209,88 @@ struct FileCompressionTests {
         #expect(scan.candidates.count == 3)
     }
 
+    @Test func incrementalScanOnlyExaminesChangedFilesAndDirectories() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let nested = root.appendingPathComponent("new-directory", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let oldDate = Date(timeIntervalSinceNow: -3_600)
+        try writeFile(named: "changed.log", in: root, modifiedAt: oldDate)
+        try writeFile(named: "unchanged.log", in: root, modifiedAt: oldDate)
+        try writeFile(named: "new-directory/new.log", in: root, modifiedAt: oldDate)
+        let settings = FolderCompressionSettings(
+            folderPaths: [root.path],
+            fileExtensions: ["log"],
+            minimumFileSize: 1,
+            stableSeconds: 0
+        )
+
+        let candidates = try AppleFileCompressionEngine().scanChangedPaths(
+            [root.appendingPathComponent("changed.log").path, nested.path],
+            settings: settings
+        )
+
+        #expect(Set(candidates.map(\.relativePath)) == ["changed.log", "new-directory/new.log"])
+    }
+
+    @Test func incrementalScanIgnoresDeletedAndOutsidePaths() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+        let outsideRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-outside-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outsideRoot)
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outsideRoot, withIntermediateDirectories: true)
+        try writeFile(named: "outside.log", in: outsideRoot, modifiedAt: .distantPast)
+        let settings = FolderCompressionSettings(
+            folderPaths: [root.path],
+            fileExtensions: ["log"],
+            minimumFileSize: 1,
+            stableSeconds: 0
+        )
+
+        let candidates = try AppleFileCompressionEngine().scanChangedPaths(
+            [root.appendingPathComponent("deleted.log").path, outsideRoot.appendingPathComponent("outside.log").path],
+            settings: settings
+        )
+
+        #expect(candidates.isEmpty)
+    }
+
+    @Test func incrementalScanHonorsFileStabilityWindow() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let modifiedAt = Date(timeIntervalSince1970: 1_000)
+        try writeFile(named: "new.log", in: root, modifiedAt: modifiedAt)
+        let settings = FolderCompressionSettings(
+            folderPaths: [root.path],
+            fileExtensions: ["log"],
+            minimumFileSize: 1,
+            stableSeconds: 600
+        )
+        let path = root.appendingPathComponent("new.log").path
+
+        let tooEarly = try AppleFileCompressionEngine().scanChangedPaths(
+            [path],
+            settings: settings,
+            now: Date(timeIntervalSince1970: 1_599)
+        )
+        let stable = try AppleFileCompressionEngine().scanChangedPaths(
+            [path],
+            settings: settings,
+            now: Date(timeIntervalSince1970: 1_600)
+        )
+
+        #expect(tooEarly.isEmpty)
+        #expect(stable.map(\.relativePath) == ["new.log"])
+    }
+
     @Test func continuesScanningAvailableFoldersAndReportsUnavailableFolders() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
@@ -179,9 +309,13 @@ struct FileCompressionTests {
         let scan = try AppleFileCompressionEngine().scan(settings: settings)
 
         #expect(scan.candidates.map(\.url.lastPathComponent) == ["available.log"])
-        #expect(scan.folderIssues == [
-            FileCompressionFolderIssue(folderURL: missing, error: .folderUnavailable)
-        ])
+        #expect(scan.folderIssues == [FileCompressionFolderIssue(
+            folderURL: URL(
+                fileURLWithPath: FileCompressionPath.canonical(missing.path),
+                isDirectory: true
+            ),
+            error: .folderUnavailable
+        )])
     }
 
     @Test func distinguishesSameNamedFilesFromDifferentFolders() throws {
@@ -427,6 +561,7 @@ struct FileCompressionTests {
         #expect(result.compressedCount == 0)
         #expect(result.skippedCount == 1)
         #expect(result.failedCount == 0)
+        #expect(result.retryableFiles.isEmpty)
         #expect(try Data(contentsOf: sourceURL) == content)
         #expect(try engine.scan(settings: settings).candidates.count == 1)
     }
@@ -514,6 +649,7 @@ struct FileCompressionTests {
         #expect(result.compressedCount == 0)
         #expect(result.skippedCount == 1)
         #expect(result.failedCount == 0)
+        #expect(result.retryableFiles == [FileCompressionPath.canonical(sourceURL.path)])
         #expect(try Data(contentsOf: sourceURL) == content)
     }
 
