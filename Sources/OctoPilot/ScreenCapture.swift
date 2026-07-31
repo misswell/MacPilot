@@ -4,7 +4,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 import SwiftUI
 import UniformTypeIdentifiers
 
