@@ -28,5 +28,7 @@
 	<string>OctoPilot uses Bluetooth to detect nearby BLE devices (such as your iPhone or Apple Watch) for proximity-based screen lock and unlock.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>OctoPilot uses Bluetooth to detect nearby BLE devices for proximity-based screen lock and unlock.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>OctoPilot captures periodic screenshots for your activity records. Screenshots are saved only to the folder you choose and are never transmitted.</string>
 </dict>
 </plist>

@@ -443,6 +443,26 @@ enum AppText {
         "compressionErrorUnavailable": "macOS 未能压缩此文件。", "compressionErrorVerification": "压缩副本与原文件校验不一致。",
         "compressionErrorCommand": "macOS 压缩命令失败：%@", "compressionErrorCoordination": "无法安全协调文件访问：%@", "compressionErrorFileInUse": "文件正被其他进程使用，已跳过。", "compressionErrorReplacement": "无法原子替换原文件。",
         "compressionFolderIssue": "%@：%@"
+        ,
+        "screenCapture": "截屏记录", "screenCaptureSubtitle": "定时截取屏幕画面并保存到指定文件夹，支持忙时/闲时不同间隔，使用 HEIC 高效压缩。",
+        "scOutputFolder": "保存文件夹", "scNoFolder": "尚未选择文件夹", "scChooseFolder": "选择文件夹…",
+        "scCaptureAllDisplays": "截取所有显示器", "scCaptureAllDisplaysHint": "多显示器时分别保存每块屏幕的画面。",
+        "scShowCursor": "包含鼠标光标",
+        "scSchedule": "截屏计划", "scEnableCapture": "启用定时截屏", "scCaptureNow": "立即截屏",
+        "scBusyHours": "忙时时段", "scStart": "开始", "scEnd": "结束",
+        "scBusyHoursHint": "设置忙时（工作时段）的范围。忙时和闲时可分别设置不同截屏间隔。开始等于结束表示无忙时时段。",
+        "scBusyInterval": "忙时间隔", "scIdleInterval": "闲时间隔",
+        "scCurrentInterval": "当前间隔：%d 分钟", "scMinutesValue": "%d 分钟",
+        "scQuality": "画质与压缩", "scFormat": "图片格式",
+        "scFormatHEIC": "HEIC", "scFormatJPEG": "JPEG", "scFormatPNG": "PNG",
+        "scCompressionQuality": "压缩质量", "scQualityHint": "HEIC 在 60%–80% 时肉眼几乎无损且体积远小于 PNG。数值越低体积越小，越高画质越好。",
+        "scRetention": "自动清理", "scRetentionDisabled": "不自动清理", "scRetentionDays": "保留 %d 天",
+        "scRetentionHint": "超过设定天数的截屏会自动删除。设为 0 表示永久保留。",
+        "scStatus": "状态", "scPermissionRequired": "需要屏幕录制权限才能截屏。",
+        "scGrantPermission": "授权屏幕录制…",
+        "scStatusRunning": "运行中", "scCaptureCount": "截屏次数", "scScreenshotCount": "截图数量",
+        "scDiskUsage": "磁盘占用", "scLastCapture": "上次截屏", "scLastSize": "上次大小",
+        "scNextCapture": "下次截屏：%@", "scYes": "是", "scNo": "否"
     ]
 
     static func value(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
@@ -577,6 +597,26 @@ enum AppText {
             "compressionErrorUnavailable": "macOS could not compress this file.", "compressionErrorVerification": "The compressed copy did not match the original file.",
             "compressionErrorCommand": "The macOS compression command failed: %@", "compressionErrorCoordination": "The file could not be coordinated safely: %@", "compressionErrorFileInUse": "The file is open in another process and was skipped.", "compressionErrorReplacement": "The original file could not be replaced atomically.",
             "compressionFolderIssue": "%@: %@"
+            ,
+            "screenCapture": "Screen Capture", "screenCaptureSubtitle": "Periodically capture screenshots to a chosen folder, with separate busy/idle intervals and efficient HEIC compression.",
+            "scOutputFolder": "Output Folder", "scNoFolder": "No folder selected", "scChooseFolder": "Choose Folder…",
+            "scCaptureAllDisplays": "Capture all displays", "scCaptureAllDisplaysHint": "Save each display separately when using multiple monitors.",
+            "scShowCursor": "Include mouse cursor",
+            "scSchedule": "Schedule", "scEnableCapture": "Enable periodic capture", "scCaptureNow": "Capture Now",
+            "scBusyHours": "Busy Hours", "scStart": "Start", "scEnd": "End",
+            "scBusyHoursHint": "Set the busy (working) time range. Busy and idle periods can have different capture intervals. Equal start and end means no busy period.",
+            "scBusyInterval": "Busy interval", "scIdleInterval": "Idle interval",
+            "scCurrentInterval": "Current interval: %d min", "scMinutesValue": "%d min",
+            "scQuality": "Quality & Compression", "scFormat": "Image format",
+            "scFormatHEIC": "HEIC", "scFormatJPEG": "JPEG", "scFormatPNG": "PNG",
+            "scCompressionQuality": "Compression quality", "scQualityHint": "HEIC at 60%–80% is visually lossless and far smaller than PNG. Lower values reduce size; higher values improve quality.",
+            "scRetention": "Auto-cleanup", "scRetentionDisabled": "No auto-cleanup", "scRetentionDays": "Keep %d days",
+            "scRetentionHint": "Screenshots older than the set number of days are automatically deleted. Set to 0 to keep forever.",
+            "scStatus": "Status", "scPermissionRequired": "Screen Recording permission is required to capture the screen.",
+            "scGrantPermission": "Grant Screen Recording…",
+            "scStatusRunning": "Running", "scCaptureCount": "Capture runs", "scScreenshotCount": "Screenshots",
+            "scDiskUsage": "Disk usage", "scLastCapture": "Last capture", "scLastSize": "Last size",
+            "scNextCapture": "Next capture: %@", "scYes": "Yes", "scNo": "No"
         ]
 }
 
@@ -596,8 +636,10 @@ final class OctoPilotModel: ObservableObject {
         var bleUnlock: BLEUnlockSettings
         var fileCompression: FolderCompressionSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings) {
-            version = 7
+        var screenCapture: ScreenCaptureSettings
+
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings) {
+            version = 8
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -606,6 +648,7 @@ final class OctoPilotModel: ObservableObject {
             self.lastScheduledBootSession = lastScheduledBootSession
             self.bleUnlock = bleUnlock
             self.fileCompression = fileCompression
+            self.screenCapture = screenCapture
         }
 
         init(from decoder: Decoder) throws {
@@ -619,6 +662,7 @@ final class OctoPilotModel: ObservableObject {
             lastScheduledBootSession = try container.decodeIfPresent(String.self, forKey: .lastScheduledBootSession)
             bleUnlock = try container.decodeIfPresent(BLEUnlockSettings.self, forKey: .bleUnlock) ?? BLEUnlockSettings()
             fileCompression = try container.decodeIfPresent(FolderCompressionSettings.self, forKey: .fileCompression) ?? FolderCompressionSettings()
+            screenCapture = try container.decodeIfPresent(ScreenCaptureSettings.self, forKey: .screenCapture) ?? ScreenCaptureSettings()
         }
     }
 
@@ -636,6 +680,7 @@ final class OctoPilotModel: ObservableObject {
     let ble = BLEUnlockModel()
     let updater = SoftwareUpdater()
     let fileCompression = FolderCompressionModel()
+    let screenCapture = ScreenCaptureModel()
     @Published var requestedSection: MainSection?
     private var launchTasks: [UUID: Task<Void, Never>] = [:]
     private let launchGate = LaunchGate(minimumStartInterval: 3)
@@ -669,9 +714,11 @@ final class OctoPilotModel: ObservableObject {
         requestAccessibilityAfterResetIfNeeded()
         ble.persist = { [weak self] in self?.saveIfReady() }
         fileCompression.persist = { [weak self] in self?.saveIfReady() }
+        screenCapture.persist = { [weak self] in self?.saveIfReady() }
         ble.startObservingSystemState()
         ble.activateFromConfiguration()
         fileCompression.activateFromConfiguration()
+        screenCapture.activateFromConfiguration()
         Task { [weak updater] in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
@@ -1245,6 +1292,7 @@ final class OctoPilotModel: ObservableObject {
         lastScheduledBootSession = configuration.lastScheduledBootSession
         ble.applyLoadedSettings(configuration.bleUnlock)
         fileCompression.applyLoadedSettings(configuration.fileCompression)
+        screenCapture.applyLoadedSettings(configuration.screenCapture)
     }
 
     private func save() {
@@ -1256,7 +1304,8 @@ final class OctoPilotModel: ObservableObject {
             isLaunchSchedulingEnabled: isLaunchSchedulingEnabled,
             lastScheduledBootSession: lastScheduledBootSession,
             bleUnlock: ble.settings,
-            fileCompression: fileCompression.settings
+            fileCompression: fileCompression.settings,
+            screenCapture: screenCapture.settings
         )
         do {
             let directory = configurationURL.deletingLastPathComponent()
@@ -1473,7 +1522,7 @@ final class OctoPilotModel: ObservableObject {
     var timeString: String { lastChecked.formatted(.dateTime.hour().minute().locale(language.locale)) }
 }
 
-enum MainSection { case exit, launch, ble, compression, settings }
+enum MainSection { case exit, launch, ble, compression, capture, settings }
 
 struct ContentView: View {
     @EnvironmentObject private var model: OctoPilotModel
@@ -1499,6 +1548,8 @@ struct ContentView: View {
                     BLEUnlockView(ble: model.ble)
                 } else if section == .compression {
                     FileCompressionView(compression: model.fileCompression)
+                } else if section == .capture {
+                    ScreenCaptureView(capture: model.screenCapture)
                 } else {
                     SettingsView()
                 }
@@ -1652,6 +1703,15 @@ struct Sidebar: View {
             }
             .buttonStyle(.plain)
             .background(section == .compression ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            Button { section = .capture } label: {
+                Label(model.t("screenCapture"), systemImage: "camera.viewfinder")
+                    .padding(.vertical, 9).padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(section == .capture ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             Button { section = .settings } label: {
                 Label(model.t("settings"), systemImage: "gearshape")
