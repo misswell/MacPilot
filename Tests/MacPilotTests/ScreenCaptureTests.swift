@@ -4,6 +4,13 @@ import Testing
 
 struct ScreenCaptureTests {
 
+    @Test func screenCaptureResetUsesCurrentBundleIdentifier() {
+        let command = ScreenCaptureResetCommand(bundleIdentifier: "com.misswell.macpilot")
+
+        #expect(command.executableURL == URL(fileURLWithPath: "/usr/bin/tccutil"))
+        #expect(command.arguments == ["reset", "ScreenCapture", "com.misswell.macpilot"])
+    }
+
     // MARK: - Busy/idle hour detection
 
     @Test func normalRangeDetectsBusyHours() {

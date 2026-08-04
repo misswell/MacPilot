@@ -130,6 +130,7 @@ enum ScreenCaptureError: LocalizedError {
     case noOutputFolder
     case outputFolderUnavailable
     case noDisplayFound
+    case permissionRequired
     case captureFailed(String)
     case encodingFailed
 
@@ -138,10 +139,33 @@ enum ScreenCaptureError: LocalizedError {
         case .noOutputFolder: return "No output folder selected."
         case .outputFolderUnavailable: return "The output folder is unavailable."
         case .noDisplayFound: return "No display was found to capture."
+        case .permissionRequired: return "Screen Recording permission is required to capture the screen."
         case .captureFailed(let detail): return "Screen capture failed: \(detail)"
         case .encodingFailed: return "Failed to encode the screenshot image."
         }
     }
+}
+
+struct ScreenCaptureResetCommand: Sendable {
+    let bundleIdentifier: String
+
+    var executableURL: URL { URL(fileURLWithPath: "/usr/bin/tccutil") }
+    var arguments: [String] { ["reset", "ScreenCapture", bundleIdentifier] }
+
+    @discardableResult
+    func run() throws -> Int32 {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+}
+
+enum ScreenCaptureResetExecution: Sendable {
+    case success(Int32)
+    case failure(String)
 }
 
 // MARK: - Model
@@ -156,6 +180,7 @@ final class ScreenCaptureModel: ObservableObject {
     @Published private(set) var totalDiskUsage: Int64 = 0
     @Published private(set) var screenshotCount: Int = 0
     @Published private(set) var errorMessage: String?
+    @Published private(set) var isPermissionError = false
     @Published private(set) var hasScreenPermission = false
     @Published private(set) var nextCaptureDate: Date?
     @Published private(set) var isLoopRunning = false
@@ -176,6 +201,7 @@ final class ScreenCaptureModel: ObservableObject {
         isLoading = true
         settings = newSettings
         hasScreenPermission = CGPreflightScreenCaptureAccess()
+        isPermissionError = false
         isLoading = false
     }
 
@@ -272,6 +298,10 @@ final class ScreenCaptureModel: ObservableObject {
                 let granted = CGPreflightScreenCaptureAccess()
                 await MainActor.run {
                     self.hasScreenPermission = granted
+                    if granted {
+                        self.isPermissionError = false
+                        self.errorMessage = nil
+                    }
                 }
                 if granted { break }
             }
@@ -338,9 +368,11 @@ final class ScreenCaptureModel: ObservableObject {
             hasScreenPermission = CGPreflightScreenCaptureAccess()
             if !hasScreenPermission {
                 requestScreenPermission()
-                errorMessage = "Screen Recording permission is required. Grant it in System Settings, then restart MacPilot."
+                isPermissionError = true
+                errorMessage = ScreenCaptureError.permissionRequired.errorDescription
                 return
             }
+            isPermissionError = false
         }
         Task { await performCapture() }
     }
@@ -367,10 +399,12 @@ final class ScreenCaptureModel: ObservableObject {
                 captureCount += 1
                 screenshotCount += saved.count
                 errorMessage = nil
+                isPermissionError = false
             }
             await refreshDiskUsage()
             await cleanupOldScreenshots()
         } catch {
+            isPermissionError = false
             errorMessage = error.localizedDescription
         }
     }
@@ -569,6 +603,7 @@ struct ScreenCaptureView: View {
     @EnvironmentObject private var appModel: MacPilotModel
     @ObservedObject var capture: ScreenCaptureModel
     @State private var showingFolderPicker = false
+    @State private var resetFailureMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -837,11 +872,33 @@ struct ScreenCaptureView: View {
             if !capture.hasScreenPermission {
                 Label(t("scPermissionRequired"), systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
-                Button(t("scGrantPermission")) { capture.requestScreenPermission() }
-                    .buttonStyle(.bordered)
+                HStack {
+                    Button(t("scGrantPermission")) { capture.requestScreenPermission() }
+                        .buttonStyle(.bordered)
+                    Button(appModel.isResettingScreenCapture ? t("scResettingPermission") : t("scResetPermission"), role: .destructive) {
+                        Task {
+                            resetFailureMessage = await appModel.resetScreenCapturePermission(presentFailureAlert: false)
+                            guard resetFailureMessage == nil else { return }
+                            appModel.terminateAfterSheetsClose()
+                        }
+                    }
+                    .disabled(appModel.isResettingScreenCapture)
+                }
+                Label(t("scPermissionRecoveryHint"), systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let resetFailureMessage {
+                    Text(resetFailureMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
 
-            if let error = capture.errorMessage {
+            if capture.isPermissionError {
+                Label(t("scPermissionRestartHint"), systemImage: "xmark.octagon.fill")
+                    .foregroundStyle(.red)
+                    .font(.caption)
+            } else if let error = capture.errorMessage {
                 Label(error, systemImage: "xmark.octagon.fill")
                     .foregroundStyle(.red)
                     .font(.caption)

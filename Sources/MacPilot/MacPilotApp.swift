@@ -474,6 +474,10 @@ enum AppText {
         "scRetentionHint": "超过设定天数的截屏会自动删除。设为 0 表示永久保留。",
         "scStatus": "状态", "scPermissionRequired": "需要屏幕录制权限才能截屏。",
         "scGrantPermission": "授权屏幕录制…",
+        "scResetPermission": "重置权限并退出", "scResettingPermission": "正在重置…",
+        "scPermissionRecoveryHint": "如果系统设置中已经允许但仍无法截屏，请重置旧的屏幕录制授权记录。",
+        "scPermissionRestartHint": "授权后请重启 MacPilot；如果仍无法截屏，请重置权限并退出。",
+        "scPermissionResetFailed": "无法重置屏幕录制权限：%@", "scPermissionResetStatus": "tccutil 退出状态：%d",
         "scStatusRunning": "运行中", "scCaptureCount": "截屏次数", "scScreenshotCount": "截图数量",
         "scDiskUsage": "磁盘占用", "scLastCapture": "上次截屏", "scLastSize": "上次大小",
         "scNextCapture": "下次截屏：%@", "scYes": "是", "scNo": "否"
@@ -628,6 +632,10 @@ enum AppText {
             "scRetentionHint": "Screenshots older than the set number of days are automatically deleted. Set to 0 to keep forever.",
             "scStatus": "Status", "scPermissionRequired": "Screen Recording permission is required to capture the screen.",
             "scGrantPermission": "Grant Screen Recording…",
+            "scResetPermission": "Reset Permission and Quit", "scResettingPermission": "Resetting…",
+            "scPermissionRecoveryHint": "If System Settings already allows access but capture still fails, reset the stale Screen Recording permission record.",
+            "scPermissionRestartHint": "Grant access, then restart MacPilot. If capture still fails, reset the permission and quit.",
+            "scPermissionResetFailed": "Couldn’t reset Screen Recording access: %@", "scPermissionResetStatus": "tccutil exited with status %d",
             "scStatusRunning": "Running", "scCaptureCount": "Capture runs", "scScreenshotCount": "Screenshots",
             "scDiskUsage": "Disk usage", "scLastCapture": "Last capture", "scLastSize": "Last size",
             "scNextCapture": "Next capture: %@", "scYes": "Yes", "scNo": "No"
@@ -689,6 +697,7 @@ final class MacPilotModel: ObservableObject {
     @Published private(set) var alertOffersAccessibilitySettings = false
     @Published private(set) var alertOffersAccessibilityReset = false
     @Published private(set) var isResettingAccessibility = false
+    @Published private(set) var isResettingScreenCapture = false
     @Published private(set) var launchesAtLogin = false
     @Published var language: AppLanguage = .system { didSet { saveIfReady() } }
     let ble = BLEUnlockModel()
@@ -797,6 +806,37 @@ final class MacPilotModel: ObservableObject {
         case .failure(let description):
             let message = t("accessibilityResetFailed", description)
             isResettingAccessibility = false
+            if presentFailureAlert { showAlert(message) }
+            return message
+        }
+    }
+
+    @discardableResult
+    func resetScreenCapturePermission(presentFailureAlert: Bool = true) async -> String? {
+        guard !isResettingScreenCapture else { return t("scResettingPermission") }
+        isResettingScreenCapture = true
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? AppIdentity.bundleIdentifier
+        let command = ScreenCaptureResetCommand(bundleIdentifier: bundleIdentifier)
+        let execution = await Task.detached(priority: .userInitiated) {
+            do {
+                return ScreenCaptureResetExecution.success(try command.run())
+            } catch {
+                return ScreenCaptureResetExecution.failure(error.localizedDescription)
+            }
+        }.value
+
+        switch execution {
+        case .success(let status):
+            guard status == 0 else {
+                let message = t("scPermissionResetFailed", t("scPermissionResetStatus", status))
+                isResettingScreenCapture = false
+                if presentFailureAlert { showAlert(message) }
+                return message
+            }
+            return nil
+        case .failure(let description):
+            let message = t("scPermissionResetFailed", description)
+            isResettingScreenCapture = false
             if presentFailureAlert { showAlert(message) }
             return message
         }
