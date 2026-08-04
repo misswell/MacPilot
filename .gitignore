@@ -3,6 +3,7 @@
 OctoQuit.app/
 OctoPilot.app/
 MacPilot.app/
+bridge-artifacts/
 cert/
 OctoPilot-*.zip
 MacPilot-*.zip

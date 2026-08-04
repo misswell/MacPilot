@@ -71,6 +71,19 @@ export MACPILOT_TEAM_ID="TEAMID"
 
 This builds, signs with Developer ID + Hardened Runtime, submits to Apple for notarization, staples the ticket, and produces `MacPilot.app` + `MacPilot-<version>-macos.zip` that open without Gatekeeper warnings.
 
+### Bridge release for the rename
+
+Before the first release with the new Bundle ID, publish one bridge release using the old app identity. The bridge keeps `OctoPilot.app`, `com.misswell.octopilot`, and the `OctoPilot-<version>-macos.zip` archive name, while its visible app name is `MacPilot`:
+
+```sh
+MACPILOT_BRIDGE=1 \
+MACPILOT_VERSION=1.1.20 \
+MACPILOT_OUTPUT_DIR="$PWD/bridge-artifacts" \
+./Scripts/distribute-app.sh
+```
+
+Publish that archive without renaming it. Older OctoPilot versions can update to this bridge, and the bridge can then validate and install a later MacPilot release. When that automatic transition starts from an existing `OctoPilot.app`, the updater replaces the bundle in place, so the filesystem path may keep its old filename even though the installed Bundle ID and visible name are `MacPilot`. Use `./Scripts/build-app.sh` with the same variables for a local metadata check only; its ad-hoc output is not suitable for publishing.
+
 ### GitHub Releases
 
 Pushing a tag like `v1.1.0` runs the `dist` job, which signs and notarizes automatically. Configure these repository secrets:

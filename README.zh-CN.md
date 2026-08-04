@@ -86,6 +86,19 @@ export MACPILOT_TEAM_ID="TEAMID"
 
 脚本会构建、用 Developer ID + Hardened Runtime 签名、提交 Apple 公证、装订票据，产出 `MacPilot.app` 与 `MacPilot-<版本>-macos.zip`，双击即可打开，无 Gatekeeper 拦截。
 
+### 改名桥接版
+
+首次使用新 Bundle ID 正式发布前，应先发布一次桥接版。桥接版保留 `OctoPilot.app`、`com.misswell.octopilot` 和 `OctoPilot-<版本>-macos.zip` 归档名，但应用显示名称已经是 `MacPilot`：
+
+```sh
+MACPILOT_BRIDGE=1 \
+MACPILOT_VERSION=1.1.20 \
+MACPILOT_OUTPUT_DIR="$PWD/bridge-artifacts" \
+./Scripts/distribute-app.sh
+```
+
+发布时不要重命名这个归档。旧版 OctoPilot 可以先升级到桥接版，桥接版再验证并安装后续的 MacPilot 正式版。如果自动升级是从现有的 `OctoPilot.app` 开始，更新器会原地替换 app bundle，因此磁盘路径可能仍保留旧文件名，但安装后的 Bundle ID 和显示名称已经是 `MacPilot`。只检查本地元数据时，可对 `./Scripts/build-app.sh` 使用同样的环境变量；该命令生成的 ad-hoc 构建不能直接发布。
+
 ### GitHub Release
 
 推送形如 `v1.1.0` 的 tag 会触发 `dist` 任务，自动签名并公证。请在仓库配置以下 secrets：

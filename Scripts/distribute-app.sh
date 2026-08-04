@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # Produce a distributable, notarized MacPilot.app + zip.
+# Set MACPILOT_BRIDGE=1 for the one-time release that keeps the old app identity.
 # Requires:
 #   MACPILOT_DEVELOPER_ID          "Developer ID Application: Your Name (TEAMID)"
 # Notarization credentials - pick one:
@@ -35,16 +36,28 @@ else
 fi
 
 VERSION="${MACPILOT_VERSION:-${OCTOPILOT_VERSION:-$("$ROOT/Scripts/version.sh")}}"
-APP="$ROOT/MacPilot.app"
-ZIP="$ROOT/MacPilot-$VERSION-macos.zip"
+BRIDGE_MODE="${MACPILOT_BRIDGE:-${OCTOPILOT_BRIDGE:-0}}"
+if [[ "$BRIDGE_MODE" == "1" ]]; then
+    APP_BUNDLE_NAME="OctoPilot.app"
+    ARCHIVE_PREFIX="OctoPilot"
+else
+    APP_BUNDLE_NAME="MacPilot.app"
+    ARCHIVE_PREFIX="MacPilot"
+fi
+OUTPUT_DIR="${MACPILOT_OUTPUT_DIR:-$ROOT}"
+APP="$OUTPUT_DIR/$APP_BUNDLE_NAME"
+ZIP="$OUTPUT_DIR/$ARCHIVE_PREFIX-$VERSION-macos.zip"
 
 echo "==> Building and signing with Developer ID"
-MACPILOT_DEVELOPER_ID="$DEVELOPER_ID" ./Scripts/build-app.sh
+MACPILOT_BRIDGE="$BRIDGE_MODE" \
+MACPILOT_DEVELOPER_ID="$DEVELOPER_ID" \
+MACPILOT_OUTPUT_DIR="$OUTPUT_DIR" \
+MACPILOT_VERSION="$VERSION" \
+./Scripts/build-app.sh
 
 echo "==> Archiving for notarization"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
-echo "==> Submitting to Apple notarization service"
 echo "==> Submitting to Apple notarization service"
 xcrun notarytool submit "$ZIP" "${NOTARY_ARGS[@]}" --wait
 
