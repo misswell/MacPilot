@@ -86,7 +86,7 @@ Publish that archive without renaming it. Older OctoPilot versions can update to
 
 ### GitHub Releases
 
-Pushing a tag like `v1.1.0` runs the `dist` job, which signs and notarizes automatically. Configure these repository secrets:
+Pushing a tag like `v1.1.0` runs the `dist` job, which signs and notarizes automatically. The one-time bridge tag `v1.1.20` publishes the legacy `OctoPilot.app` identity; later tags publish the normal `MacPilot.app` identity. Configure these repository secrets:
 
 - `APPLE_CERTIFICATE_P12` — base64-encoded `.p12` of your Developer ID Application certificate
 - `APPLE_CERTIFICATE_PASSWORD` — password for that `.p12`

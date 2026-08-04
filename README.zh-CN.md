@@ -101,7 +101,7 @@ MACPILOT_OUTPUT_DIR="$PWD/bridge-artifacts" \
 
 ### GitHub Release
 
-推送形如 `v1.1.0` 的 tag 会触发 `dist` 任务，自动签名并公证。请在仓库配置以下 secrets：
+推送形如 `v1.1.0` 的 tag 会触发 `dist` 任务，自动签名并公证。一次性的桥接 tag `v1.1.20` 会发布旧身份的 `OctoPilot.app`；之后的 tag 会发布正常的 `MacPilot.app`。请在仓库配置以下 secrets：
 
 - `APPLE_CERTIFICATE_P12` - Developer ID Application 证书 `.p12` 的 base64
 - `APPLE_CERTIFICATE_PASSWORD` - 该 `.p12` 的密码

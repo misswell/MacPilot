@@ -73,9 +73,17 @@ jobs:
           version="$(./Scripts/version.sh)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "MACPILOT_VERSION=$version" >> "$GITHUB_ENV"
+          if [[ "${GITHUB_REF_NAME}" == "v1.1.20" ]]; then
+            echo "bridge=1" >> "$GITHUB_OUTPUT"
+            echo "archive_prefix=OctoPilot" >> "$GITHUB_OUTPUT"
+          else
+            echo "bridge=0" >> "$GITHUB_OUTPUT"
+            echo "archive_prefix=MacPilot" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Sign, notarize, staple, and package
         env:
+          MACPILOT_BRIDGE: ${{ steps.version.outputs.bridge }}
           MACPILOT_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
           MACPILOT_APPLE_ID: ${{ secrets.APPLE_ID }}
           MACPILOT_APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -89,4 +97,4 @@ jobs:
           gh release create "${{ github.ref_name }}"
           --title "MacPilot ${{ github.ref_name }}"
           --generate-notes
-          "MacPilot-${{ steps.version.outputs.version }}-macos.zip#MacPilot for macOS"
+          "${{ steps.version.outputs.archive_prefix }}-${{ steps.version.outputs.version }}-macos.zip#MacPilot for macOS"
