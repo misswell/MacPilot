@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import OctoPilot
+@testable import MacPilot
 
 struct LaunchRuleCodingTests {
     @Test func closeWindowsModeUsesBehaviorBasedName() {
@@ -16,21 +16,21 @@ struct LaunchRuleCodingTests {
     }
 
     @Test func accessibilityResetUsesCurrentBundleIdentifier() {
-        let command = AccessibilityResetCommand(bundleIdentifier: "com.misswell.octopilot")
+        let command = AccessibilityResetCommand(bundleIdentifier: "com.misswell.macpilot")
 
         #expect(command.executableURL == URL(fileURLWithPath: "/usr/bin/tccutil"))
-        #expect(command.arguments == ["reset", "Accessibility", "com.misswell.octopilot"])
+        #expect(command.arguments == ["reset", "Accessibility", "com.misswell.macpilot"])
     }
 
     @Test func accessibilityRecoveryRequestIsConsumedOnlyOnce() throws {
-        let suiteName = "OctoPilotTests.\(UUID().uuidString)"
+        let suiteName = "MacPilotTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         AccessibilityRecoveryRequest.schedule(in: defaults)
 
-        #expect(AccessibilityRecoveryRequest.consume(from: defaults))
-        #expect(!AccessibilityRecoveryRequest.consume(from: defaults))
+        #expect(AccessibilityRecoveryRequest.consume(from: defaults, legacyDefaults: nil))
+        #expect(!AccessibilityRecoveryRequest.consume(from: defaults, legacyDefaults: nil))
     }
 
     @Test func onlyCloseWindowsModeRequiresAccessibility() {

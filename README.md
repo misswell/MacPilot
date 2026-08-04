@@ -1,4 +1,4 @@
-# OctoPilot
+# MacPilot
 
 [简体中文](README.zh-CN.md)
 
@@ -9,15 +9,15 @@ A native macOS menu-bar app that helps you manage distracting apps automatically
 - quit after a period of inactivity;
 - quit after it has been hidden for a period of time.
 
-It can also launch selected apps after a per-app delay following login. Each launch rule can bring the app to the foreground, hide it, or wait through a 10-second startup grace period before closing its windows while keeping its background process alive. Launch rules use seconds, show a live countdown, skip apps that are already running, and run automatically only when OctoPilot is configured to start at login.
+It can also launch selected apps after a per-app delay following login. Each launch rule can bring the app to the foreground, hide it, or wait through a 10-second startup grace period before closing its windows while keeping its background process alive. Launch rules use seconds, show a live countdown, skip apps that are already running, and run automatically only when MacPilot is configured to start at login.
 
-Rules, launch plans, and preferences persist in `~/Library/Application Support/OctoPilot/config.json`. This file is independent from the app bundle, so updating or replacing `OctoPilot.app` preserves your configuration. On first launch, OctoPilot automatically migrates compatible configuration from the previous version without modifying the original file. You can also see and reveal the exact path in Settings.
+Rules, launch plans, and preferences persist in `~/Library/Application Support/MacPilot/config.json`. This file is independent from the app bundle, so updating or replacing `MacPilot.app` preserves your configuration. On first launch, MacPilot automatically migrates compatible configuration from the previous version without modifying the original file. You can also see and reveal the exact path in Settings.
 
 You can pick a running app or browse for an `.app` bundle, reorder rules, pause enforcement globally, and choose Start at Login from the menu-bar menu.
 
 ## BLE Unlock
 
-OctoPilot can also lock and unlock your Mac by proximity of a Bluetooth Low Energy device - an iPhone, Apple Watch, or any BLE device that periodically advertises from a **static MAC address**.
+MacPilot can also lock and unlock your Mac by proximity of a Bluetooth Low Energy device - an iPhone, Apple Watch, or any BLE device that periodically advertises from a **static MAC address**.
 
 Open **BLE Unlock** from the sidebar (or the menu-bar menu) and:
 
@@ -34,20 +34,20 @@ Bluetooth and Accessibility access are required. Devices whose BLE MAC address r
 
 The **Storage Compression** sidebar scans a folder for stable text-based files and uses macOS filesystem compression to reduce their physical disk usage without changing their logical contents. Choose extensions, a minimum file size, a stability period, and a minimum savings threshold; then scan and compress manually or enable a five-minute periodic scan.
 
-OctoPilot verifies every compressed copy with SHA-256 before atomically replacing the original. It preserves visible dates and filesystem metadata through macOS `ditto`, skips packages, hidden folders, symbolic links, hard links, sparse files, and cloud placeholders, and only operates on APFS or HFS+ volumes. Compressed files remain directly readable by normal applications and can be restored from the same screen.
+MacPilot verifies every compressed copy with SHA-256 before atomically replacing the original. It preserves visible dates and filesystem metadata through macOS `ditto`, skips packages, hidden folders, symbolic links, hard links, sparse files, and cloud placeholders, and only operates on APFS or HFS+ volumes. Compressed files remain directly readable by normal applications and can be restored from the same screen.
 
 ## Build the app
 
 ```sh
 ./Scripts/build-app.sh
-open OctoPilot.app
+open MacPilot.app
 ```
 
-The built app is `OctoPilot.app` in the project root. The Close Windows action requires Accessibility access in System Settings, and selecting that mode immediately triggers the system permission prompt. Whether a target app removes its Dock icon after its windows close is controlled by that app.
+The built app is `MacPilot.app` in the project root. The Close Windows action requires Accessibility access in System Settings, and selecting that mode immediately triggers the system permission prompt. Whether a target app removes its Dock icon after its windows close is controlled by that app.
 
 Local and GitHub Release builds currently use ad-hoc signing, so each update can have a new code identity and macOS may require Accessibility access to be granted again. Preserving that grant reliably across upgrades requires distributing every version with the same Developer ID signing identity.
 
-If OctoPilot remains untrusted after an update even though it is enabled in the Accessibility list, toggling the switch may leave the old signing record in place. The permission alert offers **Reset Permission and Quit**, which runs `tccutil reset Accessibility com.misswell.octopilot` for you and exits OctoPilot. Reopen the app and grant access again. Runtime rules check access silently and do not repeatedly request it in the background.
+If MacPilot remains untrusted after an update even though it is enabled in the Accessibility list, toggling the switch may leave the old signing record in place. The permission alert offers **Reset Permission and Quit**, which runs `tccutil reset Accessibility com.misswell.macpilot` for you and exits MacPilot. Reopen the app and grant access again. Runtime rules check access silently and do not repeatedly request it in the background.
 
 ## Distribution
 
@@ -62,14 +62,14 @@ Local builds are signed ad-hoc. To produce a distributable, notarized build you 
 ### Local distribution
 
 ```sh
-export OCTOPILOT_DEVELOPER_ID="Developer ID Application: Your Name (TEAMID)"
-export OCTOPILOT_APPLE_ID="you@example.com"
-export OCTOPILOT_APPLE_PASSWORD="app-specific-password"
-export OCTOPILOT_TEAM_ID="TEAMID"
+export MACPILOT_DEVELOPER_ID="Developer ID Application: Your Name (TEAMID)"
+export MACPILOT_APPLE_ID="you@example.com"
+export MACPILOT_APPLE_PASSWORD="app-specific-password"
+export MACPILOT_TEAM_ID="TEAMID"
 ./Scripts/distribute-app.sh
 ```
 
-This builds, signs with Developer ID + Hardened Runtime, submits to Apple for notarization, staples the ticket, and produces `OctoPilot.app` + `OctoPilot-<version>-macos.zip` that open without Gatekeeper warnings.
+This builds, signs with Developer ID + Hardened Runtime, submits to Apple for notarization, staples the ticket, and produces `MacPilot.app` + `MacPilot-<version>-macos.zip` that open without Gatekeeper warnings.
 
 ### GitHub Releases
 
@@ -84,4 +84,10 @@ Pushing a tag like `v1.1.0` runs the `dist` job, which signs and notarizes autom
 
 ## GitHub Actions
 
-The macOS workflow builds, packages, verifies, and uploads the app on pushes to `main` and pull requests. Each commit after the latest version tag automatically increments the patch version: commits after `v1.0.0` build as `1.0.1`, `1.0.2`, and so on. A new tag becomes the next version baseline. Pushing a version tag such as `v1.1.0` also creates a GitHub Release with a zipped `OctoPilot.app` archive.
+The macOS workflow builds, packages, verifies, and uploads the app on pushes to `main` and pull requests. Each commit after the latest version tag automatically increments the patch version: commits after `v1.0.0` build as `1.0.1`, `1.0.2`, and so on. A new tag becomes the next version baseline. Pushing a version tag such as `v1.1.0` also creates a GitHub Release with a zipped `MacPilot.app` archive.
+
+## Renaming and migration
+
+MacPilot uses bundle identifier `com.misswell.macpilot`. It reads compatible configuration from the former `OctoPilot` and `OctoQuit` support directories, and migrates an existing BLE unlock password from the former Keychain service without exposing it. macOS Accessibility, Bluetooth, Screen Recording, and login-item permissions are tied to the app identity, so existing installations must grant those permissions again after the identity change.
+
+Before publishing the first release with the new bundle identifier and `MacPilot.app` bundle name, publish one bridge release that still has the old identity. Older OctoPilot releases cannot validate a new Bundle ID or archive layout, while the bridge updater can validate both names.

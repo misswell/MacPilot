@@ -241,9 +241,13 @@ enum AppleFileCompressionError: LocalizedError, Equatable, Sendable {
 }
 
 struct AppleFileCompressionEngine: Sendable {
-    private static let managedCompressionAttribute = "com.misswell.octopilot.filesystem-compressed"
-    private static let compressionExtendedAttributes = [
+    private static let managedCompressionAttribute = "com.misswell.macpilot.filesystem-compressed"
+    private static let legacyManagedCompressionAttribute = "com.misswell.octopilot.filesystem-compressed"
+    private static let managedCompressionAttributes = [
         managedCompressionAttribute,
+        legacyManagedCompressionAttribute
+    ]
+    private static let compressionExtendedAttributes = managedCompressionAttributes + [
         "com.apple.decmpfs",
         "com.apple.ResourceFork"
     ]
@@ -491,7 +495,7 @@ struct AppleFileCompressionEngine: Sendable {
         let sourceMetadata = try metadataSnapshot(at: sourceURL, info: sourceInfo, excludingCompressionArtifacts: true)
         let sourceAllocatedSize = Int64(sourceInfo.st_blocks * 512)
         let temporaryURL = sourceURL.deletingLastPathComponent()
-            .appendingPathComponent(".octopilot-compression-\(UUID().uuidString)")
+            .appendingPathComponent(".macpilot-compression-\(UUID().uuidString)")
         var shouldRemoveTemporary = true
         defer {
             if shouldRemoveTemporary { try? FileManager.default.removeItem(at: temporaryURL) }
@@ -566,7 +570,7 @@ struct AppleFileCompressionEngine: Sendable {
         }
         let sourceMetadata = try metadataSnapshot(at: sourceURL, info: sourceInfo, excludingCompressionArtifacts: true)
         let temporaryURL = sourceURL.deletingLastPathComponent()
-            .appendingPathComponent(".octopilot-restoration-\(UUID().uuidString)")
+            .appendingPathComponent(".macpilot-restoration-\(UUID().uuidString)")
         var shouldRemoveTemporary = true
         defer {
             if shouldRemoveTemporary { try? FileManager.default.removeItem(at: temporaryURL) }
@@ -939,7 +943,9 @@ struct AppleFileCompressionEngine: Sendable {
     }
 
     private func hasManagedCompressionAttribute(at url: URL) -> Bool {
-        getxattr(url.path, Self.managedCompressionAttribute, nil, 0, 0, XATTR_NOFOLLOW) >= 0
+        Self.managedCompressionAttributes.contains {
+            getxattr(url.path, $0, nil, 0, 0, XATTR_NOFOLLOW) >= 0
+        }
     }
 
     private func setManagedCompressionAttribute(at url: URL) throws {
@@ -960,8 +966,11 @@ struct AppleFileCompressionEngine: Sendable {
     }
 
     private func removeManagedCompressionAttribute(at url: URL) throws {
-        guard removexattr(url.path, Self.managedCompressionAttribute, XATTR_NOFOLLOW) == 0 || errno == ENOATTR else {
-            throw AppleFileCompressionError.commandFailed(String(cString: strerror(errno)))
+        for attribute in Self.managedCompressionAttributes {
+            let status = removexattr(url.path, attribute, XATTR_NOFOLLOW)
+            guard status == 0 || errno == ENOATTR else {
+                throw AppleFileCompressionError.commandFailed(String(cString: strerror(errno)))
+            }
         }
     }
 
@@ -1456,7 +1465,7 @@ final class FolderCompressionModel: ObservableObject {
 }
 
 struct FileCompressionView: View {
-    @EnvironmentObject private var appModel: OctoPilotModel
+    @EnvironmentObject private var appModel: MacPilotModel
     @ObservedObject var compression: FolderCompressionModel
     @State private var extensionText = ""
     @State private var folderPendingRemoval: String?

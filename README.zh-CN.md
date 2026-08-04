@@ -1,8 +1,8 @@
-# OctoPilot
+# MacPilot
 
 [English](README.md)
 
-OctoPilot 是一款原生 macOS 菜单栏应用。它会按照你为每个应用设置的规则，在应用闲置后自动隐藏、关闭窗口或退出，帮助减少邮件、聊天、社交和浏览器应用带来的干扰。
+MacPilot 是一款原生 macOS 菜单栏应用。它会按照你为每个应用设置的规则，在应用闲置后自动隐藏、关闭窗口或退出，帮助减少邮件、聊天、社交和浏览器应用带来的干扰。
 
 ## 功能
 
@@ -22,7 +22,7 @@ OctoPilot 是一款原生 macOS 菜单栏应用。它会按照你为每个应用
 
 ## BLE 解锁
 
-OctoPilot 还可以根据蓝牙低功耗（BLE）设备的接近程度自动锁定和解锁 Mac--支持 iPhone、Apple Watch，或任何使用**固定 MAC 地址**周期性广播信号的 BLE 设备。
+MacPilot 还可以根据蓝牙低功耗（BLE）设备的接近程度自动锁定和解锁 Mac--支持 iPhone、Apple Watch，或任何使用**固定 MAC 地址**周期性广播信号的 BLE 设备。
 
 在侧边栏或菜单栏中打开 **BLE 解锁**，然后：
 
@@ -39,30 +39,30 @@ OctoPilot 还可以根据蓝牙低功耗（BLE）设备的接近程度自动锁�
 
 侧边栏的**存储压缩**会扫描指定文件夹，使用 macOS 文件系统透明压缩减少稳定文本类文件的实际磁盘占用，同时保持文件的逻辑内容不变。你可以指定后缀、最小文件大小、保持未修改的时间和最低节省比例，然后手动扫描压缩，或启用每 5 分钟一次的定期扫描。
 
-OctoPilot 会在原子替换前使用 SHA-256 校验压缩副本，并通过 macOS `ditto` 保留创建时间、修改时间及文件系统元数据。应用会跳过应用包、隐藏目录、符号链接、硬链接、稀疏文件和云端占位文件，并且只在 APFS 或 HFS+ 宗卷上工作。透明压缩后的文件仍可被其他应用直接读取，也可在同一界面恢复为未压缩文件。
+MacPilot 会在原子替换前使用 SHA-256 校验压缩副本，并通过 macOS `ditto` 保留创建时间、修改时间及文件系统元数据。应用会跳过应用包、隐藏目录、符号链接、硬链接、稀疏文件和云端占位文件，并且只在 APFS 或 HFS+ 宗卷上工作。透明压缩后的文件仍可被其他应用直接读取，也可在同一界面恢复为未压缩文件。
 
 ## 配置文件
 
 退出规则、启动规则与偏好配置保存在：
 
 ```text
-~/Library/Application Support/OctoPilot/config.json
+~/Library/Application Support/MacPilot/config.json
 ```
 
-该文件独立于 `OctoPilot.app`。首次启动时，OctoPilot 会自动迁移上一版本的兼容配置，但不会修改原文件。你可以在应用的“设置 → 配置文件”中复制路径，或点击“在访达中显示”。
+该文件独立于 `MacPilot.app`。首次启动时，MacPilot 会自动迁移上一版本的兼容配置，但不会修改原文件。你可以在应用的“设置 → 配置文件”中复制路径，或点击“在访达中显示”。
 
 ## 构建与启动
 
 ```sh
 ./Scripts/build-app.sh
-open OctoPilot.app
+open MacPilot.app
 ```
 
-构建出的应用位于项目根目录的 `OctoPilot.app`。“关闭窗口”动作需要在“系统设置 → 隐私与安全性 → 辅助功能”中允许 OctoPilot；选择该模式时会立即触发系统授权提示。目标应用关闭窗口后是否隐藏 Dock 图标由目标应用自身决定。
+构建出的应用位于项目根目录的 `MacPilot.app`。“关闭窗口”动作需要在“系统设置 → 隐私与安全性 → 辅助功能”中允许 MacPilot；选择该模式时会立即触发系统授权提示。目标应用关闭窗口后是否隐藏 Dock 图标由目标应用自身决定。
 
 当前本地与 GitHub Release 构建使用 ad-hoc 签名，因此每次更新都可能产生新的代码身份，macOS 可能要求重新授予辅助功能权限。要让授权在版本升级后稳定继承，需要使用同一 Developer ID 证书签名后再分发。
 
-如果升级后辅助功能列表中已经勾选 OctoPilot，但“关闭窗口”仍提示无权限，仅关闭再打开开关可能不会更新旧签名记录。权限提示中可直接点击**重置权限并退出**，OctoPilot 会自动执行 `tccutil reset Accessibility com.misswell.octopilot` 并退出；重新打开应用后再次允许权限即可。运行规则只会静默检查权限，不会在后台反复重新请求。
+如果升级后辅助功能列表中已经勾选 MacPilot，但“关闭窗口”仍提示无权限，仅关闭再打开开关可能不会更新旧签名记录。权限提示中可直接点击**重置权限并退出**，MacPilot 会自动执行 `tccutil reset Accessibility com.misswell.macpilot` 并退出；重新打开应用后再次允许权限即可。运行规则只会静默检查权限，不会在后台反复重新请求。
 
 ## 分发
 
@@ -77,14 +77,14 @@ open OctoPilot.app
 ### 本地分发
 
 ```sh
-export OCTOPILOT_DEVELOPER_ID="Developer ID Application: 你的名字 (TEAMID)"
-export OCTOPILOT_APPLE_ID="you@example.com"
-export OCTOPILOT_APPLE_PASSWORD="app-specific-password"
-export OCTOPILOT_TEAM_ID="TEAMID"
+export MACPILOT_DEVELOPER_ID="Developer ID Application: 你的名字 (TEAMID)"
+export MACPILOT_APPLE_ID="you@example.com"
+export MACPILOT_APPLE_PASSWORD="app-specific-password"
+export MACPILOT_TEAM_ID="TEAMID"
 ./Scripts/distribute-app.sh
 ```
 
-脚本会构建、用 Developer ID + Hardened Runtime 签名、提交 Apple 公证、装订票据，产出 `OctoPilot.app` 与 `OctoPilot-<版本>-macos.zip`，双击即可打开，无 Gatekeeper 拦截。
+脚本会构建、用 Developer ID + Hardened Runtime 签名、提交 Apple 公证、装订票据，产出 `MacPilot.app` 与 `MacPilot-<版本>-macos.zip`，双击即可打开，无 Gatekeeper 拦截。
 
 ### GitHub Release
 
@@ -102,8 +102,14 @@ export OCTOPILOT_TEAM_ID="TEAMID"
 仓库包含 macOS 编译流水线。每次推送到 `main` 或创建面向 `main` 的拉取请求时，流水线会：
 
 1. 编译 Release 二进制；
-2. 打包 `OctoPilot.app`；
+2. 打包 `MacPilot.app`；
 3. 校验应用签名；
 4. 上传 App 构建产物，保留 14 天。
 
-最新版本标签之后的每个提交都会自动递增小版本号。例如 `v1.0.0` 后的提交会依次构建为 `1.0.1`、`1.0.2`；创建新标签后会以新标签作为版本基准。推送版本标签（例如 `v1.1.0`）时，流水线还会创建 GitHub Release，并上传压缩后的 `OctoPilot.app`。
+最新版本标签之后的每个提交都会自动递增小版本号。例如 `v1.0.0` 后的提交会依次构建为 `1.0.1`、`1.0.2`；创建新标签后会以新标签作为版本基准。推送版本标签（例如 `v1.1.0`）时，流水线还会创建 GitHub Release，并上传压缩后的 `MacPilot.app`。
+
+## 改名与迁移
+
+MacPilot 使用新的 Bundle ID `com.misswell.macpilot`。首次启动时，它会从旧版 `OctoPilot` 和 `OctoQuit` 的配置目录读取兼容配置，并把原有 BLE 解锁密码从旧 Keychain 服务迁移到新服务，密码本身不会暴露。macOS 的辅助功能、蓝牙、屏幕录制和登录项权限都绑定到应用身份，改名后需要重新授予这些权限。
+
+正式发布新的 Bundle ID 和 `MacPilot.app` 之前，应先发布一个仍使用旧身份的桥接版。旧版 OctoPilot 无法验证新的 Bundle ID 或归档名称，而桥接版更新器可以同时识别新旧名称。

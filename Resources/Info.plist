@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>OctoPilot</string>
+	<string>MacPilot</string>
 	<key>CFBundleExecutable</key>
-	<string>OctoPilot</string>
+	<string>MacPilot</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.misswell.octopilot</string>
+	<string>com.misswell.macpilot</string>
 	<key>CFBundleName</key>
-	<string>OctoPilot</string>
+	<string>MacPilot</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon.icns</string>
 	<key>CFBundlePackageType</key>
@@ -23,12 +23,12 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>OctoPilot needs permission to manage inactive apps.</string>
+	<string>MacPilot needs permission to manage inactive apps.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>OctoPilot uses Bluetooth to detect nearby BLE devices (such as your iPhone or Apple Watch) for proximity-based screen lock and unlock.</string>
+	<string>MacPilot uses Bluetooth to detect nearby BLE devices (such as your iPhone or Apple Watch) for proximity-based screen lock and unlock.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>OctoPilot uses Bluetooth to detect nearby BLE devices for proximity-based screen lock and unlock.</string>
+	<string>MacPilot uses Bluetooth to detect nearby BLE devices for proximity-based screen lock and unlock.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>OctoPilot captures periodic screenshots for your activity records. Screenshots are saved only to the folder you choose and are never transmitted.</string>
+	<string>MacPilot captures periodic screenshots for your activity records. Screenshots are saved only to the folder you choose and are never transmitted.</string>
 </dict>
 </plist>

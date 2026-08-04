@@ -61,8 +61,9 @@ struct FileCompressionChangeBatch: Equatable, Sendable {
             guard event.flags & FSEventStreamEventFlags(kFSEventStreamEventFlagHistoryDone) == 0 else {
                 continue
             }
-            guard !URL(fileURLWithPath: eventPath).lastPathComponent
-                .hasPrefix(".octopilot-compression-") else {
+            let lastPathComponent = URL(fileURLWithPath: eventPath).lastPathComponent
+            guard ![".macpilot-compression-", ".octopilot-compression-"]
+                .contains(where: lastPathComponent.hasPrefix) else {
                 continue
             }
             let affectedRoots = monitoredRoots.filter { Self.isPath(eventPath, inside: $0) }
@@ -247,7 +248,7 @@ final class FileCompressionEventMonitor: @unchecked Sendable {
         }
     }
 
-    private let callbackQueue = DispatchQueue(label: "com.misswell.octopilot.file-compression-events", qos: .utility)
+    private let callbackQueue = DispatchQueue(label: "com.misswell.macpilot.file-compression-events", qos: .utility)
     private let callbackQueueKey = DispatchSpecificKey<Void>()
     private let lifecycleLock = NSLock()
     private let stateLock = NSLock()

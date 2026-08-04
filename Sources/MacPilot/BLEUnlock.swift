@@ -799,40 +799,60 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
     // MARK: Keychain password
 
-    private var keychainService: String { Bundle.main.bundleIdentifier ?? "com.misswell.octopilot" }
+    private var keychainService: String { Bundle.main.bundleIdentifier ?? AppIdentity.bundleIdentifier }
     private var keychainAccount: String { NSUserName() }
+
+    private var keychainServices: [String] {
+        var services = [keychainService]
+        for service in AppIdentity.knownBundleIdentifiers where !services.contains(service) {
+            services.append(service)
+        }
+        return services
+    }
 
     var hasPassword: Bool { fetchPassword() != nil }
 
     @discardableResult
     func storePassword(_ password: String) -> Bool {
         let data = password.data(using: .utf8) ?? Data()
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: keychainAccount,
-            kSecAttrService as String: keychainService
-        ]
-        SecItemDelete(query as CFDictionary)
-        query[kSecValueData as String] = data
-        query[kSecAttrLabel as String] = "OctoPilot BLE Unlock"
-        let status = SecItemAdd(query as CFDictionary, nil)
+        let status = storePasswordData(data, service: keychainService)
         objectWillChange.send()
-        return status == errSecSuccess
+        return status
     }
 
-    func fetchPassword(warn: Bool = false) -> String? {
+    private func storePasswordData(_ data: Data, service: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: keychainAccount,
-            kSecAttrService as String: keychainService,
-            kSecReturnData as String: kCFBooleanTrue!,
-            kSecMatchLimit as String: kSecMatchLimitOne
+            kSecAttrService as String: service
         ]
-        var item: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        SecItemDelete(query as CFDictionary)
+        var item = query
+        item[kSecValueData as String] = data
+        item[kSecAttrLabel as String] = "MacPilot BLE Unlock"
+        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+    }
+
+    func fetchPassword(warn: Bool = false) -> String? {
+        for service in keychainServices {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: keychainAccount,
+                kSecAttrService as String: service,
+                kSecReturnData as String: kCFBooleanTrue!,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            var item: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &item)
+            guard status != errSecItemNotFound else { continue }
+            guard status == errSecSuccess, let data = item as? Data,
+                  let password = String(data: data, encoding: .utf8) else { continue }
+            if service != keychainService {
+                _ = storePasswordData(data, service: keychainService)
+            }
+            return password
+        }
+        return nil
     }
 
     // MARK: MediaRemote (optional)
@@ -870,12 +890,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     // MARK: Event script
 
     func runScript(_ arg: String) {
-        let bundleId = Bundle.main.bundleIdentifier ?? "com.misswell.octopilot"
-        let file = URL(fileURLWithPath: NSHomeDirectory())
+        let scriptsDirectory = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Scripts")
-            .appendingPathComponent(bundleId)
-            .appendingPathComponent("event")
-        guard FileManager.default.isExecutableFile(atPath: file.path) else { return }
+        var bundleIdentifiers = [Bundle.main.bundleIdentifier ?? AppIdentity.bundleIdentifier]
+        bundleIdentifiers.append(contentsOf: AppIdentity.knownBundleIdentifiers.filter { !bundleIdentifiers.contains($0) })
+        guard let file = bundleIdentifiers
+            .map({ scriptsDirectory.appendingPathComponent($0).appendingPathComponent("event") })
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else { return }
         let process = Process()
         process.executableURL = file
         process.arguments = lastRSSI.map { [arg, String($0)] } ?? [arg]
@@ -1033,5 +1054,5 @@ func bleSleepDisplay() {
 
 func bleWakeDisplay() {
     var assertionID: IOPMAssertionID = 0
-    IOPMAssertionDeclareUserActivity("OctoPilot" as CFString, kIOPMUserActiveLocal, &assertionID)
+    IOPMAssertionDeclareUserActivity("MacPilot" as CFString, kIOPMUserActiveLocal, &assertionID)
 }

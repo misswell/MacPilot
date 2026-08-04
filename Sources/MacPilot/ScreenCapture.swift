@@ -338,7 +338,7 @@ final class ScreenCaptureModel: ObservableObject {
             hasScreenPermission = CGPreflightScreenCaptureAccess()
             if !hasScreenPermission {
                 requestScreenPermission()
-                errorMessage = "Screen Recording permission is required. Grant it in System Settings, then restart OctoPilot."
+                errorMessage = "Screen Recording permission is required. Grant it in System Settings, then restart MacPilot."
                 return
             }
         }
@@ -450,7 +450,7 @@ final class ScreenCaptureModel: ObservableObject {
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .current
-        var baseName = "OctoPilot_\(formatter.string(from: now))"
+        var baseName = "MacPilot_\(formatter.string(from: now))"
         if let displayIndex {
             baseName += "_display\(displayIndex + 1)"
         }
@@ -566,7 +566,7 @@ final class ScreenCaptureModel: ObservableObject {
 // MARK: - View
 
 struct ScreenCaptureView: View {
-    @EnvironmentObject private var appModel: OctoPilotModel
+    @EnvironmentObject private var appModel: MacPilotModel
     @ObservedObject var capture: ScreenCaptureModel
     @State private var showingFolderPicker = false
 

@@ -32,9 +32,9 @@ jobs:
           version="$(./Scripts/version.sh)"
           build_number="$(git rev-list --count HEAD)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "OCTOPILOT_VERSION=$version" >> "$GITHUB_ENV"
-          echo "OCTOPILOT_BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
-          echo "Building OctoPilot $version ($build_number)"
+          echo "MACPILOT_VERSION=$version" >> "$GITHUB_ENV"
+          echo "MACPILOT_BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
+          echo "Building MacPilot $version ($build_number)"
 
       - name: Build release binary
         run: swift build -c release
@@ -43,13 +43,13 @@ jobs:
         run: ./Scripts/build-app.sh
 
       - name: Verify app signature
-        run: codesign --verify --deep --strict OctoPilot.app
+        run: codesign --verify --deep --strict MacPilot.app
 
       - name: Upload app artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OctoPilot-${{ steps.version.outputs.version }}-macos
-          path: OctoPilot.app
+          name: MacPilot-${{ steps.version.outputs.version }}-macos
+          path: MacPilot.app
           retention-days: 14
 
   dist:
@@ -72,14 +72,14 @@ jobs:
         run: |
           version="$(./Scripts/version.sh)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "OCTOPILOT_VERSION=$version" >> "$GITHUB_ENV"
+          echo "MACPILOT_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Sign, notarize, staple, and package
         env:
-          OCTOPILOT_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
-          OCTOPILOT_APPLE_ID: ${{ secrets.APPLE_ID }}
-          OCTOPILOT_APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          OCTOPILOT_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MACPILOT_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          MACPILOT_APPLE_ID: ${{ secrets.APPLE_ID }}
+          MACPILOT_APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          MACPILOT_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: ./Scripts/distribute-app.sh
 
       - name: Publish GitHub release
@@ -87,6 +87,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "${{ github.ref_name }}"
-          --title "OctoPilot ${{ github.ref_name }}"
+          --title "MacPilot ${{ github.ref_name }}"
           --generate-notes
-          "OctoPilot-${{ steps.version.outputs.version }}-macos.zip#OctoPilot for macOS"
+          "MacPilot-${{ steps.version.outputs.version }}-macos.zip#MacPilot for macOS"

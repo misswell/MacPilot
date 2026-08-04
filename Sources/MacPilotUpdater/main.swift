@@ -9,8 +9,8 @@ private enum UpdaterError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidArguments: "Invalid updater arguments."
-        case .parentDidNotExit: "OctoPilot did not exit before the update timeout."
-        case .launchFailed(let status): "Could not relaunch OctoPilot (open exited with status \(status))."
+        case .parentDidNotExit: "MacPilot did not exit before the update timeout."
+        case .launchFailed(let status): "Could not relaunch MacPilot (open exited with status \(status))."
         }
     }
 }
@@ -75,8 +75,8 @@ private func install(_ arguments: UpdaterArguments) throws {
     let fileManager = FileManager.default
     let parent = arguments.destinationApplication.deletingLastPathComponent()
     let token = UUID().uuidString
-    let incoming = parent.appendingPathComponent(".OctoPilot-update-\(token).app")
-    let backupName = ".OctoPilot-backup-\(token).app"
+    let incoming = parent.appendingPathComponent(".MacPilot-update-\(token).app")
+    let backupName = ".MacPilot-backup-\(token).app"
     let backup = parent.appendingPathComponent(backupName)
 
     do {
@@ -121,7 +121,7 @@ do {
     try install(arguments)
 } catch {
     let fallbackLog = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Logs/OctoPilot/update.log")
+        .appendingPathComponent("Library/Logs/MacPilot/update.log")
     appendLog("Updater terminated: \(error.localizedDescription)", to: fallbackLog)
     exit(1)
 }

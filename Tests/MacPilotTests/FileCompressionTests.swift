@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import OctoPilot
+@testable import MacPilot
 
 struct FileCompressionTests {
     @Test func migratesLegacySingleFolderCompressionSettings() throws {
@@ -157,7 +157,7 @@ struct FileCompressionTests {
 
     @Test func recursivelyScansOnlyEligibleFiles() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root.appendingPathComponent("nested"), withIntermediateDirectories: true)
         let oldDate = Date(timeIntervalSinceNow: -3_600)
@@ -184,9 +184,9 @@ struct FileCompressionTests {
 
     @Test func scansMultipleFoldersWithoutDuplicatingOverlappingFiles() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         let secondRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer {
             try? FileManager.default.removeItem(at: root)
             try? FileManager.default.removeItem(at: secondRoot)
@@ -215,7 +215,7 @@ struct FileCompressionTests {
 
     @Test func incrementalScanOnlyExaminesChangedFilesAndDirectories() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let nested = root.appendingPathComponent("new-directory", isDirectory: true)
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
@@ -240,9 +240,9 @@ struct FileCompressionTests {
 
     @Test func incrementalScanIgnoresDeletedAndOutsidePaths() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         let outsideRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-outside-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-outside-\(UUID().uuidString)", isDirectory: true)
         defer {
             try? FileManager.default.removeItem(at: root)
             try? FileManager.default.removeItem(at: outsideRoot)
@@ -267,7 +267,7 @@ struct FileCompressionTests {
 
     @Test func incrementalScanHonorsFileStabilityWindow() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let modifiedAt = Date(timeIntervalSince1970: 1_000)
@@ -297,9 +297,9 @@ struct FileCompressionTests {
 
     @Test func continuesScanningAvailableFoldersAndReportsUnavailableFolders() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         let missing = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-missing-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-missing-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try writeFile(named: "available.log", in: root, modifiedAt: Date(timeIntervalSinceNow: -3_600))
@@ -324,9 +324,9 @@ struct FileCompressionTests {
 
     @Test func distinguishesSameNamedFilesFromDifferentFolders() throws {
         let firstParent = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-first-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-first-\(UUID().uuidString)", isDirectory: true)
         let secondParent = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-second-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-second-\(UUID().uuidString)", isDirectory: true)
         let firstRoot = firstParent.appendingPathComponent("Logs", isDirectory: true)
         let secondRoot = secondParent.appendingPathComponent("Logs", isDirectory: true)
         defer {
@@ -354,7 +354,7 @@ struct FileCompressionTests {
 
     @Test func deduplicatesFolderPathsThatResolveToTheSameDirectory() throws {
         let parent = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: parent) }
         let root = parent.appendingPathComponent("root", isDirectory: true)
         let link = parent.appendingPathComponent("linked-root", isDirectory: true)
@@ -380,7 +380,7 @@ struct FileCompressionTests {
 
     @Test func compressesWithoutChangingContentOrVisibleDates() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let sourceURL = root.appendingPathComponent("compressible.log")
@@ -391,7 +391,7 @@ struct FileCompressionTests {
             [.creationDate: visibleDate, .modificationDate: visibleDate, .posixPermissions: 0o640],
             ofItemAtPath: sourceURL.path
         )
-        try runXattr(["-w", "com.misswell.octopilot.test", "preserved", sourceURL.path])
+        try runXattr(["-w", "com.misswell.macpilot.test", "preserved", sourceURL.path])
         try runCommand("/bin/chmod", ["+a", "everyone allow read", sourceURL.path])
         let datesBefore = try sourceURL.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
         let accessControlBefore = try runCommand("/bin/ls", ["-lde", sourceURL.path])
@@ -419,13 +419,13 @@ struct FileCompressionTests {
         #expect(datesAfter.contentModificationDate == datesBefore.contentModificationDate)
         let attributes = try FileManager.default.attributesOfItem(atPath: sourceURL.path)
         #expect(attributes[.posixPermissions] as? Int == 0o640)
-        #expect(try runXattr(["-p", "com.misswell.octopilot.test", sourceURL.path]) == "preserved")
+        #expect(try runXattr(["-p", "com.misswell.macpilot.test", sourceURL.path]) == "preserved")
         #expect(try runCommand("/bin/ls", ["-lde", sourceURL.path]) == accessControlBefore)
     }
 
     @Test func compressesDownloadedFilesWithoutChangingQuarantineMetadata() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let sourceURL = root.appendingPathComponent("downloaded.json")
@@ -475,7 +475,7 @@ struct FileCompressionTests {
 
     @Test func preservesExistingSystemProvenanceMetadata() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let seedURL = root.appendingPathComponent("seed.txt")
@@ -503,7 +503,7 @@ struct FileCompressionTests {
 
     @Test func restoresACompressedFileWithoutChangingItsContent() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let sourceURL = root.appendingPathComponent("restore.log")
@@ -537,7 +537,7 @@ struct FileCompressionTests {
 
     @Test func leavesLowSavingsFilesUntouched() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let sourceURL = root.appendingPathComponent("random.log")
@@ -572,7 +572,7 @@ struct FileCompressionTests {
 
     @Test func metadataChangesAfterScanningPreventReplacement() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let sourceURL = root.appendingPathComponent("changed.log")
@@ -587,7 +587,7 @@ struct FileCompressionTests {
         let engine = AppleFileCompressionEngine()
         let scan = try engine.scan(settings: settings)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: sourceURL.path)
-        try runXattr(["-w", "com.misswell.octopilot.changed", "yes", sourceURL.path])
+        try runXattr(["-w", "com.misswell.macpilot.changed", "yes", sourceURL.path])
 
         let result = engine.compress(scan.candidates, settings: settings)
 
@@ -600,7 +600,7 @@ struct FileCompressionTests {
 
     @Test func restoreRemainsAvailableAfterCompressionRulesChange() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let sourceURL = root.appendingPathComponent("managed.log")
@@ -631,7 +631,7 @@ struct FileCompressionTests {
 
     @Test func openFilesAreSkippedBeforeReplacement() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotCompressionTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let sourceURL = root.appendingPathComponent("open.log")

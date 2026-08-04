@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import OctoPilot
+@testable import MacPilot
 
 struct BLEWakeRecoveryTests {
     @Test func deepSleepWakeRestartsMonitoringAndRetriesUnlock() throws {

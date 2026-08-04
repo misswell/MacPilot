@@ -1,7 +1,7 @@
 import Foundation
 import CoreServices
 import Testing
-@testable import OctoPilot
+@testable import MacPilot
 
 private enum MonitoringTestError: Error {
     case timedOut
@@ -226,7 +226,7 @@ struct FileCompressionMonitoringTests {
         let root = "/tmp/monitored"
         let batch = FileCompressionChangeBatch.from(
             events: [FileCompressionFileEvent(
-                path: root + "/.octopilot-compression-1234",
+                path: root + "/.macpilot-compression-1234",
                 flags: FSEventStreamEventFlags(kFSEventStreamEventFlagItemCreated)
                     | FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsFile)
             )],
@@ -277,7 +277,7 @@ struct FileCompressionMonitoringTests {
 
     @Test func fseventsMonitorReportsANewFileWithoutScanningTheWholeRoot() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotMonitoringTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotMonitoringTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let expectedPath = root.appendingPathComponent("new.log")
@@ -308,7 +308,7 @@ struct FileCompressionMonitoringTests {
 
     @Test func restartingFromTheLastDeliveredEventIDReplaysChangesMadeWhileStopped() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotMonitoringResumeTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotMonitoringResumeTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let expectedPath = root.appendingPathComponent("during-restart.log").path
@@ -337,7 +337,7 @@ struct FileCompressionMonitoringTests {
 
     @Test func anUnacknowledgedCallbackBatchIsReplayedAfterReconfiguration() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotMonitoringAckTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotMonitoringAckTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let expectedPath = root.appendingPathComponent("not-yet-accepted.log").path
@@ -369,7 +369,7 @@ struct FileCompressionMonitoringTests {
 
     @Test func acknowledgementsAdvanceOnlyAfterEveryEarlierBatchIsAccepted() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotMonitoringOrderTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotMonitoringOrderTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let monitor = FileCompressionEventMonitor()

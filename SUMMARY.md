@@ -1,26 +1,26 @@
-# OctoPilot 开发总结
+# MacPilot 开发总结
 
-本文档总结近期 OctoPilot 的主要开发工作，涵盖新功能、界面与性能优化、可分发构建及发布流程。
+本文档总结近期 MacPilot 的主要开发工作，涵盖新功能、界面与性能优化、可分发构建及发布流程。
 
 ## 一、BLE 解锁功能
 
 在原有「退出规则 / 启动规则」基础上，新增 BLE 解锁功能：根据蓝牙低功耗（BLE）设备的接近程度自动锁定和解锁 Mac。
 
-核心实现位于 `Sources/OctoPilot/BLEUnlock.swift`，主要能力包括：
+核心实现位于 `Sources/MacPilot/BLEUnlock.swift`，主要能力包括：
 
 - **设备扫描与选择**：扫描附近 BLE 设备，解析 MAC 地址与名称（蓝牙偏好 plist + 系统蓝牙数据库 + Apple 设备型号表），按信号强度排序展示。
 - **接近判定**：基于 RSSI 滑动均值（最近 5 次）与双阈值（解锁 RSSI / 锁定 RSSI，均可独立禁用），配合「锁定延迟」与「无信号超时」两个计时器。
 - **锁屏与解锁**：登录密码安全存入钥匙串；锁屏时模拟键盘输入解锁；支持「用屏幕保护程序锁定」「锁定时关闭屏幕」「接近时唤醒」「唤醒但不解锁」。
 - **活动 / 被动模式**：默认主动连接设备读取 RSSI（更稳定）；可切换被动模式仅靠扫描，避免与其他蓝牙设备相互干扰。
 - **媒体控制**：锁屏时暂停「正在播放」，解锁后恢复（运行时加载系统媒体框架，失败则降级）。
-- **事件脚本**：锁/解锁时可运行 `~/Library/Application Scripts/com.misswell.octopilot/event`，参数 `away` / `lost` / `unlocked` / `intruded`。
+- **事件脚本**：锁/解锁时可运行 `~/Library/Application Scripts/com.misswell.macpilot/event`，参数 `away` / `lost` / `unlocked` / `intruded`。
 - **屏幕状态观察**：显示器睡眠/唤醒、系统睡眠/唤醒、屏保、解锁等系统事件。
 
 入口：
 - 主窗口侧边栏「BLE 解锁」板块（完整配置）
 - 菜单栏菜单（启用、立即锁定、选择设备、管理）
 
-设置随 `~/Library/Application Support/OctoPilot/config.json` 持久化（配置版本升至 5），中英双语。
+设置随 `~/Library/Application Support/MacPilot/config.json` 持久化（配置版本升至 5），中英双语。
 
 ## 二、界面设计
 
@@ -45,7 +45,7 @@ BLE 板块采用独立的视觉语言，区别于普通列表：
 - **排序选择器**：提供「加载顺序 / 名称 / 信号」三种排序切换。
 - **懒加载列表**：使用 `LazyVStack` 渲染设备行。
 
-回归测试：`Tests/OctoPilotTests/BLEUnlockPerformanceTests.swift` 验证突发刷新被合并为一次发布。
+回归测试：`Tests/MacPilotTests/BLEUnlockPerformanceTests.swift` 验证突发刷新被合并为一次发布。
 
 ## 四、Bug 修复
 
@@ -57,18 +57,18 @@ BLE 板块采用独立的视觉语言，区别于普通列表：
 
 从 ad-hoc 签名升级为 Apple 公证的可分发应用：
 
-- `Resources/OctoPilot.entitlements`：Hardened Runtime 所需权限。
-- `Scripts/build-app.sh`：检测到 `OCTOPILOT_DEVELOPER_ID` 时用 Developer ID + Hardened Runtime 签名，否则回退 ad-hoc。
+- `Resources/MacPilot.entitlements`：Hardened Runtime 所需权限。
+- `Scripts/build-app.sh`：检测到 `MACPILOT_DEVELOPER_ID` 时用 Developer ID + Hardened Runtime 签名，否则回退 ad-hoc；旧环境变量别名仍可用。
 - `Scripts/distribute-app.sh`：一键签名 → 提交 Apple 公证 → 装订票据 → 打 zip → Gatekeeper 校验；支持钥匙串公证 profile（不接触明文密码）。
 - `.github/workflows/build.yml`：日常 push/PR 走 ad-hoc artifact；打 `v*` tag 自动签名、公证并发布 Release。
 - tag 工作流依赖 6 个 Actions secrets：`APPLE_CERTIFICATE_P12`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_DEVELOPER_ID`、`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`；已于 2026-07-24 配齐。
-- 签名身份：`Developer ID Application: Guofeng Liu (U8U443D7ZL)`。本机钥匙串中有签名身份，但不得据此假定存在名为 `OctoPilot` 的 notarytool profile；使用本地 profile 前必须实际验证。
+- 签名身份：`Developer ID Application: Guofeng Liu (U8U443D7ZL)`。本机钥匙串中有签名身份，但不得据此假定存在名为 `MacPilot` 的 notarytool profile；使用本地 profile 前必须实际验证。
 
 仅在已确认本机存在对应 notarytool profile 时，才使用以下本地兜底命令：
 
 ```sh
-OCTOPILOT_DEVELOPER_ID="Developer ID Application: Guofeng Liu (U8U443D7ZL)" \
-OCTOPILOT_NOTARY_PROFILE="OctoPilot" \
+MACPILOT_DEVELOPER_ID="Developer ID Application: Guofeng Liu (U8U443D7ZL)" \
+MACPILOT_NOTARY_PROFILE="MacPilot" \
 ./Scripts/distribute-app.sh
 ```
 
@@ -85,7 +85,7 @@ OCTOPILOT_NOTARY_PROFILE="OctoPilot" \
 
 ## 七、分发方式说明
 
-OctoPilot 依赖辅助功能、系统蓝牙文件、媒体框架、模拟键盘等深度系统能力，采用 **Developer ID 公证分发**（非 App Store）。这种方式适合此类系统工具，用户下载 zip 解压即可运行。App Store 因强制沙盒、禁止私有 API、禁止读系统文件等限制，不适用于当前功能形态。
+MacPilot 依赖辅助功能、系统蓝牙文件、媒体框架、模拟键盘等深度系统能力，采用 **Developer ID 公证分发**（非 App Store）。这种方式适合此类系统工具，用户下载 zip 解压即可运行。App Store 因强制沙盒、禁止私有 API、禁止读系统文件等限制，不适用于当前功能形态。
 
 ## 八、测试
 
@@ -104,14 +104,14 @@ OctoPilot 依赖辅助功能、系统蓝牙文件、媒体框架、模拟键盘�
 - 运行中可用 `gh run watch <run_id>` 或 `gh api repos/misswell/OctoPilot/actions/jobs/<job_id> --jq '{s:.status,c:.conclusion,steps:[.steps[]|{name:.name,s:.status,c:.conclusion}]}'` 查看 step 状态；任务完成后用 `gh run view <run_id> --job <job_id> --log-failed` 提取失败日志。
 - `job_status=queued` + `steps=[]` = **runner 在排队等 macOS runner，不是构建失败**；同日 GitHub API 还 503，属平台抖动。
 - tag push 时 `build` job `conclusion=skipped` 是 `.github/workflows/build.yml` 里 `if: !startsWith(github.ref,'refs/tags/v')` 的正常跳过。
-- `v1.1.4`、`v1.1.5` 的 tag workflow 最终都失败过；tag 已存在不代表 Release 已发布。必须再用 `gh release view <tag>` 检查 Release，并确认 `OctoPilot-<version>-macos.zip` asset 存在。
+- `v1.1.4`、`v1.1.5` 的 tag workflow 最终都失败过；tag 已存在不代表 Release 已发布。必须再用 `gh release view <tag>` 检查 Release，并确认当前发布的 `MacPilot-<version>-macos.zip` asset 存在（历史 OctoPilot 版本仍使用旧名称）。
 - `v1.1.5` 首次失败于缺少 `APPLE_CERTIFICATE_P12`；补齐证书相关 secrets 后，又明确失败于缺少 `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD`。Secret 名称固定为 `APPLE_ID`，它的值才是 Apple Developer 登录邮箱；命令应是 `gh secret set APPLE_ID`，再在提示中输入邮箱值。
 - 6 个 secrets 配齐后，发布继续暴露新版 CI 编译器的 Swift 并发错误：Timer 与 NotificationCenter 的 `@Sendable` 回调直接访问 `@MainActor` 状态。本机缓存构建曾显示成功，全新构建加 `-Xswiftc -warnings-as-errors` 才稳定复现。
 - 修复方式是保留 `BLEUnlockModel` 的 `@MainActor` 隔离，在明确使用 `.main` queue / `RunLoop.main` 的同步回调内使用 `MainActor.assumeIsolated`，并避免跨 Sendable 边界捕获 `CBPeripheral`。
 - `v1.1.5` 已是公开 tag，修复后没有移动旧 tag，而是提交到 `main` 并发布新补丁版本 `v1.1.6`。该版本 Actions 在约 1 分钟内完成签名、公证、装订、打包和 Release 发布。
 - GitHub API 偶发 `EOF` / TLS timeout 是传输抖动，可对只读查询安全重试；不要因此改变 tag 或重复创建 Release。
 
-标准流程：严格 Release 构建与 `swift test` → 提交并推送 `main` → 创建全新的语义化版本 tag → 推送 tag → 跟踪 `dist` 到成功 → 用 `gh release view` 核验非草稿 Release 与 ZIP asset。任何一步未完成，都不能宣布发布成功。（本节为 OctoPilot 项目级发版记录。）
+标准流程：严格 Release 构建与 `swift test` → 提交并推送 `main` → 创建全新的语义化版本 tag → 推送 tag → 跟踪 `dist` 到成功 → 用 `gh release view` 核验非草稿 Release 与 ZIP asset。任何一步未完成，都不能宣布发布成功。（本节为 MacPilot 项目级发版记录。）
 
 ## 十一、存储压缩
 

@@ -58,8 +58,10 @@ struct SoftwareRelease: Equatable {
               let version = SoftwareVersion(response.tagName) else {
             throw SoftwareUpdateError.invalidRelease
         }
-        let expectedName = "OctoPilot-\(version)-macos.zip"
-        guard let asset = response.assets.first(where: { $0.name == expectedName }),
+        let expectedNames = AppIdentity.archiveNames(for: version.description)
+        guard let asset = expectedNames.lazy
+            .compactMap({ expectedName in response.assets.first { $0.name == expectedName } })
+            .first,
               asset.url.scheme == "https",
               let digest = asset.digest,
               digest.hasPrefix("sha256:") else {
@@ -200,7 +202,7 @@ enum SoftwareUpdateState: Equatable {
 
 @MainActor
 final class SoftwareUpdater: ObservableObject {
-    static let latestReleaseURL = URL(string: "https://api.github.com/repos/misswell/OctoPilot/releases/latest")!
+    static let latestReleaseURL = URL(string: "https://api.github.com/repos/\(AppIdentity.githubRepository)/releases/latest")!
 
     @Published private(set) var state: SoftwareUpdateState = .idle
     let currentVersion: String
@@ -251,7 +253,7 @@ final class SoftwareUpdater: ObservableObject {
     private func fetchLatestRelease() async throws -> SoftwareRelease {
         var request = URLRequest(url: Self.latestReleaseURL)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("OctoPilot/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("MacPilot/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 20
         let (data, response) = try await session.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
@@ -262,24 +264,24 @@ final class SoftwareUpdater: ObservableObject {
 
     private func launchInstaller(for package: VerifiedUpdatePackage) throws {
         guard applicationURL.pathExtension == "app",
-              Bundle(url: applicationURL)?.bundleIdentifier == "com.misswell.octopilot",
+              AppIdentity.isKnownBundleIdentifier(Bundle(url: applicationURL)?.bundleIdentifier),
               FileManager.default.isWritableFile(atPath: applicationURL.deletingLastPathComponent().path) else {
             throw SoftwareUpdateError.installationUnavailable
         }
-        let bundledHelper = applicationURL.appendingPathComponent("Contents/MacOS/OctoPilotUpdater")
-        guard FileManager.default.isExecutableFile(atPath: bundledHelper.path) else {
+        guard let bundledHelper = AppIdentity.updaterURLs(in: applicationURL)
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
             throw SoftwareUpdateError.updaterHelperMissing
         }
 
         let helperDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotUpdater-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotUpdater-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: helperDirectory, withIntermediateDirectories: true)
-        let helperURL = helperDirectory.appendingPathComponent("OctoPilotUpdater")
+        let helperURL = helperDirectory.appendingPathComponent("MacPilotUpdater")
         try FileManager.default.copyItem(at: bundledHelper, to: helperURL)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helperURL.path)
 
         let logURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/OctoPilot/update.log")
+            .appendingPathComponent("Library/Logs/MacPilot/update.log")
         let process = Process()
         process.executableURL = helperURL
         process.arguments = [
@@ -300,7 +302,6 @@ struct VerifiedUpdatePackage: Sendable {
 }
 
 enum UpdatePackageValidator {
-    private static let bundleIdentifier = "com.misswell.octopilot"
     private static let developerTeamIdentifier = "U8U443D7ZL"
 
     static func prepare(downloadURL: URL, release: SoftwareRelease) throws -> VerifiedUpdatePackage {
@@ -308,16 +309,27 @@ enum UpdatePackageValidator {
         guard digest == release.sha256 else { throw SoftwareUpdateError.digestMismatch }
 
         let workingDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotUpdate-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MacPilotUpdate-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
         do {
             let archiveURL = workingDirectory.appendingPathComponent("update.zip")
             try FileManager.default.copyItem(at: downloadURL, to: archiveURL)
             try run("/usr/bin/ditto", arguments: ["-x", "-k", archiveURL.path, workingDirectory.path])
 
-            let applicationURL = workingDirectory.appendingPathComponent("OctoPilot.app", isDirectory: true)
-            guard let bundle = Bundle(url: applicationURL),
-                  bundle.bundleIdentifier == bundleIdentifier else {
+            guard let applicationURL = AppIdentity.applicationURLs(in: workingDirectory).first(where: {
+                guard let bundle = Bundle(url: $0) else { return false }
+                return AppIdentity.isKnownBundleIdentifier(bundle.bundleIdentifier)
+            }),
+            let bundle = Bundle(url: applicationURL) else {
+                throw SoftwareUpdateError.invalidApplication
+            }
+            guard let executableName = bundle.object(forInfoDictionaryKey: "CFBundleExecutable") as? String,
+                  AppIdentity.knownExecutableNames.contains(executableName),
+                  FileManager.default.isExecutableFile(
+                      atPath: applicationURL.appendingPathComponent("Contents/MacOS/\(executableName)").path
+                  ),
+                  AppIdentity.updaterURLs(in: applicationURL)
+                      .contains(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
                 throw SoftwareUpdateError.invalidApplication
             }
             let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String

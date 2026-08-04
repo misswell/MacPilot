@@ -2,5 +2,7 @@
 .build/
 OctoQuit.app/
 OctoPilot.app/
+MacPilot.app/
 cert/
 OctoPilot-*.zip
+MacPilot-*.zip

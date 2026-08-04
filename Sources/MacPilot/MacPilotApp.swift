@@ -6,12 +6,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @main
-struct OctoPilotApp: App {
-    @StateObject private var model = OctoPilotModel()
+struct MacPilotApp: App {
+    @StateObject private var model = MacPilotModel()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        Window("OctoPilot", id: "main") {
+        Window("MacPilot", id: "main") {
             ContentView().environmentObject(model)
                 .frame(minWidth: 900, minHeight: 620)
         }
@@ -186,15 +186,29 @@ enum AccessibilityResetExecution: Sendable {
 }
 
 struct AccessibilityRecoveryRequest {
-    private static let key = "OctoPilot.requestAccessibilityAfterReset"
+    private static let key = "MacPilot.requestAccessibilityAfterReset"
+    private static let legacyKey = "OctoPilot.requestAccessibilityAfterReset"
 
     static func schedule(in defaults: UserDefaults = .standard) {
         defaults.set(true, forKey: key)
     }
 
-    static func consume(from defaults: UserDefaults = .standard) -> Bool {
-        guard defaults.bool(forKey: key) else { return false }
-        defaults.removeObject(forKey: key)
+    static func consume(
+        from defaults: UserDefaults = .standard,
+        legacyDefaults: UserDefaults? = UserDefaults(suiteName: AppIdentity.legacyBundleIdentifier)
+    ) -> Bool {
+        if consumeKey(from: defaults) { return true }
+        guard let legacyDefaults, legacyDefaults !== defaults else { return false }
+        return consumeKey(from: legacyDefaults)
+    }
+
+    private static func consumeKey(from defaults: UserDefaults) -> Bool {
+        if defaults.bool(forKey: key) {
+            defaults.removeObject(forKey: key)
+            return true
+        }
+        guard defaults.bool(forKey: legacyKey) else { return false }
+        defaults.removeObject(forKey: legacyKey)
         return true
     }
 }
@@ -330,7 +344,7 @@ enum AppText {
         "versionLabel": "版本 %@（构建 %@）",
         "rulesSubtitle": "在应用闲置一段时间后自动隐藏、关闭窗口或退出。",
         "dropApp": "拖入应用以添加规则", "invalidDrop": "请拖入 macOS 应用（.app）以创建规则。",
-        "duplicateRule": "已存在 \"%@\" 的规则。", "selfRule": "OctoPilot 不能管理自身。", "enforcing": "规则执行中", "paused": "规则已暂停",
+        "duplicateRule": "已存在 \"%@\" 的规则。", "selfRule": "MacPilot 不能管理自身。", "enforcing": "规则执行中", "paused": "规则已暂停",
         "enabledChecked": "%d 条已启用 · 检查于 %@", "noApps": "尚未添加应用",
         "noAppsDetail": "添加一个应用，在闲置后自动隐藏、关闭窗口或退出。", "addFirstApp": "添加第一个应用",
         "edit": "编辑", "editRule": "编辑规则", "deleteRule": "删除规则", "remove": "移除",
@@ -338,8 +352,8 @@ enum AppText {
         "hideAfter": "闲置 %d 分钟后隐藏", "closeAfter": "闲置 %d 分钟后关闭窗口", "quitAfter": "闲置 %d 分钟后退出", "quitHidden": "隐藏 %d 分钟后退出",
         "addRule": "添加应用规则", "editAppRule": "编辑应用规则", "ruleDetail": "选择一个应用，然后设置一个或多个自动操作。",
         "hideInactive": "闲置后隐藏", "closeInactive": "闲置后关闭窗口", "quitInactive": "闲置后退出", "quitAfterHidden": "隐藏后退出",
-        "closeWindowHint": "关闭应用的可关闭窗口，但保留后台进程。OctoPilot 会模拟在前台点击关闭按钮，能否移除 Dock 图标取决于该应用是否据此转入菜单栏后台。",
-        "accessibilityRequired": "“关闭窗口”需要辅助功能权限。如果升级后已勾选但仍无效，可一键重置权限并退出 OctoPilot；重新打开后再允许权限。当前应用：%@",
+        "closeWindowHint": "关闭应用的可关闭窗口，但保留后台进程。MacPilot 会模拟在前台点击关闭按钮，能否移除 Dock 图标取决于该应用是否据此转入菜单栏后台。",
+        "accessibilityRequired": "“关闭窗口”需要辅助功能权限。如果升级后已勾选但仍无效，可一键重置权限并退出 MacPilot；重新打开后再允许权限。当前应用：%@",
         "openAccessibilitySettings": "打开辅助功能设置",
         "resetAccessibility": "重置权限并退出",
         "resettingAccessibility": "正在重置…",
@@ -350,7 +364,7 @@ enum AppText {
         "browse": "浏览…", "minute": "分钟", "minutes": "分钟", "language": "语言",
         "application": "应用", "selectedApp": "已选应用", "changeApp": "更换应用", "runningApps": "正在运行的应用",
         "browseApplications": "从磁盘选择应用", "noRunningApps": "未检测到可选的运行应用",
-        "configFile": "配置文件", "configDescription": "规则和偏好保存在此本机文件中。更新或替换 OctoPilot.app 不会影响它。",
+        "configFile": "配置文件", "configDescription": "规则和偏好保存在此本机文件中。更新或替换 MacPilot.app 不会影响它。",
         "revealInFinder": "在访达中显示", "configSaveError": "无法保存配置文件：%@",
         "importQuitter": "导入 Quitter 配置", "importQuitterDescription": "直接从 Quitter 的本机偏好文件导入规则；已存在相同应用标识的规则会被跳过。",
         "importQuitterSuccess": "已导入 %d 条规则，跳过 %d 条重复或无效规则。", "importQuitterEmpty": "没有发现可导入的新规则。",
@@ -358,15 +372,15 @@ enum AppText {
         "importQuitterNotFound": "未找到 Quitter 配置文件：%@",
         "importQuitterConfirmTitle": "确认导入", "importQuitterConfirmMessage": "找到 %d 条可导入规则，另有 %d 条重复或无效规则将被跳过。是否导入？",
         "import": "导入",
-        "languageDescription": "选择 OctoPilot 的显示语言。更改会立即生效。", "systemLanguage": "跟随系统",
+        "languageDescription": "选择 MacPilot 的显示语言。更改会立即生效。", "systemLanguage": "跟随系统",
         "english": "English", "simplifiedChinese": "简体中文", "checkNow": "立即检查", "startAtLogin": "登录时启动",
-        "showApp": "显示 OctoPilot", "quitApp": "退出 OctoPilot", "enabledStatus": "OctoPilot：已启用",
-        "disabledStatus": "OctoPilot：已停用", "disableApp": "停用 OctoPilot", "enableApp": "启用 OctoPilot",
+        "showApp": "显示 MacPilot", "quitApp": "退出 MacPilot", "enabledStatus": "MacPilot：已启用",
+        "disabledStatus": "MacPilot：已停用", "disableApp": "停用 MacPilot", "enableApp": "启用 MacPilot",
         "loginError": "无法更新登录启动项：%@", "aboutAutomation": "自动化", "manageRules": "管理应用规则和界面偏好。",
         "quitsIn": "将在 %d 分钟后退出"
         , "launch": "启动", "launchSubtitle": "在登录后按设定延迟启动应用。", "launchApps": "启动应用",
         "addLaunchApp": "添加启动应用", "addLaunchRule": "添加启动规则", "editLaunchRule": "编辑启动规则",
-        "launchRuleDetail": "选择一个应用，并设置从 OctoPilot 登录启动开始计算的延迟秒数。",
+        "launchRuleDetail": "选择一个应用，并设置从 MacPilot 登录启动开始计算的延迟秒数。",
         "launchAfter": "登录后 %d 秒启动", "delaySeconds": "延迟秒数", "launchVisibility": "启动后模式",
         "launchModeForeground": "显示到前台", "launchModeHidden": "隐藏应用", "launchModeCloseWindows": "关闭窗口，保留后台",
         "launchForegroundHint": "应用启动后显示到前台。",
@@ -411,11 +425,11 @@ enum AppText {
         "checkForUpdates": "检查更新…", "checkingForUpdates": "正在检查更新…", "upToDate": "已是最新版本。",
         "updateAvailable": "发现新版本 %@。", "downloadAndInstall": "下载并安装", "downloadingUpdate": "正在下载更新…",
         "preparingUpdate": "正在验证并准备安装…", "updateFailed": "更新失败：%@", "currentVersion": "当前版本：%@",
-        "releaseNotes": "发布说明", "updateWillRestart": "安装后 OctoPilot 将自动重新启动。",
+        "releaseNotes": "发布说明", "updateWillRestart": "安装后 MacPilot 将自动重新启动。",
         "updateErrorRelease": "GitHub Release 信息或 macOS 安装包无效。", "updateErrorIntegrity": "下载文件的 SHA-256 校验失败。",
         "updateErrorVerification": "更新包未通过版本、开发者签名或 Gatekeeper 验证。",
-        "updateErrorLocation": "无法从当前位置自动更新。请先将 OctoPilot 移到可写的“应用程序”文件夹。",
-        "updateErrorHelper": "当前 OctoPilot 安装中缺少更新 helper。", "updateErrorNetwork": "网络请求失败：%@",
+        "updateErrorLocation": "无法从当前位置自动更新。请先将 MacPilot 移到可写的“应用程序”文件夹。",
+        "updateErrorHelper": "当前 MacPilot 安装中缺少更新 helper。", "updateErrorNetwork": "网络请求失败：%@",
         "updateErrorCommand": "准备更新失败：%@",
         "fileCompression": "存储压缩", "fileCompressionSubtitle": "安全地减少文本类文件的实际磁盘占用，并保留内容、创建时间和修改时间。",
         "compressionFolder": "监控文件夹", "compressionNoFolder": "尚未选择文件夹", "compressionChooseFolder": "选择文件夹…",
@@ -485,7 +499,7 @@ enum AppText {
             "versionLabel": "Version %@ (Build %@)",
             "rulesSubtitle": "Hide, close windows, or quit apps after they’ve been inactive.", "dropApp": "Drop an app to add its rule",
             "invalidDrop": "Drop a macOS application (.app) to create a rule.", "duplicateRule": "A rule for \"%@\" already exists.",
-            "selfRule": "OctoPilot cannot manage itself.",
+            "selfRule": "MacPilot cannot manage itself.",
             "enforcing": "Enforcing rules", "paused": "Rules paused", "enabledChecked": "%d enabled • checked %@",
             "noApps": "No apps yet", "noAppsDetail": "Add an app to automatically hide, close its windows, or quit it after inactivity.",
             "addFirstApp": "Add your first app", "edit": "Edit", "editRule": "Edit rule", "deleteRule": "Delete rule", "remove": "Remove",
@@ -493,8 +507,8 @@ enum AppText {
             "hideAfter": "Hide after %d min inactive", "closeAfter": "Close windows after %d min inactive", "quitAfter": "Quit after %d min inactive", "quitHidden": "Quit %d min after hiding",
             "addRule": "Add app rule", "editAppRule": "Edit app rule", "ruleDetail": "Choose an application, then choose one or more automatic actions.",
             "hideInactive": "Hide after inactivity", "closeInactive": "Close windows after inactivity", "quitInactive": "Quit after inactivity", "quitAfterHidden": "Quit after being hidden",
-            "closeWindowHint": "Closes the app's closable windows while leaving its process running. OctoPilot simulates clicking the close button in the foreground; whether the Dock icon disappears depends on whether the app retreats to the menu bar.",
-            "accessibilityRequired": "Closing windows requires Accessibility access. If it remains unavailable after an update, reset the permission and quit OctoPilot in one step, then reopen it and grant access. Current app: %@",
+            "closeWindowHint": "Closes the app's closable windows while leaving its process running. MacPilot simulates clicking the close button in the foreground; whether the Dock icon disappears depends on whether the app retreats to the menu bar.",
+            "accessibilityRequired": "Closing windows requires Accessibility access. If it remains unavailable after an update, reset the permission and quit MacPilot in one step, then reopen it and grant access. Current app: %@",
             "openAccessibilitySettings": "Open Accessibility Settings",
             "resetAccessibility": "Reset Permission and Quit",
             "resettingAccessibility": "Resetting…",
@@ -504,7 +518,7 @@ enum AppText {
             "cancel": "Cancel", "save": "Save", "chooseApp": "Choose an app", "chooseRunning": "Choose a running app", "browse": "Browse…",
             "application": "Application", "selectedApp": "Selected application", "changeApp": "Change app", "runningApps": "Running applications",
             "browseApplications": "Choose an app from disk", "noRunningApps": "No eligible running applications found",
-            "configFile": "Configuration file", "configDescription": "Rules and preferences are stored in this local file. Updating or replacing OctoPilot.app will not affect it.",
+            "configFile": "Configuration file", "configDescription": "Rules and preferences are stored in this local file. Updating or replacing MacPilot.app will not affect it.",
             "revealInFinder": "Show in Finder", "configSaveError": "Couldn’t save the configuration file: %@",
             "importQuitter": "Import Quitter Configuration", "importQuitterDescription": "Import rules directly from Quitter’s local preferences file; matching app identifiers already in your rules are skipped.",
             "importQuitterSuccess": "Imported %d rules and skipped %d duplicate or invalid rules.", "importQuitterEmpty": "No new rules were found to import.",
@@ -512,15 +526,15 @@ enum AppText {
             "importQuitterNotFound": "Quitter configuration file not found: %@",
             "importQuitterConfirmTitle": "Confirm Import", "importQuitterConfirmMessage": "Found %d rules to import. %d duplicate or invalid rules will be skipped. Import them?",
             "import": "Import",
-            "minute": "minute", "minutes": "minutes", "language": "Language", "languageDescription": "Choose OctoPilot’s display language. Changes apply immediately.",
+            "minute": "minute", "minutes": "minutes", "language": "Language", "languageDescription": "Choose MacPilot’s display language. Changes apply immediately.",
             "systemLanguage": "System Language", "english": "English", "simplifiedChinese": "Simplified Chinese", "checkNow": "Check now",
-            "startAtLogin": "Start at Login", "showApp": "Show OctoPilot", "quitApp": "Quit OctoPilot", "enabledStatus": "OctoPilot: Enabled",
-            "disabledStatus": "OctoPilot: Disabled", "disableApp": "Disable OctoPilot", "enableApp": "Enable OctoPilot",
+            "startAtLogin": "Start at Login", "showApp": "Show MacPilot", "quitApp": "Quit MacPilot", "enabledStatus": "MacPilot: Enabled",
+            "disabledStatus": "MacPilot: Disabled", "disableApp": "Disable MacPilot", "enableApp": "Enable MacPilot",
             "loginError": "Couldn’t update the login item: %@", "aboutAutomation": "AUTOMATION", "manageRules": "Manage app rules and interface preferences.",
             "quitsIn": "Quits in %d min",
             "launch": "Launch", "launchSubtitle": "Launch apps after their configured delay following login.", "launchApps": "LAUNCH APPS",
             "addLaunchApp": "Add launch app", "addLaunchRule": "Add launch rule", "editLaunchRule": "Edit launch rule",
-            "launchRuleDetail": "Choose an app and set its delay in seconds from when OctoPilot starts at login.",
+            "launchRuleDetail": "Choose an app and set its delay in seconds from when MacPilot starts at login.",
             "launchAfter": "Launch %d sec after login", "delaySeconds": "Delay in seconds", "launchVisibility": "After launch",
             "launchModeForeground": "Bring to front", "launchModeHidden": "Hide application", "launchModeCloseWindows": "Close windows, keep running",
             "launchForegroundHint": "Brings the application to the foreground after launch.",
@@ -562,14 +576,14 @@ enum AppText {
             "bleNoDevicesFound": "No nearby BLE devices found.",
             "bleSortBy": "Sort", "bleSortAdded": "Added", "bleSortName": "Name", "bleSortSignal": "Signal",
             "softwareUpdate": "Software Update", "updateDescription": "Check GitHub Releases for versions signed and notarized by Apple.",
-            "checkForUpdates": "Check for Updates…", "checkingForUpdates": "Checking for updates…", "upToDate": "OctoPilot is up to date.",
+            "checkForUpdates": "Check for Updates…", "checkingForUpdates": "Checking for updates…", "upToDate": "MacPilot is up to date.",
             "updateAvailable": "Version %@ is available.", "downloadAndInstall": "Download and Install", "downloadingUpdate": "Downloading update…",
             "preparingUpdate": "Verifying and preparing the update…", "updateFailed": "Update failed: %@", "currentVersion": "Current version: %@",
-            "releaseNotes": "Release Notes", "updateWillRestart": "OctoPilot will restart automatically after installation.",
+            "releaseNotes": "Release Notes", "updateWillRestart": "MacPilot will restart automatically after installation.",
             "updateErrorRelease": "The GitHub release or macOS archive is invalid.", "updateErrorIntegrity": "The downloaded file failed its SHA-256 integrity check.",
             "updateErrorVerification": "The update failed its version, developer signature, or Gatekeeper verification.",
-            "updateErrorLocation": "OctoPilot cannot update itself from this location. Move it to a writable Applications folder first.",
-            "updateErrorHelper": "The updater helper is missing from this OctoPilot installation.", "updateErrorNetwork": "Network request failed: %@",
+            "updateErrorLocation": "MacPilot cannot update itself from this location. Move it to a writable Applications folder first.",
+            "updateErrorHelper": "The updater helper is missing from this MacPilot installation.", "updateErrorNetwork": "Network request failed: %@",
             "updateErrorCommand": "Couldn’t prepare the update: %@",
             "fileCompression": "Storage Compression", "fileCompressionSubtitle": "Safely reduce the disk space used by text-based files while preserving content and visible dates.",
             "compressionFolder": "Monitored folders", "compressionNoFolder": "No folders selected", "compressionChooseFolder": "Choose Folder…",
@@ -621,7 +635,7 @@ enum AppText {
 }
 
 @MainActor
-final class OctoPilotModel: ObservableObject {
+final class MacPilotModel: ObservableObject {
     private static let safetyCheckInterval: Duration = .seconds(300)
     private static let closeWindowsLaunchGracePeriod: Duration = .seconds(10)
 
@@ -694,14 +708,17 @@ final class OctoPilotModel: ObservableObject {
     private var lastScheduledBootSession: String?
     private var isLoading = false
     private let configurationURL: URL
-    private let legacyConfigurationURL: URL
-    private let rulesKey = "OctoQuit.rules.v2"
-    private let enforcementKey = "OctoQuit.enforcing"
-    private let languageKey = "OctoQuit.language"
+    private let legacyConfigurationURLs: [URL]
+
+    private static let legacyUserDefaultsSources: [(suiteName: String, rulesKey: String, enforcementKey: String, languageKey: String)] = [
+        ("com.octoqit.app", "OctoQuit.rules.v2", "OctoQuit.enforcing", "OctoQuit.language"),
+        ("com.misswell.octopilot", "OctoPilot.rules.v2", "OctoPilot.enforcing", "OctoPilot.language"),
+        ("com.misswell.octopilot", "OctoQuit.rules.v2", "OctoQuit.enforcing", "OctoQuit.language")
+    ]
 
     init() {
         configurationURL = Self.defaultConfigurationURL()
-        legacyConfigurationURL = Self.legacyConfigurationURL()
+        legacyConfigurationURLs = Self.legacyConfigurationURLs()
         isLoading = true
         load()
         isLoading = false
@@ -757,7 +774,7 @@ final class OctoPilotModel: ObservableObject {
     func resetAccessibility(presentFailureAlert: Bool = true) async -> String? {
         guard !isResettingAccessibility else { return t("resettingAccessibility") }
         isResettingAccessibility = true
-        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.misswell.octopilot"
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? AppIdentity.bundleIdentifier
         let command = AccessibilityResetCommand(bundleIdentifier: bundleIdentifier)
         let execution = await Task.detached(priority: .userInitiated) {
             do {
@@ -1268,19 +1285,34 @@ final class OctoPilotModel: ObservableObject {
             return
         }
 
-        if let data = try? Data(contentsOf: legacyConfigurationURL),
-           let configuration = try? JSONDecoder().decode(StoredConfiguration.self, from: data) {
-            apply(configuration)
-            return
+        for url in legacyConfigurationURLs {
+            if let data = try? Data(contentsOf: url),
+               let configuration = try? JSONDecoder().decode(StoredConfiguration.self, from: data) {
+                apply(configuration)
+                return
+            }
         }
 
         // One-time migration from versions that used UserDefaults.
-        let defaults = UserDefaults(suiteName: "com.octoqit.app") ?? .standard
-        isEnforcing = defaults.object(forKey: enforcementKey) as? Bool ?? true
-        language = AppLanguage(rawValue: defaults.string(forKey: languageKey) ?? "") ?? .system
-        guard let data = defaults.data(forKey: rulesKey),
-              let saved = try? JSONDecoder().decode([QuitRule].self, from: data) else { return }
-        rules = saved
+        for source in Self.legacyUserDefaultsSources {
+            let defaults = UserDefaults(suiteName: source.suiteName) ?? .standard
+            var didLoad = false
+            if let enforcing = defaults.object(forKey: source.enforcementKey) as? Bool {
+                isEnforcing = enforcing
+                didLoad = true
+            }
+            if let storedLanguage = defaults.string(forKey: source.languageKey),
+               let decodedLanguage = AppLanguage(rawValue: storedLanguage) {
+                language = decodedLanguage
+                didLoad = true
+            }
+            if let data = defaults.data(forKey: source.rulesKey),
+               let saved = try? JSONDecoder().decode([QuitRule].self, from: data) {
+                rules = saved
+                didLoad = true
+            }
+            if didLoad { return }
+        }
     }
 
     private func apply(_ configuration: StoredConfiguration) {
@@ -1479,12 +1511,15 @@ final class OctoPilotModel: ObservableObject {
 
     private static func defaultConfigurationURL() -> URL {
         let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return applicationSupport.appendingPathComponent("OctoPilot", isDirectory: true).appendingPathComponent("config.json")
+        return applicationSupport.appendingPathComponent(AppIdentity.configurationDirectoryName, isDirectory: true)
+            .appendingPathComponent("config.json")
     }
 
-    private static func legacyConfigurationURL() -> URL {
+    private static func legacyConfigurationURLs() -> [URL] {
         let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return applicationSupport.appendingPathComponent("OctoQuit", isDirectory: true).appendingPathComponent("config.json")
+        return AppIdentity.legacyConfigurationDirectoryNames.map {
+            applicationSupport.appendingPathComponent($0, isDirectory: true).appendingPathComponent("config.json")
+        }
     }
 
     private static func bootSessionIdentifier() -> String {
@@ -1525,7 +1560,7 @@ final class OctoPilotModel: ObservableObject {
 enum MainSection { case exit, launch, ble, compression, capture, settings }
 
 struct ContentView: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @State private var showingAdd = false
     @State private var editingRule: QuitRule?
     @State private var showingLaunchAdd = false
@@ -1561,7 +1596,7 @@ struct ContentView: View {
         .sheet(item: $editingRule) { rule in RuleEditor(rule: rule).environmentObject(model) }
         .sheet(isPresented: $showingLaunchAdd) { LaunchRuleEditor(rule: nil).environmentObject(model) }
         .sheet(item: $editingLaunchRule) { rule in LaunchRuleEditor(rule: rule).environmentObject(model) }
-        .alert("OctoPilot", isPresented: Binding(get: { model.alertMessage != nil }, set: { if !$0 { model.dismissAlert() } })) {
+        .alert("MacPilot", isPresented: Binding(get: { model.alertMessage != nil }, set: { if !$0 { model.dismissAlert() } })) {
             if model.alertOffersAccessibilityReset {
                 Button(model.isResettingAccessibility ? model.t("resettingAccessibility") : model.t("resetAccessibility"), role: .destructive) {
                     Task {
@@ -1659,13 +1694,13 @@ struct ContentView: View {
 }
 
 struct Sidebar: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @Binding var section: MainSection
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "timer").font(.title2.bold()).foregroundStyle(.blue)
-                Text("OctoPilot").font(.headline)
+                Text("MacPilot").font(.headline)
             }
             .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 34)
             Button { section = .exit } label: {
@@ -1740,7 +1775,7 @@ struct Sidebar: View {
 }
 
 struct EmptyRulesView: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     let addRule: () -> Void
     var body: some View {
         VStack(spacing: 16) {
@@ -1754,7 +1789,7 @@ struct EmptyRulesView: View {
 }
 
 struct RuleRow: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @State private var showingRemoveConfirmation = false
     let rule: QuitRule
     let edit: () -> Void
@@ -1801,7 +1836,7 @@ struct RuleRow: View {
 }
 
 struct QuitCountdownBadge: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     let deadline: Date
 
     var body: some View {
@@ -1844,7 +1879,7 @@ struct AppIcon: View {
 }
 
 struct AccessibilityRecoveryView: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @Environment(\.dismiss) private var dismiss
     @State private var resetFailureMessage: String?
 
@@ -1879,7 +1914,7 @@ struct AccessibilityRecoveryView: View {
 }
 
 struct RuleEditor: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @Environment(\.dismiss) private var dismiss
     private let original: QuitRule?
     @State private var appName = ""
@@ -2017,7 +2052,7 @@ struct RuleEditor: View {
 }
 
 struct LaunchRulesView: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @Binding var showingAdd: Bool
     @Binding var editingRule: LaunchRule?
 
@@ -2089,7 +2124,7 @@ struct LaunchRulesView: View {
 }
 
 struct EmptyLaunchRulesView: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     let addRule: () -> Void
     var body: some View {
         VStack(spacing: 16) {
@@ -2103,7 +2138,7 @@ struct EmptyLaunchRulesView: View {
 }
 
 struct LaunchRuleRow: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @State private var showingRemoveConfirmation = false
     let rule: LaunchRule
     let edit: () -> Void
@@ -2143,7 +2178,7 @@ struct LaunchRuleRow: View {
 }
 
 struct LaunchStatusBadge: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     let state: LaunchRuntimeState
 
     @ViewBuilder
@@ -2177,7 +2212,7 @@ struct LaunchStatusBadge: View {
 }
 
 struct LaunchRuleEditor: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @Environment(\.dismiss) private var dismiss
     private let original: LaunchRule?
     @State private var appName = ""
@@ -2340,7 +2375,7 @@ struct LaunchRuleEditor: View {
 }
 
 struct ActionSetting: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     let title: String
     @Binding var enabled: Bool
     @Binding var minutes: Int
@@ -2366,7 +2401,7 @@ struct ActionSetting: View {
 private enum DeviceSortMode { case added, name, signal }
 
 struct BLEUnlockView: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @ObservedObject var ble: BLEUnlockModel
     @State private var showPicker = false
     @State private var showingPassword = false
@@ -2394,7 +2429,7 @@ struct BLEUnlockView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .sheet(isPresented: $showingPassword) { passwordSheet }
         .sheet(isPresented: $showingMinRSSI) { minRSSISheet }
-        .alert("OctoPilot", isPresented: Binding(get: { passwordMessage != nil }, set: { if !$0 { passwordMessage = nil } })) {
+        .alert("MacPilot", isPresented: Binding(get: { passwordMessage != nil }, set: { if !$0 { passwordMessage = nil } })) {
             Button("OK", role: .cancel) { passwordMessage = nil }
         } message: { Text(passwordMessage ?? "") }
         .onDisappear { if showPicker { showPicker = false; ble.stopScanning() } }
@@ -2725,7 +2760,7 @@ struct BLEUnlockView: View {
 }
 
 struct MenuBarView: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -2778,7 +2813,7 @@ struct MenuBarView: View {
     }
 
     private var mainWindow: NSWindow? {
-        NSApp.windows.first { $0.title == "OctoPilot" && $0.canBecomeMain }
+        NSApp.windows.first { $0.title == "MacPilot" && $0.canBecomeMain }
     }
 
     private func present(_ window: NSWindow) {
@@ -2789,7 +2824,7 @@ struct MenuBarView: View {
 }
 
 private struct UpdateMenuItems: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @ObservedObject var updater: SoftwareUpdater
     let showSettings: () -> Void
 
@@ -2809,7 +2844,7 @@ private struct UpdateMenuItems: View {
 }
 
 struct SettingsView: View {
-    @EnvironmentObject private var model: OctoPilotModel
+    @EnvironmentObject private var model: MacPilotModel
     @State private var quitterImportPreview: QuitterImportPreview?
     var body: some View {
         ScrollView {

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import OctoPilot
+@testable import MacPilot
 
 struct SoftwareUpdateTests {
     @Test func comparesSemanticVersionsNumerically() throws {
@@ -16,7 +16,7 @@ struct SoftwareUpdateTests {
         let json = """
         {
           "tag_name": "v1.2.3",
-          "name": "OctoPilot v1.2.3",
+          "name": "MacPilot v1.2.3",
           "body": "Safer updates",
           "draft": false,
           "prerelease": false,
@@ -27,8 +27,8 @@ struct SoftwareUpdateTests {
               "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
             {
-              "name": "OctoPilot-1.2.3-macos.zip",
-              "browser_download_url": "https://example.com/OctoPilot-1.2.3-macos.zip",
+              "name": "MacPilot-1.2.3-macos.zip",
+              "browser_download_url": "https://example.com/MacPilot-1.2.3-macos.zip",
               "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             }
           ]
@@ -39,8 +39,37 @@ struct SoftwareUpdateTests {
 
         #expect(release.version == SoftwareVersion("1.2.3"))
         #expect(release.releaseNotes == "Safer updates")
-        #expect(release.archiveURL.absoluteString == "https://example.com/OctoPilot-1.2.3-macos.zip")
+        #expect(release.archiveURL.absoluteString == "https://example.com/MacPilot-1.2.3-macos.zip")
         #expect(release.sha256 == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    }
+
+    @Test func acceptsLegacyArchiveNameDuringRenameTransition() throws {
+        let json = """
+        {
+          "tag_name": "v1.2.3",
+          "body": "",
+          "draft": false,
+          "prerelease": false,
+          "assets": [{
+            "name": "OctoPilot-1.2.3-macos.zip",
+            "browser_download_url": "https://example.com/OctoPilot-1.2.3-macos.zip",
+            "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          }]
+        }
+        """
+
+        let release = try SoftwareRelease.decodeGitHubResponse(Data(json.utf8))
+
+        #expect(release.archiveURL.lastPathComponent == "OctoPilot-1.2.3-macos.zip")
+    }
+
+    @Test func appIdentityKeepsLegacyBundleForMigration() {
+        #expect(AppIdentity.bundleIdentifier == "com.misswell.macpilot")
+        #expect(AppIdentity.knownBundleIdentifiers.contains("com.misswell.octopilot"))
+        #expect(AppIdentity.archiveNames(for: "1.2.3") == [
+            "MacPilot-1.2.3-macos.zip",
+            "OctoPilot-1.2.3-macos.zip"
+        ])
     }
 
     @Test func reportsAnUpdateOnlyForANewerVersion() throws {
@@ -65,7 +94,7 @@ struct SoftwareUpdateTests {
           "draft": false,
           "prerelease": false,
           "assets": [{
-            "name": "OctoPilot-1.2.3-macos.zip",
+            "name": "MacPilot-1.2.3-macos.zip",
             "browser_download_url": "https://example.com/update.zip",
             "digest": null
           }]
@@ -82,11 +111,11 @@ struct SoftwareUpdateTests {
 
     @Test func computesArchiveSHA256() throws {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OctoPilotTests-\(UUID().uuidString)")
+            .appendingPathComponent("MacPilotTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: url) }
-        try Data("OctoPilot".utf8).write(to: url, options: .atomic)
+        try Data("MacPilot".utf8).write(to: url, options: .atomic)
 
-        #expect(try UpdatePackageValidator.sha256(of: url) == "517bd07c962429ff2702e4e57c0299b40e6c92478de9777090354952724e9c44")
+        #expect(try UpdatePackageValidator.sha256(of: url) == "b10258073cf5d4342e110670f209c169f6782b984152416bbdcd61d77a1dbdc7")
     }
 
     @Test func localizesUpdateActionsAndFailures() {

@@ -2,15 +2,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "OctoPilot",
+    name: "MacPilot",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "OctoPilot", targets: ["OctoPilot"]),
-        .executable(name: "OctoPilotUpdater", targets: ["OctoPilotUpdater"])
+        .executable(name: "MacPilot", targets: ["MacPilot"]),
+        .executable(name: "MacPilotUpdater", targets: ["MacPilotUpdater"])
     ],
     targets: [
-        .executableTarget(name: "OctoPilot"),
-        .executableTarget(name: "OctoPilotUpdater"),
-        .testTarget(name: "OctoPilotTests", dependencies: ["OctoPilot"])
+        .executableTarget(name: "MacPilot"),
+        .executableTarget(name: "MacPilotUpdater"),
+        .testTarget(name: "MacPilotTests", dependencies: ["MacPilot"])
     ]
 )
