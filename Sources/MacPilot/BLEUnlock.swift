@@ -333,6 +333,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var unlockedAt: TimeInterval = 0
     private var nowPlayingWasPlaying = false
 
+    var isRecoveringFromSystemSleep: Bool { recoveringFromSystemSleep }
+
     // MediaRemote (private framework, loaded lazily).
     private var mediaRemoteHandle: UnsafeMutableRawPointer?
     private var mrSendCommand: (@convention(c) (Int32, AnyObject?) -> Bool)?
@@ -964,15 +966,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         scanForPeripherals()
     }
 
-    private func handleSystemDidWake() {
-        systemSleep = false
+    func startSystemWakeRecovery(using plan: BLEWakeRecoveryPlan) {
         recoveringFromSystemSleep = true
-        guard let plan = BLEWakeRecoveryPlan.make(
-            isEnabled: settings.isEnabled,
-            hasMonitoredDevice: monitoredUUID != nil
-        ) else { return }
-
-        prepareMonitoringForWakeRecovery()
         systemWakeRecoveryTask?.cancel()
         systemWakeRecoveryTask = Task { [weak self] in
             let deadlines = Set(plan.monitoringRestartDelays + plan.unlockRetryDelays).sorted()
@@ -993,8 +988,24 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 }
                 previousDeadline = deadline
             }
+            self?.recoveringFromSystemSleep = false
             self?.systemWakeRecoveryTask = nil
+            self?.tryUnlockScreen()
         }
+    }
+
+    private func handleSystemDidWake() {
+        systemSleep = false
+        guard let plan = BLEWakeRecoveryPlan.make(
+            isEnabled: settings.isEnabled,
+            hasMonitoredDevice: monitoredUUID != nil
+        ) else {
+            recoveringFromSystemSleep = false
+            return
+        }
+
+        prepareMonitoringForWakeRecovery()
+        startSystemWakeRecovery(using: plan)
     }
 
     func startObservingSystemState() {

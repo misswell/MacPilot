@@ -19,6 +19,17 @@ struct BLEWakeRecoveryTests {
     }
 
     @MainActor
+    @Test func wakeRecoveryFinishesWithoutAScreensDidWakeNotification() async throws {
+        let model = BLEUnlockModel()
+        let plan = BLEWakeRecoveryPlan(monitoringRestartDelays: [0], unlockRetryDelays: [0])
+
+        model.startSystemWakeRecovery(using: plan)
+        try await Task.sleep(for: .milliseconds(20))
+
+        #expect(!model.isRecoveringFromSystemSleep)
+    }
+
+    @MainActor
     @Test func overdueSignalTimeoutClearsThePreSleepPresence() async throws {
         let model = BLEUnlockModel()
         model.settings.signalTimeout = 0
