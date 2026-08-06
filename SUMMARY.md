@@ -75,11 +75,11 @@ MACPILOT_NOTARY_PROFILE="MacPilot" \
 ## 六、发布记录
 
 - 清理了 GitHub 上所有历史版本（v1.0.0 ~ v1.1.0，共 25 个 release 及对应 tag）。
-- 重新发布 **v1.1.1**：https://github.com/misswell/OctoPilot/releases/tag/v1.1.1
+- 重新发布 **v1.1.1**：https://github.com/misswell/MacPilot/releases/tag/v1.1.1
   - 已签名 + Apple 公证 + Hardened Runtime
   - 产物：`OctoPilot-1.1.1-macos.zip`，双击运行无 Gatekeeper 拦截
   - 该版本不是 tag workflow 自动成功：对应 Actions 运行失败，最终 Release 与 ZIP 由本机流程手动发布。
-- 正式发布 **v1.1.6**：https://github.com/misswell/OctoPilot/releases/tag/v1.1.6
+- 正式发布 **v1.1.6**：https://github.com/misswell/MacPilot/releases/tag/v1.1.6
   - 首次完整验证 Actions 自动链路：Developer ID 签名 → Apple 公证 → stapler → ZIP → GitHub Release。
   - 修复新版 Swift runner 将 MainActor/Sendable 诊断升级为编译错误的问题。
 
@@ -101,7 +101,7 @@ MacPilot 依赖辅助功能、系统蓝牙文件、媒体框架、模拟键盘�
 
 旧认知“Release 迟迟不出主要是 macOS runner 排队”不完整，已更正。排队只描述某个时刻的状态，必须继续跟踪到 job 的最终 conclusion 与失败步骤。
 
-- 运行中可用 `gh run watch <run_id>` 或 `gh api repos/misswell/OctoPilot/actions/jobs/<job_id> --jq '{s:.status,c:.conclusion,steps:[.steps[]|{name:.name,s:.status,c:.conclusion}]}'` 查看 step 状态；任务完成后用 `gh run view <run_id> --job <job_id> --log-failed` 提取失败日志。
+- 运行中可用 `gh run watch <run_id>` 或 `gh api repos/misswell/MacPilot/actions/jobs/<job_id> --jq '{s:.status,c:.conclusion,steps:[.steps[]|{name:.name,s:.status,c:.conclusion}]}'` 查看 step 状态；任务完成后用 `gh run view <run_id> --job <job_id> --log-failed` 提取失败日志。
 - `job_status=queued` + `steps=[]` = **runner 在排队等 macOS runner，不是构建失败**；同日 GitHub API 还 503，属平台抖动。
 - tag push 时 `build` job `conclusion=skipped` 是 `.github/workflows/build.yml` 里 `if: !startsWith(github.ref,'refs/tags/v')` 的正常跳过。
 - `v1.1.4`、`v1.1.5` 的 tag workflow 最终都失败过；tag 已存在不代表 Release 已发布。必须再用 `gh release view <tag>` 检查 Release，并确认当前发布的 `MacPilot-<version>-macos.zip` asset 存在（历史 OctoPilot 版本仍使用旧名称）。
