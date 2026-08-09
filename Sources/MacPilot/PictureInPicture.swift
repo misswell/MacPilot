@@ -678,21 +678,43 @@ enum PiPFrameDifference {
     }
 }
 
+private struct PiPProcessedFrame: @unchecked Sendable {
+    let image: CGImage
+    let fingerprint: [UInt8]
+}
+
 @MainActor
 private final class PiPStreamOutput: NSObject, SCStreamOutput {
-    weak var session: PiPSession?
     let processor: PiPFrameProcessor
+    private let frameContinuation: AsyncStream<PiPProcessedFrame>.Continuation
+    private var deliveryTask: Task<Void, Never>?
 
-    init(processor: PiPFrameProcessor) {
+    init(processor: PiPFrameProcessor, session: PiPSession) {
         self.processor = processor
+        var continuation: AsyncStream<PiPProcessedFrame>.Continuation?
+        let frames = AsyncStream<PiPProcessedFrame>(bufferingPolicy: .bufferingNewest(1)) {
+            continuation = $0
+        }
+        self.frameContinuation = continuation!
+        super.init()
+        deliveryTask = Task { @MainActor [weak session] in
+            for await frame in frames {
+                guard !Task.isCancelled, let session else { return }
+                session.receive(image: frame.image, fingerprint: frame.fingerprint)
+            }
+        }
+    }
+
+    deinit {
+        frameContinuation.finish()
+        deliveryTask?.cancel()
     }
 
     nonisolated func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
         guard outputType == .screen, let pixelBuffer = sampleBuffer.imageBuffer else { return }
         guard let image = processor.image(from: pixelBuffer) else { return }
-        Task { @MainActor [weak self] in
-            self?.session?.receive(image: image)
-        }
+        let frame = PiPProcessedFrame(image: image, fingerprint: PiPFrameDifference.signature(for: image))
+        frameContinuation.yield(frame)
     }
 }
 
@@ -838,11 +860,11 @@ final class PiPSession: ObservableObject, Identifiable {
         owner?.removeSession(id: id)
     }
 
-    func receive(image: CGImage) {
+    func receive(image: CGImage, fingerprint suppliedFingerprint: [UInt8]? = nil) {
         guard !isHidden else { return }
         self.image = image
         let now = Date()
-        let fingerprint = PiPFrameDifference.signature(for: image)
+        let fingerprint = suppliedFingerprint ?? PiPFrameDifference.signature(for: image)
         let previousFingerprint = lastFingerprint
         let stallContentChanged = previousFingerprint.map {
             PiPFrameDifference.hasMeaningfulChange(from: $0, to: fingerprint, sensitive: false)
@@ -897,6 +919,7 @@ final class PiPSession: ObservableObject, Identifiable {
     }
 
     func setHovering(_ hovering: Bool) {
+        guard hovering != isHovering else { return }
         isHovering = hovering
         if hovering && presentationSettings.autoHideOnHover && !isHidden {
             hide(reason: .hover)
@@ -1202,7 +1225,11 @@ final class PiPSession: ObservableObject, Identifiable {
                 throw PictureInPictureError.windowUnavailable
             }
             let filter = SCContentFilter(desktopIndependentWindow: window)
-            let configuration = Self.captureConfiguration(sourceFrame: source.frame, frameRate: frameRate)
+            let configuration = Self.captureConfiguration(
+                sourceFrame: source.frame,
+                region: region,
+                frameRate: frameRate
+            )
 
             let processor = PiPFrameProcessor(region: region, enhanceContrast: presentationSettings.enhanceContrast)
             if let initialImage = PiPInitialFrameCapture.image(for: source.windowID),
@@ -1212,9 +1239,8 @@ final class PiPSession: ObservableObject, Identifiable {
                ) {
                 receive(image: processedImage)
             }
-            let output = PiPStreamOutput(processor: processor)
+            let output = PiPStreamOutput(processor: processor, session: self)
             let delegate = PiPStreamDelegate()
-            output.session = self
             delegate.session = self
             let stream = SCStream(filter: filter, configuration: configuration, delegate: delegate)
             try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: DispatchQueue(label: "com.misswell.macpilot.pip.frames"))
@@ -1242,13 +1268,18 @@ final class PiPSession: ObservableObject, Identifiable {
         }
     }
 
-    static func captureConfiguration(sourceFrame: CGRect, frameRate: Int) -> SCStreamConfiguration {
+    static func captureConfiguration(
+        sourceFrame: CGRect,
+        region: PiPRegion = .fullWindow,
+        frameRate: Int
+    ) -> SCStreamConfiguration {
         let configuration = SCStreamConfiguration()
         // Capture the full source window and crop the selected region after the
         // frame arrives. This keeps the region coordinates stable across
         // ScreenCaptureKit's scaling behavior.
-        configuration.width = max(1, Int(sourceFrame.width * 2))
-        configuration.height = max(1, Int(sourceFrame.height * 2))
+        let pixelSize = capturePixelSize(sourceFrame: sourceFrame, region: region)
+        configuration.width = max(1, Int(pixelSize.width.rounded()))
+        configuration.height = max(1, Int(pixelSize.height.rounded()))
         // SCScreenshotManager otherwise preserves the window's native point
         // size inside the larger pixel buffer, leaving the live content in the
         // top-left quarter with black padding.
@@ -1259,6 +1290,21 @@ final class PiPSession: ObservableObject, Identifiable {
         configuration.showsCursor = false
         configuration.capturesAudio = false
         return configuration
+    }
+
+    static func capturePixelSize(sourceFrame: CGRect, region: PiPRegion) -> CGSize {
+        // A normal PiP is at most 420 points wide and Quick Look rarely needs
+        // more than 1,600 pixels on its longest edge. Calculate the scale from
+        // the selected region, then cap it at Retina 2x. A narrow crop keeps
+        // enough detail to enlarge while a full 4K/5K window avoids processing
+        // its entire backing store for a small floating panel.
+        let selectedWidth = max(1, sourceFrame.width * region.width)
+        let selectedHeight = max(1, sourceFrame.height * region.height)
+        let scale = min(2, 1_600 / max(selectedWidth, selectedHeight))
+        return CGSize(
+            width: max(1, sourceFrame.width * scale),
+            height: max(1, sourceFrame.height * scale)
+        )
     }
 
     // SCScreenshotManager invokes its completion handler on the replayd XPC
@@ -1836,7 +1882,10 @@ final class PictureInPictureModel: ObservableObject {
     func setQuickLookWithSpace(_ value: Bool) { updateSettings { $0.quickLookWithSpace = value } }
     func setDefaultFrameRate(_ value: Int) { updateSettings { $0.defaultFrameRate = value } }
     func setEnhanceContrast(_ value: Double) { updateSettings { $0.enhanceContrast = value } }
-    func setQuickRegionCapture(_ value: Bool) { updateSettings { $0.quickRegionCapture = value } }
+    func setQuickRegionCapture(_ value: Bool) {
+        updateSettings { $0.quickRegionCapture = value }
+        updateMouseMonitoring()
+    }
     func setAspectRatioLimit(_ value: Double) { updateSettings { $0.aspectRatioLimit = value } }
     func setMediaControls(_ value: Bool) {
         updateSettings { $0.mediaControls = value }
@@ -1901,6 +1950,7 @@ final class PictureInPictureModel: ObservableObject {
     func removeSession(id: UUID) {
         sessions.removeValue(forKey: id)
         if sessions.isEmpty { stopMediaPolling() }
+        updateMouseMonitoring()
         rebuildFocusObservers()
         refreshSummaries()
     }
@@ -1917,6 +1967,7 @@ final class PictureInPictureModel: ObservableObject {
         let current = Array(sessions.values)
         sessions.removeAll()
         stopMediaPolling()
+        updateMouseMonitoring()
         for session in current { session.stop(); session.panel?.orderOut(nil) }
         rebuildFocusObservers()
         refreshSummaries()
@@ -2011,14 +2062,7 @@ final class PictureInPictureModel: ObservableObject {
         localKeyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyUp]) { [weak self] event in
             self?.handleKeyUpEvent(PiPKeyInput(event)) == true ? nil : event
         }
-        let mouseMask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDown, .otherMouseDown, .scrollWheel, .beginGesture, .endGesture]
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseMask) { [weak self] event in
-            self?.handleMouseEvent(event)
-        }
-        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseMask) { [weak self] event in
-            self?.handleMouseEvent(event)
-            return event
-        }
+        updateMouseMonitoring()
         functionMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
             self?.handleFunctionFlags(event)
         }
@@ -2045,8 +2089,7 @@ final class PictureInPictureModel: ObservableObject {
         if let localKeyMonitor { NSEvent.removeMonitor(localKeyMonitor) }
         if let keyUpMonitor { NSEvent.removeMonitor(keyUpMonitor) }
         if let localKeyUpMonitor { NSEvent.removeMonitor(localKeyUpMonitor) }
-        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
-        if let localMouseMonitor { NSEvent.removeMonitor(localMouseMonitor) }
+        stopMouseMonitoring()
         if let functionMonitor { NSEvent.removeMonitor(functionMonitor) }
         if let localFunctionMonitor { NSEvent.removeMonitor(localFunctionMonitor) }
         removeEventTap()
@@ -2055,14 +2098,43 @@ final class PictureInPictureModel: ObservableObject {
         localKeyMonitor = nil
         keyUpMonitor = nil
         localKeyUpMonitor = nil
-        mouseMonitor = nil
-        localMouseMonitor = nil
         functionMonitor = nil
         localFunctionMonitor = nil
         activationObserver = nil
         removeFocusObservers()
         functionKeyIsDown = false
         functionComboWasUsed = false
+        threeFingerGestureActive = false
+    }
+
+    private func updateMouseMonitoring() {
+        let isNeeded = keyMonitor != nil && (settings.quickRegionCapture || !sessions.isEmpty)
+        if isNeeded {
+            startMouseMonitoring()
+        } else {
+            stopMouseMonitoring()
+        }
+    }
+
+    private func startMouseMonitoring() {
+        guard mouseMonitor == nil, localMouseMonitor == nil else { return }
+        let mouseMask: NSEvent.EventTypeMask = [
+            .mouseMoved, .leftMouseDown, .otherMouseDown, .scrollWheel, .beginGesture, .endGesture
+        ]
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseMask) { [weak self] event in
+            self?.handleMouseEvent(event)
+        }
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseMask) { [weak self] event in
+            self?.handleMouseEvent(event)
+            return event
+        }
+    }
+
+    private func stopMouseMonitoring() {
+        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+        if let localMouseMonitor { NSEvent.removeMonitor(localMouseMonitor) }
+        mouseMonitor = nil
+        localMouseMonitor = nil
         threeFingerGestureActive = false
     }
 
@@ -2501,6 +2573,7 @@ final class PictureInPictureModel: ObservableObject {
         let constrainedRegion = region.limited(aspectRatioLimit: settings.aspectRatioLimit)
         let session = PiPSession(source: source, region: constrainedRegion, settings: settings, owner: self)
         sessions[session.id] = session
+        updateMouseMonitoring()
         rebuildFocusObservers()
         refreshSummaries()
         session.start()

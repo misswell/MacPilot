@@ -4,6 +4,7 @@ import Darwin
 import ObjectiveC
 import ScreenCaptureKit
 import CoreMedia
+import Combine
 import Testing
 @testable import MacPilot
 
@@ -218,6 +219,49 @@ struct PictureInPictureTests {
         #expect(configuration.width == 1600)
         #expect(configuration.height == 1200)
         #expect(configuration.scalesToFit)
+    }
+
+    @Test @MainActor func fullWindowCaptureCapsLargeBackingStoresButKeepsRegionDetail() {
+        let sourceFrame = CGRect(x: 0, y: 0, width: 2_560, height: 1_440)
+        let fullWindow = PiPSession.captureConfiguration(
+            sourceFrame: sourceFrame,
+            frameRate: 10
+        )
+        let region = PiPSession.captureConfiguration(
+            sourceFrame: sourceFrame,
+            region: PiPRegion(x: 0.25, y: 0.25, width: 0.5, height: 0.5),
+            frameRate: 10
+        )
+
+        #expect(fullWindow.width == 1_600)
+        #expect(fullWindow.height == 900)
+        #expect(region.width == 3_200)
+        #expect(region.height == 1_800)
+    }
+
+    @Test @MainActor func repeatedMouseMovementDoesNotRepublishTheSameHoverState() {
+        let source = PiPSource(
+            windowID: 0,
+            processID: 1,
+            appName: "Hover Test",
+            bundleIdentifier: "com.example.hover",
+            title: "Static",
+            frame: CGRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let owner = PictureInPictureModel()
+        let session = PiPSession(source: source, region: .fullWindow, settings: .init(), owner: owner)
+        var publicationCount = 0
+        let observation = session.objectWillChange.sink { publicationCount += 1 }
+
+        session.setHovering(false)
+        #expect(publicationCount == 0)
+        session.setHovering(true)
+        let countAfterTransition = publicationCount
+        for _ in 0..<100 { session.setHovering(true) }
+
+        #expect(countAfterTransition > 0)
+        #expect(publicationCount == countAfterTransition)
+        withExtendedLifetime(observation) {}
     }
 
     @Test func focusedWindowSelectionSkipsTransientIconSizedWindows() {
