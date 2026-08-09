@@ -55,7 +55,7 @@ private enum PiPTriggerKeyCode {
     }
 }
 
-private final class PiPEventTapContext: @unchecked Sendable {
+final class PiPEventTapContext: @unchecked Sendable {
     let owner: UnsafeMutableRawPointer
     private let lock = NSLock()
     private var triggerKeyCode: CGKeyCode
@@ -140,8 +140,18 @@ private func pictureInPictureEventTapCallback(
         return Unmanaged.passUnretained(event)
     }
 
+    return pictureInPictureShouldSuppressEvent(type, event: event, context: context)
+        ? nil
+        : Unmanaged.passUnretained(event)
+}
+
+func pictureInPictureShouldSuppressEvent(
+    _ type: CGEventType,
+    event: CGEvent,
+    context: PiPEventTapContext
+) -> Bool {
     if event.getIntegerValueField(.eventSourceUserData) == 0x4D_50_50_49_50 {
-        return Unmanaged.passUnretained(event)
+        return false
     }
 
     let owner = Unmanaged<PictureInPictureModel>.fromOpaque(context.owner).takeUnretainedValue()
@@ -151,13 +161,13 @@ private func pictureInPictureEventTapCallback(
         context.markFunctionComboWasUsed()
         let shift = event.flags.contains(.maskShift)
         Task { @MainActor in owner.handleEventTapTrigger(shift: shift) }
-        return nil
+        return true
     }
 
     guard (type == .keyDown || type == .keyUp),
           Thread.isMainThread,
           let nsEvent = NSEvent(cgEvent: event) else {
-        return Unmanaged.passUnretained(event)
+        return false
     }
     let keyInput = PiPKeyInput(nsEvent)
     let handled = MainActor.assumeIsolated {
@@ -165,7 +175,7 @@ private func pictureInPictureEventTapCallback(
             ? owner.handleKeyEvent(keyInput, suppress: true)
             : owner.handleKeyUpEvent(keyInput)
     }
-    return handled ? nil : Unmanaged.passUnretained(event)
+    return handled
 }
 
 private func pictureInPictureFocusedWindowCallback(
@@ -450,6 +460,30 @@ struct PiPSource: Equatable, Sendable {
     let bundleIdentifier: String?
     let title: String
     let frame: CGRect
+}
+
+struct PiPWindowCandidate: Equatable {
+    let windowID: CGWindowID
+    let frame: CGRect
+}
+
+enum PiPWindowSelection {
+    static func isPlausibleCaptureWindow(_ frame: CGRect) -> Bool {
+        frame.width >= 80 && frame.height >= 60 && frame.width * frame.height >= 8_000
+    }
+
+    /// Input is expected in front-to-back window order. Tiny utility windows
+    /// (tooltips, drag badges, transient controls) must not win over the app's
+    /// actual document window merely because ScreenCaptureKit lists them first.
+    static func orderedCaptureWindowIDs(from candidates: [PiPWindowCandidate]) -> [CGWindowID] {
+        let plausible = candidates.filter { isPlausibleCaptureWindow($0.frame) }
+        if !plausible.isEmpty {
+            return plausible.map(\.windowID)
+        }
+        return candidates
+            .sorted { $0.frame.width * $0.frame.height > $1.frame.width * $1.frame.height }
+            .map(\.windowID)
+    }
 }
 
 enum PiPCoordinateSpace {
@@ -1168,17 +1202,7 @@ final class PiPSession: ObservableObject, Identifiable {
                 throw PictureInPictureError.windowUnavailable
             }
             let filter = SCContentFilter(desktopIndependentWindow: window)
-            let configuration = SCStreamConfiguration()
-            // Capture the full source window and crop the selected region after the
-            // frame arrives. This keeps the region coordinates stable across
-            // ScreenCaptureKit's scaling behavior.
-            configuration.width = max(1, Int(source.frame.width * 2))
-            configuration.height = max(1, Int(source.frame.height * 2))
-            configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(frameRate))
-            configuration.queueDepth = 3
-            configuration.pixelFormat = kCVPixelFormatType_32BGRA
-            configuration.showsCursor = false
-            configuration.capturesAudio = false
+            let configuration = Self.captureConfiguration(sourceFrame: source.frame, frameRate: frameRate)
 
             let processor = PiPFrameProcessor(region: region, enhanceContrast: presentationSettings.enhanceContrast)
             if let initialImage = PiPInitialFrameCapture.image(for: source.windowID),
@@ -1216,6 +1240,25 @@ final class PiPSession: ObservableObject, Identifiable {
         if token == captureToken {
             captureStartTask = nil
         }
+    }
+
+    static func captureConfiguration(sourceFrame: CGRect, frameRate: Int) -> SCStreamConfiguration {
+        let configuration = SCStreamConfiguration()
+        // Capture the full source window and crop the selected region after the
+        // frame arrives. This keeps the region coordinates stable across
+        // ScreenCaptureKit's scaling behavior.
+        configuration.width = max(1, Int(sourceFrame.width * 2))
+        configuration.height = max(1, Int(sourceFrame.height * 2))
+        // SCScreenshotManager otherwise preserves the window's native point
+        // size inside the larger pixel buffer, leaving the live content in the
+        // top-left quarter with black padding.
+        configuration.scalesToFit = true
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, frameRate)))
+        configuration.queueDepth = 3
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA
+        configuration.showsCursor = false
+        configuration.capturesAudio = false
+        return configuration
     }
 
     // SCScreenshotManager invokes its completion handler on the replayd XPC
@@ -1318,13 +1361,13 @@ struct PiPPanelView: View {
                     ProgressView().tint(.white)
                 }
 
-                if session.isStalled || isMediaPaused {
+                if isMediaPaused {
                     Color.black.opacity(0.38)
-                    Image(systemName: session.isStalled ? "exclamationmark.triangle.fill" : "pause.circle.fill")
+                    Image(systemName: "pause.circle.fill")
                         .font(.system(size: 28, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.92))
                         .shadow(radius: 6)
-                        .accessibilityLabel(session.isStalled ? "Content stalled" : "Media paused")
+                        .accessibilityLabel("Media paused")
                 }
 
                 if session.presentationSettings.dimOnHover && session.isHovering {
@@ -2137,17 +2180,24 @@ final class PictureInPictureModel: ObservableObject {
     }
 
     private func focusedWindowID(for processID: pid_t) -> CGWindowID? {
+        PiPWindowSelection.orderedCaptureWindowIDs(
+            from: orderedWindowCandidates(for: processID)
+        ).first
+    }
+
+    private func orderedWindowCandidates(for processID: pid_t) -> [PiPWindowCandidate] {
         guard let windowInfo = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements],
             kCGNullWindowID
-        ) as? [[CFString: Any]] else { return nil }
-        for window in windowInfo {
+        ) as? [[CFString: Any]] else { return [] }
+        return windowInfo.compactMap { window in
             guard (window[kCGWindowOwnerPID] as? NSNumber)?.int32Value == processID,
                   (window[kCGWindowLayer] as? NSNumber)?.intValue == 0,
-                  let number = (window[kCGWindowNumber] as? NSNumber)?.uint32Value else { continue }
-            return CGWindowID(number)
+                  let number = (window[kCGWindowNumber] as? NSNumber)?.uint32Value,
+                  let bounds = window[kCGWindowBounds] as? [String: CGFloat],
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return nil }
+            return PiPWindowCandidate(windowID: CGWindowID(number), frame: frame)
         }
-        return nil
     }
 
     private func rebuildFocusObservers() {
@@ -2410,12 +2460,17 @@ final class PictureInPictureModel: ObservableObject {
             guard let self else { return }
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                guard let window = content.windows.first(where: { window in
+                let matches = content.windows.filter { window in
                     guard window.isOnScreen, window.windowID != 0 else { return false }
                     let appMatches = appQuery.map { window.owningApplication?.applicationName.localizedCaseInsensitiveContains($0) == true } ?? true
                     let titleMatches = windowQuery.map { window.title?.localizedCaseInsensitiveContains($0) == true || String(window.windowID) == $0 } ?? true
                     return appMatches && titleMatches
-                }) else { throw PictureInPictureError.noFocusedWindow }
+                }
+                guard let processID = matches.first?.owningApplication?.processID,
+                      let window = preferredWindow(
+                          from: matches.filter { $0.owningApplication?.processID == processID },
+                          processID: processID
+                      ) else { throw PictureInPictureError.noFocusedWindow }
                 let source = source(from: window)
                 await MainActor.run {
                     guard let session = self.createSession(source: source, region: .fullWindow) else { return }
@@ -2437,8 +2492,25 @@ final class PictureInPictureModel: ObservableObject {
         let candidates = content.windows.filter { window in
             window.owningApplication?.processID == pid && window.isOnScreen && window.windowID != 0
         }
-        guard let window = candidates.first else { return nil }
+        guard let window = preferredWindow(from: candidates, processID: pid) else { return nil }
         return source(from: window)
+    }
+
+    private func preferredWindow(from candidates: [SCWindow], processID: pid_t) -> SCWindow? {
+        let orderedWindowIDs = PiPWindowSelection.orderedCaptureWindowIDs(
+            from: orderedWindowCandidates(for: processID)
+        )
+        if let window = orderedWindowIDs.lazy.compactMap({ windowID in
+            candidates.first(where: { $0.windowID == windowID })
+        }).first {
+            return window
+        }
+
+        let plausible = candidates.filter { PiPWindowSelection.isPlausibleCaptureWindow($0.frame) }
+        let titled = plausible.filter { $0.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
+        return titled.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
+            ?? plausible.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
+            ?? candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
     }
 
     private func source(at point: CGPoint) async throws -> PiPSource? {

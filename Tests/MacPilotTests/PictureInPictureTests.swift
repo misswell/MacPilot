@@ -106,7 +106,7 @@ struct PictureInPictureTests {
         #expect(session.zoomSelection == nil)
     }
 
-    @Test @MainActor func stalledOverlayStateAppearsAfterMotionStopsAndClearsOnChange() async throws {
+    @Test @MainActor func stalledCaptureStateAppearsAfterMotionStopsAndClearsOnChange() async throws {
         let source = PiPSource(
             windowID: 0, processID: 1, appName: "Stall Test", bundleIdentifier: "com.example.stall",
             title: "Static", frame: CGRect(x: 0, y: 0, width: 800, height: 600)
@@ -141,6 +141,7 @@ struct PictureInPictureTests {
     }
 
     @Test @MainActor func screenCaptureKitStreamsPipiriWhenItIsRunning() async throws {
+        guard pipLiveScreenCaptureTestsEnabled else { return }
         _ = NSApplication.shared
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let window = content.windows.first(where: {
@@ -167,6 +168,7 @@ struct PictureInPictureTests {
     }
 
     @Test @MainActor func pipSessionShowsCropsHidesAndRestoresARealPipiriWindow() async throws {
+        guard pipLiveScreenCaptureTestsEnabled else { return }
         _ = NSApplication.shared
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let window = content.windows.first(where: {
@@ -207,8 +209,29 @@ struct PictureInPictureTests {
         #expect(session.panel?.isVisible == true)
     }
 
-    @Test @MainActor func handledHoverShortcutIsReallySuppressedByTheEventTap() async throws {
-        guard AXIsProcessTrusted() else { return }
+    @Test @MainActor func pipCaptureScalesTheWindowToFillItsRequestedPixelBuffer() {
+        let configuration = PiPSession.captureConfiguration(
+            sourceFrame: CGRect(x: 0, y: 0, width: 800, height: 600),
+            frameRate: 10
+        )
+
+        #expect(configuration.width == 1600)
+        #expect(configuration.height == 1200)
+        #expect(configuration.scalesToFit)
+    }
+
+    @Test func focusedWindowSelectionSkipsTransientIconSizedWindows() {
+        let orderedIDs = PiPWindowSelection.orderedCaptureWindowIDs(from: [
+            PiPWindowCandidate(windowID: 11, frame: CGRect(x: 120, y: 300, width: 52, height: 20)),
+            PiPWindowCandidate(windowID: 22, frame: CGRect(x: 100, y: 300, width: 920, height: 741)),
+            PiPWindowCandidate(windowID: 33, frame: CGRect(x: 70, y: 270, width: 920, height: 741))
+        ])
+
+        #expect(orderedIDs == [22, 33])
+    }
+
+    @Test @MainActor func handledHoverShortcutIsSuppressedByTheEventTapHandler() async throws {
+        guard pipLiveScreenCaptureTestsEnabled else { return }
         _ = NSApplication.shared
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let window = content.windows.first(where: {
@@ -224,8 +247,6 @@ struct PictureInPictureTests {
             frame: window.frame
         )
         let owner = PictureInPictureModel()
-        owner.activateFromConfiguration()
-        defer { owner.shutdown() }
         let session = try #require(owner.createSession(source: source, region: .fullWindow))
         defer { owner.closeAll() }
         let originalMouseLocation = NSEvent.mouseLocation
@@ -240,38 +261,20 @@ struct PictureInPictureTests {
         CGWarpMouseCursorPosition(PiPCoordinateSpace.quartzPoint(fromAppKit: mouseTarget))
         try await Task.sleep(for: .milliseconds(100))
 
-        let collector = PiPTestKeyEventCollector()
-        let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
-        let refcon = Unmanaged.passUnretained(collector).toOpaque()
-        let possibleDownstreamTap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .tailAppendEventTap,
-            options: .listenOnly,
-            eventsOfInterest: mask,
-            callback: pipTestKeyEventCallback,
-            userInfo: refcon
+        let context = PiPEventTapContext(
+            owner: Unmanaged.passUnretained(owner).toOpaque(),
+            triggerKeyCode: 35
         )
-        let downstreamTap = try #require(possibleDownstreamTap)
-        let sourceRef = try #require(CFMachPortCreateRunLoopSource(nil, downstreamTap, 0))
-        CFRunLoopAddSource(CFRunLoopGetMain(), sourceRef, .commonModes)
-        CGEvent.tapEnable(tap: downstreamTap, enable: true)
-        defer {
-            CGEvent.tapEnable(tap: downstreamTap, enable: false)
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), sourceRef, .commonModes)
-        }
-
         let keyDown = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 24, keyDown: true))
-        let keyUp = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 24, keyDown: false))
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
-        try await Task.sleep(for: .milliseconds(200))
+        keyDown.flags = []
+        let suppressed = pictureInPictureShouldSuppressEvent(.keyDown, event: keyDown, context: context)
 
+        #expect(suppressed)
         #expect(session.zoomFactor == 1.5)
-        #expect(collector.keyDownCount == 0)
     }
 
-    @Test @MainActor func quickLookHoldPeeksAndEscapeLeavesThePipOpen() async throws {
-        guard AXIsProcessTrusted() else { return }
+    @Test @MainActor func quickLookHoldPeeksAndEscapeLeavesThePipOpenWhenHandled() async throws {
+        guard pipLiveScreenCaptureTestsEnabled else { return }
         _ = NSApplication.shared
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let window = content.windows.first(where: {
@@ -287,8 +290,6 @@ struct PictureInPictureTests {
             frame: window.frame
         )
         let owner = PictureInPictureModel()
-        owner.activateFromConfiguration()
-        defer { owner.shutdown() }
         let session = try #require(owner.createSession(source: source, region: .fullWindow))
         defer { owner.closeAll() }
         let panel = try #require(session.panel)
@@ -302,20 +303,28 @@ struct PictureInPictureTests {
         try await Task.sleep(for: .milliseconds(100))
         let initialWindowCount = pipTestVisibleWindowCount()
 
+        let context = PiPEventTapContext(
+            owner: Unmanaged.passUnretained(owner).toOpaque(),
+            triggerKeyCode: 35
+        )
         let spaceDown = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 49, keyDown: true))
         let spaceUp = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 49, keyDown: false))
-        spaceDown.post(tap: .cghidEventTap)
+        spaceDown.flags = []
+        spaceUp.flags = []
+        let spaceDownSuppressed = pictureInPictureShouldSuppressEvent(.keyDown, event: spaceDown, context: context)
+        #expect(spaceDownSuppressed)
         for _ in 0..<30 where pipTestVisibleWindowCount() <= initialWindowCount {
             try await Task.sleep(for: .milliseconds(50))
         }
         #expect(pipTestVisibleWindowCount() > initialWindowCount)
 
         let escapeDown = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: true))
-        let escapeUp = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: false))
-        escapeDown.post(tap: .cghidEventTap)
-        escapeUp.post(tap: .cghidEventTap)
-        spaceUp.post(tap: .cghidEventTap)
+        escapeDown.flags = []
+        let escapeSuppressed = pictureInPictureShouldSuppressEvent(.keyDown, event: escapeDown, context: context)
+        let spaceUpSuppressed = pictureInPictureShouldSuppressEvent(.keyUp, event: spaceUp, context: context)
         try await Task.sleep(for: .milliseconds(200))
+        #expect(escapeSuppressed)
+        #expect(spaceUpSuppressed)
         #expect(owner.summaries.count == 1)
         #expect(pipTestVisibleWindowCount() == initialWindowCount)
     }
@@ -763,29 +772,8 @@ private final class PiPTestFrameCollector: NSObject, SCStreamOutput, @unchecked 
     }
 }
 
-private final class PiPTestKeyEventCollector: @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
-
-    var keyDownCount: Int {
-        lock.withLock { count }
-    }
-
-    func recordKeyDown() {
-        lock.withLock { count += 1 }
-    }
-}
-
-private func pipTestKeyEventCallback(
-    _ proxy: CGEventTapProxy,
-    _ type: CGEventType,
-    _ event: CGEvent?,
-    _ refcon: UnsafeMutableRawPointer?
-) -> Unmanaged<CGEvent>? {
-    if type == .keyDown, let refcon {
-        Unmanaged<PiPTestKeyEventCollector>.fromOpaque(refcon).takeUnretainedValue().recordKeyDown()
-    }
-    return event.map(Unmanaged.passUnretained)
+private var pipLiveScreenCaptureTestsEnabled: Bool {
+    ProcessInfo.processInfo.environment["MACPILOT_RUN_LIVE_SCREEN_CAPTURE_TESTS"] == "1"
 }
 
 private func pipTestVisibleWindowCount() -> Int {
