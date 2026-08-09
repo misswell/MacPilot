@@ -1218,7 +1218,10 @@ final class PiPSession: ObservableObject, Identifiable {
         }
     }
 
-    private func captureInitialImage(
+    // SCScreenshotManager invokes its completion handler on the replayd XPC
+    // queue. Keep this entry point nonisolated so the callback does not inherit
+    // PiPSession's MainActor isolation and trip Swift's executor assertion.
+    private nonisolated func captureInitialImage(
         filter: SCContentFilter,
         configuration: SCStreamConfiguration,
         processor: PiPFrameProcessor,
