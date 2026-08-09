@@ -359,7 +359,7 @@ struct PiPMediaTransportControls: View {
                         Text(formatTime(duration))
                     }
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.62))
                 }
 
                 HStack(spacing: 15) {
@@ -389,10 +389,17 @@ struct PiPMediaTransportControls: View {
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 10)
+            .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(.white.opacity(0.16))
+            )
+            .shadow(color: .black.opacity(0.3), radius: 12, y: 5)
             .onAppear { updateSeekPosition(from: snapshot) }
             .onChange(of: snapshot) { _, newValue in
                 updateSeekPosition(from: newValue)

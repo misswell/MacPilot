@@ -1362,82 +1362,52 @@ struct PiPPanelView: View {
                 }
 
                 if isMediaPaused {
-                    Color.black.opacity(0.38)
-                    Image(systemName: "pause.circle.fill")
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.92))
-                        .shadow(radius: 6)
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(13)
+                        .background(.black.opacity(0.58), in: Circle())
+                        .overlay(Circle().strokeBorder(.white.opacity(0.18)))
+                        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
                         .accessibilityLabel("Media paused")
                 }
 
                 if session.presentationSettings.dimOnHover && session.isHovering {
-                    Color.black.opacity(0.18)
                     if session.presentationSettings.blurAmount > 0 {
                         Rectangle()
                             .fill(.ultraThinMaterial)
-                            .opacity(session.presentationSettings.blurAmount)
+                            .opacity(session.presentationSettings.blurAmount * 0.32)
                     }
+                    LinearGradient(
+                        colors: [.black.opacity(0.52), .clear, .black.opacity(0.48)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 }
 
-                if session.presentationSettings.showHoverHints && session.showsHoverHints {
-                    VStack(spacing: 0) {
+                if session.isHovering {
+                    VStack(spacing: 10) {
                         HStack(spacing: 8) {
-                            Button { session.cycleDetectionMode() } label: {
-                                Circle()
-                                    .fill(detectionIndicatorColor)
-                                    .overlay {
-                                        if session.detectionIsSensitive {
-                                            Circle().stroke(.white.opacity(0.9), lineWidth: 1)
-                                        }
-                                    }
-                                    .frame(width: 9, height: 9)
+                            if session.presentationSettings.showHoverHints {
+                                sourceBadge
+                                    .transition(.move(edge: .top).combined(with: .opacity))
                             }
-                            .buttonStyle(.plain)
-                            .help(detectionIndicatorHelp)
-                            .contextMenu {
-                                Button("关闭检测") {
-                                    if session.detectionMode == .idle { session.toggleIdleDetection() }
-                                    if session.detectionMode == .change { session.toggleChangeDetection() }
-                                }
-                                Button("空闲检测") { session.toggleIdleDetection() }
-                                Button("变化检测") { session.toggleChangeDetection() }
-                                Divider()
-                                Button(session.detectionIsSensitive ? "关闭敏感检测" : "开启敏感检测") {
-                                    session.toggleSensitiveDetection()
-                                }
+                            Spacer(minLength: 8)
+                            hudButton(icon: "xmark", help: "Close Picture-in-Picture") {
+                                session.close()
                             }
-                            Text(session.source.appName)
-                                .font(.caption.weight(.semibold))
-                                .lineLimit(1)
-                            Spacer()
-                            Text("⌘ \(Int(session.zoomFactor))×")
-                                .font(.caption2.monospaced())
                         }
-                        .padding(9)
-                        .background(.ultraThinMaterial)
                         Spacer()
-                        if session.mediaSnapshot == nil {
-                            HStack(spacing: 12) {
-                                Text("⌘拖动缩放 · 滚轮平移")
-                                Spacer()
-                                Text("Esc 关闭")
-                            }
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.9))
-                            .padding(8)
-                            .background(.black.opacity(0.45))
+                        if session.presentationSettings.mediaControls,
+                           session.mediaSnapshot != nil {
+                            PiPMediaTransportControls(session: session)
+                                .frame(maxWidth: 360)
+                        } else if session.presentationSettings.showHoverHints {
+                            actionDock
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
-                }
-
-                if session.presentationSettings.mediaControls,
-                   session.isHovering,
-                   session.mediaSnapshot != nil {
-                    VStack {
-                        Spacer()
-                        PiPMediaTransportControls(session: session)
-                            .padding(8)
-                    }
+                    .padding(10)
                 }
 
                 if let selection = session.zoomSelection {
@@ -1489,6 +1459,100 @@ struct PiPPanelView: View {
                 Divider()
                 Button("关闭 PiP", role: .destructive) { session.close() }
             }
+            .animation(.easeOut(duration: 0.16), value: session.isHovering)
+        }
+    }
+
+    private var sourceBadge: some View {
+        HStack(spacing: 7) {
+            if let icon = NSRunningApplication(processIdentifier: session.source.processID)?.icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 17, height: 17)
+            } else {
+                Image(systemName: "macwindow")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            Text(session.source.appName)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+            Circle()
+                .fill(session.image == nil ? Color.orange : Color.green)
+                .frame(width: 6, height: 6)
+        }
+        .foregroundStyle(.white)
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
+        .padding(.vertical, 6)
+        .background(.black.opacity(0.58), in: Capsule())
+        .overlay(Capsule().strokeBorder(.white.opacity(0.16)))
+        .shadow(color: .black.opacity(0.24), radius: 8, y: 3)
+    }
+
+    private var actionDock: some View {
+        HStack(spacing: 4) {
+            hudButton(icon: detectionIcon, help: detectionIndicatorHelp) {
+                session.cycleDetectionMode()
+            }
+            .overlay(alignment: .topTrailing) {
+                Circle()
+                    .fill(detectionIndicatorColor)
+                    .frame(width: 6, height: 6)
+                    .overlay {
+                        if session.detectionIsSensitive {
+                            Circle().stroke(.white.opacity(0.9), lineWidth: 1)
+                        }
+                    }
+                    .offset(x: -4, y: 4)
+            }
+            Divider()
+                .frame(height: 18)
+                .overlay(.white.opacity(0.18))
+                .padding(.horizontal, 3)
+            hudButton(icon: "arrow.up.forward.app", help: "Focus source window") {
+                session.focusSource()
+            }
+            hudButton(icon: "arrow.counterclockwise", help: "Reset zoom") {
+                session.resetZoom()
+            }
+            Text(zoomLabel)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.82))
+                .frame(minWidth: 32)
+                .padding(.horizontal, 4)
+        }
+        .padding(5)
+        .background(.black.opacity(0.62), in: Capsule())
+        .overlay(Capsule().strokeBorder(.white.opacity(0.16)))
+        .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
+    }
+
+    private func hudButton(icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 27, height: 27)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .background(.white.opacity(0.08), in: Circle())
+        .help(help)
+    }
+
+    private var zoomLabel: String {
+        let rounded = session.zoomFactor.rounded()
+        if abs(session.zoomFactor - rounded) < 0.01 {
+            return "\(Int(rounded))×"
+        }
+        return String(format: "%.1f×", session.zoomFactor)
+    }
+
+    private var detectionIcon: String {
+        switch session.detectionMode {
+        case .off: "waveform.slash"
+        case .idle: "moon.zzz.fill"
+        case .change: "waveform.path.ecg"
         }
     }
 
@@ -2597,90 +2661,137 @@ struct PictureInPictureView: View {
     @State private var page: PiPSettingsPage = .general
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 10) {
-                    Image(systemName: "pip.enter")
-                        .font(.title2.bold())
-                        .foregroundStyle(.blue)
-                    Text(t("pictureInPicture"))
-                        .font(.headline)
+        VStack(spacing: 0) {
+            dashboardHeader
+            categoryBar
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 10) {
+                        Image(systemName: page.icon)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.tint)
+                            .frame(width: 30, height: 30)
+                            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(t(page.titleKey))
+                                .font(.title2.bold())
+                            Text(page == .general ? t("pictureInPictureSubtitle") : t("pictureInPicture"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("\(pictureInPicture.summaries.count) PiP")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(.quaternary.opacity(0.7), in: Capsule())
+                    }
+                    pageContent
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 26)
-                .padding(.bottom, 24)
+                .frame(maxWidth: 940)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity)
+            }
+            .background(
+                LinearGradient(
+                    colors: [Color.accentColor.opacity(0.025), .clear],
+                    startPoint: .top,
+                    endPoint: .center
+                )
+            )
+        }
+    }
 
+    private var dashboardHeader: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "rectangle.inset.filled.and.person.filled")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(
+                    LinearGradient(
+                        colors: [Color.accentColor, Color.purple.opacity(0.85)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+                )
+                .shadow(color: Color.accentColor.opacity(0.25), radius: 9, y: 4)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(t("pictureInPicture"))
+                    .font(.headline)
+                Text(t("pictureInPictureSubtitle"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(pictureInPicture.settings.isEnabled ? Color.green : Color.orange)
+                    .frame(width: 7, height: 7)
+                Text(pictureInPicture.settings.isEnabled ? t("pipEnabledStatus") : t("pipDisabledStatus"))
+                    .font(.caption.weight(.semibold))
+                Toggle("", isOn: Binding(
+                    get: { pictureInPicture.settings.isEnabled },
+                    set: { pictureInPicture.setEnabled($0) }
+                ))
+                .labelsHidden()
+                .controlSize(.mini)
+            }
+            .padding(.leading, 11)
+            .padding(.trailing, 8)
+            .padding(.vertical, 7)
+            .background(.quaternary.opacity(0.55), in: Capsule())
+            Button(t("pipCloseAll")) { pictureInPicture.closeAll() }
+                .disabled(pictureInPicture.summaries.isEmpty)
+            Button {
+                pictureInPicture.captureFocusedWindowNow()
+            } label: {
+                Label(t("pipCaptureFocused"), systemImage: "plus.rectangle.on.rectangle")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!pictureInPicture.settings.isEnabled)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
+        .background(.bar)
+    }
+
+    private var categoryBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 7) {
                 ForEach(PiPSettingsPage.allCases) { item in
                     Button { page = item } label: {
-                        Label(t(item.titleKey), systemImage: item.icon)
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                        HStack(spacing: 7) {
+                            Image(systemName: item.icon)
+                            Text(t(item.titleKey))
+                                .lineLimit(1)
+                        }
+                        .font(.caption.weight(page == item ? .semibold : .medium))
+                        .foregroundStyle(page == item ? Color.accentColor : Color.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            page == item ? Color.accentColor.opacity(0.12) : Color.clear,
+                            in: Capsule()
+                        )
+                        .overlay {
+                            if page == item {
+                                Capsule().strokeBorder(Color.accentColor.opacity(0.2))
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
-                    .background(page == item ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 8))
-                    .padding(.horizontal, 10)
-                }
-
-                Spacer()
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Circle()
-                            .fill(pictureInPicture.settings.isEnabled ? .green : .orange)
-                            .frame(width: 8, height: 8)
-                        Text(pictureInPicture.settings.isEnabled ? t("pipEnabledStatus") : t("pipDisabledStatus"))
-                            .font(.caption.weight(.medium))
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { pictureInPicture.settings.isEnabled },
-                            set: { pictureInPicture.setEnabled($0) }
-                        ))
-                        .labelsHidden()
-                        .controlSize(.mini)
-                    }
-                    Text("\(pictureInPicture.summaries.count) PiP")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(14)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
-                .padding(14)
-            }
-            .frame(width: 190)
-            .background(Color(nsColor: .controlBackgroundColor))
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(t(page.titleKey))
-                            .font(.system(size: 27, weight: .bold))
-                        Text(page == .general ? t("pictureInPictureSubtitle") : t("pictureInPicture"))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    HStack(spacing: 8) {
-                        Button(t("pipCloseAll")) { pictureInPicture.closeAll() }
-                            .disabled(pictureInPicture.summaries.isEmpty)
-                        Button(t("pipCaptureFocused")) { pictureInPicture.captureFocusedWindowNow() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(!pictureInPicture.settings.isEnabled)
-                    }
-                }
-                .padding(.horizontal, 32)
-                .padding(.top, 28)
-                .padding(.bottom, 20)
-
-                ScrollView {
-                    pageContent
-                        .padding(.horizontal, 32)
-                        .padding(.bottom, 30)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 10)
         }
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     @ViewBuilder
@@ -2974,8 +3085,13 @@ struct PictureInPictureView: View {
 
     private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 14, content: content)
-            .padding(18)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
+            .padding(20)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(.primary.opacity(0.07))
+            )
+            .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private func settingRow<Content: View>(_ title: String, hint: String? = nil, @ViewBuilder control: () -> Content) -> some View {
