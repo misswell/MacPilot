@@ -29,6 +29,6 @@
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>MacPilot uses Bluetooth to detect nearby BLE devices for proximity-based screen lock and unlock.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>MacPilot captures periodic screenshots for your activity records. Screenshots are saved only to the folder you choose and are never transmitted.</string>
+	<string>MacPilot captures selected windows and displays for Picture-in-Picture and periodic screenshots. Captured images stay on your Mac.</string>
 </dict>
 </plist>

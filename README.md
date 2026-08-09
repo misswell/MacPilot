@@ -36,6 +36,20 @@ The **Storage Compression** sidebar scans a folder for stable text-based files a
 
 MacPilot verifies every compressed copy with SHA-256 before atomically replacing the original. It preserves visible dates and filesystem metadata through macOS `ditto`, skips packages, hidden folders, symbolic links, hard links, sparse files, and cloud placeholders, and only operates on APFS or HFS+ volumes. Compressed files remain directly readable by normal applications and can be restored from the same screen.
 
+## Picture-in-Picture
+
+The **Picture-in-Picture** sidebar uses ScreenCaptureKit to capture an individual window and show it as a live floating panel across Spaces:
+
+- `fn-P` captures the focused window, `fn-Shift-P` selects a region, and optional `fn` double-click captures a quick area around the pointer.
+- Panels keep the source aspect ratio, support resizing, ⌘-dragging a region to zoom into it, scroll panning, `+/-` zoom, and fullscreen Spaces.
+- Auto-hide, click-to-focus, double-click-to-focus-and-close, Backspace/Esc close, Space QuickLook, media play/pause, and arrow-key seeking are supported.
+- Media controls use the source app's real Now Playing session for play/pause, five-second seeking, progress display, and YouTube captions.
+- Configure 1–60 fps, 0–100% contrast enhancement, multi-window mode, hover hints, corner radius, and per-app idle/change/sensitive detection. Detection scripts receive `PIPIRI_EVENT`, `PIPIRI_APP`, `PIPIRI_BUNDLE_ID`, and `PIPIRI_WINDOW_ID`.
+- Off-screen rendering fixes can relaunch Chromium/Electron apps with their supported background-rendering flag. Firefox, Floorp, kitty, Ghostty, iTerm2, and explicitly selected custom-compositor apps can instead be patched after confirmation; MacPilot creates a complete backup, supports restoration and administrator authorization, watches patched bundles with FSEvents to reapply after updates, and automatically restores after repeated fast crashes.
+- Picture-in-Picture settings are persisted with the rest of the app configuration in `~/Library/Application Support/MacPilot/config.json`.
+
+The first capture requires Screen Recording access in **System Settings → Privacy & Security → Screen Recording**. To intercept `fn-P` while another app is active, also grant MacPilot **Accessibility** access; without it, the in-app fallback can observe hotkeys but cannot suppress the original keystroke. Custom-compositor patching never runs silently: the target app must be quit, the user must confirm the modification, and its original bundle remains restorable from MacPilot's Application Support directory.
+
 ## Build the app
 
 ```sh
@@ -45,13 +59,13 @@ open MacPilot.app
 
 The built app is `MacPilot.app` in the project root. The Close Windows action requires Accessibility access in System Settings, and selecting that mode immediately triggers the system permission prompt. Whether a target app removes its Dock icon after its windows close is controlled by that app.
 
-Local and GitHub Release builds currently use ad-hoc signing, so each update can have a new code identity and macOS may require Accessibility access to be granted again. Preserving that grant reliably across upgrades requires distributing every version with the same Developer ID signing identity.
+When a Developer ID identity is available, release builds and local builds use the same explicit designated requirement (bundle identifier and Apple trust chain). The requirement deliberately does not include the signing certificate's Team ID, because the local Apple Development and release Developer ID certificates may belong to different teams on a development Mac. A local build automatically uses the installed Apple Development identity; if no stable identity is available, the script warns and falls back to ad-hoc signing. The first build after migrating from an older ad-hoc/default-signed app may need permissions granted once again; subsequent development and release builds can share the same Screen Recording and Accessibility authorization.
 
 If MacPilot remains untrusted after an update even though it is enabled in the Accessibility list, toggling the switch may leave the old signing record in place. The permission alert offers **Reset Permission and Quit**, which runs `tccutil reset Accessibility com.misswell.macpilot` for you and exits MacPilot. Reopen the app and grant access again. Runtime rules check access silently and do not repeatedly request it in the background.
 
 ## Distribution
 
-Local builds are signed ad-hoc. To produce a distributable, notarized build you need an Apple Developer account.
+If no stable signing identity is installed, local builds fall back to ad-hoc signing. To produce a distributable, notarized build you need an Apple Developer account and a Developer ID Application certificate.
 
 ### Prerequisites
 
@@ -82,7 +96,7 @@ MACPILOT_OUTPUT_DIR="$PWD/bridge-artifacts" \
 ./Scripts/distribute-app.sh
 ```
 
-Publish that archive without renaming it. Older OctoPilot versions can update to this bridge, and the bridge can then validate and install a later MacPilot release. When that automatic transition starts from an existing `OctoPilot.app`, the updater replaces the bundle in place, so the filesystem path may keep its old filename even though the installed Bundle ID and visible name are `MacPilot`. Use `./Scripts/build-app.sh` with the same variables for a local metadata check only; its ad-hoc output is not suitable for publishing.
+Publish that archive without renaming it. Older OctoPilot versions can update to this bridge, and the bridge can then validate and install a later MacPilot release. When that automatic transition starts from an existing `OctoPilot.app`, the updater replaces the bundle in place, so the filesystem path may keep its old filename even though the installed Bundle ID and visible name are `MacPilot`. Use `./Scripts/build-app.sh` for local testing; the script applies the same shared designated requirement used by distribution builds.
 
 ### GitHub Releases
 
