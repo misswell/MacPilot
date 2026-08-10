@@ -15,12 +15,47 @@ struct PictureInPictureTests {
 
         #expect(settings.isEnabled)
         #expect(settings.triggerKey == "p")
+        #expect(settings.triggerModifier == .commandOption)
+        #expect(settings.triggerShortcutDescription == "⌥⌘P")
         #expect(settings.position == .bottomRight)
         #expect(settings.defaultFrameRate == 10)
         #expect(settings.quickRegionCapture == false)
         #expect(settings.frameRate(for: nil) == 10)
         #expect(settings.occlusionFixBundleIdentifiers.isEmpty)
         #expect(settings.occlusionAutoApply)
+    }
+
+    @Test func standardGlobalShortcutMatchesOnlyTheConfiguredCombination() {
+        let modifier = PiPShortcutModifier.commandOption
+
+        #expect(modifier.matches(NSEvent.ModifierFlags([.command, .option])))
+        #expect(modifier.matches(NSEvent.ModifierFlags([.command, .option, .shift])))
+        #expect(modifier.matches(CGEventFlags([.maskCommand, .maskAlternate])))
+        #expect(modifier.matches(CGEventFlags([.maskCommand, .maskAlternate, .maskShift])))
+        #expect(!modifier.matches(.function))
+        #expect(!modifier.matches(.command))
+        #expect(!modifier.matches(CGEventFlags([.maskSecondaryFn])))
+    }
+
+    @Test @MainActor func menuBarViewsObserveTheLivePictureInPictureModel() {
+        let pictureInPicture = PictureInPictureModel()
+        let dedicatedMenu = PictureInPictureMenuBarView(pictureInPicture: pictureInPicture)
+        let appMenu = MenuBarView(pictureInPicture: pictureInPicture)
+
+        #expect(dedicatedMenu.pictureInPicture === pictureInPicture)
+        #expect(appMenu.pictureInPicture === pictureInPicture)
+
+        pictureInPicture.setEnabled(false)
+        #expect(!dedicatedMenu.pictureInPicture.settings.isEnabled)
+        #expect(!appMenu.pictureInPicture.settings.isEnabled)
+    }
+
+    @Test func legacySettingsFallBackToTheStandardGlobalShortcut() throws {
+        let data = Data(#"{"triggerKey":"p"}"#.utf8)
+        let settings = try JSONDecoder().decode(PictureInPictureSettings.self, from: data)
+
+        #expect(settings.triggerModifier == .commandOption)
+        #expect(settings.triggerShortcutDescription == "⌥⌘P")
     }
 
     @Test func settingsClampUnsafeValuesAndNormalizeTriggerKey() {
@@ -105,6 +140,25 @@ struct PictureInPictureTests {
         #expect(session.zoomFactor == 4)
         #expect(session.zoomOffset == CGSize(width: 400, height: 300))
         #expect(session.zoomSelection == nil)
+    }
+
+    @Test @MainActor func scrollWheelZoomsAndCommandScrollPansThePipSession() {
+        let source = PiPSource(
+            windowID: 3, processID: 1, appName: "Scroll Test", bundleIdentifier: "com.example.scroll",
+            title: "Test", frame: CGRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let session = PiPSession(
+            source: source, region: .fullWindow, settings: .init(), owner: PictureInPictureModel()
+        )
+
+        session.applyScrollWheel(deltaX: 0, deltaY: 10, commandPressed: false)
+        #expect(session.zoomFactor == 1.5)
+
+        session.applyScrollWheel(deltaX: 40, deltaY: 30, commandPressed: true)
+        #expect(session.zoomOffset == CGSize(width: 40, height: 30))
+
+        session.applyScrollWheel(deltaX: -12, deltaY: 0, commandPressed: false)
+        #expect(session.zoomOffset == CGSize(width: 28, height: 30))
     }
 
     @Test @MainActor func stalledCaptureStateAppearsAfterMotionStopsAndClearsOnChange() async throws {

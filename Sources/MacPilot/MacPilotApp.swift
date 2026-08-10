@@ -18,7 +18,7 @@ struct MacPilotApp: App {
         .windowStyle(.hiddenTitleBar)
 
         MenuBarExtra {
-            MenuBarView().environmentObject(model)
+            MenuBarView(pictureInPicture: model.pictureInPicture).environmentObject(model)
         } label: {
             Image(systemName: model.isEnforcing ? "timer" : "pause.circle")
         }
@@ -28,7 +28,7 @@ struct MacPilotApp: App {
             get: { model.pictureInPicture.settings.showMenuBarIcon },
             set: { model.pictureInPicture.setShowMenuBarIcon($0) }
         )) {
-            PictureInPictureMenuBarView().environmentObject(model)
+            PictureInPictureMenuBarView(pictureInPicture: model.pictureInPicture).environmentObject(model)
         } label: {
             Image(systemName: "pip.enter")
         }
@@ -493,26 +493,28 @@ enum AppText {
         "scNextCapture": "下次截屏：%@", "scYes": "是", "scNo": "否",
         "pictureInPicture": "画中画", "pictureInPictureSubtitle": "将任意窗口或窗口区域变成跨 Space 的实时悬浮面板。",
         "pipEnabledStatus": "画中画：已启用", "pipDisabledStatus": "画中画：已停用", "pipCaptureFocused": "捕获当前窗口", "pipCloseAll": "关闭全部画中画",
-        "pipNoSessions": "还没有画中画窗口", "pipNoSessionsDetail": "按 fn-P 捕获当前窗口，或使用下方按钮开始。",
+        "pipNoSessions": "还没有画中画窗口", "pipNoSessionsDetail": "使用设置中的全局快捷键捕获当前窗口，或使用下方按钮开始。",
         "pipCreate": "创建", "pipShowHide": "显示与隐藏", "pipFocus": "聚焦", "pipZoom": "缩放",
         "pipGeneral": "通用", "pipWindowBehavior": "窗口行为", "pipPanelUI": "面板 UI", "pipCapture": "捕获", "pipMedia": "媒体", "pipDetection": "检测", "pipPatches": "补丁",
-        "pipTriggerHotkey": "触发快捷键", "pipTriggerHotkeyHint": "默认使用 fn-P；加 Shift 可选择窗口区域。",
+        "pipGlobalShortcut": "全局快捷键", "pipGlobalShortcutHint": "当前为 %@；在其他 App 中使用需要辅助功能权限。加 Shift 可选择窗口区域。",
+        "pipShortcutModifier": "组合键", "pipShortcutKey": "触发键",
+        "pipShortcutCommandOption": "Option + Command", "pipShortcutCommandControl": "Control + Command", "pipShortcutControlOption": "Control + Option", "pipShortcutCommandControlOption": "Control + Option + Command",
         "pipLaunchAtLogin": "登录时启动", "pipShowMenuBarIcon": "显示菜单栏图标", "pipCheatSheet": "快捷键速查",
-        "pipCheatSheetBody": "fn-P 捕获窗口 · fn-Shift-P 选择区域 · fn 双击快速区域 · Backspace 关闭 · 空格快速查看 · +/- 缩放 · ⌘ 双击重置缩放",
+        "pipCheatSheetBody": "%@ 捕获窗口 · %@ + Shift 选择区域 · %@ 双击快速区域 · 滚轮缩放 · ⌘+滚轮平移 · Backspace 关闭 · 空格快速查看 · +/- 缩放 · ⌘ 双击重置缩放",
         "pipPosition": "位置", "pipPositionTopLeft": "左上", "pipPositionTopRight": "右上", "pipPositionBottomLeft": "左下", "pipPositionBottomRight": "右下",
         "pipAutoHide": "悬停时自动隐藏", "pipAutoHideHint": "鼠标移到面板上时淡出，让你操作后面的窗口；移开后恢复。",
         "pipClickToFocus": "点击聚焦源窗口", "pipClickToFocusHint": "单击画中画面板将源窗口带到前台。",
         "pipSourceFocused": "源窗口获得焦点时", "pipDoNothing": "不处理", "pipHidePanel": "隐藏面板", "pipClosePanel": "关闭面板",
         "pipFullscreenSpaces": "显示在全屏 Space", "pipMultiWindow": "多窗口模式", "pipMultiWindowHint": "允许同时捕获多个不同窗口，每个窗口拥有自己的画中画面板。",
         "pipShowHoverHints": "显示悬停提示", "pipDimOnHover": "悬停时调暗", "pipBlur": "模糊", "pipCornerRadius": "圆角", "pipQuickLook": "按空格快速查看源窗口",
-        "pipFrameRate": "帧率", "pipFrameRateHint": "帧率越低越省 CPU；终端通常 1–5 fps，视频可用 30–60 fps。", "pipEnhanceContrast": "增强对比度", "pipQuickRegion": "启用 fn 双击快速区域捕获", "pipAspectLimit": "区域宽高比上限",
+        "pipFrameRate": "帧率", "pipFrameRateHint": "帧率越低越省 CPU；终端通常 1–5 fps，视频可用 30–60 fps。", "pipEnhanceContrast": "增强对比度", "pipQuickRegion": "启用 %@ 双击快速区域捕获", "pipAspectLimit": "区域宽高比上限",
         "pipMediaControls": "启用媒体控制", "pipSeekBar": "显示进度与方向键控制", "pipSpacePlayPause": "空格播放 / 暂停", "pipYoutubeCaptions": "YouTube 字幕按钮",
         "pipDetectionThreshold": "空闲/变化检测阈值", "pipSensitiveDetection": "敏感检测", "pipDetectionScript": "检测脚本", "pipDetectionScriptHint": "事件触发时运行 shell。环境变量：PIPIRI_EVENT、PIPIRI_APP、PIPIRI_BUNDLE_ID、PIPIRI_WINDOW_ID。", "pipScriptTimeout": "脚本超时",
         "pipPatchesTitle": "离屏渲染修复", "pipPatchesBody": "部分浏览器或 Electron 应用在窗口被遮挡后会暂停渲染。为应用启用修复后，MacPilot 会用后台渲染参数重新启动它；应用包体不会被修改。",
         "pipPatchesNoApps": "没有检测到支持的浏览器或 Electron 应用。", "pipPatchRunning": "正在运行", "pipPatchRelaunch": "使用修复参数重新启动", "pipPatchAutoApply": "自动保持修复生效", "pipPatchAutoApplyHint": "启用的应用正常启动时，MacPilot 会将它重新启动一次并附加离屏渲染参数。关闭开关即可撤销；下次正常启动不会再应用。", "pipPatchFailed": "无法应用离屏渲染修复", "pipPatchDetails": "详细信息", "pipPatchDetailsBody": "此修复使用 Chromium/Electron 官方支持的启动参数。应用当前正在运行时，需要先退出再重新启动，未保存的内容可能丢失，因此只有点击按钮或启用自动应用时才会执行。",
         "pipCustomPatchTitle": "自定义合成器应用", "pipCustomPatchBody": "Firefox、kitty 和 Ghostty 没有后台渲染启动参数。MacPilot 可以在备份原 App 后，为其主程序注入一个独立的轻量组件，使 AppKit 始终报告窗口可见。", "pipCustomPatchNoApps": "没有检测到可补丁的自定义合成器应用。", "pipCustomPatchWarning": "补丁会修改并重新签名第三方 App，可能使它重新请求屏幕录制、辅助功能等权限。操作前必须退出目标 App；原始 App 会保存在 MacPilot 的 Application Support 中并可随时恢复。", "pipPatchInstall": "安装补丁", "pipPatchRestore": "恢复原版", "pipPatchInstalled": "补丁已安装", "pipPatchQuitFirst": "请先退出 App", "pipPatchUpdateDetected": "检测到更新，可重新安装补丁", "pipPatchConfirmTitle": "修改并重新签名这个 App？", "pipPatchConfirmBody": "MacPilot 会先完整备份原 App，再注入离屏渲染组件并使用临时签名重新签名。此操作可能让 macOS 再次询问权限。", "pipRestoreConfirmTitle": "恢复原始 App？", "pipRestoreConfirmBody": "MacPilot 会用安装补丁前保存的完整备份替换当前 App。请确认目标 App 已退出。", "pipPatchAnotherApp": "补丁另一个 App…", "pipPatchRemoveCustom": "从列表移除", "choose": "选择",
         "pipPermissionRequired": "需要屏幕录制权限才能创建画中画。", "pipGrantPermission": "授权屏幕录制…", "pipOpenSettings": "打开设置",
-        "pipAccessibilityRequired": "需要辅助功能权限才能在其他 App 中拦截 fn 快捷键。", "pipGrantAccessibility": "授权辅助功能…", "pipOpenAccessibility": "打开辅助功能设置"
+        "pipAccessibilityRequired": "需要辅助功能权限才能在其他 App 中拦截全局快捷键。", "pipGrantAccessibility": "授权辅助功能…", "pipOpenAccessibility": "打开辅助功能设置"
     ]
 
     static func value(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
@@ -673,26 +675,28 @@ enum AppText {
             "scNextCapture": "Next capture: %@", "scYes": "Yes", "scNo": "No",
             "pictureInPicture": "Picture-in-Picture", "pictureInPictureSubtitle": "Turn any window or region into a live floating panel across Spaces.",
             "pipEnabledStatus": "Picture-in-Picture: On", "pipDisabledStatus": "Picture-in-Picture: Off", "pipCaptureFocused": "Capture Focused Window", "pipCloseAll": "Close All PiP",
-            "pipNoSessions": "No Picture-in-Picture windows", "pipNoSessionsDetail": "Press fn-P to capture the focused window, or use the button below.",
+            "pipNoSessions": "No Picture-in-Picture windows", "pipNoSessionsDetail": "Use the configured global shortcut to capture the focused window, or use the button below.",
             "pipCreate": "Create", "pipShowHide": "Show & hide", "pipFocus": "Focus", "pipZoom": "Zoom",
             "pipGeneral": "General", "pipWindowBehavior": "Window behavior", "pipPanelUI": "Panel UI", "pipCapture": "Capture", "pipMedia": "Media", "pipDetection": "Detection", "pipPatches": "Patches",
-            "pipTriggerHotkey": "Trigger hotkey", "pipTriggerHotkeyHint": "Default is fn-P; add Shift to select a region of the window.",
+            "pipGlobalShortcut": "Global shortcut", "pipGlobalShortcutHint": "Current shortcut: %@. Accessibility access is required in other apps. Add Shift to select a window region.",
+            "pipShortcutModifier": "Modifier", "pipShortcutKey": "Trigger key",
+            "pipShortcutCommandOption": "Option + Command", "pipShortcutCommandControl": "Control + Command", "pipShortcutControlOption": "Control + Option", "pipShortcutCommandControlOption": "Control + Option + Command",
             "pipLaunchAtLogin": "Launch at login", "pipShowMenuBarIcon": "Show menubar icon", "pipCheatSheet": "Cheat sheet",
-            "pipCheatSheetBody": "fn-P capture window · fn-Shift-P select region · fn double-click quick region · Backspace close · Space QuickLook · +/- zoom · ⌘ double-click reset",
+            "pipCheatSheetBody": "%@ capture window · %@ + Shift select region · %@ double-click quick region · Scroll to zoom · ⌘+scroll to pan · Backspace close · Space QuickLook · +/- zoom · ⌘ double-click reset",
             "pipPosition": "Position", "pipPositionTopLeft": "Top Left", "pipPositionTopRight": "Top Right", "pipPositionBottomLeft": "Bottom Left", "pipPositionBottomRight": "Bottom Right",
             "pipAutoHide": "Auto-hide on hover", "pipAutoHideHint": "Fade the panel while the pointer is over it so you can interact with the window behind it.",
             "pipClickToFocus": "Click to focus", "pipClickToFocusHint": "A single click brings the source window to the front.",
             "pipSourceFocused": "When source window gets focused", "pipDoNothing": "Do nothing", "pipHidePanel": "Hide panel", "pipClosePanel": "Close panel",
             "pipFullscreenSpaces": "Show on fullscreen Spaces", "pipMultiWindow": "Multi-window mode", "pipMultiWindowHint": "Allow multiple different windows to be captured at the same time, each with its own PiP panel.",
             "pipShowHoverHints": "Show hover hints", "pipDimOnHover": "Dim on hover", "pipBlur": "Blur", "pipCornerRadius": "Corner radius", "pipQuickLook": "QuickLook with Space",
-            "pipFrameRate": "Frame rate", "pipFrameRateHint": "Lower rates save CPU; terminals often need 1–5 fps while video may need 30–60 fps.", "pipEnhanceContrast": "Enhance contrast", "pipQuickRegion": "Enable fn double-click quick region capture", "pipAspectLimit": "Aspect ratio limit",
+            "pipFrameRate": "Frame rate", "pipFrameRateHint": "Lower rates save CPU; terminals often need 1–5 fps while video may need 30–60 fps.", "pipEnhanceContrast": "Enhance contrast", "pipQuickRegion": "Enable %@ double-click quick region capture", "pipAspectLimit": "Aspect ratio limit",
             "pipMediaControls": "Enable media controls", "pipSeekBar": "Seek bar and arrow-key seeking", "pipSpacePlayPause": "Play / pause using Space", "pipYoutubeCaptions": "Captions button for YouTube",
             "pipDetectionThreshold": "Idle/change detection threshold", "pipSensitiveDetection": "Sensitive detection", "pipDetectionScript": "Detection script", "pipDetectionScriptHint": "Run a shell command on events. Environment: PIPIRI_EVENT, PIPIRI_APP, PIPIRI_BUNDLE_ID, PIPIRI_WINDOW_ID.", "pipScriptTimeout": "Script timeout",
             "pipPatchesTitle": "Off-screen rendering fixes", "pipPatchesBody": "Some browsers and Electron apps pause rendering when their windows are covered. When a fix is enabled, MacPilot relaunches that app with a background-rendering argument without modifying its app bundle.",
             "pipPatchesNoApps": "No supported browser or Electron app was found.", "pipPatchRunning": "Running", "pipPatchRelaunch": "Relaunch with fix", "pipPatchAutoApply": "Keep fixes applied automatically", "pipPatchAutoApplyHint": "When an enabled app starts normally, MacPilot relaunches it once with the off-screen rendering argument. Turn its switch off to stop applying the fix.", "pipPatchFailed": "Could not apply the off-screen rendering fix", "pipPatchDetails": "Details", "pipPatchDetailsBody": "This fix uses an officially supported Chromium/Electron launch argument. A running app must quit before relaunching, so unsaved work could be lost; MacPilot only does this when you click the button or enable automatic application.",
             "pipCustomPatchTitle": "Custom compositor apps", "pipCustomPatchBody": "Firefox, kitty, and Ghostty have no background-rendering launch flag. After backing up the original app, MacPilot can inject an independent lightweight component that makes AppKit report its windows as visible.", "pipCustomPatchNoApps": "No patchable custom-compositor app was found.", "pipCustomPatchWarning": "Patching modifies and re-signs a third-party app, which may make it request Screen Recording, Accessibility, or other permissions again. Quit the target app first. Its original bundle is stored in MacPilot's Application Support folder and can be restored.", "pipPatchInstall": "Install patch", "pipPatchRestore": "Restore original", "pipPatchInstalled": "Patch installed", "pipPatchQuitFirst": "Quit the app first", "pipPatchUpdateDetected": "Update detected; patch can be reinstalled", "pipPatchConfirmTitle": "Modify and re-sign this app?", "pipPatchConfirmBody": "MacPilot will fully back up the original app, inject its off-screen rendering component, and apply an ad-hoc signature. macOS may ask for the app's permissions again.", "pipRestoreConfirmTitle": "Restore the original app?", "pipRestoreConfirmBody": "MacPilot will replace the current app with the complete backup saved before patching. Make sure the target app is not running.", "pipPatchAnotherApp": "Patch another app…", "pipPatchRemoveCustom": "Remove from list", "choose": "Choose",
             "pipPermissionRequired": "Screen Recording permission is required to create a Picture-in-Picture window.", "pipGrantPermission": "Grant Screen Recording…", "pipOpenSettings": "Open Settings",
-            "pipAccessibilityRequired": "Accessibility permission is required to intercept the fn hotkey in other apps.", "pipGrantAccessibility": "Grant Accessibility…", "pipOpenAccessibility": "Open Accessibility Settings"
+            "pipAccessibilityRequired": "Accessibility permission is required to intercept the global shortcut in other apps.", "pipGrantAccessibility": "Grant Accessibility…", "pipOpenAccessibility": "Open Accessibility Settings"
         ]
 }
 
@@ -2875,17 +2879,18 @@ struct BLEUnlockView: View {
 struct PictureInPictureMenuBarView: View {
     @EnvironmentObject private var model: MacPilotModel
     @Environment(\.openWindow) private var openWindow
+    @ObservedObject var pictureInPicture: PictureInPictureModel
 
     var body: some View {
-        Toggle(model.pictureInPicture.settings.isEnabled ? model.t("pipEnabledStatus") : model.t("pipDisabledStatus"),
+        Toggle(pictureInPicture.settings.isEnabled ? model.t("pipEnabledStatus") : model.t("pipDisabledStatus"),
                isOn: Binding(
-                   get: { model.pictureInPicture.settings.isEnabled },
-                   set: { model.pictureInPicture.setEnabled($0) }
+                   get: { pictureInPicture.settings.isEnabled },
+                   set: { pictureInPicture.setEnabled($0) }
                ))
-        Button(model.t("pipCaptureFocused")) { model.pictureInPicture.captureFocusedWindowNow() }
-            .disabled(!model.pictureInPicture.settings.isEnabled)
-        Button(model.t("pipCloseAll")) { model.pictureInPicture.closeAll() }
-            .disabled(model.pictureInPicture.summaries.isEmpty)
+        Button(model.t("pipCaptureFocused")) { pictureInPicture.captureFocusedWindowNow() }
+            .disabled(!pictureInPicture.settings.isEnabled)
+        Button(model.t("pipCloseAll")) { pictureInPicture.closeAll() }
+            .disabled(pictureInPicture.summaries.isEmpty)
         Divider()
         Button(model.t("pictureInPicture")) {
             model.requestedSection = .pictureInPicture
@@ -2903,6 +2908,7 @@ struct PictureInPictureMenuBarView: View {
 struct MenuBarView: View {
     @EnvironmentObject private var model: MacPilotModel
     @Environment(\.openWindow) private var openWindow
+    @ObservedObject var pictureInPicture: PictureInPictureModel
 
     var body: some View {
         Text(model.isEnforcing ? model.t("enabledStatus") : model.t("disabledStatus"))
@@ -2930,15 +2936,15 @@ struct MenuBarView: View {
         } else {
             Button(model.t("bleSelectDevice")) { model.requestedSection = .ble; showMainWindow() }
         }
-        if model.pictureInPicture.settings.showMenuBarIcon {
+        if pictureInPicture.settings.showMenuBarIcon {
             Divider()
-            Toggle(model.pictureInPicture.settings.isEnabled ? model.t("pipEnabledStatus") : model.t("pipDisabledStatus"),
-                   isOn: Binding(get: { model.pictureInPicture.settings.isEnabled }, set: { model.pictureInPicture.setEnabled($0) }))
-            Button(model.t("pipCaptureFocused")) { model.pictureInPicture.captureFocusedWindowNow() }
-                .disabled(!model.pictureInPicture.settings.isEnabled)
+            Toggle(pictureInPicture.settings.isEnabled ? model.t("pipEnabledStatus") : model.t("pipDisabledStatus"),
+                   isOn: Binding(get: { pictureInPicture.settings.isEnabled }, set: { pictureInPicture.setEnabled($0) }))
+            Button(model.t("pipCaptureFocused")) { pictureInPicture.captureFocusedWindowNow() }
+                .disabled(!pictureInPicture.settings.isEnabled)
             Button(model.t("pictureInPicture")) { model.requestedSection = .pictureInPicture; showMainWindow() }
-            Button(model.t("pipCloseAll")) { model.pictureInPicture.closeAll() }
-                .disabled(model.pictureInPicture.summaries.isEmpty)
+            Button(model.t("pipCloseAll")) { pictureInPicture.closeAll() }
+                .disabled(pictureInPicture.summaries.isEmpty)
         }
         Divider()
         UpdateMenuItems(updater: model.updater) {

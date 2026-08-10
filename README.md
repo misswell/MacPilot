@@ -40,15 +40,15 @@ MacPilot verifies every compressed copy with SHA-256 before atomically replacing
 
 The **Picture-in-Picture** sidebar uses ScreenCaptureKit to capture an individual window and show it as a live floating panel across Spaces:
 
-- `fn-P` captures the focused window, `fn-Shift-P` selects a region, and optional `fn` double-click captures a quick area around the pointer.
-- Panels keep the source aspect ratio, support resizing, ⌘-dragging a region to zoom into it, scroll panning, `+/-` zoom, and fullscreen Spaces.
+- The default global shortcut is `⌥⌘P` (configurable in the Picture-in-Picture settings); add `Shift` to select a region, or double-click with the modifier keys to capture a quick area around the pointer.
+- Panels keep the source aspect ratio, support resizing, ⌘-dragging a region to zoom into it, scroll-wheel zooming, ⌘-scroll panning, `+/-` zoom, and fullscreen Spaces.
 - Auto-hide, click-to-focus, double-click-to-focus-and-close, Backspace/Esc close, Space QuickLook, media play/pause, and arrow-key seeking are supported.
 - Media controls use the source app's real Now Playing session for play/pause, five-second seeking, progress display, and YouTube captions.
 - Configure 1–60 fps, 0–100% contrast enhancement, multi-window mode, hover hints, corner radius, and per-app idle/change/sensitive detection. Detection scripts receive `PIPIRI_EVENT`, `PIPIRI_APP`, `PIPIRI_BUNDLE_ID`, and `PIPIRI_WINDOW_ID`.
 - Off-screen rendering fixes can relaunch Chromium/Electron apps with their supported background-rendering flag. Firefox, Floorp, kitty, Ghostty, iTerm2, and explicitly selected custom-compositor apps can instead be patched after confirmation; MacPilot creates a complete backup, supports restoration and administrator authorization, watches patched bundles with FSEvents to reapply after updates, and automatically restores after repeated fast crashes.
 - Picture-in-Picture settings are persisted with the rest of the app configuration in `~/Library/Application Support/MacPilot/config.json`.
 
-The first capture requires Screen Recording access in **System Settings → Privacy & Security → Screen Recording**. To intercept `fn-P` while another app is active, also grant MacPilot **Accessibility** access; without it, the in-app fallback can observe hotkeys but cannot suppress the original keystroke. Custom-compositor patching never runs silently: the target app must be quit, the user must confirm the modification, and its original bundle remains restorable from MacPilot's Application Support directory.
+The first capture requires Screen Recording access in **System Settings → Privacy & Security → Screen Recording**. To intercept the global shortcut while another app is active, also grant MacPilot **Accessibility** access; without it, the in-app fallback can observe the shortcut but cannot suppress the original keystroke. Custom-compositor patching never runs silently: the target app must be quit, the user must confirm the modification, and its original bundle remains restorable from MacPilot's Application Support directory.
 
 ## Build the app
 

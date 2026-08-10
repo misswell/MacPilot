@@ -128,8 +128,8 @@ MacPilot 依赖辅助功能、系统蓝牙文件、媒体框架、模拟键盘�
 
 新增 `Sources/MacPilot/PictureInPicture.swift`，按 Pipiri 公开功能做等价的原生 macOS 实现：
 
-- 使用 ScreenCaptureKit 逐窗口捕获，支持 `fn-P` 窗口捕获、`fn-Shift-P` 区域选择、可选的 fn 双击快速区域捕获，以及命令行 `--app` / `--window` / `--zoom` 启动参数。
-- 悬浮面板保持源窗口比例，支持跨全屏 Space、调整大小、⌘ 框选区域缩放、滚轮平移、快捷键缩放、自动隐藏、聚焦具体源窗口和多窗口模式。
+- 使用 ScreenCaptureKit 逐窗口捕获，默认使用清晰的 `⌥⌘P` 全局快捷键（可配置，加 Shift 选择区域，组合键双击快速捕获），以及命令行 `--app` / `--window` / `--zoom` 启动参数。
+- 悬浮面板保持源窗口比例，支持跨全屏 Space、调整大小、⌘ 框选区域缩放、滚轮缩放、⌘+滚轮平移、快捷键缩放、自动隐藏、聚焦具体源窗口和多窗口模式。
 - 设置页拆分为通用、窗口行为、面板 UI、捕获、媒体、检测和补丁；支持 1–60 fps、0–100% 强度增强对比度、真实 Now Playing 媒体控制、按 App 保存的空闲/变化/敏感检测与 shell 脚本通知；检测使用整帧差分，敏感模式捕获细小变化。
 - Chromium/Electron 目标通过 `--disable-backgrounding-occluded-windows` 重启；Firefox、Floorp、kitty、Ghostty、iTerm2 和手动选择的 App 可使用自研 universal `libMacPilotOcclusionPatch.dylib`。补丁流程包含 Mach-O `LC_LOAD_DYLIB` 注入、完整备份、临时目录构建、重签名、管理员授权安装、恢复、更新后自动重打及连续快速崩溃自动恢复，且修改第三方 App 前始终要求用户明确确认。
 - 画中画配置并入 `config.json`，版本升至 9；单元测试覆盖默认值、配置约束、区域坐标、Codable、媒体匹配、离屏设置及真实 Firefox universal Mach-O 注入。

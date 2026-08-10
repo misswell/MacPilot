@@ -45,15 +45,15 @@ MacPilot 会在原子替换前使用 SHA-256 校验压缩副本，并通过 macO
 
 侧边栏的**画中画**使用 ScreenCaptureKit 直接捕获单个窗口，生成跨 Space 的实时悬浮面板：
 
-- 默认 `fn-P` 捕获当前窗口，`fn-Shift-P` 选择窗口区域；开启快速区域后可用 `fn` 双击直接捕获鼠标附近区域。
-- 面板支持自由调整大小、保持源窗口比例、⌘ 拖动框选区域后放大、滚轮平移、`+/-` 缩放，以及跨全屏 Space 显示。
+- 默认使用 `⌥⌘P` 捕获当前窗口（可在画中画设置中配置），加 `Shift` 选择窗口区域；开启快速区域后可用组合键双击直接捕获鼠标附近区域。
+- 面板支持自由调整大小、保持源窗口比例、⌘ 拖动框选区域后放大、滚轮缩放、⌘+滚轮平移、`+/-` 缩放，以及跨全屏 Space 显示。
 - 支持自动隐藏、单击聚焦源窗口、双击聚焦并关闭、Backspace/Esc 关闭、空格快速查看、媒体播放/暂停和方向键 seek。
 - 媒体控制会匹配源 App 的真实 Now Playing 会话，支持播放/暂停、前后 5 秒、进度显示与拖动，以及 YouTube 字幕按钮。
 - 支持 1–60 fps、0–100% 强度的增强对比度、多窗口模式、悬停提示、圆角，以及按 App 保存的空闲/变化/敏感检测；检测脚本可读取 `PIPIRI_EVENT`、`PIPIRI_APP`、`PIPIRI_BUNDLE_ID`、`PIPIRI_WINDOW_ID` 环境变量。
 - 离屏渲染修复可用后台渲染参数重启 Chromium/Electron 应用；Firefox、Floorp、kitty、Ghostty、iTerm2 及手动选择的自定义合成器 App 可在用户确认后安装补丁。MacPilot 会完整备份原 App，支持恢复、管理员授权安装，用 FSEvents 监听更新后自动重打补丁，并在连续快速崩溃后自动恢复原版。
 - 画中画配置与其他偏好一起保存在 `~/Library/Application Support/MacPilot/config.json`。
 
-首次使用需要在“系统设置 → 隐私与安全性 → 屏幕录制”中允许 MacPilot。要在其他 App 激活时拦截 `fn-P`，还需要授予 MacPilot“辅助功能”权限；没有该权限时，应用内的兼容监听仍可观察快捷键，但无法阻止原按键继续传给前台 App。自定义合成器补丁绝不会静默执行：目标 App 必须先退出，用户必须明确确认，原始 bundle 会保存在 MacPilot 的 Application Support 目录并可恢复。
+首次使用需要在“系统设置 → 隐私与安全性 → 屏幕录制”中允许 MacPilot。要在其他 App 激活时拦截全局快捷键，还需要授予 MacPilot“辅助功能”权限；没有该权限时，应用内的兼容监听仍可观察快捷键，但无法阻止原按键继续传给前台 App。自定义合成器补丁绝不会静默执行：目标 App 必须先退出，用户必须明确确认，原始 bundle 会保存在 MacPilot 的 Application Support 目录并可恢复。
 
 ## 配置文件
 

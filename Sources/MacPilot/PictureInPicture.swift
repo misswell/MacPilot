@@ -31,6 +31,75 @@ enum PiPSourceFocusBehavior: String, CaseIterable, Codable, Identifiable, Sendab
     var id: String { rawValue }
 }
 
+enum PiPShortcutModifier: String, CaseIterable, Codable, Identifiable, Sendable {
+    case commandOption
+    case commandControl
+    case controlOption
+    case commandControlOption
+
+    var id: String { rawValue }
+
+    var symbolDescription: String {
+        switch self {
+        case .commandOption: "⌥⌘"
+        case .commandControl: "⌃⌘"
+        case .controlOption: "⌃⌥"
+        case .commandControlOption: "⌃⌥⌘"
+        }
+    }
+
+    var titleKey: String {
+        switch self {
+        case .commandOption: "pipShortcutCommandOption"
+        case .commandControl: "pipShortcutCommandControl"
+        case .controlOption: "pipShortcutControlOption"
+        case .commandControlOption: "pipShortcutCommandControlOption"
+        }
+    }
+
+    var cocoaFlags: NSEvent.ModifierFlags {
+        switch self {
+        case .commandOption: [.command, .option]
+        case .commandControl: [.command, .control]
+        case .controlOption: [.control, .option]
+        case .commandControlOption: [.command, .control, .option]
+        }
+    }
+
+    var cgEventFlags: CGEventFlags {
+        switch self {
+        case .commandOption: [.maskCommand, .maskAlternate]
+        case .commandControl: [.maskCommand, .maskControl]
+        case .controlOption: [.maskControl, .maskAlternate]
+        case .commandControlOption: [.maskCommand, .maskControl, .maskAlternate]
+        }
+    }
+
+    func matches(_ flags: NSEvent.ModifierFlags, allowingShift: Bool = true) -> Bool {
+        let relevant: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
+        let actual = flags.intersection(relevant)
+        let expected = cocoaFlags
+        if actual == expected { return true }
+        return allowingShift && actual == expected.union(.shift)
+    }
+
+    func matches(_ flags: CGEventFlags, allowingShift: Bool = true) -> Bool {
+        Self.matches(flags, required: cgEventFlags, allowingShift: allowingShift)
+    }
+
+    static func matches(
+        _ flags: CGEventFlags,
+        required: CGEventFlags,
+        allowingShift: Bool = true
+    ) -> Bool {
+        let relevant: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
+        let actual = flags.intersection(relevant)
+        let expected = required
+        if actual == expected { return true }
+        return allowingShift && actual == expected.union(.maskShift)
+    }
+}
+
 enum PiPDetectionMode: String, CaseIterable, Codable, Identifiable, Sendable {
     case off
     case idle
@@ -59,12 +128,17 @@ final class PiPEventTapContext: @unchecked Sendable {
     let owner: UnsafeMutableRawPointer
     private let lock = NSLock()
     private var triggerKeyCode: CGKeyCode
-    private var functionComboWasUsed = false
+    private var triggerModifierFlags: CGEventFlags
     private var eventTap: CFMachPort?
 
-    init(owner: UnsafeMutableRawPointer, triggerKeyCode: CGKeyCode) {
+    init(
+        owner: UnsafeMutableRawPointer,
+        triggerKeyCode: CGKeyCode,
+        triggerModifierFlags: CGEventFlags = PiPShortcutModifier.commandOption.cgEventFlags
+    ) {
         self.owner = owner
         self.triggerKeyCode = triggerKeyCode
+        self.triggerModifierFlags = triggerModifierFlags
     }
 
     func updateTriggerKeyCode(_ value: CGKeyCode) {
@@ -73,25 +147,19 @@ final class PiPEventTapContext: @unchecked Sendable {
         lock.unlock()
     }
 
-    func matches(_ keyCode: CGKeyCode) -> Bool {
+    func updateTriggerModifierFlags(_ value: CGEventFlags) {
         lock.lock()
+        triggerModifierFlags = value
+        lock.unlock()
+    }
+
+    func matches(_ keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {
+        lock.lock()
+        let expectedFlags = triggerModifierFlags
         let matches = keyCode == triggerKeyCode
+            && PiPShortcutModifier.matches(flags, required: expectedFlags)
         lock.unlock()
         return matches
-    }
-
-    func markFunctionComboWasUsed() {
-        lock.lock()
-        functionComboWasUsed = true
-        lock.unlock()
-    }
-
-    func consumeFunctionComboWasUsed() -> Bool {
-        lock.lock()
-        let value = functionComboWasUsed
-        functionComboWasUsed = false
-        lock.unlock()
-        return value
     }
 
     func setEventTap(_ eventTap: CFMachPort?) {
@@ -156,9 +224,10 @@ func pictureInPictureShouldSuppressEvent(
 
     let owner = Unmanaged<PictureInPictureModel>.fromOpaque(context.owner).takeUnretainedValue()
     if type == .keyDown,
-       event.flags.contains(.maskSecondaryFn),
-       context.matches(CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))) {
-        context.markFunctionComboWasUsed()
+       context.matches(
+           CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)),
+           flags: event.flags
+       ) {
         let shift = event.flags.contains(.maskShift)
         Task { @MainActor in owner.handleEventTapTrigger(shift: shift) }
         return true
@@ -196,6 +265,7 @@ private func pictureInPictureFocusedWindowCallback(
 struct PictureInPictureSettings: Codable, Equatable, Sendable {
     var isEnabled: Bool
     var triggerKey: String
+    var triggerModifier: PiPShortcutModifier
     var showMenuBarIcon: Bool
     var launchAtLogin: Bool
     var position: PiPPanelPosition
@@ -232,6 +302,7 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
     init(
         isEnabled: Bool = true,
         triggerKey: String = "p",
+        triggerModifier: PiPShortcutModifier = .commandOption,
         showMenuBarIcon: Bool = true,
         launchAtLogin: Bool = false,
         position: PiPPanelPosition = .bottomRight,
@@ -268,6 +339,7 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
         self.isEnabled = isEnabled
         let normalizedKey = triggerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.triggerKey = normalizedKey.isEmpty ? "p" : String(normalizedKey.prefix(1))
+        self.triggerModifier = triggerModifier
         self.showMenuBarIcon = showMenuBarIcon
         self.launchAtLogin = launchAtLogin
         self.position = position
@@ -303,7 +375,7 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, triggerKey, showMenuBarIcon, launchAtLogin
+        case isEnabled, triggerKey, triggerModifier, showMenuBarIcon, launchAtLogin
         case position, autoHideOnHover, clickToFocusSource, sourceFocusBehavior
         case showOnFullscreenSpaces, multiWindowMode, showHoverHints, dimOnHover
         case blurAmount, cornerRadius, quickLookWithSpace, defaultFrameRate
@@ -321,6 +393,7 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
         self.init(
             isEnabled: try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true,
             triggerKey: try c.decodeIfPresent(String.self, forKey: .triggerKey) ?? "p",
+            triggerModifier: try c.decodeIfPresent(PiPShortcutModifier.self, forKey: .triggerModifier) ?? .commandOption,
             showMenuBarIcon: try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true,
             launchAtLogin: try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false,
             position: try c.decodeIfPresent(PiPPanelPosition.self, forKey: .position) ?? .bottomRight,
@@ -364,6 +437,20 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
             return legacy ? 0.15 : 0
         }
         return 0
+    }
+
+    var triggerShortcutDescription: String {
+        "\(triggerModifier.symbolDescription)\(triggerKey.uppercased())"
+    }
+
+    func matchesTrigger(keyCode: CGKeyCode, flags: NSEvent.ModifierFlags) -> Bool {
+        guard PiPTriggerKeyCode.value(for: triggerKey) == keyCode else { return false }
+        return triggerModifier.matches(flags)
+    }
+
+    func matchesTrigger(keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {
+        guard PiPTriggerKeyCode.value(for: triggerKey) == keyCode else { return false }
+        return triggerModifier.matches(flags)
     }
 
     func frameRate(for bundleIdentifier: String?) -> Int {
@@ -978,6 +1065,16 @@ final class PiPSession: ObservableObject, Identifiable {
     func changeZoom(by amount: CGFloat) {
         zoomFactor = min(12, max(1, zoomFactor + amount))
         if zoomFactor == 1 { zoomOffset = .zero }
+    }
+
+    func applyScrollWheel(deltaX: CGFloat, deltaY: CGFloat, commandPressed: Bool) {
+        if commandPressed {
+            pan(by: CGSize(width: deltaX, height: deltaY))
+        } else if abs(deltaY) > 0.001 {
+            changeZoom(by: deltaY / 20)
+        } else {
+            pan(by: CGSize(width: deltaX, height: 0))
+        }
     }
 
     func pan(by delta: CGSize) {
@@ -1768,8 +1865,6 @@ final class PictureInPictureModel: ObservableObject {
     private var localKeyUpMonitor: Any?
     private var mouseMonitor: Any?
     private var localMouseMonitor: Any?
-    private var functionMonitor: Any?
-    private var localFunctionMonitor: Any?
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
     private var eventTapContext: PiPEventTapContext?
@@ -1782,9 +1877,6 @@ final class PictureInPictureModel: ObservableObject {
     private var spaceQuickLookWasVisible = false
     private var spaceTask: Task<Void, Never>?
     private var isLoading = false
-    private var functionKeyIsDown = false
-    private var functionComboWasUsed = false
-    private var lastFunctionTapDate: Date?
     private var threeFingerGestureActive = false
 
     func applyLoadedSettings(_ newSettings: PictureInPictureSettings) {
@@ -1796,6 +1888,7 @@ final class PictureInPictureModel: ObservableObject {
             customApplicationPaths: newSettings.occlusionCustomApplicationPaths
         )
         eventTapContext?.updateTriggerKeyCode(PiPTriggerKeyCode.value(for: newSettings.triggerKey) ?? 35)
+        eventTapContext?.updateTriggerModifierFlags(newSettings.triggerModifier.cgEventFlags)
         hasScreenPermission = CGPreflightScreenCaptureAccess()
         hasAccessibilityPermission = AXIsProcessTrusted()
         isLoading = false
@@ -1859,6 +1952,10 @@ final class PictureInPictureModel: ObservableObject {
         updateSettings { $0.triggerKey = key }
         let keyCode = PiPTriggerKeyCode.value(for: settings.triggerKey) ?? 35
         eventTapContext?.updateTriggerKeyCode(keyCode)
+    }
+    func setTriggerModifier(_ modifier: PiPShortcutModifier) {
+        updateSettings { $0.triggerModifier = modifier }
+        eventTapContext?.updateTriggerModifierFlags(modifier.cgEventFlags)
     }
     func setShowMenuBarIcon(_ value: Bool) { updateSettings { $0.showMenuBarIcon = value } }
     func setLaunchAtLogin(_ value: Bool) { updateSettings { $0.launchAtLogin = value } }
@@ -2063,13 +2160,6 @@ final class PictureInPictureModel: ObservableObject {
             self?.handleKeyUpEvent(PiPKeyInput(event)) == true ? nil : event
         }
         updateMouseMonitoring()
-        functionMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
-            self?.handleFunctionFlags(event)
-        }
-        localFunctionMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
-            self?.handleFunctionFlags(event)
-            return event
-        }
         installEventTapIfPossible()
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -2090,20 +2180,14 @@ final class PictureInPictureModel: ObservableObject {
         if let keyUpMonitor { NSEvent.removeMonitor(keyUpMonitor) }
         if let localKeyUpMonitor { NSEvent.removeMonitor(localKeyUpMonitor) }
         stopMouseMonitoring()
-        if let functionMonitor { NSEvent.removeMonitor(functionMonitor) }
-        if let localFunctionMonitor { NSEvent.removeMonitor(localFunctionMonitor) }
         removeEventTap()
         if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
         keyMonitor = nil
         localKeyMonitor = nil
         keyUpMonitor = nil
         localKeyUpMonitor = nil
-        functionMonitor = nil
-        localFunctionMonitor = nil
         activationObserver = nil
         removeFocusObservers()
-        functionKeyIsDown = false
-        functionComboWasUsed = false
         threeFingerGestureActive = false
     }
 
@@ -2142,7 +2226,8 @@ final class PictureInPictureModel: ObservableObject {
         guard eventTap == nil, AXIsProcessTrusted() else { return }
         let context = PiPEventTapContext(
             owner: Unmanaged.passUnretained(self).toOpaque(),
-            triggerKeyCode: PiPTriggerKeyCode.value(for: settings.triggerKey) ?? 35
+            triggerKeyCode: PiPTriggerKeyCode.value(for: settings.triggerKey) ?? 35,
+            triggerModifierFlags: settings.triggerModifier.cgEventFlags
         )
         let eventMask = (CGEventMask(1) << CGEventType.keyDown.rawValue)
             | (CGEventMask(1) << CGEventType.keyUp.rawValue)
@@ -2178,7 +2263,6 @@ final class PictureInPictureModel: ObservableObject {
 
     fileprivate func handleEventTapTrigger(shift: Bool) {
         guard settings.isEnabled else { return }
-        functionComboWasUsed = true
         if shift {
             captureFocusedRegion()
         } else {
@@ -2189,8 +2273,7 @@ final class PictureInPictureModel: ObservableObject {
     fileprivate func handleKeyEvent(_ event: PiPKeyInput, suppress: Bool) -> Bool {
         let key = event.characters
         let flags = event.modifierFlags
-        if flags.contains(.function) { functionComboWasUsed = true }
-        if flags.contains(.function) && key == settings.triggerKey {
+        if settings.matchesTrigger(keyCode: CGKeyCode(event.keyCode), flags: flags) {
             if flags.contains(.shift) {
                 captureFocusedRegion()
             } else {
@@ -2269,27 +2352,6 @@ final class PictureInPictureModel: ObservableObject {
         let wasHandlingSpace = spaceSession != nil
         finishSpaceAction()
         return wasHandlingSpace
-    }
-
-    private func handleFunctionFlags(_ event: NSEvent) {
-        let isDown = event.modifierFlags.contains(.function)
-        if isDown && !functionKeyIsDown {
-            functionKeyIsDown = true
-            functionComboWasUsed = false
-        } else if !isDown && functionKeyIsDown {
-            let comboWasUsed = functionComboWasUsed || eventTapContext?.consumeFunctionComboWasUsed() == true
-            if !comboWasUsed, let session = sessionUnderMouse() {
-                let now = Date()
-                if let lastFunctionTapDate, now.timeIntervalSince(lastFunctionTapDate) < 0.45 {
-                    setAutoHideOnHover(!settings.autoHideOnHover)
-                } else {
-                    session.toggleHidden()
-                }
-                self.lastFunctionTapDate = now
-            }
-            functionKeyIsDown = false
-            functionComboWasUsed = false
-        }
     }
 
     private func handleSourceApplicationActivation(_ processID: pid_t) {
@@ -2397,18 +2459,18 @@ final class PictureInPictureModel: ObservableObject {
         }
 
         if event.type == .scrollWheel, let session = sessionUnderMouse() {
-            if event.modifierFlags.contains(.command) {
-                session.changeZoom(by: CGFloat(event.scrollingDeltaY) / 20)
-            } else {
-                session.pan(by: CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY))
-            }
+            session.applyScrollWheel(
+                deltaX: CGFloat(event.scrollingDeltaX),
+                deltaY: CGFloat(event.scrollingDeltaY),
+                commandPressed: event.modifierFlags.contains(.command)
+            )
             return
         }
 
         guard settings.quickRegionCapture,
               event.type == .leftMouseDown,
               event.clickCount >= 2,
-              event.modifierFlags.contains(.function),
+              settings.triggerModifier.matches(event.modifierFlags, allowingShift: false),
               sessionUnderMouse() == nil else { return }
         captureQuickRegion(at: location)
     }
@@ -2883,19 +2945,32 @@ struct PictureInPictureView: View {
     private var generalPage: some View {
         VStack(alignment: .leading, spacing: 16) {
             card {
-                settingRow(t("pipTriggerHotkey"), hint: t("pipTriggerHotkeyHint")) {
+                settingRow(
+                    t("pipGlobalShortcut"),
+                    hint: t("pipGlobalShortcutHint", pictureInPicture.settings.triggerShortcutDescription)
+                ) {
                     HStack(spacing: 6) {
-                        Text("fn")
-                            .font(.system(.body, design: .monospaced))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-                        TextField("P", text: Binding(
+                        Picker(t("pipShortcutModifier"), selection: Binding(
+                            get: { pictureInPicture.settings.triggerModifier },
+                            set: { pictureInPicture.setTriggerModifier($0) }
+                        )) {
+                            ForEach(PiPShortcutModifier.allCases) { modifier in
+                                Text("\(modifier.symbolDescription)  \(t(modifier.titleKey))")
+                                    .tag(modifier)
+                            }
+                        }
+                        .frame(width: 220)
+                        TextField(t("pipShortcutKey"), text: Binding(
                             get: { pictureInPicture.settings.triggerKey.uppercased() },
                             set: { pictureInPicture.setTriggerKey($0) }
                         ))
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 58)
+                        Text(pictureInPicture.settings.triggerShortcutDescription)
+                            .font(.system(.body, design: .monospaced).weight(.semibold))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                     }
                 }
                 Divider()
@@ -2914,7 +2989,12 @@ struct PictureInPictureView: View {
 
             card {
                 Text(t("pipCheatSheet")).font(.headline)
-                Text(t("pipCheatSheetBody"))
+                Text(t(
+                    "pipCheatSheetBody",
+                    pictureInPicture.settings.triggerShortcutDescription,
+                    pictureInPicture.settings.triggerShortcutDescription,
+                    pictureInPicture.settings.triggerModifier.symbolDescription
+                ))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -3043,7 +3123,7 @@ struct PictureInPictureView: View {
                 ), range: 0...1, valueText: "\(Int(pictureInPicture.settings.enhanceContrast * 100))%")
             }
             card {
-                Toggle(t("pipQuickRegion"), isOn: Binding(
+                Toggle(t("pipQuickRegion", pictureInPicture.settings.triggerModifier.symbolDescription), isOn: Binding(
                     get: { pictureInPicture.settings.quickRegionCapture },
                     set: { pictureInPicture.setQuickRegionCapture($0) }
                 ))
