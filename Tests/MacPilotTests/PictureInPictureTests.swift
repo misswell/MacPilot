@@ -195,6 +195,31 @@ struct PictureInPictureTests {
         #expect(session.zoomOffset == CGSize(width: -300, height: 0))
     }
 
+    @Test @MainActor func zoomedPipUsesContentDraggingAndUnzoomedPipUsesWindowDragging() {
+        let source = PiPSource(
+            windowID: 0, processID: 1, appName: "Drag Mode Test", bundleIdentifier: "com.example.drag-mode",
+            title: "Test", frame: CGRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let session = PiPSession(
+            source: source, region: .fullWindow, settings: .init(), owner: PictureInPictureModel()
+        )
+        session.start()
+        defer { session.close() }
+
+        #expect(session.panel?.isMovableByWindowBackground == true)
+
+        session.setZoomFactor(2)
+        session.pan(by: CGSize(width: 36, height: -18))
+
+        #expect(session.panel?.isMovableByWindowBackground == false)
+        #expect(session.zoomOffset == CGSize(width: 36, height: -18))
+
+        session.resetZoom()
+
+        #expect(session.panel?.isMovableByWindowBackground == true)
+        #expect(session.zoomOffset == .zero)
+    }
+
     @Test @MainActor func recapturingAHiddenSourceRestoresItsExistingPipSession() throws {
         let source = PiPSource(
             windowID: 0, processID: 1, appName: "Hidden Source Test", bundleIdentifier: "com.example.hidden-source",

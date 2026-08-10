@@ -836,6 +836,20 @@ private final class PiPQuickLookPanel: NSPanel {
     }
 }
 
+private struct PiPWindowDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> PiPWindowDragHandleView {
+        PiPWindowDragHandleView()
+    }
+
+    func updateNSView(_ nsView: PiPWindowDragHandleView, context: Context) {}
+}
+
+private final class PiPWindowDragHandleView: NSView {
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
+    }
+}
+
 // MARK: - Session
 
 @MainActor
@@ -860,7 +874,11 @@ final class PiPSession: ObservableObject, Identifiable {
     @Published private(set) var isStalled = false
     @Published private(set) var isHovering = false
     @Published private(set) var showsHoverHints = false
-    @Published private(set) var zoomFactor: CGFloat = 1
+    @Published private(set) var zoomFactor: CGFloat = 1 {
+        didSet {
+            panel?.isMovableByWindowBackground = zoomFactor <= 1
+        }
+    }
     @Published private(set) var zoomOffset: CGSize = .zero
     @Published private(set) var zoomSelection: CGRect?
     @Published private(set) var errorMessage: String?
@@ -1510,6 +1528,7 @@ final class PiPSession: ObservableObject, Identifiable {
 
 struct PiPPanelView: View {
     @ObservedObject var session: PiPSession
+    @State private var panTranslation: CGSize = .zero
 
     var body: some View {
         GeometryReader { geometry in
@@ -1557,10 +1576,18 @@ struct PiPPanelView: View {
                     )
                 }
 
+                if session.zoomFactor > 1 {
+                    Rectangle()
+                        .fill(.clear)
+                        .contentShape(Rectangle())
+                        .gesture(contentPanGesture)
+                        .accessibilityHidden(true)
+                }
+
                 if session.isHovering {
                     VStack(spacing: 10) {
                         HStack(spacing: 8) {
-                            if session.presentationSettings.showHoverHints {
+                            if session.presentationSettings.showHoverHints || session.zoomFactor > 1 {
                                 sourceBadge
                                     .transition(.move(edge: .top).combined(with: .opacity))
                             }
@@ -1576,7 +1603,7 @@ struct PiPPanelView: View {
                                 .frame(maxWidth: 360)
                         } else if session.presentationSettings.showHoverHints {
                             actionDock
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
                     .padding(10)
@@ -1596,6 +1623,13 @@ struct PiPPanelView: View {
                 RoundedRectangle(cornerRadius: session.presentationSettings.cornerRadius, style: .continuous)
                     .strokeBorder(.white.opacity(0.22), lineWidth: 1)
             )
+            .overlay(alignment: .topLeading) {
+                if session.zoomFactor > 1 {
+                    PiPWindowDragHandle()
+                        .frame(width: min(240, max(110, geometry.size.width * 0.65)), height: 56)
+                        .accessibilityHidden(true)
+                }
+            }
             .onHover { session.setHovering($0) }
             .onTapGesture(count: 2) {
                 if NSEvent.modifierFlags.contains(.command) {
@@ -1633,6 +1667,21 @@ struct PiPPanelView: View {
             }
             .animation(.easeOut(duration: 0.16), value: session.isHovering)
         }
+    }
+
+    private var contentPanGesture: some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { value in
+                let delta = CGSize(
+                    width: value.translation.width - panTranslation.width,
+                    height: value.translation.height - panTranslation.height
+                )
+                panTranslation = value.translation
+                session.pan(by: delta)
+            }
+            .onEnded { _ in
+                panTranslation = .zero
+            }
     }
 
     private var sourceBadge: some View {
