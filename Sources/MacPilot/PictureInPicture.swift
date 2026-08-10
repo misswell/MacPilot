@@ -1067,11 +1067,40 @@ final class PiPSession: ObservableObject, Identifiable {
         if zoomFactor == 1 { zoomOffset = .zero }
     }
 
-    func applyScrollWheel(deltaX: CGFloat, deltaY: CGFloat, commandPressed: Bool) {
+    func changeZoom(by amount: CGFloat, around anchor: CGPoint, in viewportSize: CGSize) {
+        let oldFactor = zoomFactor
+        let newFactor = min(12, max(1, oldFactor + amount))
+        guard oldFactor != newFactor, oldFactor > 0, viewportSize.width > 0, viewportSize.height > 0 else { return }
+
+        let center = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+        let ratio = newFactor / oldFactor
+        let contentOffsetAtAnchor = CGPoint(
+            x: anchor.x - center.x - zoomOffset.width,
+            y: anchor.y - center.y - zoomOffset.height
+        )
+        zoomOffset = CGSize(
+            width: zoomOffset.width + (1 - ratio) * contentOffsetAtAnchor.x,
+            height: zoomOffset.height + (1 - ratio) * contentOffsetAtAnchor.y
+        )
+        zoomFactor = newFactor
+        if zoomFactor == 1 { zoomOffset = .zero }
+    }
+
+    func applyScrollWheel(
+        deltaX: CGFloat,
+        deltaY: CGFloat,
+        commandPressed: Bool,
+        mousePoint: CGPoint? = nil,
+        viewportSize: CGSize? = nil
+    ) {
         if commandPressed {
             pan(by: CGSize(width: deltaX, height: deltaY))
         } else if abs(deltaY) > 0.001 {
-            changeZoom(by: deltaY / 20)
+            if let mousePoint, let viewportSize {
+                changeZoom(by: deltaY / 20, around: mousePoint, in: viewportSize)
+            } else {
+                changeZoom(by: deltaY / 20)
+            }
         } else {
             pan(by: CGSize(width: deltaX, height: 0))
         }
@@ -2459,10 +2488,19 @@ final class PictureInPictureModel: ObservableObject {
         }
 
         if event.type == .scrollWheel, let session = sessionUnderMouse() {
+            let panelFrame = session.panel?.frame
+            let mousePoint = panelFrame.map { frame in
+                CGPoint(
+                    x: location.x - frame.minX,
+                    y: frame.maxY - location.y
+                )
+            }
             session.applyScrollWheel(
                 deltaX: CGFloat(event.scrollingDeltaX),
                 deltaY: CGFloat(event.scrollingDeltaY),
-                commandPressed: event.modifierFlags.contains(.command)
+                commandPressed: event.modifierFlags.contains(.command),
+                mousePoint: mousePoint,
+                viewportSize: session.panel?.contentView?.bounds.size ?? panelFrame?.size
             )
             return
         }

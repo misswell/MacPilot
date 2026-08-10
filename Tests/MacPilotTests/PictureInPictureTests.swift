@@ -161,6 +161,40 @@ struct PictureInPictureTests {
         #expect(session.zoomOffset == CGSize(width: 28, height: 30))
     }
 
+    @Test @MainActor func scrollWheelZoomKeepsThePointerContentAnchored() {
+        let source = PiPSource(
+            windowID: 4, processID: 1, appName: "Anchored Scroll Test", bundleIdentifier: "com.example.anchored-scroll",
+            title: "Test", frame: CGRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let session = PiPSession(
+            source: source, region: .fullWindow, settings: .init(), owner: PictureInPictureModel()
+        )
+        let viewportSize = CGSize(width: 800, height: 600)
+        let mousePoint = CGPoint(x: 700, y: 300)
+
+        session.applyScrollWheel(
+            deltaX: 0,
+            deltaY: 10,
+            commandPressed: false,
+            mousePoint: mousePoint,
+            viewportSize: viewportSize
+        )
+
+        #expect(session.zoomFactor == 1.5)
+        #expect(session.zoomOffset == CGSize(width: -150, height: 0))
+
+        session.applyScrollWheel(
+            deltaX: 0,
+            deltaY: 10,
+            commandPressed: false,
+            mousePoint: mousePoint,
+            viewportSize: viewportSize
+        )
+
+        #expect(session.zoomFactor == 2)
+        #expect(session.zoomOffset == CGSize(width: -300, height: 0))
+    }
+
     @Test @MainActor func stalledCaptureStateAppearsAfterMotionStopsAndClearsOnChange() async throws {
         let source = PiPSource(
             windowID: 0, processID: 1, appName: "Stall Test", bundleIdentifier: "com.example.stall",
