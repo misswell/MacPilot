@@ -2661,6 +2661,9 @@ final class PictureInPictureModel: ObservableObject {
         hasScreenPermission = true
         errorMessage = nil
         if let existing = sessions.values.first(where: { $0.source.windowID == source.windowID }) {
+            if existing.isHidden {
+                existing.show()
+            }
             existing.panel?.orderFrontRegardless()
             return existing
         }

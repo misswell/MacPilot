@@ -195,6 +195,24 @@ struct PictureInPictureTests {
         #expect(session.zoomOffset == CGSize(width: -300, height: 0))
     }
 
+    @Test @MainActor func recapturingAHiddenSourceRestoresItsExistingPipSession() throws {
+        let source = PiPSource(
+            windowID: 0, processID: 1, appName: "Hidden Source Test", bundleIdentifier: "com.example.hidden-source",
+            title: "Test", frame: CGRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let owner = PictureInPictureModel()
+        let session = try #require(owner.createSession(source: source, region: .fullWindow))
+        defer { session.close() }
+
+        session.hide(reason: .manual)
+        #expect(session.isHidden)
+
+        let reused = try #require(owner.createSession(source: source, region: .fullWindow))
+
+        #expect(reused === session)
+        #expect(!reused.isHidden)
+    }
+
     @Test @MainActor func stalledCaptureStateAppearsAfterMotionStopsAndClearsOnChange() async throws {
         let source = PiPSource(
             windowID: 0, processID: 1, appName: "Stall Test", bundleIdentifier: "com.example.stall",
