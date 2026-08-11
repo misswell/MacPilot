@@ -1129,12 +1129,13 @@ final class WindowSwitcherModel: ObservableObject {
                         maximumPixelSize: CGSize(width: 320, height: 200)
                     )
                 }.value
-                guard !Task.isCancelled, let captured else { continue }
+                guard let captured else { continue }
                 let image = NSImage(
                     cgImage: captured.image,
                     size: NSSize(width: captured.image.width, height: captured.image.height)
                 )
                 self.storeThumbnail(image, for: windowID)
+                guard !Task.isCancelled else { return }
                 item.updatePreview(image)
             }
         }
