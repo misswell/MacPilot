@@ -9,6 +9,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import OSLog
 import SwiftUI
 
 // MARK: - Configuration and pure selection rules
@@ -52,7 +53,42 @@ enum WindowSwitcherSelection {
     }
 }
 
-final class WindowSwitcherItem: Identifiable {
+enum WindowSwitcherOrdering {
+    static func orderedIndices(
+        processIDs: [pid_t],
+        frontmostProcessID: pid_t?,
+        recentProcessIDs: [pid_t]
+    ) -> [Int] {
+        let recentOrder = Dictionary(uniqueKeysWithValues: recentProcessIDs.enumerated().map { ($1, $0) })
+        return processIDs.indices.sorted { lhs, rhs in
+            let lhsPID = processIDs[lhs]
+            let rhsPID = processIDs[rhs]
+            if lhsPID == rhsPID { return lhs < rhs }
+            if lhsPID == frontmostProcessID { return true }
+            if rhsPID == frontmostProcessID { return false }
+            let lhsOrder = recentOrder[lhsPID] ?? Int.max
+            let rhsOrder = recentOrder[rhsPID] ?? Int.max
+            return lhsOrder == rhsOrder ? lhs < rhs : lhsOrder < rhsOrder
+        }
+    }
+}
+
+enum WindowSwitcherThumbnailPriority {
+    static func orderedIndices(count: Int, selectedIndex: Int) -> [Int] {
+        guard count > 0 else { return [] }
+        let selected = min(max(selectedIndex, 0), count - 1)
+        var result = [selected]
+        for distance in 1..<count {
+            let forward = (selected + distance) % count
+            if !result.contains(forward) { result.append(forward) }
+            let backward = (selected - distance + count) % count
+            if !result.contains(backward) { result.append(backward) }
+        }
+        return result
+    }
+}
+
+final class WindowSwitcherItem: ObservableObject, Identifiable, @unchecked Sendable {
     let id: String
     let windowID: CGWindowID?
     let processID: pid_t
@@ -60,10 +96,11 @@ final class WindowSwitcherItem: Identifiable {
     let bundleIdentifier: String?
     let title: String
     let icon: NSImage
-    let preview: NSImage?
+    @Published private(set) var preview: NSImage?
     let axWindow: AXUIElement?
     let isMinimized: Bool
     let isHidden: Bool
+    let canCapturePreview: Bool
 
     init(
         id: String,
@@ -76,7 +113,8 @@ final class WindowSwitcherItem: Identifiable {
         preview: NSImage?,
         axWindow: AXUIElement?,
         isMinimized: Bool,
-        isHidden: Bool
+        isHidden: Bool,
+        canCapturePreview: Bool
     ) {
         self.id = id
         self.windowID = windowID
@@ -89,10 +127,15 @@ final class WindowSwitcherItem: Identifiable {
         self.axWindow = axWindow
         self.isMinimized = isMinimized
         self.isHidden = isHidden
+        self.canCapturePreview = canCapturePreview
     }
 
     var displayTitle: String {
         title.isEmpty ? appName : title
+    }
+
+    func updatePreview(_ preview: NSImage?) {
+        self.preview = preview
     }
 }
 
@@ -105,12 +148,26 @@ private struct WindowSwitcherServerRecord {
     let isOnScreen: Bool
 }
 
+private struct WindowSwitcherAXAttributes {
+    let role: String?
+    let title: String
+    let isMinimized: Bool
+    let frame: CGRect?
+}
+
 private enum WindowSwitcherInventory {
+    private static let accessibilityTimeoutConfigured: Void = {
+        // The system default is several seconds. One unresponsive app must not
+        // prevent the background cache from becoming usable for the others.
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1)
+    }()
+
     static func snapshot(
         settings: WindowSwitcherSettings,
         frontmostProcessID: pid_t?,
         recentProcessIDs: [pid_t]
     ) -> [WindowSwitcherItem] {
+        _ = accessibilityTimeoutConfigured
         let serverRecords = windowServerRecords()
         let recordsByProcess = Dictionary(grouping: serverRecords, by: \.processID)
         let applications = NSWorkspace.shared.runningApplications.filter { application in
@@ -136,6 +193,7 @@ private enum WindowSwitcherInventory {
         for application in orderedApplications {
             let processID = application.processIdentifier
             let records = recordsByProcess[processID] ?? []
+            let icon = applicationIcon(for: application)
             let appElement = AXUIElementCreateApplication(processID)
             var windowsValue: CFTypeRef?
             let axResult = AXUIElementCopyAttributeValue(
@@ -148,12 +206,13 @@ private enum WindowSwitcherInventory {
             var appItems: [WindowSwitcherItem] = []
 
             for (index, axWindow) in axWindows.enumerated() {
-                guard role(of: axWindow) == kAXWindowRole as String else { continue }
-                let title = stringAttribute(kAXTitleAttribute, from: axWindow) ?? ""
-                let minimized = boolAttribute(kAXMinimizedAttribute, from: axWindow)
+                let attributes = windowAttributes(of: axWindow)
+                guard attributes.role == kAXWindowRole as String else { continue }
+                let title = attributes.title
+                let minimized = attributes.isMinimized
                 if minimized && !settings.includeMinimizedWindows { continue }
 
-                let frame = frame(of: axWindow)
+                let frame = attributes.frame
                 let record = matchingRecord(
                     title: title,
                     frame: frame,
@@ -170,7 +229,7 @@ private enum WindowSwitcherInventory {
                     serverRecord: record,
                     fallbackTitle: resolvedTitle,
                     index: index,
-                    settings: settings,
+                    icon: icon,
                     minimized: minimized
                 ))
             }
@@ -186,15 +245,16 @@ private enum WindowSwitcherInventory {
                         serverRecord: record,
                         fallbackTitle: record.title,
                         index: index,
-                        settings: settings,
+                        icon: icon,
                         minimized: false
                     ))
                 }
             }
 
+            let recordOrder = Dictionary(uniqueKeysWithValues: records.map { ($0.windowID, $0.order) })
             result.append(contentsOf: appItems.sorted { lhs, rhs in
-                let lhsOrder = records.first(where: { $0.windowID == lhs.windowID })?.order ?? Int.max
-                let rhsOrder = records.first(where: { $0.windowID == rhs.windowID })?.order ?? Int.max
+                let lhsOrder = lhs.windowID.flatMap { recordOrder[$0] } ?? Int.max
+                let rhsOrder = rhs.windowID.flatMap { recordOrder[$0] } ?? Int.max
                 return lhsOrder == rhsOrder ? lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending : lhsOrder < rhsOrder
             })
         }
@@ -208,20 +268,13 @@ private enum WindowSwitcherInventory {
         serverRecord: WindowSwitcherServerRecord?,
         fallbackTitle: String,
         index: Int,
-        settings: WindowSwitcherSettings,
+        icon: NSImage,
         minimized: Bool
     ) -> WindowSwitcherItem {
         let processID = application.processIdentifier
         let appName = application.localizedName ?? application.bundleIdentifier ?? "Application"
         let bundleIdentifier = application.bundleIdentifier
         let windowID = serverRecord?.windowID
-        let icon = application.icon
-            ?? (application.bundleURL.map { NSWorkspace.shared.icon(forFile: $0.path) })
-            ?? NSImage(systemSymbolName: "app", accessibilityDescription: nil)
-            ?? NSImage()
-        let thumbnail = settings.showThumbnails && serverRecord?.isOnScreen == true
-            ? serverRecord.flatMap { Self.preview(for: $0.windowID) }
-            : nil
         let stableID: String
         if let windowID {
             stableID = "window-\(windowID)"
@@ -236,11 +289,19 @@ private enum WindowSwitcherInventory {
             bundleIdentifier: bundleIdentifier,
             title: fallbackTitle,
             icon: icon,
-            preview: thumbnail,
+            preview: nil,
             axWindow: axWindow,
             isMinimized: minimized,
-            isHidden: application.isHidden
+            isHidden: application.isHidden,
+            canCapturePreview: serverRecord?.isOnScreen == true
         )
+    }
+
+    private static func applicationIcon(for application: NSRunningApplication) -> NSImage {
+        application.icon
+            ?? (application.bundleURL.map { NSWorkspace.shared.icon(forFile: $0.path) })
+            ?? NSImage(systemSymbolName: "app", accessibilityDescription: nil)
+            ?? NSImage()
     }
 
     private static func windowServerRecords() -> [WindowSwitcherServerRecord] {
@@ -290,8 +351,32 @@ private enum WindowSwitcherInventory {
             + abs(lhs.width - rhs.width) + abs(lhs.height - rhs.height)
     }
 
-    private static func role(of element: AXUIElement) -> String? {
-        stringAttribute(kAXRoleAttribute, from: element)
+    private static func windowAttributes(of element: AXUIElement) -> WindowSwitcherAXAttributes {
+        let keys = [
+            kAXRoleAttribute,
+            kAXTitleAttribute,
+            kAXMinimizedAttribute,
+            kAXPositionAttribute,
+            kAXSizeAttribute
+        ]
+        var values: CFArray?
+        if AXUIElementCopyMultipleAttributeValues(element, keys as CFArray, [], &values) == .success,
+           let values = values as? [CFTypeRef], values.count == keys.count {
+            let position = pointValue(values[3])
+            let size = sizeValue(values[4])
+            return WindowSwitcherAXAttributes(
+                role: values[0] as? String,
+                title: values[1] as? String ?? "",
+                isMinimized: (values[2] as? NSNumber)?.boolValue ?? false,
+                frame: position.flatMap { position in size.map { CGRect(origin: position, size: $0) } }
+            )
+        }
+        return WindowSwitcherAXAttributes(
+            role: stringAttribute(kAXRoleAttribute, from: element),
+            title: stringAttribute(kAXTitleAttribute, from: element) ?? "",
+            isMinimized: boolAttribute(kAXMinimizedAttribute, from: element),
+            frame: frame(of: element)
+        )
     }
 
     private static func stringAttribute(_ attribute: String, from element: AXUIElement) -> String? {
@@ -324,22 +409,76 @@ private enum WindowSwitcherInventory {
         return CGRect(origin: position, size: size)
     }
 
-    private static func preview(for windowID: CGWindowID) -> NSImage? {
-        typealias CaptureFunction = @convention(c) (
-            CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption
-        ) -> CGImage?
+    private static func pointValue(_ value: CFTypeRef) -> CGPoint? {
+        guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        let axValue = value as! AXValue
+        guard AXValueGetType(axValue) == .cgPoint else { return nil }
+        var point = CGPoint.zero
+        return AXValueGetValue(axValue, .cgPoint, &point) ? point : nil
+    }
+
+    private static func sizeValue(_ value: CFTypeRef) -> CGSize? {
+        guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        let axValue = value as! AXValue
+        guard AXValueGetType(axValue) == .cgSize else { return nil }
+        var size = CGSize.zero
+        return AXValueGetValue(axValue, .cgSize, &size) ? size : nil
+    }
+
+}
+
+private struct WindowSwitcherCapturedPreview: @unchecked Sendable {
+    let image: CGImage
+}
+
+private enum WindowSwitcherPreviewCapture {
+    private typealias CaptureFunction = @convention(c) (
+        CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption
+    ) -> CGImage?
+
+    // Keep the framework handle and symbol for the process lifetime. Resolving
+    // both for every tile was measurable work on the shortcut's hot path.
+    private static let captureFunction: CaptureFunction? = {
         guard let handle = dlopen(
             "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
             RTLD_LAZY
         ), let symbol = dlsym(handle, "CGWindowListCreateImage") else { return nil }
-        let capture = unsafeBitCast(symbol, to: CaptureFunction.self)
-        guard let image = capture(
-            .null,
-            .optionIncludingWindow,
-            windowID,
-            [.bestResolution, .boundsIgnoreFraming]
-        ) else { return nil }
-        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        return unsafeBitCast(symbol, to: CaptureFunction.self)
+    }()
+
+    static func capture(windowID: CGWindowID, maximumPixelSize: CGSize) -> WindowSwitcherCapturedPreview? {
+        guard let captureFunction,
+              let source = captureFunction(
+                .null,
+                .optionIncludingWindow,
+                windowID,
+                [.nominalResolution, .boundsIgnoreFraming]
+              ) else { return nil }
+        return WindowSwitcherCapturedPreview(image: downscaled(source, maximumPixelSize: maximumPixelSize))
+    }
+
+    private static func downscaled(_ source: CGImage, maximumPixelSize: CGSize) -> CGImage {
+        let sourceSize = CGSize(width: source.width, height: source.height)
+        let scale = min(
+            1,
+            maximumPixelSize.width / max(sourceSize.width, 1),
+            maximumPixelSize.height / max(sourceSize.height, 1)
+        )
+        guard scale < 1 else { return source }
+        let width = max(1, Int((sourceSize.width * scale).rounded()))
+        let height = max(1, Int((sourceSize.height * scale).rounded()))
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return source }
+        context.interpolationQuality = .medium
+        context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage() ?? source
     }
 }
 
@@ -411,12 +550,25 @@ private func windowSwitcherEventTapCallback(
 
 // MARK: - Runtime model
 
+private struct WindowSwitcherPendingSession {
+    var reverse: Bool
+    var manual: Bool
+    var additionalSelectionOffset = 0
+    var commitWhenReady = false
+    var startedAt = CFAbsoluteTimeGetCurrent()
+}
+
 @MainActor
 final class WindowSwitcherModel: ObservableObject {
+    private static let performanceLogger = Logger(
+        subsystem: "com.misswell.macpilot",
+        category: "WindowSwitcherPerformance"
+    )
+
     @Published private(set) var settings = WindowSwitcherSettings()
-    @Published private(set) var windows: [WindowSwitcherItem] = []
-    @Published private(set) var selectedIndex = 0
-    @Published private(set) var isShowing = false
+    private(set) var windows: [WindowSwitcherItem] = []
+    private(set) var selectedIndex = 0
+    private(set) var isShowing = false
     @Published private(set) var hasAccessibilityPermission = false
 
     var language: AppLanguage = .system
@@ -428,10 +580,17 @@ final class WindowSwitcherModel: ObservableObject {
     private var consumeTabKeyUp = false
     private var consumeEscapeKeyUp = false
     private var recentProcessIDs: [pid_t] = []
+    private var cachedWindows: [WindowSwitcherItem] = []
+    private var inventoryTask: Task<Void, Never>?
+    private var inventoryRevision = 0
+    private var pendingSession: WindowSwitcherPendingSession?
+    private var thumbnailTask: Task<Void, Never>?
+    private var thumbnailCache: [CGWindowID: NSImage] = [:]
+    private var thumbnailCacheOrder: [CGWindowID] = []
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
     private var eventTapContext: WindowSwitcherEventTapContext?
-    private var workspaceObserver: NSObjectProtocol?
+    private var workspaceObservers: [NSObjectProtocol] = []
     private var manualDismissTask: Task<Void, Never>?
     private var panelController: WindowSwitcherPanelController?
 
@@ -442,14 +601,21 @@ final class WindowSwitcherModel: ObservableObject {
 
     func applyLoadedSettings(_ settings: WindowSwitcherSettings) {
         self.settings = settings
-        if isActive { refreshEventTap() }
+        cachedWindows = []
+        if isActive {
+            refreshEventTap()
+            requestInventoryRefresh(priority: .utility)
+        }
     }
 
     func activateFromConfiguration() {
         guard !isActive else { return }
         isActive = true
+        panelController = WindowSwitcherPanelController(model: self)
+        panelController?.prepare()
         installWorkspaceObserver()
         refreshEventTap()
+        requestInventoryRefresh(priority: .utility)
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -457,8 +623,10 @@ final class WindowSwitcherModel: ObservableObject {
         settings.isEnabled = enabled
         if enabled {
             refreshEventTap()
+            requestInventoryRefresh(priority: .userInitiated)
         } else {
             cancelSession()
+            cancelPendingSession()
             removeEventTap()
         }
         persist?()
@@ -466,16 +634,28 @@ final class WindowSwitcherModel: ObservableObject {
 
     func setIncludeMinimizedWindows(_ enabled: Bool) {
         settings.includeMinimizedWindows = enabled
+        cachedWindows = []
+        requestInventoryRefresh(priority: .utility)
         persist?()
     }
 
     func setIncludeHiddenApplications(_ enabled: Bool) {
         settings.includeHiddenApplications = enabled
+        cachedWindows = []
+        requestInventoryRefresh(priority: .utility)
         persist?()
     }
 
     func setShowThumbnails(_ enabled: Bool) {
         settings.showThumbnails = enabled
+        if enabled {
+            applyCachedPreviews(to: cachedWindows)
+            prewarmThumbnails()
+        } else {
+            thumbnailTask?.cancel()
+            cachedWindows.forEach { $0.updatePreview(nil) }
+            windows.forEach { $0.updatePreview(nil) }
+        }
         persist?()
     }
 
@@ -489,11 +669,13 @@ final class WindowSwitcherModel: ObservableObject {
             ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         )
         refreshEventTap()
+        if hasAccessibilityPermission { requestInventoryRefresh(priority: .userInitiated) }
     }
 
     func refreshPermissionStatus() {
         hasAccessibilityPermission = AXIsProcessTrusted()
         refreshEventTap()
+        if hasAccessibilityPermission { requestInventoryRefresh(priority: .utility) }
     }
 
     func openAccessibilitySettings() {
@@ -508,12 +690,16 @@ final class WindowSwitcherModel: ObservableObject {
 
     func select(index: Int) {
         guard windows.indices.contains(index) else { return }
+        guard selectedIndex != index else { return }
+        objectWillChange.send()
         selectedIndex = index
     }
 
     func commitSelection(at index: Int? = nil) {
         guard isShowing else { return }
-        if let index, windows.indices.contains(index) { selectedIndex = index }
+        if let index, windows.indices.contains(index), selectedIndex != index {
+            selectedIndex = index
+        }
         finishSession(commit: true)
     }
 
@@ -537,20 +723,21 @@ final class WindowSwitcherModel: ObservableObject {
         switch type {
         case .keyDown:
             if keyCode == 53 { // Escape
-                guard isShowing else { return false }
+                guard isShowing || pendingSession != nil else { return false }
                 consumeEscapeKeyUp = true
-                cancelSelection()
+                if isShowing { cancelSelection() } else { cancelPendingSession() }
                 return true
             }
             guard keyCode == 48 else { return false } // Tab
             let optionPressed = flags.contains(.maskAlternate)
             let reverse = flags.contains(.maskShift)
             if isShowing {
-                if !tabIsDown || isAutorepeat {
-                    if tabIsDown {
-                        cycleSelection(reverse: reverse)
-                    }
-                }
+                cycleSelection(reverse: reverse)
+                tabIsDown = true
+                return true
+            }
+            if pendingSession != nil {
+                pendingSession?.additionalSelectionOffset += reverse ? -1 : 1
                 tabIsDown = true
                 return true
             }
@@ -563,7 +750,7 @@ final class WindowSwitcherModel: ObservableObject {
             return true
 
         case .keyUp:
-            if keyCode == 48, isShowing || consumeTabKeyUp {
+            if keyCode == 48, isShowing || pendingSession != nil || consumeTabKeyUp {
                 tabIsDown = false
                 consumeTabKeyUp = false
                 return true
@@ -575,6 +762,14 @@ final class WindowSwitcherModel: ObservableObject {
             return false
 
         case .flagsChanged:
+            if pendingSession != nil,
+               pendingSession?.manual == false,
+               !flags.contains(.maskAlternate) {
+                consumeTabKeyUp = tabIsDown
+                tabIsDown = false
+                pendingSession?.commitWhenReady = true
+                return true
+            }
             guard isShowing, !isManualSession, !flags.contains(.maskAlternate) else { return false }
             consumeTabKeyUp = tabIsDown
             tabIsDown = false
@@ -588,24 +783,59 @@ final class WindowSwitcherModel: ObservableObject {
 
     private func beginSession(reverse: Bool, manual: Bool) -> Bool {
         guard !isShowing else { return true }
+        let startedAt = CFAbsoluteTimeGetCurrent()
         let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let snapshot = WindowSwitcherInventory.snapshot(
-            settings: settings,
-            frontmostProcessID: frontmost,
-            recentProcessIDs: recentProcessIDs
+        let snapshot = orderedForSession(cachedWindows, frontmostProcessID: frontmost)
+        guard !snapshot.isEmpty else {
+            pendingSession = WindowSwitcherPendingSession(
+                reverse: reverse,
+                manual: manual,
+                startedAt: startedAt
+            )
+            requestInventoryRefresh(priority: .userInitiated)
+            return true
+        }
+        showSession(
+            snapshot,
+            reverse: reverse,
+            manual: manual,
+            additionalSelectionOffset: 0,
+            startedAt: startedAt,
+            cacheHit: true
         )
-        guard !snapshot.isEmpty else { return false }
-        windows = snapshot
+        requestInventoryRefresh(priority: .utility)
+        return true
+    }
+
+    private func showSession(
+        _ snapshot: [WindowSwitcherItem],
+        reverse: Bool,
+        manual: Bool,
+        additionalSelectionOffset: Int,
+        startedAt: CFAbsoluteTime,
+        cacheHit: Bool
+    ) {
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let currentIndex = snapshot.firstIndex { $0.processID == frontmost }
-        selectedIndex = WindowSwitcherSelection.initialIndex(
+        let initialIndex = WindowSwitcherSelection.initialIndex(
             count: snapshot.count,
             currentIndex: currentIndex,
             reverse: reverse
         ) ?? 0
+        let resolvedIndex = WindowSwitcherSelection.cycledIndex(
+            current: initialIndex,
+            count: snapshot.count,
+            offset: additionalSelectionOffset
+        ) ?? initialIndex
+        objectWillChange.send()
+        windows = snapshot
+        selectedIndex = resolvedIndex
         isManualSession = manual
         isShowing = true
         panelController = panelController ?? WindowSwitcherPanelController(model: self)
         panelController?.show()
+        reportPresentationLatency(startedAt: startedAt, cacheHit: cacheHit)
+        refreshThumbnails(for: snapshot, selectedIndex: selectedIndex, maximumCount: nil, requireShowing: true)
         if manual {
             manualDismissTask?.cancel()
             manualDismissTask = Task { @MainActor [weak self] in
@@ -614,7 +844,6 @@ final class WindowSwitcherModel: ObservableObject {
                 self.finishSession(commit: false)
             }
         }
-        return true
     }
 
     private func cycleSelection(reverse: Bool) {
@@ -623,6 +852,7 @@ final class WindowSwitcherModel: ObservableObject {
             count: windows.count,
             offset: reverse ? -1 : 1
         ) else { return }
+        objectWillChange.send()
         selectedIndex = next
     }
 
@@ -630,18 +860,26 @@ final class WindowSwitcherModel: ObservableObject {
         manualDismissTask?.cancel()
         manualDismissTask = nil
         let selected = windows.indices.contains(selectedIndex) ? windows[selectedIndex] : nil
+        objectWillChange.send()
         isShowing = false
         isManualSession = false
         windows = []
         panelController?.hide()
+        thumbnailTask?.cancel()
         if commit, let selected {
             focus(selected)
         }
+        requestInventoryRefresh(priority: .utility)
     }
 
     private func cancelSession() {
         guard isShowing else { return }
         finishSession(commit: false)
+    }
+
+    private func cancelPendingSession() {
+        pendingSession = nil
+        tabIsDown = false
     }
 
     private func focus(_ item: WindowSwitcherItem) {
@@ -660,13 +898,25 @@ final class WindowSwitcherModel: ObservableObject {
     }
 
     private func installWorkspaceObserver() {
-        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            Task { @MainActor in self?.noteApplicationActivation(application) }
+        let center = NSWorkspace.shared.notificationCenter
+        let names: [NSNotification.Name] = [
+            NSWorkspace.didActivateApplicationNotification,
+            NSWorkspace.didLaunchApplicationNotification,
+            NSWorkspace.didTerminateApplicationNotification,
+            NSWorkspace.didHideApplicationNotification,
+            NSWorkspace.didUnhideApplicationNotification
+        ]
+        workspaceObservers = names.map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                Task { @MainActor in
+                    guard let self else { return }
+                    if name == NSWorkspace.didActivateApplicationNotification {
+                        self.noteApplicationActivation(application)
+                    }
+                    self.requestInventoryRefresh(priority: .utility)
+                }
+            }
         }
     }
 
@@ -675,6 +925,180 @@ final class WindowSwitcherModel: ObservableObject {
         recentProcessIDs.removeAll { $0 == processID }
         recentProcessIDs.insert(processID, at: 0)
         if recentProcessIDs.count > 128 { recentProcessIDs.removeLast(recentProcessIDs.count - 128) }
+    }
+
+    private func orderedForSession(
+        _ items: [WindowSwitcherItem],
+        frontmostProcessID: pid_t?
+    ) -> [WindowSwitcherItem] {
+        WindowSwitcherOrdering.orderedIndices(
+            processIDs: items.map(\.processID),
+            frontmostProcessID: frontmostProcessID,
+            recentProcessIDs: recentProcessIDs
+        ).map { items[$0] }
+    }
+
+    private func requestInventoryRefresh(priority: TaskPriority) {
+        guard isActive, settings.isEnabled, hasAccessibilityPermission else { return }
+        inventoryRevision += 1
+        guard inventoryTask == nil else { return }
+        startInventoryRefresh(priority: priority)
+    }
+
+    private func startInventoryRefresh(priority: TaskPriority) {
+        let revision = inventoryRevision
+        let settings = settings
+        let frontmostProcessID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let recentProcessIDs = recentProcessIDs
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        inventoryTask = Task { @MainActor [weak self] in
+            let snapshot = await Task.detached(priority: priority) {
+                WindowSwitcherInventory.snapshot(
+                    settings: settings,
+                    frontmostProcessID: frontmostProcessID,
+                    recentProcessIDs: recentProcessIDs
+                )
+            }.value
+            guard let self else { return }
+            self.reportInventoryLatency(startedAt: startedAt, windowCount: snapshot.count)
+            self.inventoryTask = nil
+            let settingsStillMatch = settings == self.settings
+            if settingsStillMatch {
+                self.cachedWindows = snapshot
+                self.applyCachedPreviews(to: snapshot)
+                if let pending = self.pendingSession {
+                    self.pendingSession = nil
+                    self.completePendingSession(pending, snapshot: snapshot)
+                }
+            }
+            if revision != self.inventoryRevision || !settingsStillMatch {
+                self.startInventoryRefresh(priority: self.pendingSession == nil ? .utility : .userInitiated)
+                return
+            }
+            self.prewarmThumbnails()
+        }
+    }
+
+    private func completePendingSession(
+        _ pending: WindowSwitcherPendingSession,
+        snapshot: [WindowSwitcherItem]
+    ) {
+        guard !snapshot.isEmpty else { return }
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let ordered = orderedForSession(snapshot, frontmostProcessID: frontmost)
+        let currentIndex = ordered.firstIndex { $0.processID == frontmost }
+        let initialIndex = WindowSwitcherSelection.initialIndex(
+            count: ordered.count,
+            currentIndex: currentIndex,
+            reverse: pending.reverse
+        ) ?? 0
+        let resolvedIndex = WindowSwitcherSelection.cycledIndex(
+            current: initialIndex,
+            count: ordered.count,
+            offset: pending.additionalSelectionOffset
+        ) ?? initialIndex
+        if pending.commitWhenReady {
+            focus(ordered[resolvedIndex])
+        } else {
+            showSession(
+                ordered,
+                reverse: pending.reverse,
+                manual: pending.manual,
+                additionalSelectionOffset: pending.additionalSelectionOffset,
+                startedAt: pending.startedAt,
+                cacheHit: false
+            )
+        }
+    }
+
+    private func reportPresentationLatency(startedAt: CFAbsoluteTime, cacheHit: Bool) {
+        let milliseconds = (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
+        guard milliseconds >= 16 else { return }
+        Self.performanceLogger.notice(
+            "presentation latency: \(milliseconds, privacy: .public) ms; cache hit: \(cacheHit, privacy: .public)"
+        )
+    }
+
+    private func reportInventoryLatency(startedAt: CFAbsoluteTime, windowCount: Int) {
+        let milliseconds = (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
+        guard milliseconds >= 100 else { return }
+        Self.performanceLogger.notice(
+            "inventory latency: \(milliseconds, privacy: .public) ms; windows: \(windowCount, privacy: .public)"
+        )
+    }
+
+    private func applyCachedPreviews(to items: [WindowSwitcherItem]) {
+        guard settings.showThumbnails else {
+            items.forEach { $0.updatePreview(nil) }
+            return
+        }
+        for item in items {
+            guard let windowID = item.windowID else { continue }
+            item.updatePreview(thumbnailCache[windowID])
+        }
+    }
+
+    private func prewarmThumbnails() {
+        guard !isShowing else { return }
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let ordered = orderedForSession(cachedWindows, frontmostProcessID: frontmost)
+        let selected = WindowSwitcherSelection.initialIndex(
+            count: ordered.count,
+            currentIndex: ordered.firstIndex { $0.processID == frontmost },
+            reverse: false
+        ) ?? 0
+        refreshThumbnails(for: ordered, selectedIndex: selected, maximumCount: 3, requireShowing: false)
+    }
+
+    private func refreshThumbnails(
+        for items: [WindowSwitcherItem],
+        selectedIndex: Int,
+        maximumCount: Int?,
+        requireShowing: Bool
+    ) {
+        thumbnailTask?.cancel()
+        guard settings.showThumbnails else { return }
+        let prioritized = WindowSwitcherThumbnailPriority.orderedIndices(
+            count: items.count,
+            selectedIndex: selectedIndex
+        )
+        let indices = maximumCount.map { Array(prioritized.prefix($0)) } ?? prioritized
+        thumbnailTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for index in indices {
+                guard !Task.isCancelled, self.settings.showThumbnails else { return }
+                if requireShowing && !self.isShowing { return }
+                let item = items[index]
+                guard let windowID = item.windowID, item.canCapturePreview else { continue }
+                if let cached = self.thumbnailCache[windowID] {
+                    item.updatePreview(cached)
+                    continue
+                }
+                let captured = await Task.detached(priority: .utility) {
+                    WindowSwitcherPreviewCapture.capture(
+                        windowID: windowID,
+                        maximumPixelSize: CGSize(width: 320, height: 200)
+                    )
+                }.value
+                guard !Task.isCancelled, let captured else { continue }
+                let image = NSImage(
+                    cgImage: captured.image,
+                    size: NSSize(width: captured.image.width, height: captured.image.height)
+                )
+                self.storeThumbnail(image, for: windowID)
+                item.updatePreview(image)
+            }
+        }
+    }
+
+    private func storeThumbnail(_ image: NSImage, for windowID: CGWindowID) {
+        thumbnailCache[windowID] = image
+        thumbnailCacheOrder.removeAll { $0 == windowID }
+        thumbnailCacheOrder.append(windowID)
+        while thumbnailCacheOrder.count > 64 {
+            let removed = thumbnailCacheOrder.removeFirst()
+            thumbnailCache.removeValue(forKey: removed)
+        }
     }
 
     private func refreshEventTap() {
@@ -733,11 +1157,15 @@ private final class WindowSwitcherPanelController {
         self.model = model
     }
 
+    func prepare() {
+        guard panel == nil, let model else { return }
+        panel = makePanel(model: model)
+    }
+
     func show() {
         guard let model else { return }
-        let panel = self.panel ?? makePanel()
+        let panel = self.panel ?? makePanel(model: model)
         self.panel = panel
-        panel.contentView = NSHostingView(rootView: WindowSwitcherOverlay(model: model))
         let screen = NSScreen.main ?? NSScreen.screens.first
         let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
         let size = NSSize(width: min(940, max(620, visibleFrame.width - 80)), height: 220)
@@ -754,7 +1182,7 @@ private final class WindowSwitcherPanelController {
         panel?.orderOut(nil)
     }
 
-    private func makePanel() -> WindowSwitcherPanel {
+    private func makePanel(model: WindowSwitcherModel) -> WindowSwitcherPanel {
         let panel = WindowSwitcherPanel(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 220),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -767,6 +1195,7 @@ private final class WindowSwitcherPanelController {
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
+        panel.contentView = NSHostingView(rootView: WindowSwitcherOverlay(model: model))
         return panel
     }
 }
@@ -791,22 +1220,34 @@ private struct WindowSwitcherOverlay: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 118)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(Array(model.windows.enumerated()), id: \.element.id) { index, item in
-                            WindowSwitcherTile(
-                                item: item,
-                                isSelected: index == model.selectedIndex,
-                                showTitle: model.settings.showWindowTitles
-                            ) {
-                                model.commitSelection(at: index)
-                            }
-                            .onHover { isHovered in
-                                if isHovered { model.select(index: index) }
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 10) {
+                            ForEach(model.windows.indices, id: \.self) { index in
+                                let item = model.windows[index]
+                                WindowSwitcherTile(
+                                    item: item,
+                                    isSelected: index == model.selectedIndex,
+                                    showTitle: model.settings.showWindowTitles
+                                ) {
+                                    model.commitSelection(at: index)
+                                }
+                                .id(item.id)
+                                .onHover { isHovered in
+                                    if isHovered { model.select(index: index) }
+                                }
                             }
                         }
+                        .padding(.horizontal, 2)
                     }
-                    .padding(.horizontal, 2)
+                    .onChange(of: model.selectedIndex) { _, index in
+                        guard model.windows.indices.contains(index) else { return }
+                        proxy.scrollTo(model.windows[index].id, anchor: .center)
+                    }
+                    .onAppear {
+                        guard model.windows.indices.contains(model.selectedIndex) else { return }
+                        proxy.scrollTo(model.windows[model.selectedIndex].id, anchor: .center)
+                    }
                 }
                 .frame(height: 142)
             }
@@ -819,7 +1260,7 @@ private struct WindowSwitcherOverlay: View {
 }
 
 private struct WindowSwitcherTile: View {
-    let item: WindowSwitcherItem
+    @ObservedObject var item: WindowSwitcherItem
     let isSelected: Bool
     let showTitle: Bool
     let action: () -> Void

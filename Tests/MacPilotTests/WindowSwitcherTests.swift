@@ -20,6 +20,21 @@ struct WindowSwitcherTests {
         #expect(WindowSwitcherSelection.cycledIndex(current: 1, count: 0, offset: 1) == nil)
     }
 
+    @Test func cachedWindowsAreReorderedWithoutRediscovery() {
+        let processIDs: [pid_t] = [11, 11, 22, 33, 33]
+
+        #expect(WindowSwitcherOrdering.orderedIndices(
+            processIDs: processIDs,
+            frontmostProcessID: 33,
+            recentProcessIDs: [22, 11]
+        ) == [3, 4, 2, 0, 1])
+    }
+
+    @Test func thumbnailWorkStartsAtTheSelectionAndFansOut() {
+        #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 5, selectedIndex: 2) == [2, 3, 1, 4, 0])
+        #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 0, selectedIndex: 0).isEmpty)
+    }
+
     @Test func settingsDecodeMissingFieldsWithSafeDefaults() throws {
         let settings = try JSONDecoder().decode(
             WindowSwitcherSettings.self,

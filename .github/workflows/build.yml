@@ -7,13 +7,19 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      signed_test:
+        description: Build a Developer ID signed and notarized test artifact without publishing a release
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
   build:
-    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'workflow_dispatch' || !inputs.signed_test) }}
     runs-on: macos-15
     steps:
       - name: Check out source
@@ -51,6 +57,44 @@ jobs:
           name: MacPilot-${{ steps.version.outputs.version }}-macos
           path: MacPilot.app
           retention-days: 14
+
+  signed-test:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.signed_test }}
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Import Developer ID signing certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Resolve app version
+        id: version
+        run: |
+          version="$(./Scripts/version.sh)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "MACPILOT_VERSION=$version" >> "$GITHUB_ENV"
+          echo "MACPILOT_BUILD_NUMBER=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
+
+      - name: Sign, notarize, staple, and package
+        env:
+          MACPILOT_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          MACPILOT_APPLE_ID: ${{ secrets.APPLE_ID }}
+          MACPILOT_APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          MACPILOT_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: ./Scripts/distribute-app.sh
+
+      - name: Upload signed test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacPilot-${{ steps.version.outputs.version }}-developer-id-test
+          path: MacPilot-${{ steps.version.outputs.version }}-macos.zip
+          retention-days: 7
 
   dist:
     if: startsWith(github.ref, 'refs/tags/v')
