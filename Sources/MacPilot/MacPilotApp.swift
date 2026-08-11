@@ -18,7 +18,11 @@ struct MacPilotApp: App {
         .windowStyle(.hiddenTitleBar)
 
         MenuBarExtra {
-            MenuBarView(pictureInPicture: model.pictureInPicture, inputSources: model.inputSources).environmentObject(model)
+            MenuBarView(
+                pictureInPicture: model.pictureInPicture,
+                inputSources: model.inputSources,
+                windowSwitcher: model.windowSwitcher
+            ).environmentObject(model)
         } label: {
             Image(systemName: model.isEnforcing ? "timer" : "pause.circle")
         }
@@ -540,7 +544,15 @@ enum AppText {
         "pipPatchesNoApps": "没有检测到支持的浏览器或 Electron 应用。", "pipPatchRunning": "正在运行", "pipPatchRelaunch": "使用修复参数重新启动", "pipPatchAutoApply": "自动保持修复生效", "pipPatchAutoApplyHint": "启用的应用正常启动时，MacPilot 会将它重新启动一次并附加离屏渲染参数。关闭开关即可撤销；下次正常启动不会再应用。", "pipPatchFailed": "无法应用离屏渲染修复", "pipPatchDetails": "详细信息", "pipPatchDetailsBody": "此修复使用 Chromium/Electron 官方支持的启动参数。应用当前正在运行时，需要先退出再重新启动，未保存的内容可能丢失，因此只有点击按钮或启用自动应用时才会执行。",
         "pipCustomPatchTitle": "自定义合成器应用", "pipCustomPatchBody": "Firefox、kitty 和 Ghostty 没有后台渲染启动参数。MacPilot 可以在备份原 App 后，为其主程序注入一个独立的轻量组件，使 AppKit 始终报告窗口可见。", "pipCustomPatchNoApps": "没有检测到可补丁的自定义合成器应用。", "pipCustomPatchWarning": "补丁会修改并重新签名第三方 App，可能使它重新请求屏幕录制、辅助功能等权限。操作前必须退出目标 App；原始 App 会保存在 MacPilot 的 Application Support 中并可随时恢复。", "pipPatchInstall": "安装补丁", "pipPatchRestore": "恢复原版", "pipPatchInstalled": "补丁已安装", "pipPatchQuitFirst": "请先退出 App", "pipPatchUpdateDetected": "检测到更新，可重新安装补丁", "pipPatchConfirmTitle": "修改并重新签名这个 App？", "pipPatchConfirmBody": "MacPilot 会先完整备份原 App，再注入离屏渲染组件并使用临时签名重新签名。此操作可能让 macOS 再次询问权限。", "pipRestoreConfirmTitle": "恢复原始 App？", "pipRestoreConfirmBody": "MacPilot 会用安装补丁前保存的完整备份替换当前 App。请确认目标 App 已退出。", "pipPatchAnotherApp": "补丁另一个 App…", "pipPatchRemoveCustom": "从列表移除", "choose": "选择",
         "pipPermissionRequired": "需要屏幕录制权限才能创建画中画。", "pipGrantPermission": "授权屏幕录制…", "pipOpenSettings": "打开设置",
-        "pipAccessibilityRequired": "需要辅助功能权限才能在其他 App 中拦截全局快捷键。", "pipGrantAccessibility": "授权辅助功能…", "pipOpenAccessibility": "打开辅助功能设置"
+        "pipAccessibilityRequired": "需要辅助功能权限才能在其他 App 中拦截全局快捷键。", "pipGrantAccessibility": "授权辅助功能…", "pipOpenAccessibility": "打开辅助功能设置",
+        "windowSwitcher": "窗口切换", "windowSwitcherTitle": "窗口切换器", "windowSwitcherSubtitle": "使用 ⌥Tab 在所有应用窗口之间快速切换。按住 Option 连续切换，松开后聚焦选中的窗口。",
+        "windowSwitcherShortcut": "⌥Tab", "windowSwitcherShortcutHint": "默认快捷键为 ⌥Tab；按住 Option 时可连续按 Tab，按住 Shift 可反向切换。",
+        "windowSwitcherIncludeMinimized": "显示最小化窗口", "windowSwitcherIncludeHidden": "显示已隐藏应用的窗口",
+        "windowSwitcherShowThumbnails": "显示窗口缩略图（需要屏幕录制权限）", "windowSwitcherShowTitles": "显示窗口标题",
+        "windowSwitcherAccessibilityRequired": "窗口切换需要辅助功能权限，才能读取和聚焦其他应用的窗口。",
+        "windowSwitcherGrantAccessibility": "授权辅助功能…", "windowSwitcherAccessibilityReady": "辅助功能权限已就绪",
+        "windowSwitcherTestNow": "立即显示窗口切换器", "windowSwitcherNoWindows": "当前没有可切换的窗口。",
+        "windowSwitcherEnabledStatus": "窗口切换：已启用", "windowSwitcherDisabledStatus": "窗口切换：已停用"
     ]
 
     static func value(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
@@ -748,7 +760,15 @@ enum AppText {
             "pipPatchesNoApps": "No supported browser or Electron app was found.", "pipPatchRunning": "Running", "pipPatchRelaunch": "Relaunch with fix", "pipPatchAutoApply": "Keep fixes applied automatically", "pipPatchAutoApplyHint": "When an enabled app starts normally, MacPilot relaunches it once with the off-screen rendering argument. Turn its switch off to stop applying the fix.", "pipPatchFailed": "Could not apply the off-screen rendering fix", "pipPatchDetails": "Details", "pipPatchDetailsBody": "This fix uses an officially supported Chromium/Electron launch argument. A running app must quit before relaunching, so unsaved work could be lost; MacPilot only does this when you click the button or enable automatic application.",
             "pipCustomPatchTitle": "Custom compositor apps", "pipCustomPatchBody": "Firefox, kitty, and Ghostty have no background-rendering launch flag. After backing up the original app, MacPilot can inject an independent lightweight component that makes AppKit report its windows as visible.", "pipCustomPatchNoApps": "No patchable custom-compositor app was found.", "pipCustomPatchWarning": "Patching modifies and re-signs a third-party app, which may make it request Screen Recording, Accessibility, or other permissions again. Quit the target app first. Its original bundle is stored in MacPilot's Application Support folder and can be restored.", "pipPatchInstall": "Install patch", "pipPatchRestore": "Restore original", "pipPatchInstalled": "Patch installed", "pipPatchQuitFirst": "Quit the app first", "pipPatchUpdateDetected": "Update detected; patch can be reinstalled", "pipPatchConfirmTitle": "Modify and re-sign this app?", "pipPatchConfirmBody": "MacPilot will fully back up the original app, inject its off-screen rendering component, and apply an ad-hoc signature. macOS may ask for the app's permissions again.", "pipRestoreConfirmTitle": "Restore the original app?", "pipRestoreConfirmBody": "MacPilot will replace the current app with the complete backup saved before patching. Make sure the target app is not running.", "pipPatchAnotherApp": "Patch another app…", "pipPatchRemoveCustom": "Remove from list", "choose": "Choose",
             "pipPermissionRequired": "Screen Recording permission is required to create a Picture-in-Picture window.", "pipGrantPermission": "Grant Screen Recording…", "pipOpenSettings": "Open Settings",
-            "pipAccessibilityRequired": "Accessibility permission is required to intercept the global shortcut in other apps.", "pipGrantAccessibility": "Grant Accessibility…", "pipOpenAccessibility": "Open Accessibility Settings"
+            "pipAccessibilityRequired": "Accessibility permission is required to intercept the global shortcut in other apps.", "pipGrantAccessibility": "Grant Accessibility…", "pipOpenAccessibility": "Open Accessibility Settings",
+            "windowSwitcher": "Window Switcher", "windowSwitcherTitle": "Window Switcher", "windowSwitcherSubtitle": "Quickly switch between windows across applications with ⌥Tab. Hold Option to keep cycling, then release it to focus the selected window.",
+            "windowSwitcherShortcut": "⌥Tab", "windowSwitcherShortcutHint": "The default shortcut is ⌥Tab. Hold Option and press Tab repeatedly; hold Shift to cycle backwards.",
+            "windowSwitcherIncludeMinimized": "Show minimized windows", "windowSwitcherIncludeHidden": "Show windows from hidden applications",
+            "windowSwitcherShowThumbnails": "Show window thumbnails (requires Screen Recording)", "windowSwitcherShowTitles": "Show window titles",
+            "windowSwitcherAccessibilityRequired": "Accessibility access is required to read and focus windows from other applications.",
+            "windowSwitcherGrantAccessibility": "Grant Accessibility…", "windowSwitcherAccessibilityReady": "Accessibility access is ready",
+            "windowSwitcherTestNow": "Show Window Switcher Now", "windowSwitcherNoWindows": "There are no switchable windows right now.",
+            "windowSwitcherEnabledStatus": "Window Switcher: On", "windowSwitcherDisabledStatus": "Window Switcher: Off"
         ]
 }
 
@@ -771,9 +791,10 @@ final class MacPilotModel: ObservableObject {
         var screenCapture: ScreenCaptureSettings
         var pictureInPicture: PictureInPictureSettings
         var inputSources: InputSourceSettings
+        var windowSwitcher: WindowSwitcherSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings) {
-            version = 10
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings) {
+            version = 11
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -785,6 +806,7 @@ final class MacPilotModel: ObservableObject {
             self.screenCapture = screenCapture
             self.pictureInPicture = pictureInPicture
             self.inputSources = inputSources
+            self.windowSwitcher = windowSwitcher
         }
 
         init(from decoder: Decoder) throws {
@@ -801,6 +823,7 @@ final class MacPilotModel: ObservableObject {
             screenCapture = try container.decodeIfPresent(ScreenCaptureSettings.self, forKey: .screenCapture) ?? ScreenCaptureSettings()
             pictureInPicture = try container.decodeIfPresent(PictureInPictureSettings.self, forKey: .pictureInPicture) ?? PictureInPictureSettings()
             inputSources = try container.decodeIfPresent(InputSourceSettings.self, forKey: .inputSources) ?? InputSourceSettings()
+            windowSwitcher = try container.decodeIfPresent(WindowSwitcherSettings.self, forKey: .windowSwitcher) ?? WindowSwitcherSettings()
         }
     }
 
@@ -815,13 +838,14 @@ final class MacPilotModel: ObservableObject {
     @Published private(set) var isResettingAccessibility = false
     @Published private(set) var isResettingScreenCapture = false
     @Published private(set) var launchesAtLogin = false
-    @Published var language: AppLanguage = .system { didSet { saveIfReady() } }
+    @Published var language: AppLanguage = .system { didSet { windowSwitcher.language = language; saveIfReady() } }
     let ble = BLEUnlockModel()
     let updater = SoftwareUpdater()
     let fileCompression = FolderCompressionModel()
     let screenCapture = ScreenCaptureModel()
     let pictureInPicture = PictureInPictureModel()
     let inputSources = InputSourceModel()
+    let windowSwitcher = WindowSwitcherModel()
     @Published var requestedSection: MainSection?
     private var launchTasks: [UUID: Task<Void, Never>] = [:]
     private let launchGate = LaunchGate(minimumStartInterval: 3)
@@ -831,11 +855,16 @@ final class MacPilotModel: ObservableObject {
     private var quitTasks: [UUID: Task<Void, Never>] = [:]
     private var quitWakeDeadlines: [UUID: Date] = [:]
     private var safetyCheckTask: Task<Void, Never>?
+    private var inputSourceSaveTask: Task<Void, Never>?
     private var workspaceObservers: [NSObjectProtocol] = []
     private var lastScheduledBootSession: String?
     private var isLoading = false
     private let configurationURL: URL
     private let legacyConfigurationURLs: [URL]
+    private let configurationWriteQueue = DispatchQueue(
+        label: "com.misswell.macpilot.configuration-write",
+        qos: .utility
+    )
 
     private static let legacyUserDefaultsSources: [(suiteName: String, rulesKey: String, enforcementKey: String, languageKey: String)] = [
         ("com.octoqit.app", "OctoQuit.rules.v2", "OctoQuit.enforcing", "OctoQuit.language"),
@@ -860,13 +889,16 @@ final class MacPilotModel: ObservableObject {
         fileCompression.persist = { [weak self] in self?.saveIfReady() }
         screenCapture.persist = { [weak self] in self?.saveIfReady() }
         pictureInPicture.persist = { [weak self] in self?.saveIfReady() }
-        inputSources.persist = { [weak self] in self?.saveIfReady() }
+        inputSources.persist = { [weak self] in self?.scheduleInputSourceSave() }
+        windowSwitcher.persist = { [weak self] in self?.saveIfReady() }
+        windowSwitcher.language = language
         ble.startObservingSystemState()
         ble.activateFromConfiguration()
         fileCompression.activateFromConfiguration()
         screenCapture.activateFromConfiguration()
         pictureInPicture.activateFromConfiguration()
         inputSources.activateFromConfiguration()
+        windowSwitcher.activateFromConfiguration()
         Task { [weak updater] in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
@@ -1489,6 +1521,22 @@ final class MacPilotModel: ObservableObject {
         screenCapture.applyLoadedSettings(configuration.screenCapture)
         pictureInPicture.applyLoadedSettings(configuration.pictureInPicture)
         inputSources.applyLoadedSettings(configuration.inputSources)
+        windowSwitcher.applyLoadedSettings(configuration.windowSwitcher)
+    }
+
+    private func scheduleInputSourceSave() {
+        guard !isLoading else { return }
+        inputSourceSaveTask?.cancel()
+        inputSourceSaveTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(300))
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.inputSourceSaveTask = nil
+            self.save()
+        }
     }
 
     private func save() {
@@ -1503,16 +1551,32 @@ final class MacPilotModel: ObservableObject {
             fileCompression: fileCompression.settings,
             screenCapture: screenCapture.settings,
             pictureInPicture: pictureInPicture.settings,
-            inputSources: inputSources.settings
+            inputSources: inputSources.settings,
+            windowSwitcher: windowSwitcher.settings
         )
+        let data: Data
         do {
-            let directory = configurationURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(configuration).write(to: configurationURL, options: .atomic)
+            data = try encoder.encode(configuration)
         } catch {
             showAlert(t("configSaveError", error.localizedDescription))
+            return
+        }
+
+        let configurationURL = self.configurationURL
+        configurationWriteQueue.async { [weak self] in
+            do {
+                let directory = configurationURL.deletingLastPathComponent()
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try data.write(to: configurationURL, options: .atomic)
+            } catch {
+                let errorDescription = error.localizedDescription
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.showAlert(self.t("configSaveError", errorDescription))
+                }
+            }
         }
     }
 
@@ -1723,7 +1787,7 @@ final class MacPilotModel: ObservableObject {
     var timeString: String { lastChecked.formatted(.dateTime.hour().minute().locale(language.locale)) }
 }
 
-enum MainSection { case exit, launch, ble, inputSources, compression, capture, pictureInPicture, settings }
+enum MainSection { case exit, launch, ble, inputSources, compression, capture, pictureInPicture, windowSwitcher, settings }
 
 struct ContentView: View {
     @EnvironmentObject private var model: MacPilotModel
@@ -1755,6 +1819,9 @@ struct ContentView: View {
                     ScreenCaptureView(capture: model.screenCapture)
                 } else if section == .pictureInPicture {
                     PictureInPictureView(pictureInPicture: model.pictureInPicture)
+                } else if section == .windowSwitcher {
+                    WindowSwitcherSettingsView(windowSwitcher: model.windowSwitcher)
+                        .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
                 } else {
                     SettingsView()
                 }
@@ -1935,6 +2002,15 @@ struct Sidebar: View {
             }
             .buttonStyle(.plain)
             .background(section == .pictureInPicture ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            Button { section = .windowSwitcher } label: {
+                Label(model.t("windowSwitcher"), systemImage: "rectangle.on.rectangle")
+                    .padding(.vertical, 9).padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(section == .windowSwitcher ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             Button { section = .settings } label: {
                 Label(model.t("settings"), systemImage: "gearshape")
@@ -2981,10 +3057,16 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @ObservedObject var pictureInPicture: PictureInPictureModel
     @ObservedObject var inputSources: InputSourceModel
+    @ObservedObject var windowSwitcher: WindowSwitcherModel
 
-    init(pictureInPicture: PictureInPictureModel, inputSources: InputSourceModel = InputSourceModel()) {
+    init(
+        pictureInPicture: PictureInPictureModel,
+        inputSources: InputSourceModel = InputSourceModel(),
+        windowSwitcher: WindowSwitcherModel = WindowSwitcherModel()
+    ) {
         self._pictureInPicture = ObservedObject(wrappedValue: pictureInPicture)
         self._inputSources = ObservedObject(wrappedValue: inputSources)
+        self._windowSwitcher = ObservedObject(wrappedValue: windowSwitcher)
     }
 
     var body: some View {
@@ -3019,6 +3101,12 @@ struct MenuBarView: View {
         Button(model.t("inputSourcesCycleNow")) { inputSources.cycleInputSource() }
             .disabled(!inputSources.settings.isEnabled || inputSources.availableSources.count < 2)
         Button(model.t("inputSources")) { model.requestedSection = .inputSources; showMainWindow() }
+        Divider()
+        Toggle(windowSwitcher.settings.isEnabled ? model.t("windowSwitcherEnabledStatus") : model.t("windowSwitcherDisabledStatus"),
+               isOn: Binding(get: { windowSwitcher.settings.isEnabled }, set: { windowSwitcher.setEnabled($0) }))
+        Button(model.t("windowSwitcherTestNow")) { windowSwitcher.showSwitcherNow() }
+            .disabled(!windowSwitcher.settings.isEnabled || !windowSwitcher.hasAccessibilityPermission)
+        Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
         if pictureInPicture.settings.showMenuBarIcon {
             Divider()
             Toggle(pictureInPicture.settings.isEnabled ? model.t("pipEnabledStatus") : model.t("pipDisabledStatus"),

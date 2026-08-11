@@ -164,6 +164,29 @@ enum InputSourceBrowserRuleType: String, CaseIterable, Codable, Identifiable, Se
     var id: Self { self }
 }
 
+private final class MacPilotInputSourceRegexCache: @unchecked Sendable {
+    static let shared = MacPilotInputSourceRegexCache()
+
+    private let cache: NSCache<NSString, NSRegularExpression>
+
+    private init() {
+        cache = NSCache<NSString, NSRegularExpression>()
+        cache.countLimit = 128
+    }
+
+    func expression(for pattern: String) -> NSRegularExpression? {
+        let key = pattern as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        cache.setObject(expression, forKey: key)
+        return expression
+    }
+}
+
 struct InputSourceBrowserRule: Codable, Equatable, Hashable, Identifiable, Sendable {
     var id = UUID()
     var browserBundleIdentifier: String?
@@ -208,11 +231,12 @@ struct InputSourceBrowserRule: Codable, Equatable, Hashable, Identifiable, Senda
             else { return false }
             return host == expected
         case .urlRegex:
-            guard let expression = try? NSRegularExpression(pattern: value, options: [.caseInsensitive]) else {
+            guard let expression = MacPilotInputSourceRegexCache.shared.expression(for: value) else {
                 return false
             }
-            let range = NSRange(location: 0, length: url.absoluteString.utf16.count)
-            return expression.firstMatch(in: url.absoluteString, options: [], range: range) != nil
+            let absoluteString = url.absoluteString
+            let range = NSRange(location: 0, length: absoluteString.utf16.count)
+            return expression.firstMatch(in: absoluteString, options: [], range: range) != nil
         }
     }
 
@@ -391,7 +415,16 @@ enum MacPilotBrowserURLResolver {
               browserBundleIdentifiers.contains(bundleIdentifier)
         else { return nil }
 
-        let appElement = AXUIElementCreateApplication(application.processIdentifier)
+        return currentURL(
+            processIdentifier: application.processIdentifier,
+            bundleIdentifier: bundleIdentifier
+        )
+    }
+
+    static func currentURL(processIdentifier: pid_t, bundleIdentifier: String) -> URL? {
+        guard browserBundleIdentifiers.contains(bundleIdentifier) else { return nil }
+
+        let appElement = AXUIElementCreateApplication(processIdentifier)
         var focusedElementValue: CFTypeRef?
         if AXUIElementCopyAttributeValue(
             appElement,
@@ -718,6 +751,10 @@ final class InputSourceModel: ObservableObject {
     private var eventTapSource: CFRunLoopSource?
     private var eventTapContext: InputSourceEventTapContext?
 
+    private var hasEnabledBrowserRules: Bool {
+        settings.browserRules.contains { $0.isEnabled }
+    }
+
     init() {
         refreshSources()
         currentSource = MacPilotInputSourceCatalog.current()
@@ -728,7 +765,7 @@ final class InputSourceModel: ObservableObject {
         if isActive {
             refreshSources()
             refreshEventTap()
-            if settings.isEnabled { startBrowserPolling() } else { stopBrowserPolling() }
+            refreshBrowserPolling()
             evaluateCurrentApplication()
         }
     }
@@ -741,7 +778,7 @@ final class InputSourceModel: ObservableObject {
         refreshSources()
         installObservers()
         refreshEventTap()
-        if settings.isEnabled { startBrowserPolling() }
+        refreshBrowserPolling()
         evaluateCurrentApplication()
     }
 
@@ -756,7 +793,7 @@ final class InputSourceModel: ObservableObject {
         if enabled {
             refreshSources()
             refreshEventTap()
-            startBrowserPolling()
+            refreshBrowserPolling()
             evaluateCurrentApplication()
         } else {
             stopBrowserPolling()
@@ -924,6 +961,7 @@ final class InputSourceModel: ObservableObject {
     func addBrowserRule(_ rule: InputSourceBrowserRule) {
         guard !rule.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         settings.browserRules.append(rule)
+        refreshBrowserPolling()
         persist?()
         if settings.isEnabled { evaluateCurrentApplication() }
     }
@@ -931,12 +969,14 @@ final class InputSourceModel: ObservableObject {
     func updateBrowserRule(_ rule: InputSourceBrowserRule) {
         guard let index = settings.browserRules.firstIndex(where: { $0.id == rule.id }) else { return }
         settings.browserRules[index] = rule
+        refreshBrowserPolling()
         persist?()
         if settings.isEnabled { evaluateCurrentApplication() }
     }
 
     func removeBrowserRule(_ rule: InputSourceBrowserRule) {
         settings.browserRules.removeAll { $0.id == rule.id }
+        refreshBrowserPolling()
         persist?()
         if settings.isEnabled { evaluateCurrentApplication() }
     }
@@ -983,6 +1023,14 @@ final class InputSourceModel: ObservableObject {
         })
     }
 
+    private func refreshBrowserPolling() {
+        guard isActive, settings.isEnabled, hasEnabledBrowserRules else {
+            stopBrowserPolling()
+            return
+        }
+        startBrowserPolling()
+    }
+
     private func startBrowserPolling() {
         guard browserPollingTask == nil else { return }
         lastBrowserPollingSignature = nil
@@ -993,19 +1041,29 @@ final class InputSourceModel: ObservableObject {
                 } catch {
                     return
                 }
-                guard !Task.isCancelled, let self, self.isActive, self.settings.isEnabled,
+                guard !Task.isCancelled else { return }
+                guard let self else { return }
+                guard self.isActive, self.settings.isEnabled, self.hasEnabledBrowserRules,
                       let application = NSWorkspace.shared.frontmostApplication,
                       let bundleIdentifier = application.bundleIdentifier,
                       MacPilotBrowserURLResolver.browserBundleIdentifiers.contains(bundleIdentifier)
                 else { continue }
-                let url = MacPilotBrowserURLResolver.currentURL(for: application)
+
+                let processIdentifier = application.processIdentifier
+                let url = await Task.detached(priority: .utility) {
+                    MacPilotBrowserURLResolver.currentURL(
+                        processIdentifier: processIdentifier,
+                        bundleIdentifier: bundleIdentifier
+                    )
+                }.value
+                guard !Task.isCancelled else { return }
                 let signature = "\(bundleIdentifier)|\(url?.absoluteString ?? "")"
                 let needsEventTap = self.settings.globalShortcutEnabled
                     || !self.settings.shortcuts.isEmpty
                     || self.settings.appRules.contains(where: { $0.forceEnglishPunctuation })
                 guard signature != self.lastBrowserPollingSignature || (needsEventTap && self.eventTap == nil) else { continue }
                 self.lastBrowserPollingSignature = signature
-                self.evaluateApplication(application)
+                self.evaluateApplication(application, knownBrowserURL: url, browserURLWasResolved: true)
             }
         }
     }
@@ -1028,19 +1086,32 @@ final class InputSourceModel: ObservableObject {
         evaluateApplication(NSWorkspace.shared.frontmostApplication)
     }
 
-    private func evaluateApplication(_ application: NSRunningApplication?) {
+    private func evaluateApplication(
+        _ application: NSRunningApplication?,
+        knownBrowserURL: URL? = nil,
+        browserURLWasResolved: Bool = false
+    ) {
         currentSource = MacPilotInputSourceCatalog.current() ?? currentSource
         activeApplicationName = application?.localizedName
-        if let application,
-           let bundleIdentifier = application.bundleIdentifier,
-           MacPilotBrowserURLResolver.browserBundleIdentifiers.contains(bundleIdentifier) {
-            let url = MacPilotBrowserURLResolver.currentURL(for: application)
-            lastBrowserPollingSignature = "\(bundleIdentifier)|\(url?.absoluteString ?? "")"
+        let bundleIdentifier = application?.bundleIdentifier
+        let isBrowser = bundleIdentifier.map {
+            MacPilotBrowserURLResolver.browserBundleIdentifiers.contains($0)
+        } == true
+        let shouldResolveBrowserURL = settings.isEnabled && hasEnabledBrowserRules && isBrowser
+        let browserURL: URL?
+        if shouldResolveBrowserURL {
+            browserURL = browserURLWasResolved
+                ? knownBrowserURL
+                : application.flatMap { MacPilotBrowserURLResolver.currentURL(for: $0) }
+            lastBrowserPollingSignature = "\(bundleIdentifier ?? "")|\(browserURL?.absoluteString ?? "")"
+        } else {
+            browserURL = nil
+            lastBrowserPollingSignature = nil
         }
         if settings.isEnabled, eventTap == nil {
             refreshEventTap()
         }
-        guard settings.isEnabled, let application else {
+        guard settings.isEnabled, application != nil else {
             activeRuleIdentifier = nil
             activeBrowserRuleIdentifier = nil
             eventTapContext?.update(
@@ -1051,8 +1122,6 @@ final class InputSourceModel: ObservableObject {
             return
         }
 
-        let bundleIdentifier = application.bundleIdentifier
-        let browserURL = MacPilotBrowserURLResolver.currentURL(for: application)
         let appRule = InputSourceRuleEngine.appRule(bundleIdentifier: bundleIdentifier, rules: settings.appRules)
         let browserRule = InputSourceRuleEngine.browserRule(url: browserURL, bundleIdentifier: bundleIdentifier, rules: settings.browserRules)
         activeRuleIdentifier = appRule?.id

@@ -149,3 +149,14 @@ Pipiri 本身没有公开源码。研究其官网、DMG 元数据、可观察行
 - 规则层、域名边界、URL 正则、配置兼容解码和输入模式标识符都有 Swift Testing 覆盖。
 
 实现基于 macOS Carbon、Accessibility、Core Graphics 和 IOKit 的独立代码，没有复制或打包 Input Source Pro（GPL-3.0）的源码、Core Data 模型或第三方依赖。全局快捷键和英文标点需要辅助功能权限；没有权限时，规则自动切换和手动菜单操作仍可使用。
+
+## 十四、窗口切换器
+
+新增 `Sources/MacPilot/WindowSwitcher.swift`，参考 alt-tab-macos 的交互方式实现独立窗口切换功能：
+
+- 默认使用 `⌥Tab` 呼出窗口切换器；按住 Option 连续按 Tab 前进，`Shift+Tab` 后退，松开 Option 聚焦当前选中的窗口，支持 Escape 取消。
+- 使用 Accessibility 读取真实窗口对象并通过 WindowServer 顺序显示应用窗口；支持最小化/隐藏应用筛选、应用图标和可用时的窗口缩略图，聚焦时会恢复最小化窗口并提升目标窗口。
+- 接入菜单栏、主窗口侧边栏和设置页；配置并入 `config.json`，版本升至 11，旧配置缺少窗口切换字段时使用安全默认值。
+- 全局按键拦截需要辅助功能权限；缩略图依赖屏幕录制权限，权限不可用时自动回退到应用图标。
+
+alt-tab-macos 使用 GPL-3.0 授权，MacPilot 只参考其公开行为和架构思路，未复制或链接其源码。
