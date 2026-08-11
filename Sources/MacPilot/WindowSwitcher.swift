@@ -148,6 +148,11 @@ private struct WindowSwitcherServerRecord {
     let isOnScreen: Bool
 }
 
+private struct WindowSwitcherServerScan {
+    let records: [WindowSwitcherServerRecord]
+    let signature: Int
+}
+
 private struct WindowSwitcherAXAttributes {
     let role: String?
     let title: String
@@ -159,9 +164,9 @@ private enum WindowSwitcherInventory {
     static func snapshot(
         settings: WindowSwitcherSettings,
         frontmostProcessID: pid_t?,
-        recentProcessIDs: [pid_t]
+        recentProcessIDs: [pid_t],
+        serverRecords: [WindowSwitcherServerRecord]
     ) -> [WindowSwitcherItem] {
-        let serverRecords = windowServerRecords()
         let recordsByProcess = Dictionary(grouping: serverRecords, by: \.processID)
         let applications = NSWorkspace.shared.runningApplications.filter { application in
             guard application.processIdentifier != getpid(), !application.isTerminated else { return false }
@@ -258,9 +263,10 @@ private enum WindowSwitcherInventory {
         return result
     }
 
-    static func windowServerSignature() -> Int {
+    static func scanWindowServer() -> WindowSwitcherServerScan {
+        let records = windowServerRecords()
         var hasher = Hasher()
-        for record in windowServerRecords() {
+        for record in records {
             hasher.combine(record.windowID)
             hasher.combine(record.processID)
             hasher.combine(record.title)
@@ -270,7 +276,7 @@ private enum WindowSwitcherInventory {
             hasher.combine(Int(record.frame.width.rounded()))
             hasher.combine(Int(record.frame.height.rounded()))
         }
-        return hasher.finalize()
+        return WindowSwitcherServerScan(records: records, signature: hasher.finalize())
     }
 
     private static func makeItem(
@@ -576,6 +582,7 @@ private struct WindowSwitcherInventoryRefresh: Sendable {
 
 @MainActor
 final class WindowSwitcherModel: ObservableObject {
+    private static let inventoryRefreshDebounce = Duration.milliseconds(200)
     private static let performanceLogger = Logger(
         subsystem: "com.misswell.macpilot",
         category: "WindowSwitcherPerformance"
@@ -598,6 +605,7 @@ final class WindowSwitcherModel: ObservableObject {
     private var recentProcessIDs: [pid_t] = []
     private var cachedWindows: [WindowSwitcherItem] = []
     private var inventoryTask: Task<Void, Never>?
+    private var inventoryRefreshDebounceTask: Task<Void, Never>?
     private var inventoryRevision = 0
     private var inventorySignature: Int?
     private var pendingSession: WindowSwitcherPendingSession?
@@ -644,6 +652,8 @@ final class WindowSwitcherModel: ObservableObject {
         } else {
             cancelSession()
             cancelPendingSession()
+            inventoryRefreshDebounceTask?.cancel()
+            inventoryRefreshDebounceTask = nil
             removeEventTap()
         }
         persist?()
@@ -820,7 +830,6 @@ final class WindowSwitcherModel: ObservableObject {
             startedAt: startedAt,
             cacheHit: true
         )
-        requestInventoryRefresh(priority: .utility)
         return true
     }
 
@@ -844,9 +853,7 @@ final class WindowSwitcherModel: ObservableObject {
             count: snapshot.count,
             offset: additionalSelectionOffset
         ) ?? initialIndex
-        objectWillChange.send()
-        windows = snapshot
-        selectedIndex = resolvedIndex
+        updatePanelContents(snapshot, selectedIndex: resolvedIndex)
         isManualSession = manual
         isShowing = true
         panelController = panelController ?? WindowSwitcherPanelController(model: self)
@@ -871,6 +878,19 @@ final class WindowSwitcherModel: ObservableObject {
         ) else { return }
         objectWillChange.send()
         selectedIndex = next
+    }
+
+    @discardableResult
+    private func updatePanelContents(
+        _ items: [WindowSwitcherItem],
+        selectedIndex: Int
+    ) -> Bool {
+        let itemsChanged = !windows.elementsEqual(items, by: { $0 === $1 })
+        guard self.selectedIndex != selectedIndex || itemsChanged else { return false }
+        objectWillChange.send()
+        windows = items
+        self.selectedIndex = selectedIndex
+        return true
     }
 
     private func finishSession(commit: Bool) {
@@ -956,11 +976,29 @@ final class WindowSwitcherModel: ObservableObject {
     private func requestInventoryRefresh(priority: TaskPriority) {
         guard isActive, settings.isEnabled, hasAccessibilityPermission else { return }
         inventoryRevision += 1
+        scheduleInventoryRefresh(priority: priority)
+    }
+
+    private func scheduleInventoryRefresh(priority: TaskPriority) {
         guard inventoryTask == nil else { return }
-        startInventoryRefresh(priority: priority)
+        inventoryRefreshDebounceTask?.cancel()
+        inventoryRefreshDebounceTask = nil
+        if priority == .userInitiated {
+            startInventoryRefresh(priority: priority)
+            return
+        }
+        inventoryRefreshDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.inventoryRefreshDebounce)
+            guard !Task.isCancelled, let self else { return }
+            self.inventoryRefreshDebounceTask = nil
+            guard self.inventoryTask == nil else { return }
+            self.startInventoryRefresh(priority: priority)
+        }
     }
 
     private func startInventoryRefresh(priority: TaskPriority) {
+        inventoryRefreshDebounceTask?.cancel()
+        inventoryRefreshDebounceTask = nil
         let revision = inventoryRevision
         let settings = settings
         let frontmostProcessID = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -970,14 +1008,16 @@ final class WindowSwitcherModel: ObservableObject {
         let startedAt = CFAbsoluteTimeGetCurrent()
         inventoryTask = Task { @MainActor [weak self] in
             let refresh = await Task.detached(priority: priority) {
-                let signature = WindowSwitcherInventory.windowServerSignature()
+                let serverScan = WindowSwitcherInventory.scanWindowServer()
+                let signature = serverScan.signature
                 if hasCachedWindows, signature == previousSignature {
                     return WindowSwitcherInventoryRefresh(snapshot: nil, signature: signature)
                 }
                 let snapshot = WindowSwitcherInventory.snapshot(
                     settings: settings,
                     frontmostProcessID: frontmostProcessID,
-                    recentProcessIDs: recentProcessIDs
+                    recentProcessIDs: recentProcessIDs,
+                    serverRecords: serverScan.records
                 )
                 return WindowSwitcherInventoryRefresh(snapshot: snapshot, signature: signature)
             }.value
@@ -1001,7 +1041,7 @@ final class WindowSwitcherModel: ObservableObject {
                 }
             }
             if revision != self.inventoryRevision || !settingsStillMatch {
-                self.startInventoryRefresh(priority: self.pendingSession == nil ? .utility : .userInitiated)
+                self.scheduleInventoryRefresh(priority: self.pendingSession == nil ? .utility : .userInitiated)
                 return
             }
             self.prepareHiddenPanelContents()
@@ -1082,9 +1122,9 @@ final class WindowSwitcherModel: ObservableObject {
             currentIndex: currentIndex,
             reverse: false
         ) ?? 0
-        objectWillChange.send()
-        windows = ordered
-        selectedIndex = preparedSelection
+        if updatePanelContents(ordered, selectedIndex: preparedSelection) {
+            panelController?.layoutIfNeeded()
+        }
     }
 
     private func prewarmThumbnails() {
@@ -1209,13 +1249,29 @@ private final class WindowSwitcherPanelController {
 
     func prepare() {
         guard panel == nil, let model else { return }
-        panel = makePanel(model: model)
+        let panel = makePanel(model: model)
+        self.panel = panel
+        updateFrame(of: panel)
+        panel.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    func layoutIfNeeded() {
+        panel?.contentView?.layoutSubtreeIfNeeded()
     }
 
     func show() {
         guard let model else { return }
         let panel = self.panel ?? makePanel(model: model)
         self.panel = panel
+        updateFrame(of: panel)
+        panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
+    }
+
+    private func updateFrame(of panel: WindowSwitcherPanel) {
         let screen = NSScreen.main ?? NSScreen.screens.first
         let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
         let size = NSSize(width: min(940, max(620, visibleFrame.width - 80)), height: 220)
@@ -1228,11 +1284,6 @@ private final class WindowSwitcherPanelController {
         if panel.frame != targetFrame {
             panel.setFrame(targetFrame, display: false)
         }
-        panel.orderFrontRegardless()
-    }
-
-    func hide() {
-        panel?.orderOut(nil)
     }
 
     private func makePanel(model: WindowSwitcherModel) -> WindowSwitcherPanel {
