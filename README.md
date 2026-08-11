@@ -30,6 +30,17 @@ Open **BLE Unlock** from the sidebar (or the menu-bar menu) and:
 
 Bluetooth and Accessibility access are required. Devices whose BLE MAC address rotates (most non-Apple devices) cannot be tracked reliably.
 
+## Input Source Automation
+
+The **Input Sources** sidebar brings the core Input Source Pro workflow into MacPilot:
+
+- Enumerate and select macOS keyboard input sources with Carbon, then switch automatically by application or browser domain/URL rules.
+- Show an on-screen indicator near the cursor or in the center of the screen, and cycle sources from the menu bar.
+- Force English punctuation and switch between standard function keys and media keys per application.
+- Use `⌥⌘I` as the global cycle shortcut, or record custom combinations for individual input sources. Accessibility access is required in other apps; settings are persisted with the rest of `config.json`.
+
+This feature is an independent implementation using macOS Carbon, Accessibility, Core Graphics, and IOKit APIs; it does not bundle Input Source Pro source code or third-party dependencies.
+
 ## Storage Compression
 
 The **Storage Compression** sidebar scans a folder for stable text-based files and uses macOS filesystem compression to reduce their physical disk usage without changing their logical contents. Choose extensions, a minimum file size, a stability period, and a minimum savings threshold; then scan and compress manually or enable a five-minute periodic scan.

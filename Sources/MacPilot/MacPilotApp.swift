@@ -18,7 +18,7 @@ struct MacPilotApp: App {
         .windowStyle(.hiddenTitleBar)
 
         MenuBarExtra {
-            MenuBarView(pictureInPicture: model.pictureInPicture).environmentObject(model)
+            MenuBarView(pictureInPicture: model.pictureInPicture, inputSources: model.inputSources).environmentObject(model)
         } label: {
             Image(systemName: model.isEnforcing ? "timer" : "pause.circle")
         }
@@ -430,6 +430,32 @@ enum AppText {
         "bleNoPassword": "未设置密码", "blePasswordSet": "密码已保存",
         "bleAccessRequired": "BLE 解锁需要辅助功能权限来模拟键盘解锁并锁定屏幕。当前应用：%@", "bleBluetoothRequired": "需要蓝牙权限才能扫描 BLE 设备。",
         "bleNoDevicesFound": "未发现附近 BLE 设备。",
+        "inputSources": "输入法", "inputSourcesSubtitle": "按应用或浏览器网站自动切换 macOS 输入法，并显示切换提示。",
+        "inputSourcesEnable": "启用输入法自动化", "inputSourcesEnabled": "输入法规则正在运行", "inputSourcesDisabled": "输入法规则已停用",
+        "inputSourcesEnabledStatus": "输入法：已启用", "inputSourcesDisabledStatus": "输入法：已停用", "inputSourcesCycleNow": "切换到下一个输入法",
+        "inputSourcesUnavailable": "没有找到可切换的键盘输入源。", "inputSourcesCurrent": "当前输入法", "inputSourcesNotDetected": "尚未检测到输入法",
+        "inputSourcesActiveApp": "当前应用：%@", "refresh": "刷新", "inputSourcesDefault": "默认输入法",
+        "inputSourcesDefaultHint": "没有匹配到应用或网站规则时使用此输入法；留空则保留系统当前选择。", "inputSourcesNoDefault": "不自动切换",
+        "inputSourcesIndicator": "屏幕提示", "inputSourcesShowIndicator": "切换时显示输入法提示", "inputSourcesIndicatorPosition": "提示位置",
+        "inputSourcesNearCursor": "鼠标附近", "inputSourcesScreenCenter": "屏幕中央", "inputSourcesIndicatorDuration": "显示时长",
+        "inputSourcesShortcuts": "快捷键", "inputSourcesCycleShortcut": "启用全局切换快捷键",
+        "inputSourcesCycleShortcutHint": "按 ⌥⌘I 切换到下一个可用输入法。全局快捷键需要辅助功能权限。",
+        "inputSourcesCustomShortcuts": "自定义输入法快捷键", "inputSourcesAddShortcut": "添加快捷键",
+        "inputSourcesNoShortcuts": "尚未配置直接切换快捷键。", "inputSourcesShortcutHint": "按下带修饰键的组合键来记录快捷键，例如 ⌥⌘1。相同组合键只保留最后一条。",
+        "inputSourcesRecordShortcut": "按下快捷键…",
+        "inputSourcesAccessibilityRequired": "需要辅助功能权限才能在其他应用中监听快捷键。", "inputSourcesGrantAccessibility": "授权辅助功能…",
+        "inputSourcesAppRules": "应用规则", "inputSourcesAppRulesHint": "为每个应用指定输入法，也可以强制使用英文标点或功能键模式。",
+        "inputSourcesNoAppRules": "尚未添加应用规则。", "inputSourcesBrowserRules": "浏览器网站规则",
+        "inputSourcesBrowserRulesHint": "在 Safari、Chrome、Firefox 等浏览器中按域名或 URL 自动切换。",
+        "inputSourcesNoBrowserRules": "尚未添加浏览器网站规则。", "inputSourcesEnglishPunctuation": "强制英文标点",
+        "inputSourcesFunctionKeys": "标准功能键 F1–F12", "inputSourcesMediaKeys": "媒体键（亮度、音量等）",
+        "inputSourcesAddAppRule": "添加应用输入法规则", "inputSourcesEditAppRule": "编辑应用输入法规则",
+        "inputSourcesChooseApp": "选择应用", "inputSourcesTarget": "目标输入法", "inputSourcesFunctionKeyMode": "功能键模式",
+        "inputSourcesUseSystemDefault": "使用系统默认", "inputSourcesAddBrowserRule": "添加浏览器网站规则",
+        "inputSourcesEditBrowserRule": "编辑浏览器网站规则", "inputSourcesBrowser": "浏览器",
+        "inputSourcesAnyBrowser": "所有支持的浏览器", "inputSourcesRuleType": "匹配类型",
+        "inputSourcesDomainSuffix": "域名后缀", "inputSourcesDomain": "精确域名", "inputSourcesURLRegex": "URL 正则",
+        "inputSourcesRuleValue": "域名或 URL 模式",
         "bleSortBy": "排序", "bleSortAdded": "加载顺序", "bleSortName": "名称", "bleSortSignal": "信号",
         "softwareUpdate": "软件更新", "updateDescription": "从 GitHub Releases 检查经过签名和 Apple 公证的新版本。",
         "checkForUpdates": "检查更新…", "checkingForUpdates": "正在检查更新…", "upToDate": "已是最新版本。",
@@ -612,6 +638,32 @@ enum AppText {
             "bleNoPassword": "No password set", "blePasswordSet": "Password saved",
             "bleAccessRequired": "BLE Unlock needs Accessibility access to simulate keystrokes for unlocking and to lock the screen. Current app: %@", "bleBluetoothRequired": "Bluetooth permission is required to scan for BLE devices.",
             "bleNoDevicesFound": "No nearby BLE devices found.",
+            "inputSources": "Input Sources", "inputSourcesSubtitle": "Automatically switch macOS input sources by app or browser website, with a visual indicator.",
+            "inputSourcesEnable": "Enable input source automation", "inputSourcesEnabled": "Input source rules are running", "inputSourcesDisabled": "Input source rules are paused",
+            "inputSourcesEnabledStatus": "Input Sources: On", "inputSourcesDisabledStatus": "Input Sources: Off", "inputSourcesCycleNow": "Switch to Next Input Source",
+            "inputSourcesUnavailable": "No selectable keyboard input sources were found.", "inputSourcesCurrent": "Current Input Source", "inputSourcesNotDetected": "Input source not detected",
+            "inputSourcesActiveApp": "Active app: %@", "refresh": "Refresh", "inputSourcesDefault": "Default Input Source",
+            "inputSourcesDefaultHint": "Used when no app or website rule matches. Leave it empty to keep the system selection.", "inputSourcesNoDefault": "Do not switch automatically",
+            "inputSourcesIndicator": "On-screen Indicator", "inputSourcesShowIndicator": "Show an indicator when switching", "inputSourcesIndicatorPosition": "Indicator position",
+            "inputSourcesNearCursor": "Near cursor", "inputSourcesScreenCenter": "Screen center", "inputSourcesIndicatorDuration": "Display duration",
+            "inputSourcesShortcuts": "Shortcuts", "inputSourcesCycleShortcut": "Enable global cycle shortcut",
+            "inputSourcesCycleShortcutHint": "Press ⌥⌘I to switch to the next available input source. Accessibility access is required outside MacPilot.",
+            "inputSourcesCustomShortcuts": "Custom input source shortcuts", "inputSourcesAddShortcut": "Add Shortcut",
+            "inputSourcesNoShortcuts": "No direct-switch shortcuts configured yet.", "inputSourcesShortcutHint": "Press a modified key combination to record it, such as ⌥⌘1. Duplicate combinations keep the last binding.",
+            "inputSourcesRecordShortcut": "Press a shortcut…",
+            "inputSourcesAccessibilityRequired": "Accessibility access is required to listen for shortcuts in other apps.", "inputSourcesGrantAccessibility": "Grant Accessibility…",
+            "inputSourcesAppRules": "Application Rules", "inputSourcesAppRulesHint": "Choose an input source for each app, with optional English punctuation and function-key overrides.",
+            "inputSourcesNoAppRules": "No application rules yet.", "inputSourcesBrowserRules": "Browser Website Rules",
+            "inputSourcesBrowserRulesHint": "Switch automatically by domain or URL in Safari, Chrome, Firefox, and other supported browsers.",
+            "inputSourcesNoBrowserRules": "No browser website rules yet.", "inputSourcesEnglishPunctuation": "Force English punctuation",
+            "inputSourcesFunctionKeys": "Standard Function Keys F1–F12", "inputSourcesMediaKeys": "Media Keys (brightness, volume, etc.)",
+            "inputSourcesAddAppRule": "Add Application Input Source Rule", "inputSourcesEditAppRule": "Edit Application Input Source Rule",
+            "inputSourcesChooseApp": "Choose an application", "inputSourcesTarget": "Target input source", "inputSourcesFunctionKeyMode": "Function-key mode",
+            "inputSourcesUseSystemDefault": "Use system default", "inputSourcesAddBrowserRule": "Add Browser Website Rule",
+            "inputSourcesEditBrowserRule": "Edit Browser Website Rule", "inputSourcesBrowser": "Browser",
+            "inputSourcesAnyBrowser": "All supported browsers", "inputSourcesRuleType": "Match type",
+            "inputSourcesDomainSuffix": "Domain suffix", "inputSourcesDomain": "Exact domain", "inputSourcesURLRegex": "URL regex",
+            "inputSourcesRuleValue": "Domain or URL pattern",
             "bleSortBy": "Sort", "bleSortAdded": "Added", "bleSortName": "Name", "bleSortSignal": "Signal",
             "softwareUpdate": "Software Update", "updateDescription": "Check GitHub Releases for versions signed and notarized by Apple.",
             "checkForUpdates": "Check for Updates…", "checkingForUpdates": "Checking for updates…", "upToDate": "MacPilot is up to date.",
@@ -718,9 +770,10 @@ final class MacPilotModel: ObservableObject {
 
         var screenCapture: ScreenCaptureSettings
         var pictureInPicture: PictureInPictureSettings
+        var inputSources: InputSourceSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, pictureInPicture: PictureInPictureSettings) {
-            version = 9
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings) {
+            version = 10
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -731,6 +784,7 @@ final class MacPilotModel: ObservableObject {
             self.fileCompression = fileCompression
             self.screenCapture = screenCapture
             self.pictureInPicture = pictureInPicture
+            self.inputSources = inputSources
         }
 
         init(from decoder: Decoder) throws {
@@ -746,6 +800,7 @@ final class MacPilotModel: ObservableObject {
             fileCompression = try container.decodeIfPresent(FolderCompressionSettings.self, forKey: .fileCompression) ?? FolderCompressionSettings()
             screenCapture = try container.decodeIfPresent(ScreenCaptureSettings.self, forKey: .screenCapture) ?? ScreenCaptureSettings()
             pictureInPicture = try container.decodeIfPresent(PictureInPictureSettings.self, forKey: .pictureInPicture) ?? PictureInPictureSettings()
+            inputSources = try container.decodeIfPresent(InputSourceSettings.self, forKey: .inputSources) ?? InputSourceSettings()
         }
     }
 
@@ -766,6 +821,7 @@ final class MacPilotModel: ObservableObject {
     let fileCompression = FolderCompressionModel()
     let screenCapture = ScreenCaptureModel()
     let pictureInPicture = PictureInPictureModel()
+    let inputSources = InputSourceModel()
     @Published var requestedSection: MainSection?
     private var launchTasks: [UUID: Task<Void, Never>] = [:]
     private let launchGate = LaunchGate(minimumStartInterval: 3)
@@ -804,11 +860,13 @@ final class MacPilotModel: ObservableObject {
         fileCompression.persist = { [weak self] in self?.saveIfReady() }
         screenCapture.persist = { [weak self] in self?.saveIfReady() }
         pictureInPicture.persist = { [weak self] in self?.saveIfReady() }
+        inputSources.persist = { [weak self] in self?.saveIfReady() }
         ble.startObservingSystemState()
         ble.activateFromConfiguration()
         fileCompression.activateFromConfiguration()
         screenCapture.activateFromConfiguration()
         pictureInPicture.activateFromConfiguration()
+        inputSources.activateFromConfiguration()
         Task { [weak updater] in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
@@ -1430,6 +1488,7 @@ final class MacPilotModel: ObservableObject {
         fileCompression.applyLoadedSettings(configuration.fileCompression)
         screenCapture.applyLoadedSettings(configuration.screenCapture)
         pictureInPicture.applyLoadedSettings(configuration.pictureInPicture)
+        inputSources.applyLoadedSettings(configuration.inputSources)
     }
 
     private func save() {
@@ -1443,7 +1502,8 @@ final class MacPilotModel: ObservableObject {
             bleUnlock: ble.settings,
             fileCompression: fileCompression.settings,
             screenCapture: screenCapture.settings,
-            pictureInPicture: pictureInPicture.settings
+            pictureInPicture: pictureInPicture.settings,
+            inputSources: inputSources.settings
         )
         do {
             let directory = configurationURL.deletingLastPathComponent()
@@ -1663,7 +1723,7 @@ final class MacPilotModel: ObservableObject {
     var timeString: String { lastChecked.formatted(.dateTime.hour().minute().locale(language.locale)) }
 }
 
-enum MainSection { case exit, launch, ble, compression, capture, pictureInPicture, settings }
+enum MainSection { case exit, launch, ble, inputSources, compression, capture, pictureInPicture, settings }
 
 struct ContentView: View {
     @EnvironmentObject private var model: MacPilotModel
@@ -1687,6 +1747,8 @@ struct ContentView: View {
                     LaunchRulesView(showingAdd: $showingLaunchAdd, editingRule: $editingLaunchRule)
                 } else if section == .ble {
                     BLEUnlockView(ble: model.ble)
+                } else if section == .inputSources {
+                    InputSourcesView(inputSources: model.inputSources)
                 } else if section == .compression {
                     FileCompressionView(compression: model.fileCompression)
                 } else if section == .capture {
@@ -1837,6 +1899,15 @@ struct Sidebar: View {
             }
             .buttonStyle(.plain)
             .background(section == .ble ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            Button { section = .inputSources } label: {
+                Label(model.t("inputSources"), systemImage: "keyboard")
+                    .padding(.vertical, 9).padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(section == .inputSources ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             Button { section = .compression } label: {
                 Label(model.t("fileCompression"), systemImage: "archivebox")
@@ -2909,6 +2980,12 @@ struct MenuBarView: View {
     @EnvironmentObject private var model: MacPilotModel
     @Environment(\.openWindow) private var openWindow
     @ObservedObject var pictureInPicture: PictureInPictureModel
+    @ObservedObject var inputSources: InputSourceModel
+
+    init(pictureInPicture: PictureInPictureModel, inputSources: InputSourceModel = InputSourceModel()) {
+        self._pictureInPicture = ObservedObject(wrappedValue: pictureInPicture)
+        self._inputSources = ObservedObject(wrappedValue: inputSources)
+    }
 
     var body: some View {
         Text(model.isEnforcing ? model.t("enabledStatus") : model.t("disabledStatus"))
@@ -2936,6 +3013,12 @@ struct MenuBarView: View {
         } else {
             Button(model.t("bleSelectDevice")) { model.requestedSection = .ble; showMainWindow() }
         }
+        Divider()
+        Toggle(inputSources.settings.isEnabled ? model.t("inputSourcesEnabledStatus") : model.t("inputSourcesDisabledStatus"),
+               isOn: Binding(get: { inputSources.settings.isEnabled }, set: { inputSources.setEnabled($0) }))
+        Button(model.t("inputSourcesCycleNow")) { inputSources.cycleInputSource() }
+            .disabled(!inputSources.settings.isEnabled || inputSources.availableSources.count < 2)
+        Button(model.t("inputSources")) { model.requestedSection = .inputSources; showMainWindow() }
         if pictureInPicture.settings.showMenuBarIcon {
             Divider()
             Toggle(pictureInPicture.settings.isEnabled ? model.t("pipEnabledStatus") : model.t("pipDisabledStatus"),

@@ -132,8 +132,20 @@ MacPilot 依赖辅助功能、系统蓝牙文件、媒体框架、模拟键盘�
 - 悬浮面板保持源窗口比例，支持跨全屏 Space、调整大小、⌘ 框选区域缩放、滚轮缩放、⌘+滚轮平移、快捷键缩放、自动隐藏、聚焦具体源窗口和多窗口模式。
 - 设置页拆分为通用、窗口行为、面板 UI、捕获、媒体、检测和补丁；支持 1–60 fps、0–100% 强度增强对比度、真实 Now Playing 媒体控制、按 App 保存的空闲/变化/敏感检测与 shell 脚本通知；检测使用整帧差分，敏感模式捕获细小变化。
 - Chromium/Electron 目标通过 `--disable-backgrounding-occluded-windows` 重启；Firefox、Floorp、kitty、Ghostty、iTerm2 和手动选择的 App 可使用自研 universal `libMacPilotOcclusionPatch.dylib`。补丁流程包含 Mach-O `LC_LOAD_DYLIB` 注入、完整备份、临时目录构建、重签名、管理员授权安装、恢复、更新后自动重打及连续快速崩溃自动恢复，且修改第三方 App 前始终要求用户明确确认。
-- 画中画配置并入 `config.json`，版本升至 9；单元测试覆盖默认值、配置约束、区域坐标、Codable、媒体匹配、离屏设置及真实 Firefox universal Mach-O 注入。
+- 画中画配置并入 `config.json`，版本升至 10；单元测试覆盖默认值、配置约束、区域坐标、Codable、媒体匹配、离屏设置及真实 Firefox universal Mach-O 注入。
 - 全局快捷键在获得辅助功能权限后使用 Core Graphics event tap 拦截，兼容监听保留为无权限时的降级路径；本应用自己的 PiP 面板也接入了本地键盘、滚轮和 Function 事件监听。
 - 补丁更新监听使用 FSEvents；源窗口关闭会自动清理 PiP，窗口级 AX/CGWindow 焦点用于精确执行隐藏/关闭。真实测试覆盖 Pipiri frame/crop/hide/restore、快捷键 event tap 抑制、检测脚本、FSEvents 重打补丁、Firefox 副本运行和签名验证。
 
 Pipiri 本身没有公开源码。研究其官网、DMG 元数据、可观察行为、二进制符号和 MediaHelper 协议后，MacPilot 使用独立代码实现行为等价功能；没有复制或打包 Pipiri 的专有代码、helper 或 dylib。涉及修改第三方 App bundle 的自定义合成器补丁仅在用户明确确认后执行，并始终先创建可恢复的完整备份。
+
+## 十三、输入法自动化
+
+新增 `Sources/MacPilot/InputSourceFeature.swift`，将 Input Source Pro 的核心工作流整合到 MacPilot：
+
+- 使用 Carbon 枚举和切换键盘输入源，持久化包含输入模式的稳定标识符，避免同一输入法多模式时出现重复或选错。
+- 按应用规则和浏览器网站规则自动切换；浏览器通过 Accessibility 获取当前 URL，并轮询页面变化以覆盖同一浏览器内切换标签页/网站的场景。
+- 支持鼠标附近/屏幕中央的输入法屏幕提示、菜单栏循环切换、`⌥⌘I` 全局快捷键，以及为具体输入法录制自定义组合键。
+- 可按应用强制将全角/中文标点映射为英文标点，并通过 IOKit 按应用设置标准功能键或媒体键模式；关闭功能后会恢复启用前的系统功能键模式。
+- 规则层、域名边界、URL 正则、配置兼容解码和输入模式标识符都有 Swift Testing 覆盖。
+
+实现基于 macOS Carbon、Accessibility、Core Graphics 和 IOKit 的独立代码，没有复制或打包 Input Source Pro（GPL-3.0）的源码、Core Data 模型或第三方依赖。全局快捷键和英文标点需要辅助功能权限；没有权限时，规则自动切换和手动菜单操作仍可使用。
