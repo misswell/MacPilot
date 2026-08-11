@@ -1356,8 +1356,15 @@ private struct WindowSwitcherTile: View {
             }
             .padding(8)
             .frame(width: 144, alignment: .leading)
-            .background(isSelected ? Color.accentColor.opacity(0.28) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(isSelected ? Color.accentColor : .clear, lineWidth: 2))
+            .background(isSelected ? Color(nsColor: .systemBlue).opacity(0.24) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(.white.opacity(0.9), lineWidth: 5)
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(Color(nsColor: .systemBlue), lineWidth: 3)
+                }
+            }
         }
         .buttonStyle(.plain)
     }
