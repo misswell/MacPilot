@@ -156,18 +156,11 @@ private struct WindowSwitcherAXAttributes {
 }
 
 private enum WindowSwitcherInventory {
-    private static let accessibilityTimeoutConfigured: Void = {
-        // The system default is several seconds. One unresponsive app must not
-        // prevent the background cache from becoming usable for the others.
-        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1)
-    }()
-
     static func snapshot(
         settings: WindowSwitcherSettings,
         frontmostProcessID: pid_t?,
         recentProcessIDs: [pid_t]
     ) -> [WindowSwitcherItem] {
-        _ = accessibilityTimeoutConfigured
         let serverRecords = windowServerRecords()
         let recordsByProcess = Dictionary(grouping: serverRecords, by: \.processID)
         let applications = NSWorkspace.shared.runningApplications.filter { application in
@@ -195,6 +188,9 @@ private enum WindowSwitcherInventory {
             let records = recordsByProcess[processID] ?? []
             let icon = applicationIcon(for: application)
             let appElement = AXUIElementCreateApplication(processID)
+            // Keep one unresponsive application from delaying the whole cache.
+            // WindowServer records still provide a useful fallback tile.
+            AXUIElementSetMessagingTimeout(appElement, 0.25)
             var windowsValue: CFTypeRef?
             let axResult = AXUIElementCopyAttributeValue(
                 appElement,
@@ -260,6 +256,21 @@ private enum WindowSwitcherInventory {
         }
 
         return result
+    }
+
+    static func windowServerSignature() -> Int {
+        var hasher = Hasher()
+        for record in windowServerRecords() {
+            hasher.combine(record.windowID)
+            hasher.combine(record.processID)
+            hasher.combine(record.title)
+            hasher.combine(record.isOnScreen)
+            hasher.combine(Int(record.frame.origin.x.rounded()))
+            hasher.combine(Int(record.frame.origin.y.rounded()))
+            hasher.combine(Int(record.frame.width.rounded()))
+            hasher.combine(Int(record.frame.height.rounded()))
+        }
+        return hasher.finalize()
     }
 
     private static func makeItem(
@@ -558,6 +569,11 @@ private struct WindowSwitcherPendingSession {
     var startedAt = CFAbsoluteTimeGetCurrent()
 }
 
+private struct WindowSwitcherInventoryRefresh: Sendable {
+    let snapshot: [WindowSwitcherItem]?
+    let signature: Int
+}
+
 @MainActor
 final class WindowSwitcherModel: ObservableObject {
     private static let performanceLogger = Logger(
@@ -583,6 +599,7 @@ final class WindowSwitcherModel: ObservableObject {
     private var cachedWindows: [WindowSwitcherItem] = []
     private var inventoryTask: Task<Void, Never>?
     private var inventoryRevision = 0
+    private var inventorySignature: Int?
     private var pendingSession: WindowSwitcherPendingSession?
     private var thumbnailTask: Task<Void, Never>?
     private var thumbnailCache: [CGWindowID: NSImage] = [:]
@@ -860,10 +877,8 @@ final class WindowSwitcherModel: ObservableObject {
         manualDismissTask?.cancel()
         manualDismissTask = nil
         let selected = windows.indices.contains(selectedIndex) ? windows[selectedIndex] : nil
-        objectWillChange.send()
         isShowing = false
         isManualSession = false
-        windows = []
         panelController?.hide()
         thumbnailTask?.cancel()
         if commit, let selected {
@@ -950,31 +965,46 @@ final class WindowSwitcherModel: ObservableObject {
         let settings = settings
         let frontmostProcessID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let recentProcessIDs = recentProcessIDs
+        let previousSignature = inventorySignature
+        let hasCachedWindows = !cachedWindows.isEmpty
         let startedAt = CFAbsoluteTimeGetCurrent()
         inventoryTask = Task { @MainActor [weak self] in
-            let snapshot = await Task.detached(priority: priority) {
-                WindowSwitcherInventory.snapshot(
+            let refresh = await Task.detached(priority: priority) {
+                let signature = WindowSwitcherInventory.windowServerSignature()
+                if hasCachedWindows, signature == previousSignature {
+                    return WindowSwitcherInventoryRefresh(snapshot: nil, signature: signature)
+                }
+                let snapshot = WindowSwitcherInventory.snapshot(
                     settings: settings,
                     frontmostProcessID: frontmostProcessID,
                     recentProcessIDs: recentProcessIDs
                 )
+                return WindowSwitcherInventoryRefresh(snapshot: snapshot, signature: signature)
             }.value
             guard let self else { return }
-            self.reportInventoryLatency(startedAt: startedAt, windowCount: snapshot.count)
+            self.reportInventoryLatency(
+                startedAt: startedAt,
+                windowCount: refresh.snapshot?.count ?? self.cachedWindows.count,
+                performedAccessibilityEnumeration: refresh.snapshot != nil
+            )
             self.inventoryTask = nil
+            self.inventorySignature = refresh.signature
             let settingsStillMatch = settings == self.settings
             if settingsStillMatch {
-                self.cachedWindows = snapshot
-                self.applyCachedPreviews(to: snapshot)
+                if let snapshot = refresh.snapshot {
+                    self.cachedWindows = snapshot
+                    self.applyCachedPreviews(to: snapshot)
+                }
                 if let pending = self.pendingSession {
                     self.pendingSession = nil
-                    self.completePendingSession(pending, snapshot: snapshot)
+                    self.completePendingSession(pending, snapshot: self.cachedWindows)
                 }
             }
             if revision != self.inventoryRevision || !settingsStillMatch {
                 self.startInventoryRefresh(priority: self.pendingSession == nil ? .utility : .userInitiated)
                 return
             }
+            self.prepareHiddenPanelContents()
             self.prewarmThumbnails()
         }
     }
@@ -1019,11 +1049,15 @@ final class WindowSwitcherModel: ObservableObject {
         )
     }
 
-    private func reportInventoryLatency(startedAt: CFAbsoluteTime, windowCount: Int) {
+    private func reportInventoryLatency(
+        startedAt: CFAbsoluteTime,
+        windowCount: Int,
+        performedAccessibilityEnumeration: Bool
+    ) {
         let milliseconds = (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
         guard milliseconds >= 100 else { return }
         Self.performanceLogger.notice(
-            "inventory latency: \(milliseconds, privacy: .public) ms; windows: \(windowCount, privacy: .public)"
+            "inventory latency: \(milliseconds, privacy: .public) ms; windows: \(windowCount, privacy: .public); AX: \(performedAccessibilityEnumeration, privacy: .public)"
         )
     }
 
@@ -1036,6 +1070,21 @@ final class WindowSwitcherModel: ObservableObject {
             guard let windowID = item.windowID else { continue }
             item.updatePreview(thumbnailCache[windowID])
         }
+    }
+
+    private func prepareHiddenPanelContents() {
+        guard !isShowing, pendingSession == nil, !cachedWindows.isEmpty else { return }
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let ordered = orderedForSession(cachedWindows, frontmostProcessID: frontmost)
+        let currentIndex = ordered.firstIndex { $0.processID == frontmost }
+        let preparedSelection = WindowSwitcherSelection.initialIndex(
+            count: ordered.count,
+            currentIndex: currentIndex,
+            reverse: false
+        ) ?? 0
+        objectWillChange.send()
+        windows = ordered
+        selectedIndex = preparedSelection
     }
 
     private func prewarmThumbnails() {
@@ -1169,13 +1218,16 @@ private final class WindowSwitcherPanelController {
         let screen = NSScreen.main ?? NSScreen.screens.first
         let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
         let size = NSSize(width: min(940, max(620, visibleFrame.width - 80)), height: 220)
-        panel.setContentSize(size)
-        panel.setFrameOrigin(NSPoint(
+        let targetFrame = NSRect(
             x: visibleFrame.midX - size.width / 2,
-            y: visibleFrame.midY - size.height / 2
-        ))
+            y: visibleFrame.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+        if panel.frame != targetFrame {
+            panel.setFrame(targetFrame, display: false)
+        }
         panel.orderFrontRegardless()
-        panel.makeKey()
     }
 
     func hide() {
