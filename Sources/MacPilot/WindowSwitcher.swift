@@ -1177,6 +1177,7 @@ final class WindowSwitcherModel: ObservableObject {
                 if let snapshot = refresh.snapshot {
                     self.cachedWindows = snapshot
                     self.applyCachedPreviews(to: snapshot)
+                    self.noteApplicationActivation(NSWorkspace.shared.frontmostApplication)
                 }
                 if let pending = self.pendingSession {
                     self.pendingSession = nil
