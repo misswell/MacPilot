@@ -324,6 +324,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var systemWakeRecoveryTask: Task<Void, Never>?
     private var latestRSSIs: [Double] = []
     private let latestN = 5
+    private var hasPasswordCache: Bool?
 
     private var displaySleep = false
     private var systemSleep = false
@@ -386,11 +387,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
     func selectDevice(_ uuid: UUID) {
         deviceMap[uuid]?.resolveIdentity()
+        let selectedName = deviceMap[uuid]?.displayName
+        stopScanning()
         settings.monitoredDeviceUUID = uuid.uuidString
-        settings.monitoredDeviceName = deviceMap[uuid]?.displayName
+        settings.monitoredDeviceName = selectedName
         connected = false
         presence = false
-        isScanning = false
         ensureCentralManager()
         startMonitor(uuid)
         notifyChange()
@@ -422,6 +424,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         isScanning = false
         scanCleanupTimer?.invalidate()
         scanCleanupTimer = nil
+        clearDiscoveredDevices()
         if activeModeTimer == nil && monitoredUUID == nil { centralMgr?.stopScan() }
     }
 
@@ -436,6 +439,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         wakeRetryTask?.cancel(); wakeRetryTask = nil
         systemWakeRecoveryTask?.cancel(); systemWakeRecoveryTask = nil
         centralMgr?.stopScan()
+        clearDiscoveredDevices()
         if let p = monitoredPeripheral { centralMgr?.cancelPeripheralConnection(p) }
         monitoredPeripheral = nil
         presence = false
@@ -443,6 +447,19 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         connected = false
         activeMode = false
         recoveringFromSystemSleep = false
+    }
+
+    private func clearDiscoveredDevices() {
+        deviceRefreshTask?.cancel()
+        deviceRefreshTask = nil
+        deviceRefreshBatcher = BLEDeviceListRefreshBatcher()
+        let discoveredPeripherals = deviceMap.values.compactMap(\.peripheral)
+        deviceMap.removeAll(keepingCapacity: false)
+        devices.removeAll(keepingCapacity: false)
+        for peripheral in discoveredPeripherals where peripheral !== monitoredPeripheral {
+            centralMgr?.cancelPeripheralConnection(peripheral)
+            peripheral.delegate = nil
+        }
     }
 
     private func scanForPeripherals() {
@@ -641,6 +658,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        guard isScanning || peripheral === monitoredPeripheral else {
+            central.cancelPeripheralConnection(peripheral)
+            peripheral.delegate = nil
+            return
+        }
         peripheral.delegate = self
         if isScanning { peripheral.discoverServices([deviceInformationUUID]) }
         if peripheral == monitoredPeripheral && !settings.passiveMode {
@@ -812,12 +834,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         return services
     }
 
-    var hasPassword: Bool { fetchPassword() != nil }
+    var hasPassword: Bool {
+        if let hasPasswordCache { return hasPasswordCache }
+        return fetchPassword() != nil
+    }
 
     @discardableResult
     func storePassword(_ password: String) -> Bool {
         let data = password.data(using: .utf8) ?? Data()
         let status = storePasswordData(data, service: keychainService)
+        hasPasswordCache = status
         objectWillChange.send()
         return status
     }
@@ -852,8 +878,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             if service != keychainService {
                 _ = storePasswordData(data, service: keychainService)
             }
+            hasPasswordCache = true
             return password
         }
+        hasPasswordCache = false
         return nil
     }
 

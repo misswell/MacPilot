@@ -833,6 +833,7 @@ private final class PiPQuickLookPanel: NSPanel {
 
     override func cancelOperation(_ sender: Any?) {
         orderOut(nil)
+        contentView = nil
     }
 }
 
@@ -960,9 +961,22 @@ final class PiPSession: ObservableObject, Identifiable {
     }
 
     func close() {
-        stop()
-        panel?.orderOut(nil)
+        releaseResources()
         owner?.removeSession(id: id)
+    }
+
+    fileprivate func releaseResources() {
+        stop()
+        hoverHintTask?.cancel()
+        hoverHintTask = nil
+        showsHoverHints = false
+        image = nil
+        lastFingerprint = nil
+        let currentPanel = panel
+        panel = nil
+        currentPanel?.orderOut(nil)
+        currentPanel?.contentView = nil
+        currentPanel?.close()
     }
 
     func receive(image: CGImage, fingerprint suppliedFingerprint: [UInt8]? = nil) {
@@ -1429,7 +1443,7 @@ final class PiPSession: ObservableObject, Identifiable {
         // top-left quarter with black padding.
         configuration.scalesToFit = true
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, frameRate)))
-        configuration.queueDepth = 3
+        configuration.queueDepth = 2
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.showsCursor = false
         configuration.capturesAudio = false
@@ -1444,7 +1458,9 @@ final class PiPSession: ObservableObject, Identifiable {
         // its entire backing store for a small floating panel.
         let selectedWidth = max(1, sourceFrame.width * region.width)
         let selectedHeight = max(1, sourceFrame.height * region.height)
-        let scale = min(2, 1_600 / max(selectedWidth, selectedHeight))
+        let selectedDetailScale = 1_600 / max(selectedWidth, selectedHeight)
+        let backingStoreScale = 2_048 / max(sourceFrame.width, sourceFrame.height)
+        let scale = min(2, selectedDetailScale, backingStoreScale)
         return CGSize(
             width: max(1, sourceFrame.width * scale),
             height: max(1, sourceFrame.height * scale)
@@ -1955,6 +1971,7 @@ final class PictureInPictureModel: ObservableObject {
     private var spaceQuickLookWasVisible = false
     private var spaceTask: Task<Void, Never>?
     private var isLoading = false
+    private var isMonitoring = false
     private var threeFingerGestureActive = false
 
     func applyLoadedSettings(_ newSettings: PictureInPictureSettings) {
@@ -2016,7 +2033,9 @@ final class PictureInPictureModel: ObservableObject {
             "AXTrustedCheckOptionPrompt": true
         ] as CFDictionary)
         if hasAccessibilityPermission {
-            installEventTapIfPossible()
+            if installEventTapIfPossible() {
+                removeKeyboardFallbackMonitors()
+            }
             rebuildFocusObservers()
         }
     }
@@ -2123,6 +2142,7 @@ final class PictureInPictureModel: ObservableObject {
     }
 
     func removeSession(id: UUID) {
+        if quickLookSessionID == id { hideQuickLook() }
         sessions.removeValue(forKey: id)
         if sessions.isEmpty { stopMediaPolling() }
         updateMouseMonitoring()
@@ -2142,8 +2162,9 @@ final class PictureInPictureModel: ObservableObject {
         let current = Array(sessions.values)
         sessions.removeAll()
         stopMediaPolling()
+        hideQuickLook()
         updateMouseMonitoring()
-        for session in current { session.stop(); session.panel?.orderOut(nil) }
+        for session in current { session.releaseResources() }
         rebuildFocusObservers()
         refreshSummaries()
     }
@@ -2222,23 +2243,13 @@ final class PictureInPictureModel: ObservableObject {
     // MARK: Hotkeys and mouse tracking
 
     private func startMonitoring() {
-        guard keyMonitor == nil else { return }
+        guard !isMonitoring else { return }
+        isMonitoring = true
         hasAccessibilityPermission = AXIsProcessTrusted()
-        let keyMask: NSEvent.EventTypeMask = [.keyDown]
-        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: keyMask) { [weak self] event in
-            _ = self?.handleKeyEvent(PiPKeyInput(event), suppress: false)
-        }
-        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: keyMask) { [weak self] event in
-            self?.handleKeyEvent(PiPKeyInput(event), suppress: true) == true ? nil : event
-        }
-        keyUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyUp]) { [weak self] event in
-            self?.handleKeyUpEvent(PiPKeyInput(event))
-        }
-        localKeyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyUp]) { [weak self] event in
-            self?.handleKeyUpEvent(PiPKeyInput(event)) == true ? nil : event
+        if !installEventTapIfPossible() {
+            installKeyboardFallbackMonitors()
         }
         updateMouseMonitoring()
-        installEventTapIfPossible()
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
@@ -2252,25 +2263,47 @@ final class PictureInPictureModel: ObservableObject {
         }
     }
 
+    private func installKeyboardFallbackMonitors() {
+        guard keyMonitor == nil else { return }
+        let keyMask: NSEvent.EventTypeMask = [.keyDown]
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: keyMask) { [weak self] event in
+            _ = self?.handleKeyEvent(PiPKeyInput(event), suppress: false)
+        }
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: keyMask) { [weak self] event in
+            self?.handleKeyEvent(PiPKeyInput(event), suppress: true) == true ? nil : event
+        }
+        keyUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyUp]) { [weak self] event in
+            self?.handleKeyUpEvent(PiPKeyInput(event))
+        }
+        localKeyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyUp]) { [weak self] event in
+            self?.handleKeyUpEvent(PiPKeyInput(event)) == true ? nil : event
+        }
+    }
+
     private func stopMonitoring() {
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-        if let localKeyMonitor { NSEvent.removeMonitor(localKeyMonitor) }
-        if let keyUpMonitor { NSEvent.removeMonitor(keyUpMonitor) }
-        if let localKeyUpMonitor { NSEvent.removeMonitor(localKeyUpMonitor) }
+        isMonitoring = false
+        removeKeyboardFallbackMonitors()
         stopMouseMonitoring()
         removeEventTap()
         if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
-        keyMonitor = nil
-        localKeyMonitor = nil
-        keyUpMonitor = nil
-        localKeyUpMonitor = nil
         activationObserver = nil
         removeFocusObservers()
         threeFingerGestureActive = false
     }
 
+    private func removeKeyboardFallbackMonitors() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        if let localKeyMonitor { NSEvent.removeMonitor(localKeyMonitor) }
+        if let keyUpMonitor { NSEvent.removeMonitor(keyUpMonitor) }
+        if let localKeyUpMonitor { NSEvent.removeMonitor(localKeyUpMonitor) }
+        keyMonitor = nil
+        localKeyMonitor = nil
+        keyUpMonitor = nil
+        localKeyUpMonitor = nil
+    }
+
     private func updateMouseMonitoring() {
-        let isNeeded = keyMonitor != nil && (settings.quickRegionCapture || !sessions.isEmpty)
+        let isNeeded = isMonitoring && (settings.quickRegionCapture || !sessions.isEmpty)
         if isNeeded {
             startMouseMonitoring()
         } else {
@@ -2300,8 +2333,10 @@ final class PictureInPictureModel: ObservableObject {
         threeFingerGestureActive = false
     }
 
-    private func installEventTapIfPossible() {
-        guard eventTap == nil, AXIsProcessTrusted() else { return }
+    @discardableResult
+    private func installEventTapIfPossible() -> Bool {
+        if eventTap != nil { return true }
+        guard isMonitoring, AXIsProcessTrusted() else { return false }
         let context = PiPEventTapContext(
             owner: Unmanaged.passUnretained(self).toOpaque(),
             triggerKeyCode: PiPTriggerKeyCode.value(for: settings.triggerKey) ?? 35,
@@ -2316,15 +2351,14 @@ final class PictureInPictureModel: ObservableObject {
             eventsOfInterest: eventMask,
             callback: pictureInPictureEventTapCallback,
             userInfo: Unmanaged.passUnretained(context).toOpaque()
-        ), let source = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
-            return
-        }
+        ), let source = CFMachPortCreateRunLoopSource(nil, tap, 0) else { return false }
         eventTapContext = context
         eventTap = tap
         eventTapSource = source
         context.setEventTap(tap)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        return true
     }
 
     private func removeEventTap() {
@@ -2642,8 +2676,13 @@ final class PictureInPictureModel: ObservableObject {
         return hostingView.rootView.session.id == session.id
     }
 
+    private var quickLookSessionID: UUID? {
+        (quickLookPanel?.contentView as? NSHostingView<PiPQuickLookView>)?.rootView.session.id
+    }
+
     private func hideQuickLook() {
         quickLookPanel?.orderOut(nil)
+        quickLookPanel?.contentView = nil
     }
 
     // MARK: Capture creation

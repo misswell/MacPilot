@@ -148,6 +148,144 @@ enum ScreenCaptureError: LocalizedError {
     }
 }
 
+private struct SendableScreenCaptureImage: @unchecked Sendable {
+    let value: CGImage
+}
+
+private struct ScreenCaptureSaveConfiguration: Sendable {
+    let outputFolder: String
+    let imageFormat: ScreenCaptureImageFormat
+    let quality: Double
+}
+
+private struct ScreenCaptureSavedImage: Sendable {
+    let url: URL
+    let size: Int64
+}
+
+private struct ScreenCaptureStorageStatistics: Sendable {
+    var bytes: Int64 = 0
+    var count = 0
+}
+
+private enum ScreenCaptureStorage {
+    private static let imageExtensions: Set<String> = ["heic", "jpg", "jpeg", "png"]
+
+    static func save(
+        image: SendableScreenCaptureImage,
+        displayIndex: Int?,
+        date: Date,
+        configuration: ScreenCaptureSaveConfiguration
+    ) throws -> ScreenCaptureSavedImage {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: configuration.outputFolder,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else {
+            throw ScreenCaptureError.outputFolderUnavailable
+        }
+
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateFormat = "yyyy-MM-dd"
+        dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dayFormatter.timeZone = .current
+        let dayURL = URL(fileURLWithPath: configuration.outputFolder)
+            .appendingPathComponent(dayFormatter.string(from: date), isDirectory: true)
+        try FileManager.default.createDirectory(at: dayURL, withIntermediateDirectories: true)
+
+        let fileFormatter = DateFormatter()
+        fileFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        fileFormatter.locale = Locale(identifier: "en_US_POSIX")
+        fileFormatter.timeZone = .current
+        var baseName = "MacPilot_\(fileFormatter.string(from: date))"
+        if let displayIndex { baseName += "_display\(displayIndex + 1)" }
+        let fileURL = dayURL.appendingPathComponent(
+            "\(baseName).\(configuration.imageFormat.fileExtension)"
+        )
+
+        guard let destination = CGImageDestinationCreateWithURL(
+            fileURL as CFURL,
+            configuration.imageFormat.utType.identifier as CFString,
+            1,
+            nil
+        ) else {
+            throw ScreenCaptureError.encodingFailed
+        }
+        if configuration.imageFormat.supportsQuality {
+            let options: [CFString: Any] = [
+                kCGImageDestinationLossyCompressionQuality: configuration.quality
+            ]
+            CGImageDestinationAddImage(destination, image.value, options as CFDictionary)
+        } else {
+            CGImageDestinationAddImage(destination, image.value, nil)
+        }
+        guard CGImageDestinationFinalize(destination) else {
+            throw ScreenCaptureError.encodingFailed
+        }
+
+        let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+        return ScreenCaptureSavedImage(
+            url: fileURL,
+            size: (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+        )
+    }
+
+    static func statistics(at folderURL: URL) -> ScreenCaptureStorageStatistics {
+        var statistics = ScreenCaptureStorageStatistics()
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: folderURL,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        ) else { return statistics }
+
+        while let fileURL = enumerator.nextObject() as? URL {
+            guard imageExtensions.contains(fileURL.pathExtension.lowercased()) else { continue }
+            guard let values = try? fileURL.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true else { continue }
+            statistics.bytes += Int64(values.fileSize ?? 0)
+            statistics.count += 1
+        }
+        return statistics
+    }
+
+    static func cleanup(
+        folder: String,
+        maximumAgeInDays: Int,
+        now: Date = Date()
+    ) -> ScreenCaptureStorageStatistics {
+        var deleted = ScreenCaptureStorageStatistics()
+        let folderURL = URL(fileURLWithPath: folder)
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        guard let dayURLs = try? FileManager.default.contentsOfDirectory(
+            at: folderURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return deleted }
+
+        for dayURL in dayURLs {
+            let values = try? dayURL.resourceValues(forKeys: [.isDirectoryKey])
+            guard values?.isDirectory == true,
+                  let dayDate = formatter.date(from: dayURL.lastPathComponent) else { continue }
+            let daysOld = calendar.dateComponents([.day], from: dayDate, to: now).day ?? 0
+            guard daysOld > maximumAgeInDays else { continue }
+            let directoryStatistics = statistics(at: dayURL)
+            do {
+                try FileManager.default.removeItem(at: dayURL)
+                deleted.bytes += directoryStatistics.bytes
+                deleted.count += directoryStatistics.count
+            } catch {
+                continue
+            }
+        }
+        return deleted
+    }
+}
+
 private final class LegacyDisplayCaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let lock = NSLock()
@@ -249,6 +387,7 @@ final class ScreenCaptureModel: ObservableObject {
     private var isLoading = false
     private var captureTask: Task<Void, Never>?
     private var permissionPollTask: Task<Void, Never>?
+    private var diskUsageRevision = 0
 
     deinit {
         captureTask?.cancel()
@@ -260,6 +399,7 @@ final class ScreenCaptureModel: ObservableObject {
     func applyLoadedSettings(_ newSettings: ScreenCaptureSettings) {
         isLoading = true
         settings = newSettings
+        diskUsageRevision += 1
         hasScreenPermission = CGPreflightScreenCaptureAccess()
         isPermissionError = false
         isLoading = false
@@ -287,6 +427,9 @@ final class ScreenCaptureModel: ObservableObject {
     func setOutputFolder(_ url: URL) {
         let path = url.standardizedFileURL.resolvingSymlinksInPath().path
         updateSettings { $0.outputFolder = path }
+        diskUsageRevision += 1
+        totalDiskUsage = 0
+        screenshotCount = 0
         Task { await refreshDiskUsage() }
     }
 
@@ -455,13 +598,15 @@ final class ScreenCaptureModel: ObservableObject {
             let saved = try await captureAndSaveAllDisplays()
             if !saved.isEmpty {
                 lastCaptureDate = Date()
-                lastCaptureSize = saved.reduce(0) { $0 + $1.size }
+                let savedBytes = saved.reduce(Int64(0)) { $0 + $1.size }
+                lastCaptureSize = savedBytes
                 captureCount += 1
                 screenshotCount += saved.count
+                totalDiskUsage += savedBytes
+                diskUsageRevision += 1
                 errorMessage = nil
                 isPermissionError = false
             }
-            await refreshDiskUsage()
             await cleanupOldScreenshots()
         } catch {
             isPermissionError = false
@@ -469,7 +614,7 @@ final class ScreenCaptureModel: ObservableObject {
         }
     }
 
-    private func captureAndSaveAllDisplays() async throws -> [(url: URL, size: Int64)] {
+    private func captureAndSaveAllDisplays() async throws -> [ScreenCaptureSavedImage] {
         let content: SCShareableContent
         do {
             content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -488,22 +633,36 @@ final class ScreenCaptureModel: ObservableObject {
             throw ScreenCaptureError.noDisplayFound
         }
 
-        var results: [(url: URL, size: Int64)] = []
+        let saveConfiguration = ScreenCaptureSaveConfiguration(
+            outputFolder: settings.outputFolder,
+            imageFormat: settings.imageFormat,
+            quality: settings.quality
+        )
+        let showsCursor = settings.showsCursor
+        var results: [ScreenCaptureSavedImage] = []
         let multiDisplay = displays.count > 1
         for (index, display) in displays.enumerated() {
-            guard let image = try? await captureDisplay(display) else { continue }
-            let url = try saveImage(image, displayIndex: multiDisplay ? index : nil)
-            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-            let size = (attributes?[.size] as? Int64) ?? 0
-            results.append((url, size))
+            guard let image = try? await captureDisplay(display, showsCursor: showsCursor) else { continue }
+            let sendableImage = SendableScreenCaptureImage(value: image)
+            let displayIndex = multiDisplay ? index : nil
+            let date = Date()
+            let saved = try await Task.detached(priority: .utility) {
+                try ScreenCaptureStorage.save(
+                    image: sendableImage,
+                    displayIndex: displayIndex,
+                    date: date,
+                    configuration: saveConfiguration
+                )
+            }.value
+            results.append(saved)
         }
         return results
     }
 
-    private func captureDisplay(_ display: SCDisplay) async throws -> CGImage {
+    private func captureDisplay(_ display: SCDisplay, showsCursor: Bool) async throws -> CGImage {
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let configuration = SCStreamConfiguration()
-        configuration.showsCursor = settings.showsCursor
+        configuration.showsCursor = showsCursor
         configuration.scalesToFit = true
         let (width, height) = pixelSize(for: display)
         configuration.width = width
@@ -554,115 +713,45 @@ final class ScreenCaptureModel: ObservableObject {
         return (display.width * 2, display.height * 2)
     }
 
-    // MARK: - Image saving
-
-    private func saveImage(_ image: CGImage, displayIndex: Int?) throws -> URL {
-        let now = Date()
-        let dayFolder = try ensureDayFolder(for: now)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        var baseName = "MacPilot_\(formatter.string(from: now))"
-        if let displayIndex {
-            baseName += "_display\(displayIndex + 1)"
-        }
-        let fileURL = dayFolder.appendingPathComponent("\(baseName).\(settings.imageFormat.fileExtension)")
-
-        guard let destination = CGImageDestinationCreateWithURL(
-            fileURL as CFURL,
-            settings.imageFormat.utType.identifier as CFString,
-            1,
-            nil
-        ) else {
-            throw ScreenCaptureError.encodingFailed
-        }
-
-        if settings.imageFormat.supportsQuality {
-            let options: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: settings.quality]
-            CGImageDestinationAddImage(destination, image, options as CFDictionary)
-        } else {
-            CGImageDestinationAddImage(destination, image, nil)
-        }
-
-        guard CGImageDestinationFinalize(destination) else {
-            throw ScreenCaptureError.encodingFailed
-        }
-        return fileURL
-    }
-
-    private func ensureDayFolder(for date: Date) throws -> URL {
-        guard settings.isOutputFolderValid else {
-            throw ScreenCaptureError.noOutputFolder
-        }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        let dayName = formatter.string(from: date)
-        let dayURL = URL(fileURLWithPath: settings.outputFolder).appendingPathComponent(dayName, isDirectory: true)
-        try FileManager.default.createDirectory(at: dayURL, withIntermediateDirectories: true)
-        return dayURL
-    }
-
     // MARK: - Disk usage & cleanup
 
     func refreshDiskUsage() async {
-        guard settings.isOutputFolderValid else {
-            totalDiskUsage = 0
-            screenshotCount = 0
+        while !Task.isCancelled {
+            guard settings.isOutputFolderValid else {
+                totalDiskUsage = 0
+                screenshotCount = 0
+                return
+            }
+            let folder = settings.outputFolder
+            let revision = diskUsageRevision
+            let statistics = await Task.detached(priority: .utility) {
+                ScreenCaptureStorage.statistics(at: URL(fileURLWithPath: folder))
+            }.value
+            guard settings.outputFolder == folder else { continue }
+            guard diskUsageRevision == revision else { continue }
+            totalDiskUsage = statistics.bytes
+            screenshotCount = statistics.count
+            diskUsageRevision += 1
             return
         }
-        let folder = settings.outputFolder
-        let (totalBytes, count) = await Task.detached(priority: .utility) { () -> (Int64, Int) in
-            var totalBytes: Int64 = 0
-            var count = 0
-            let extensions: Set<String> = ["heic", "jpg", "jpeg", "png"]
-            if let enumerator = FileManager.default.enumerator(atPath: folder) {
-                while let path = enumerator.nextObject() as? String {
-                    let ext = (path as NSString).pathExtension.lowercased()
-                    guard extensions.contains(ext) else { continue }
-                    let full = (folder as NSString).appendingPathComponent(path)
-                    let attrs = try? FileManager.default.attributesOfItem(atPath: full)
-                    if let size = attrs?[.size] as? Int64 {
-                        totalBytes += size
-                        count += 1
-                    }
-                }
-            }
-            return (totalBytes, count)
-        }.value
-        totalDiskUsage = totalBytes
-        screenshotCount = count
     }
 
     func cleanupOldScreenshots() async {
         guard settings.maxRetentionDays > 0, settings.isOutputFolderValid else { return }
         let folder = settings.outputFolder
         let cutoff = settings.maxRetentionDays
-        let deleted = await Task.detached(priority: .utility) { () -> Bool in
-            var deletedAny = false
-            let calendar = Calendar.current
-            let now = Date()
-            guard let dayURLs = try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: folder), includingPropertiesForKeys: [.creationDateKey], options: [.skipsHiddenFiles]) else { return false }
-            for dayURL in dayURLs where dayURL.hasDirectoryPath {
-                let dayName = dayURL.lastPathComponent
-                let formatter = DateFormatter()
-                formatter.dateFormat = "yyyy-MM-dd"
-                formatter.locale = Locale(identifier: "en_US_POSIX")
-                formatter.timeZone = .current
-                guard let dayDate = formatter.date(from: dayName) else { continue }
-                let daysOld = calendar.dateComponents([.day], from: dayDate, to: now).day ?? 0
-                if daysOld > cutoff {
-                    try? FileManager.default.removeItem(at: dayURL)
-                    deletedAny = true
-                }
-            }
-            return deletedAny
+        let revision = diskUsageRevision
+        let deleted = await Task.detached(priority: .utility) {
+            ScreenCaptureStorage.cleanup(folder: folder, maximumAgeInDays: cutoff)
         }.value
-        if deleted {
+        guard settings.outputFolder == folder, deleted.count > 0 else { return }
+        guard diskUsageRevision == revision else {
             await refreshDiskUsage()
+            return
         }
+        totalDiskUsage = max(0, totalDiskUsage - deleted.bytes)
+        screenshotCount = max(0, screenshotCount - deleted.count)
+        diskUsageRevision += 1
     }
 
     // MARK: - Helpers

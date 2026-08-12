@@ -581,6 +581,65 @@ private struct WindowSwitcherInventoryRefresh: Sendable {
     let signature: Int
 }
 
+private enum WindowSwitcherFocusedWindowResolver {
+    static func resolve(processID: pid_t, candidates: [WindowSwitcherItem]) -> String? {
+        let appElement = AXUIElementCreateApplication(processID)
+        AXUIElementSetMessagingTimeout(appElement, 0.25)
+        var focusedWindowValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &focusedWindowValue
+        ) == .success else { return candidates.first?.id }
+        guard let focusedWindowValue,
+              CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID() else {
+            return candidates.first?.id
+        }
+        let focusedWindow = focusedWindowValue as! AXUIElement
+
+        if let identityMatch = candidates.first(where: { item in
+            guard let itemWindow = item.axWindow else { return false }
+            return CFEqual(focusedWindow, itemWindow)
+        }) {
+            return identityMatch.id
+        }
+
+        var titleValue: CFTypeRef?
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        AXUIElementCopyAttributeValue(focusedWindow, kAXTitleAttribute as CFString, &titleValue)
+        AXUIElementCopyAttributeValue(focusedWindow, kAXPositionAttribute as CFString, &positionValue)
+        AXUIElementCopyAttributeValue(focusedWindow, kAXSizeAttribute as CFString, &sizeValue)
+        let title = titleValue as? String ?? ""
+        if !title.isEmpty, let exact = candidates.first(where: { $0.title == title }) {
+            return exact.id
+        }
+
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        let hasPosition = positionValue.map {
+            CFGetTypeID($0) == AXValueGetTypeID() && AXValueGetValue($0 as! AXValue, .cgPoint, &position)
+        } ?? false
+        let hasSize = sizeValue.map {
+            CFGetTypeID($0) == AXValueGetTypeID() && AXValueGetValue($0 as! AXValue, .cgSize, &size)
+        } ?? false
+        guard hasPosition, hasSize else { return candidates.first?.id }
+        let frame = CGRect(origin: position, size: size)
+        return candidates
+            .compactMap { item -> (WindowSwitcherItem, CGFloat)? in
+                guard let itemFrame = item.frame, !itemFrame.isNull else { return nil }
+                return (item, frameDistance(frame, itemFrame))
+            }
+            .min { $0.1 < $1.1 }?
+            .0.id ?? candidates.first?.id
+    }
+
+    private static func frameDistance(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
+        abs(lhs.midX - rhs.midX) + abs(lhs.midY - rhs.midY)
+            + abs(lhs.width - rhs.width) + abs(lhs.height - rhs.height)
+    }
+}
+
 @MainActor
 final class WindowSwitcherModel: ObservableObject {
     private static let inventoryRefreshDebounce = Duration.milliseconds(200)
@@ -603,6 +662,7 @@ final class WindowSwitcherModel: ObservableObject {
     var persist: (() -> Void)?
 
     private var isActive = false
+    private var isRuntimeActive = false
     private var isManualSession = false
     private var tabIsDown = false
     private var consumeTabKeyUp = false
@@ -614,6 +674,7 @@ final class WindowSwitcherModel: ObservableObject {
     private var inventoryRevision = 0
     private var inventorySignature: Int?
     private var pendingSession: WindowSwitcherPendingSession?
+    private var focusedWindowTask: Task<Void, Never>?
     private var thumbnailTask: Task<Void, Never>?
     private var thumbnailRevision = 0
     private var thumbnailCache: [CGWindowID: NSImage] = [:]
@@ -646,37 +707,71 @@ final class WindowSwitcherModel: ObservableObject {
         self.settings = settings
         cachedWindows = []
         if isActive {
-            refreshEventTap()
-            requestInventoryRefresh(priority: .utility)
+            if settings.isEnabled {
+                if isRuntimeActive {
+                    refreshEventTap()
+                    requestInventoryRefresh(priority: .utility)
+                } else {
+                    startRuntime(inventoryPriority: .utility)
+                }
+            } else {
+                stopRuntime()
+            }
         }
     }
 
     func activateFromConfiguration() {
         guard !isActive else { return }
         isActive = true
-        panelController = WindowSwitcherPanelController(model: self)
-        panelController?.prepare()
-        installWorkspaceObserver()
-        refreshEventTap()
-        requestInventoryRefresh(priority: .utility)
+        guard settings.isEnabled else { return }
+        startRuntime(inventoryPriority: .utility)
     }
 
     func setEnabled(_ enabled: Bool) {
         guard settings.isEnabled != enabled else { return }
         settings.isEnabled = enabled
         if enabled {
-            refreshEventTap()
-            requestInventoryRefresh(priority: .userInitiated)
+            startRuntime(inventoryPriority: .userInitiated)
         } else {
-            cancelSession()
-            cancelPendingSession()
-            inventoryRefreshDebounceTask?.cancel()
-            inventoryRefreshDebounceTask = nil
-            cancelThumbnailRefresh()
-            clearThumbnailCache()
-            removeEventTap()
+            stopRuntime()
         }
         persist?()
+    }
+
+    private func startRuntime(inventoryPriority: TaskPriority) {
+        guard isActive, settings.isEnabled, !isRuntimeActive else { return }
+        isRuntimeActive = true
+        panelController = WindowSwitcherPanelController(model: self)
+        panelController?.prepare()
+        installWorkspaceObserver()
+        refreshEventTap()
+        requestInventoryRefresh(priority: inventoryPriority)
+    }
+
+    private func stopRuntime() {
+        guard isRuntimeActive else { return }
+        isRuntimeActive = false
+        cancelSession()
+        cancelPendingSession()
+        manualDismissTask?.cancel()
+        manualDismissTask = nil
+        focusedWindowTask?.cancel()
+        focusedWindowTask = nil
+        inventoryRevision += 1
+        inventoryTask?.cancel()
+        inventoryTask = nil
+        inventoryRefreshDebounceTask?.cancel()
+        inventoryRefreshDebounceTask = nil
+        cancelThumbnailRefresh()
+        removeEventTap()
+        removeWorkspaceObservers()
+        clearThumbnailCache()
+        cachedWindows.removeAll(keepingCapacity: false)
+        recentWindowIDs.removeAll(keepingCapacity: false)
+        inventorySignature = nil
+        _ = updatePanelContents([], selectedIndex: nil)
+        panelController?.releaseResources()
+        panelController = nil
     }
 
     func setIncludeMinimizedWindows(_ enabled: Bool) {
@@ -861,6 +956,7 @@ final class WindowSwitcherModel: ObservableObject {
     }
 
     private func beginSession(reverse: Bool, manual: Bool) -> Bool {
+        guard isRuntimeActive else { return false }
         guard !isShowing else { return true }
         let startedAt = CFAbsoluteTimeGetCurrent()
         let snapshot = orderedForSession(cachedWindows)
@@ -1038,6 +1134,7 @@ final class WindowSwitcherModel: ObservableObject {
     }
 
     private func installWorkspaceObserver() {
+        guard workspaceObservers.isEmpty else { return }
         let center = NSWorkspace.shared.notificationCenter
         let names: [NSNotification.Name] = [
             NSWorkspace.didActivateApplicationNotification,
@@ -1060,70 +1157,32 @@ final class WindowSwitcherModel: ObservableObject {
         }
     }
 
+    private func removeWorkspaceObservers() {
+        let center = NSWorkspace.shared.notificationCenter
+        for observer in workspaceObservers { center.removeObserver(observer) }
+        workspaceObservers.removeAll(keepingCapacity: false)
+    }
+
     private func noteApplicationActivation(_ application: NSRunningApplication?) {
         guard let processID = application?.processIdentifier, processID != getpid() else { return }
-        if let focusedWindowID = focusedWindowID(of: processID) {
-            noteWindowActivation(focusedWindowID)
-        } else if let fallbackID = cachedWindows.first(where: { $0.processID == processID })?.id {
-            noteWindowActivation(fallbackID)
-        }
-    }
-
-    private func focusedWindowID(of processID: pid_t) -> String? {
-        let appElement = AXUIElementCreateApplication(processID)
-        AXUIElementSetMessagingTimeout(appElement, 0.25)
-        var focusedWindowValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            appElement,
-            kAXFocusedWindowAttribute as CFString,
-            &focusedWindowValue
-        ) == .success else { return nil }
-        guard let focusedWindowValue,
-              CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID() else { return nil }
-        let focusedWindow = focusedWindowValue as! AXUIElement
-
-        var titleValue: CFTypeRef?
-        var positionValue: CFTypeRef?
-        var sizeValue: CFTypeRef?
-        AXUIElementCopyAttributeValue(focusedWindow, kAXTitleAttribute as CFString, &titleValue)
-        AXUIElementCopyAttributeValue(focusedWindow, kAXPositionAttribute as CFString, &positionValue)
-        AXUIElementCopyAttributeValue(focusedWindow, kAXSizeAttribute as CFString, &sizeValue)
-        let title = titleValue as? String ?? ""
-        var position = CGPoint.zero
-        var size = CGSize.zero
-        let hasPosition = positionValue.map {
-            CFGetTypeID($0) == AXValueGetTypeID() && AXValueGetValue($0 as! AXValue, .cgPoint, &position)
-        } ?? false
-        let hasSize = sizeValue.map {
-            CFGetTypeID($0) == AXValueGetTypeID() && AXValueGetValue($0 as! AXValue, .cgSize, &size)
-        } ?? false
-        let frame = hasPosition && hasSize ? CGRect(origin: position, size: size) : nil
-
         let candidates = cachedWindows.filter { $0.processID == processID }
-        if let identityMatch = candidates.first(where: { item in
-            guard let itemWindow = item.axWindow else { return false }
-            return CFEqual(focusedWindow, itemWindow)
-        }) {
-            return identityMatch.id
+        guard let fallbackID = candidates.first?.id else { return }
+        guard candidates.count > 1 else {
+            noteWindowActivation(fallbackID)
+            return
         }
-        if !title.isEmpty {
-            if let exact = candidates.first(where: { $0.title == title }) {
-                return exact.id
-            }
+        focusedWindowTask?.cancel()
+        focusedWindowTask = Task { @MainActor [weak self] in
+            let focusedWindowID = await Task.detached(priority: .utility) {
+                WindowSwitcherFocusedWindowResolver.resolve(
+                    processID: processID,
+                    candidates: candidates
+                )
+            }.value
+            guard !Task.isCancelled, let self, self.isRuntimeActive else { return }
+            self.focusedWindowTask = nil
+            self.noteWindowActivation(focusedWindowID ?? fallbackID)
         }
-        guard let frame else { return candidates.first?.id }
-        return candidates
-            .compactMap { item -> (WindowSwitcherItem, CGFloat)? in
-                guard let itemFrame = item.frame, !itemFrame.isNull else { return nil }
-                return (item, frameDistance(frame, itemFrame))
-            }
-            .min { $0.1 < $1.1 }?
-            .0.id
-    }
-
-    private func frameDistance(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
-        abs(lhs.midX - rhs.midX) + abs(lhs.midY - rhs.midY)
-            + abs(lhs.width - rhs.width) + abs(lhs.height - rhs.height)
     }
 
     private func noteWindowActivation(_ windowID: String) {
@@ -1140,7 +1199,7 @@ final class WindowSwitcherModel: ObservableObject {
     }
 
     private func requestInventoryRefresh(priority: TaskPriority) {
-        guard isActive, settings.isEnabled, hasAccessibilityPermission else { return }
+        guard isRuntimeActive, settings.isEnabled, hasAccessibilityPermission else { return }
         inventoryRevision += 1
         scheduleInventoryRefresh(priority: priority)
     }
@@ -1183,7 +1242,7 @@ final class WindowSwitcherModel: ObservableObject {
                 )
                 return WindowSwitcherInventoryRefresh(snapshot: snapshot, signature: signature)
             }.value
-            guard let self else { return }
+            guard !Task.isCancelled, let self, self.isRuntimeActive else { return }
             self.reportInventoryLatency(
                 startedAt: startedAt,
                 windowCount: refresh.snapshot?.count ?? self.cachedWindows.count,
@@ -1400,7 +1459,7 @@ final class WindowSwitcherModel: ObservableObject {
     private func refreshEventTap() {
         hasAccessibilityPermission = AXIsProcessTrusted()
         removeEventTap()
-        guard isActive, settings.isEnabled, hasAccessibilityPermission else { return }
+        guard isRuntimeActive, settings.isEnabled, hasAccessibilityPermission else { return }
 
         let context = WindowSwitcherEventTapContext(owner: Unmanaged.passUnretained(self).toOpaque())
         let eventMask = (CGEventMask(1) << CGEventType.keyDown.rawValue)
@@ -1468,6 +1527,14 @@ private final class WindowSwitcherPanelController {
 
     func hide() {
         panel?.orderOut(nil)
+    }
+
+    func releaseResources() {
+        let currentPanel = panel
+        panel = nil
+        currentPanel?.orderOut(nil)
+        currentPanel?.contentView = nil
+        currentPanel?.close()
     }
 
     private func updateFrame(of panel: WindowSwitcherPanel) {

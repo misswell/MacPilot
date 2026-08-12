@@ -349,6 +349,7 @@ struct PictureInPictureTests {
 
         #expect(configuration.width == 1600)
         #expect(configuration.height == 1200)
+        #expect(configuration.queueDepth == 2)
         #expect(configuration.scalesToFit)
     }
 
@@ -366,8 +367,8 @@ struct PictureInPictureTests {
 
         #expect(fullWindow.width == 1_600)
         #expect(fullWindow.height == 900)
-        #expect(region.width == 3_200)
-        #expect(region.height == 1_800)
+        #expect(region.width == 2_048)
+        #expect(region.height == 1_152)
     }
 
     @Test @MainActor func repeatedMouseMovementDoesNotRepublishTheSameHoverState() {
