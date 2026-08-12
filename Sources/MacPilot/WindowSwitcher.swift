@@ -37,9 +37,9 @@ enum WindowSwitcherSelection {
     static func initialIndex(count: Int, currentIndex: Int?, reverse: Bool) -> Int? {
         guard count > 0 else { return nil }
         guard count > 1 else { return 0 }
-        let current = currentIndex ?? (reverse ? 0 : -1)
+        guard let currentIndex else { return nil }
         let offset = reverse ? -1 : 1
-        return wrappedIndex(current + offset, count: count)
+        return wrappedIndex(currentIndex + offset, count: count)
     }
 
     static func cycledIndex(current: Int, count: Int, offset: Int) -> Int? {
@@ -55,19 +55,13 @@ enum WindowSwitcherSelection {
 
 enum WindowSwitcherOrdering {
     static func orderedIndices(
-        processIDs: [pid_t],
-        frontmostProcessID: pid_t?,
-        recentProcessIDs: [pid_t]
+        ids: [String],
+        recentIDs: [String]
     ) -> [Int] {
-        let recentOrder = Dictionary(uniqueKeysWithValues: recentProcessIDs.enumerated().map { ($1, $0) })
-        return processIDs.indices.sorted { lhs, rhs in
-            let lhsPID = processIDs[lhs]
-            let rhsPID = processIDs[rhs]
-            if lhsPID == rhsPID { return lhs < rhs }
-            if lhsPID == frontmostProcessID { return true }
-            if rhsPID == frontmostProcessID { return false }
-            let lhsOrder = recentOrder[lhsPID] ?? Int.max
-            let rhsOrder = recentOrder[rhsPID] ?? Int.max
+        let recentOrder = Dictionary(uniqueKeysWithValues: recentIDs.enumerated().map { ($1, $0) })
+        return ids.indices.sorted { lhs, rhs in
+            let lhsOrder = recentOrder[ids[lhs]] ?? Int.max
+            let rhsOrder = recentOrder[ids[rhs]] ?? Int.max
             return lhsOrder == rhsOrder ? lhs < rhs : lhsOrder < rhsOrder
         }
     }
@@ -163,8 +157,6 @@ private struct WindowSwitcherAXAttributes {
 private enum WindowSwitcherInventory {
     static func snapshot(
         settings: WindowSwitcherSettings,
-        frontmostProcessID: pid_t?,
-        recentProcessIDs: [pid_t],
         serverRecords: [WindowSwitcherServerRecord]
     ) -> [WindowSwitcherItem] {
         let recordsByProcess = Dictionary(grouping: serverRecords, by: \.processID)
@@ -177,16 +169,8 @@ private enum WindowSwitcherInventory {
             return true
         }
 
-        let recentOrder = Dictionary(uniqueKeysWithValues: recentProcessIDs.enumerated().map { ($1, $0) })
         let orderedApplications = applications.sorted { lhs, rhs in
-            let lhsPID = lhs.processIdentifier
-            let rhsPID = rhs.processIdentifier
-            if lhsPID == frontmostProcessID { return true }
-            if rhsPID == frontmostProcessID { return false }
-            let lhsOrder = recentOrder[lhsPID] ?? Int.max
-            let rhsOrder = recentOrder[rhsPID] ?? Int.max
-            if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
-            return (lhs.localizedName ?? "").localizedCaseInsensitiveCompare(rhs.localizedName ?? "") == .orderedAscending
+            (lhs.localizedName ?? "").localizedCaseInsensitiveCompare(rhs.localizedName ?? "") == .orderedAscending
         }
 
         var result: [WindowSwitcherItem] = []
@@ -254,7 +238,7 @@ private enum WindowSwitcherInventory {
                 }
             }
 
-            let recordOrder = Dictionary(uniqueKeysWithValues: records.map { ($0.windowID, $0.order) })
+            let recordOrder: [CGWindowID: Int] = Dictionary(uniqueKeysWithValues: records.map { ($0.windowID, $0.order) })
             result.append(contentsOf: appItems.sorted { lhs, rhs in
                 let lhsOrder = lhs.windowID.flatMap { recordOrder[$0] } ?? Int.max
                 let rhsOrder = rhs.windowID.flatMap { recordOrder[$0] } ?? Int.max
@@ -594,7 +578,7 @@ final class WindowSwitcherModel: ObservableObject {
 
     @Published private(set) var settings = WindowSwitcherSettings()
     private(set) var windows: [WindowSwitcherItem] = []
-    private(set) var selectedIndex = 0
+    private(set) var selectedIndex: Int?
     private(set) var isShowing = false
     @Published private(set) var hasAccessibilityPermission = false
 
@@ -606,7 +590,7 @@ final class WindowSwitcherModel: ObservableObject {
     private var tabIsDown = false
     private var consumeTabKeyUp = false
     private var consumeEscapeKeyUp = false
-    private var recentProcessIDs: [pid_t] = []
+    private var recentWindowIDs: [String] = []
     private var cachedWindows: [WindowSwitcherItem] = []
     private var inventoryTask: Task<Void, Never>?
     private var inventoryRefreshDebounceTask: Task<Void, Never>?
@@ -817,8 +801,7 @@ final class WindowSwitcherModel: ObservableObject {
     private func beginSession(reverse: Bool, manual: Bool) -> Bool {
         guard !isShowing else { return true }
         let startedAt = CFAbsoluteTimeGetCurrent()
-        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let snapshot = orderedForSession(cachedWindows, frontmostProcessID: frontmost)
+        let snapshot = orderedForSession(cachedWindows)
         guard !snapshot.isEmpty else {
             pendingSession = WindowSwitcherPendingSession(
                 reverse: reverse,
@@ -853,12 +836,17 @@ final class WindowSwitcherModel: ObservableObject {
             count: snapshot.count,
             currentIndex: currentIndex,
             reverse: reverse
-        ) ?? 0
-        let resolvedIndex = WindowSwitcherSelection.cycledIndex(
-            current: initialIndex,
-            count: snapshot.count,
-            offset: additionalSelectionOffset
-        ) ?? initialIndex
+        )
+        let resolvedIndex: Int?
+        if let initialIndex {
+            resolvedIndex = WindowSwitcherSelection.cycledIndex(
+                current: initialIndex,
+                count: snapshot.count,
+                offset: additionalSelectionOffset
+            ) ?? initialIndex
+        } else {
+            resolvedIndex = nil
+        }
         updatePanelContents(snapshot, selectedIndex: resolvedIndex)
         isManualSession = manual
         isShowing = true
@@ -882,8 +870,9 @@ final class WindowSwitcherModel: ObservableObject {
     }
 
     private func cycleSelection(reverse: Bool) {
+        guard let current = selectedIndex else { return }
         guard let next = WindowSwitcherSelection.cycledIndex(
-            current: selectedIndex,
+            current: current,
             count: windows.count,
             offset: reverse ? -1 : 1
         ) else { return }
@@ -894,7 +883,7 @@ final class WindowSwitcherModel: ObservableObject {
     @discardableResult
     private func updatePanelContents(
         _ items: [WindowSwitcherItem],
-        selectedIndex: Int
+        selectedIndex: Int?
     ) -> Bool {
         let itemsChanged = !windows.elementsEqual(items, by: { $0 === $1 })
         guard self.selectedIndex != selectedIndex || itemsChanged else { return false }
@@ -907,7 +896,7 @@ final class WindowSwitcherModel: ObservableObject {
     private func finishSession(commit: Bool) {
         manualDismissTask?.cancel()
         manualDismissTask = nil
-        let selected = windows.indices.contains(selectedIndex) ? windows[selectedIndex] : nil
+        let selected = selectedIndex.flatMap { windows.indices.contains($0) ? windows[$0] : nil }
         isShowing = false
         isManualSession = false
         panelController?.hide()
@@ -940,6 +929,7 @@ final class WindowSwitcherModel: ObservableObject {
             _ = AXUIElementSetAttributeValue(axWindow, kAXMainAttribute as CFString, true as CFTypeRef)
             _ = AXUIElementSetAttributeValue(axWindow, kAXFocusedAttribute as CFString, true as CFTypeRef)
         }
+        noteWindowActivation(item.id)
         noteApplicationActivation(application)
     }
 
@@ -968,19 +958,22 @@ final class WindowSwitcherModel: ObservableObject {
 
     private func noteApplicationActivation(_ application: NSRunningApplication?) {
         guard let processID = application?.processIdentifier, processID != getpid() else { return }
-        recentProcessIDs.removeAll { $0 == processID }
-        recentProcessIDs.insert(processID, at: 0)
-        if recentProcessIDs.count > 128 { recentProcessIDs.removeLast(recentProcessIDs.count - 128) }
+        let frontmostWindowID = cachedWindows.first { $0.processID == processID }?.id
+        if let frontmostWindowID {
+            noteWindowActivation(frontmostWindowID)
+        }
     }
 
-    private func orderedForSession(
-        _ items: [WindowSwitcherItem],
-        frontmostProcessID: pid_t?
-    ) -> [WindowSwitcherItem] {
+    private func noteWindowActivation(_ windowID: String) {
+        recentWindowIDs.removeAll { $0 == windowID }
+        recentWindowIDs.insert(windowID, at: 0)
+        if recentWindowIDs.count > 128 { recentWindowIDs.removeLast(recentWindowIDs.count - 128) }
+    }
+
+    private func orderedForSession(_ items: [WindowSwitcherItem]) -> [WindowSwitcherItem] {
         WindowSwitcherOrdering.orderedIndices(
-            processIDs: items.map(\.processID),
-            frontmostProcessID: frontmostProcessID,
-            recentProcessIDs: recentProcessIDs
+            ids: items.map(\.id),
+            recentIDs: recentWindowIDs
         ).map { items[$0] }
     }
 
@@ -1012,8 +1005,6 @@ final class WindowSwitcherModel: ObservableObject {
         inventoryRefreshDebounceTask = nil
         let revision = inventoryRevision
         let settings = settings
-        let frontmostProcessID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let recentProcessIDs = recentProcessIDs
         let previousSignature = inventorySignature
         let hasCachedWindows = !cachedWindows.isEmpty
         let startedAt = CFAbsoluteTimeGetCurrent()
@@ -1026,8 +1017,6 @@ final class WindowSwitcherModel: ObservableObject {
                 }
                 let snapshot = WindowSwitcherInventory.snapshot(
                     settings: settings,
-                    frontmostProcessID: frontmostProcessID,
-                    recentProcessIDs: recentProcessIDs,
                     serverRecords: serverScan.records
                 )
                 return WindowSwitcherInventoryRefresh(snapshot: snapshot, signature: signature)
@@ -1066,20 +1055,27 @@ final class WindowSwitcherModel: ObservableObject {
     ) {
         guard !snapshot.isEmpty else { return }
         let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let ordered = orderedForSession(snapshot, frontmostProcessID: frontmost)
+        let ordered = orderedForSession(snapshot)
         let currentIndex = ordered.firstIndex { $0.processID == frontmost }
         let initialIndex = WindowSwitcherSelection.initialIndex(
             count: ordered.count,
             currentIndex: currentIndex,
             reverse: pending.reverse
-        ) ?? 0
-        let resolvedIndex = WindowSwitcherSelection.cycledIndex(
-            current: initialIndex,
-            count: ordered.count,
-            offset: pending.additionalSelectionOffset
-        ) ?? initialIndex
+        )
+        let resolvedIndex: Int?
+        if let initialIndex {
+            resolvedIndex = WindowSwitcherSelection.cycledIndex(
+                current: initialIndex,
+                count: ordered.count,
+                offset: pending.additionalSelectionOffset
+            ) ?? initialIndex
+        } else {
+            resolvedIndex = nil
+        }
         if pending.commitWhenReady {
-            focus(ordered[resolvedIndex])
+            if let resolvedIndex, ordered.indices.contains(resolvedIndex) {
+                focus(ordered[resolvedIndex])
+            }
         } else {
             showSession(
                 ordered,
@@ -1126,36 +1122,38 @@ final class WindowSwitcherModel: ObservableObject {
     private func prepareHiddenPanelContents() {
         guard !isShowing, pendingSession == nil, !cachedWindows.isEmpty else { return }
         let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let ordered = orderedForSession(cachedWindows, frontmostProcessID: frontmost)
+        let ordered = orderedForSession(cachedWindows)
         let currentIndex = ordered.firstIndex { $0.processID == frontmost }
         let preparedSelection = WindowSwitcherSelection.initialIndex(
             count: ordered.count,
             currentIndex: currentIndex,
             reverse: false
-        ) ?? 0
+        )
         updatePanelContents(ordered, selectedIndex: preparedSelection)
     }
 
     private func prewarmThumbnails() {
         guard !isShowing else { return }
         let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let ordered = orderedForSession(cachedWindows, frontmostProcessID: frontmost)
+        let ordered = orderedForSession(cachedWindows)
         let selected = WindowSwitcherSelection.initialIndex(
             count: ordered.count,
             currentIndex: ordered.firstIndex { $0.processID == frontmost },
             reverse: false
-        ) ?? 0
-        refreshThumbnails(for: ordered, selectedIndex: selected, maximumCount: 3, requireShowing: false)
+        )
+        if let selected {
+            refreshThumbnails(for: ordered, selectedIndex: selected, maximumCount: 3, requireShowing: false)
+        }
     }
 
     private func refreshThumbnails(
         for items: [WindowSwitcherItem],
-        selectedIndex: Int,
+        selectedIndex: Int?,
         maximumCount: Int?,
         requireShowing: Bool
     ) {
         cancelThumbnailRefresh()
-        guard settings.showThumbnails else { return }
+        guard settings.showThumbnails, let selectedIndex else { return }
         let revision = thumbnailRevision
         let maximumPixelSize = Self.thumbnailMaximumPixelSize
         let prioritized = WindowSwitcherThumbnailPriority.orderedIndices(
@@ -1310,7 +1308,8 @@ private final class WindowSwitcherPanelController {
     }
 
     private func updateFrame(of panel: WindowSwitcherPanel) {
-        let screen = NSScreen.main ?? NSScreen.screens.first
+        let mouseLocation = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) }) ?? NSScreen.main ?? NSScreen.screens.first
         let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
         let size = NSSize(width: min(940, max(620, visibleFrame.width - 80)), height: 220)
         let targetFrame = NSRect(
@@ -1369,7 +1368,7 @@ private struct WindowSwitcherOverlay: View {
                                 let item = model.windows[index]
                                 WindowSwitcherTile(
                                     item: item,
-                                    isSelected: index == model.selectedIndex,
+                                    isSelected: model.selectedIndex == index,
                                     showTitle: model.settings.showWindowTitles
                                 ) {
                                     model.commitSelection(at: index)
@@ -1383,12 +1382,12 @@ private struct WindowSwitcherOverlay: View {
                         .padding(.horizontal, 2)
                     }
                     .onChange(of: model.selectedIndex) { _, index in
-                        guard model.windows.indices.contains(index) else { return }
+                        guard let index, model.windows.indices.contains(index) else { return }
                         proxy.scrollTo(model.windows[index].id, anchor: .center)
                     }
                     .onAppear {
-                        guard model.windows.indices.contains(model.selectedIndex) else { return }
-                        proxy.scrollTo(model.windows[model.selectedIndex].id, anchor: .center)
+                        guard let selectedIndex = model.selectedIndex, model.windows.indices.contains(selectedIndex) else { return }
+                        proxy.scrollTo(model.windows[selectedIndex].id, anchor: .center)
                     }
                 }
                 .frame(height: 142)
@@ -1452,6 +1451,7 @@ private struct WindowSwitcherTile: View {
                         .strokeBorder(.white.opacity(0.9), lineWidth: 5)
                     RoundedRectangle(cornerRadius: 12)
                         .strokeBorder(Color(nsColor: .systemBlue), lineWidth: 3)
+                        .padding(1)
                 }
             }
         }

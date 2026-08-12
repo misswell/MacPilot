@@ -8,9 +8,9 @@ struct WindowSwitcherTests {
         #expect(WindowSwitcherSelection.initialIndex(count: 4, currentIndex: 0, reverse: true) == 3)
     }
 
-    @Test func initialSelectionFallsBackToTheFirstWindowWhenThereIsNoFrontmostWindow() {
-        #expect(WindowSwitcherSelection.initialIndex(count: 3, currentIndex: nil, reverse: false) == 0)
-        #expect(WindowSwitcherSelection.initialIndex(count: 3, currentIndex: nil, reverse: true) == 2)
+    @Test func initialSelectionHasNoSelectionWhenThereIsNoFrontmostWindow() {
+        #expect(WindowSwitcherSelection.initialIndex(count: 3, currentIndex: nil, reverse: false) == nil)
+        #expect(WindowSwitcherSelection.initialIndex(count: 3, currentIndex: nil, reverse: true) == nil)
         #expect(WindowSwitcherSelection.initialIndex(count: 0, currentIndex: nil, reverse: false) == nil)
     }
 
@@ -21,13 +21,12 @@ struct WindowSwitcherTests {
     }
 
     @Test func cachedWindowsAreReorderedWithoutRediscovery() {
-        let processIDs: [pid_t] = [11, 11, 22, 33, 33]
+        let ids = ["window-11", "window-11", "window-22", "window-33", "window-33"]
 
         #expect(WindowSwitcherOrdering.orderedIndices(
-            processIDs: processIDs,
-            frontmostProcessID: 33,
-            recentProcessIDs: [22, 11]
-        ) == [3, 4, 2, 0, 1])
+            ids: ids,
+            recentIDs: ["window-22", "window-11"]
+        ) == [2, 0, 1, 3, 4])
     }
 
     @Test func thumbnailWorkStartsAtTheSelectionAndFansOut() {
