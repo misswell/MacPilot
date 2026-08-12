@@ -172,6 +172,7 @@ private enum WindowSwitcherInventory {
             guard application.processIdentifier != getpid(), !application.isTerminated else { return false }
             guard application.activationPolicy == .regular || application.activationPolicy == .accessory else { return false }
             if application.isHidden && !settings.includeHiddenApplications { return false }
+            guard recordsByProcess[application.processIdentifier]?.isEmpty == false else { return false }
             return true
         }
 
