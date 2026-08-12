@@ -1934,6 +1934,19 @@ struct ContentView: View {
     }
 }
 
+/// 侧边栏 Label 样式：图标固定宽度，保证文字起点一致。
+private struct SidebarLabelStyle: LabelStyle {
+    var iconWidth: CGFloat = 22
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            configuration.icon
+                .frame(width: iconWidth)
+            configuration.title
+        }
+    }
+}
+
 struct Sidebar: View {
     @EnvironmentObject private var model: MacPilotModel
     @Binding var section: MainSection
@@ -1946,6 +1959,7 @@ struct Sidebar: View {
             .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 34)
             Button { section = .exit } label: {
                 Label(model.t("rules"), systemImage: "list.bullet.rectangle")
+                    .labelStyle(SidebarLabelStyle())
                     .padding(.vertical, 9).padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -1955,6 +1969,7 @@ struct Sidebar: View {
             .padding(.horizontal, 12)
             Button { section = .launch } label: {
                 Label(model.t("launch"), systemImage: "play.circle")
+                    .labelStyle(SidebarLabelStyle())
                     .padding(.vertical, 9).padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -1964,6 +1979,7 @@ struct Sidebar: View {
             .padding(.horizontal, 12)
             Button { section = .ble } label: {
                 Label(model.t("bleUnlock"), systemImage: "antenna.radiowaves.left.and.right")
+                    .labelStyle(SidebarLabelStyle())
                     .padding(.vertical, 9).padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -1973,6 +1989,7 @@ struct Sidebar: View {
             .padding(.horizontal, 12)
             Button { section = .inputSources } label: {
                 Label(model.t("inputSources"), systemImage: "keyboard")
+                    .labelStyle(SidebarLabelStyle())
                     .padding(.vertical, 9).padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -1982,6 +1999,7 @@ struct Sidebar: View {
             .padding(.horizontal, 12)
             Button { section = .compression } label: {
                 Label(model.t("fileCompression"), systemImage: "archivebox")
+                    .labelStyle(SidebarLabelStyle())
                     .padding(.vertical, 9).padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -1991,6 +2009,7 @@ struct Sidebar: View {
             .padding(.horizontal, 12)
             Button { section = .capture } label: {
                 Label(model.t("screenCapture"), systemImage: "camera.viewfinder")
+                    .labelStyle(SidebarLabelStyle())
                     .padding(.vertical, 9).padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -2000,6 +2019,7 @@ struct Sidebar: View {
             .padding(.horizontal, 12)
             Button { section = .pictureInPicture } label: {
                 Label(model.t("pictureInPicture"), systemImage: "pip.enter")
+                    .labelStyle(SidebarLabelStyle())
                     .padding(.vertical, 9).padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -2009,6 +2029,7 @@ struct Sidebar: View {
             .padding(.horizontal, 12)
             Button { section = .windowSwitcher } label: {
                 Label(model.t("windowSwitcher"), systemImage: "rectangle.on.rectangle")
+                    .labelStyle(SidebarLabelStyle())
                     .padding(.vertical, 9).padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -2018,6 +2039,7 @@ struct Sidebar: View {
             .padding(.horizontal, 12)
             Button { section = .settings } label: {
                 Label(model.t("settings"), systemImage: "gearshape")
+                    .labelStyle(SidebarLabelStyle())
                     .padding(.vertical, 9).padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
