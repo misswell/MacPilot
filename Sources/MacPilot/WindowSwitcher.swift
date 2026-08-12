@@ -1478,8 +1478,11 @@ private final class WindowSwitcherPanelController {
         let columns = model?.gridColumnCount ?? 6
         let windowCount = model?.windows.count ?? 0
         let rows = max(1, (windowCount + columns - 1) / columns)
-        let tileHeight = model?.settings.showIconsOnly == true ? 92 : (model?.settings.previewSize.tileHeight ?? 132)
-        let contentHeight = CGFloat(rows) * CGFloat(tileHeight) + CGFloat(rows - 1) * 12 + 56
+        let tileHeight = model?.settings.layoutTileHeight ?? 132
+        // Include the grid padding, title row, stack spacing, and outer padding.
+        // Keeping this in sync with WindowSwitcherOverlay prevents a one-row
+        // grid from being a few points taller than the panel's content area.
+        let contentHeight = CGFloat(rows) * tileHeight + CGFloat(rows - 1) * 12 + 72
         let size = NSSize(
             width: preferredWidth,
             height: min(visibleFrame.height - 80, max(188, contentHeight))
@@ -1533,47 +1536,55 @@ private struct WindowSwitcherOverlay: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 118)
             } else {
-                let columns = (0..<model.gridColumnCount).map { _ in
-                    GridItem(.flexible(minimum: model.settings.tileMinimumWidth), spacing: 10)
-                }
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical, showsIndicators: false) {
-                        LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
-                            ForEach(model.windows) { item in
-                                WindowSwitcherTile(
-                                    item: item,
-                                    isSelected: model.selectedItemID == item.id,
-                                    showTitle: model.settings.showWindowTitles,
-                                    showIconsOnly: model.settings.showIconsOnly,
-                                    previewSize: model.settings.previewSize
-                                ) {
-                                    model.commitSelection(itemID: item.id)
-                                }
-                                .onContinuousHover { phase in
-                                    if case .active = phase {
-                                        model.handleHover(itemID: item.id)
-                                    }
-                                }
-                            }
+                if model.windows.count > model.gridColumnCount {
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical, showsIndicators: false) {
+                            windowGrid
                         }
-                        .padding(2)
+                        .onChange(of: model.selectedItemID) { _, itemID in
+                            guard let itemID else { return }
+                            proxy.scrollTo(itemID, anchor: .center)
+                        }
+                        .onAppear {
+                            guard let itemID = model.selectedItemID else { return }
+                            proxy.scrollTo(itemID, anchor: .center)
+                        }
                     }
-                    .onChange(of: model.selectedItemID) { _, itemID in
-                        guard let itemID else { return }
-                        proxy.scrollTo(itemID, anchor: .center)
-                    }
-                    .onAppear {
-                        guard let itemID = model.selectedItemID else { return }
-                        proxy.scrollTo(itemID, anchor: .center)
-                    }
+                    .frame(maxHeight: .infinity)
+                } else {
+                    windowGrid
                 }
-                .frame(maxHeight: .infinity)
             }
         }
         .padding(16)
         .frame(minWidth: 680, minHeight: 188)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.18)))
+    }
+
+    private var windowGrid: some View {
+        let columns = (0..<model.gridColumnCount).map { _ in
+            GridItem(.flexible(minimum: model.settings.tileMinimumWidth), spacing: 10)
+        }
+        return LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+            ForEach(model.windows) { item in
+                WindowSwitcherTile(
+                    item: item,
+                    isSelected: model.selectedItemID == item.id,
+                    showTitle: model.settings.showWindowTitles,
+                    showIconsOnly: model.settings.showIconsOnly,
+                    previewSize: model.settings.previewSize
+                ) {
+                    model.commitSelection(itemID: item.id)
+                }
+                .onContinuousHover { phase in
+                    if case .active = phase {
+                        model.handleHover(itemID: item.id)
+                    }
+                }
+            }
+        }
+        .padding(2)
     }
 }
 
@@ -1636,7 +1647,7 @@ private struct WindowSwitcherTile: View {
             }
             .padding(8)
             .frame(width: previewSize.tileWidth, alignment: .leading)
-            .frame(minHeight: showIconsOnly ? 72 : previewSize.tileHeight)
+            .frame(minHeight: showIconsOnly ? 72 : previewSize.layoutTileHeight(showTitle: showTitle))
             .background(isSelected ? Color(nsColor: .systemBlue).opacity(0.24) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
             .overlay {
                 if isSelected {
@@ -1684,12 +1695,22 @@ private extension WindowSwitcherPreviewSize {
         case .large: return 150
         }
     }
+
+    func layoutTileHeight(showTitle: Bool) -> CGFloat {
+        let contentHeight = previewHeight + 6 + 16 + (showTitle ? 6 + 13 : 0) + 16
+        return max(tileHeight, contentHeight)
+    }
 }
 
 private extension WindowSwitcherSettings {
     var tileMinimumWidth: CGFloat {
         if showIconsOnly { return 180 }
         return previewSize.tileWidth
+    }
+
+    var layoutTileHeight: CGFloat {
+        if showIconsOnly { return 72 }
+        return previewSize.layoutTileHeight(showTitle: showWindowTitles)
     }
 }
 
