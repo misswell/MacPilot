@@ -579,6 +579,7 @@ final class WindowSwitcherModel: ObservableObject {
     @Published private(set) var settings = WindowSwitcherSettings()
     private(set) var windows: [WindowSwitcherItem] = []
     private(set) var selectedIndex: Int?
+    private(set) var selectedItemID: String?
     private(set) var isShowing = false
     @Published private(set) var hasAccessibilityPermission = false
 
@@ -707,16 +708,28 @@ final class WindowSwitcherModel: ObservableObject {
 
     func select(index: Int) {
         guard windows.indices.contains(index) else { return }
-        guard selectedIndex != index else { return }
+        select(itemID: windows[index].id)
+    }
+
+    func select(itemID: String) {
+        guard let index = windows.firstIndex(where: { $0.id == itemID }) else { return }
+        guard selectedItemID != itemID else { return }
         objectWillChange.send()
         selectedIndex = index
+        selectedItemID = itemID
     }
 
     func commitSelection(at index: Int? = nil) {
         guard isShowing else { return }
-        if let index, windows.indices.contains(index), selectedIndex != index {
-            selectedIndex = index
+        if let index, windows.indices.contains(index) {
+            select(itemID: windows[index].id)
         }
+        finishSession(commit: true)
+    }
+
+    func commitSelection(itemID: String) {
+        guard isShowing else { return }
+        select(itemID: itemID)
         finishSession(commit: true)
     }
 
@@ -844,6 +857,13 @@ final class WindowSwitcherModel: ObservableObject {
                 count: snapshot.count,
                 offset: additionalSelectionOffset
             ) ?? initialIndex
+        } else if additionalSelectionOffset != 0 {
+            let start = reverse ? snapshot.count - 1 : 0
+            resolvedIndex = WindowSwitcherSelection.cycledIndex(
+                current: start,
+                count: snapshot.count,
+                offset: max(0, additionalSelectionOffset - 1)
+            )
         } else {
             resolvedIndex = nil
         }
@@ -870,14 +890,21 @@ final class WindowSwitcherModel: ObservableObject {
     }
 
     private func cycleSelection(reverse: Bool) {
-        guard let current = selectedIndex else { return }
-        guard let next = WindowSwitcherSelection.cycledIndex(
-            current: current,
-            count: windows.count,
-            offset: reverse ? -1 : 1
-        ) else { return }
+        guard !windows.isEmpty else { return }
+        let next: Int
+        if let current = selectedIndex {
+            guard let cycled = WindowSwitcherSelection.cycledIndex(
+                current: current,
+                count: windows.count,
+                offset: reverse ? -1 : 1
+            ) else { return }
+            next = cycled
+        } else {
+            next = reverse ? windows.count - 1 : 0
+        }
         objectWillChange.send()
         selectedIndex = next
+        selectedItemID = windows[next].id
     }
 
     @discardableResult
@@ -886,10 +913,12 @@ final class WindowSwitcherModel: ObservableObject {
         selectedIndex: Int?
     ) -> Bool {
         let itemsChanged = !windows.elementsEqual(items, by: { $0 === $1 })
-        guard self.selectedIndex != selectedIndex || itemsChanged else { return false }
+        let newSelectedID = selectedIndex.flatMap { items.indices.contains($0) ? items[$0].id : nil }
+        guard self.selectedIndex != selectedIndex || self.selectedItemID != newSelectedID || itemsChanged else { return false }
         objectWillChange.send()
         windows = items
         self.selectedIndex = selectedIndex
+        self.selectedItemID = newSelectedID
         return true
     }
 
@@ -1069,6 +1098,13 @@ final class WindowSwitcherModel: ObservableObject {
                 count: ordered.count,
                 offset: pending.additionalSelectionOffset
             ) ?? initialIndex
+        } else if pending.additionalSelectionOffset != 0 {
+            let start = pending.reverse ? ordered.count - 1 : 0
+            resolvedIndex = WindowSwitcherSelection.cycledIndex(
+                current: start,
+                count: ordered.count,
+                offset: max(0, pending.additionalSelectionOffset - 1)
+            )
         } else {
             resolvedIndex = nil
         }
@@ -1121,15 +1157,8 @@ final class WindowSwitcherModel: ObservableObject {
 
     private func prepareHiddenPanelContents() {
         guard !isShowing, pendingSession == nil, !cachedWindows.isEmpty else { return }
-        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let ordered = orderedForSession(cachedWindows)
-        let currentIndex = ordered.firstIndex { $0.processID == frontmost }
-        let preparedSelection = WindowSwitcherSelection.initialIndex(
-            count: ordered.count,
-            currentIndex: currentIndex,
-            reverse: false
-        )
-        updatePanelContents(ordered, selectedIndex: preparedSelection)
+        updatePanelContents(ordered, selectedIndex: nil)
     }
 
     private func prewarmThumbnails() {
@@ -1364,30 +1393,28 @@ private struct WindowSwitcherOverlay: View {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 10) {
-                            ForEach(model.windows.indices, id: \.self) { index in
-                                let item = model.windows[index]
+                            ForEach(model.windows) { item in
                                 WindowSwitcherTile(
                                     item: item,
-                                    isSelected: model.selectedIndex == index,
+                                    isSelected: model.selectedItemID == item.id,
                                     showTitle: model.settings.showWindowTitles
                                 ) {
-                                    model.commitSelection(at: index)
+                                    model.commitSelection(itemID: item.id)
                                 }
-                                .id(item.id)
                                 .onHover { isHovered in
-                                    if isHovered { model.select(index: index) }
+                                    if isHovered { model.select(itemID: item.id) }
                                 }
                             }
                         }
                         .padding(.horizontal, 2)
                     }
-                    .onChange(of: model.selectedIndex) { _, index in
-                        guard let index, model.windows.indices.contains(index) else { return }
-                        proxy.scrollTo(model.windows[index].id, anchor: .center)
+                    .onChange(of: model.selectedItemID) { _, itemID in
+                        guard let itemID else { return }
+                        proxy.scrollTo(itemID, anchor: .center)
                     }
                     .onAppear {
-                        guard let selectedIndex = model.selectedIndex, model.windows.indices.contains(selectedIndex) else { return }
-                        proxy.scrollTo(model.windows[selectedIndex].id, anchor: .center)
+                        guard let itemID = model.selectedItemID else { return }
+                        proxy.scrollTo(itemID, anchor: .center)
                     }
                 }
                 .frame(height: 142)
