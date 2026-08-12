@@ -1122,9 +1122,7 @@ final class WindowSwitcherModel: ObservableObject {
             currentIndex: currentIndex,
             reverse: false
         ) ?? 0
-        if updatePanelContents(ordered, selectedIndex: preparedSelection) {
-            panelController?.layoutIfNeeded()
-        }
+        updatePanelContents(ordered, selectedIndex: preparedSelection)
     }
 
     private func prewarmThumbnails() {
@@ -1249,14 +1247,7 @@ private final class WindowSwitcherPanelController {
 
     func prepare() {
         guard panel == nil, let model else { return }
-        let panel = makePanel(model: model)
-        self.panel = panel
-        updateFrame(of: panel)
-        panel.contentView?.layoutSubtreeIfNeeded()
-    }
-
-    func layoutIfNeeded() {
-        panel?.contentView?.layoutSubtreeIfNeeded()
+        panel = makePanel(model: model)
     }
 
     func show() {
