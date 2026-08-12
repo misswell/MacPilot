@@ -583,6 +583,8 @@ private struct WindowSwitcherInventoryRefresh: Sendable {
 @MainActor
 final class WindowSwitcherModel: ObservableObject {
     private static let inventoryRefreshDebounce = Duration.milliseconds(200)
+    private static let thumbnailCacheLimit = 24
+    private static let thumbnailMaximumPixelSize = CGSize(width: 256, height: 160)
     private static let performanceLogger = Logger(
         subsystem: "com.misswell.macpilot",
         category: "WindowSwitcherPerformance"
@@ -610,6 +612,7 @@ final class WindowSwitcherModel: ObservableObject {
     private var inventorySignature: Int?
     private var pendingSession: WindowSwitcherPendingSession?
     private var thumbnailTask: Task<Void, Never>?
+    private var thumbnailRevision = 0
     private var thumbnailCache: [CGWindowID: NSImage] = [:]
     private var thumbnailCacheOrder: [CGWindowID] = []
     private var eventTap: CFMachPort?
@@ -654,6 +657,8 @@ final class WindowSwitcherModel: ObservableObject {
             cancelPendingSession()
             inventoryRefreshDebounceTask?.cancel()
             inventoryRefreshDebounceTask = nil
+            cancelThumbnailRefresh()
+            clearThumbnailCache()
             removeEventTap()
         }
         persist?()
@@ -679,9 +684,8 @@ final class WindowSwitcherModel: ObservableObject {
             applyCachedPreviews(to: cachedWindows)
             prewarmThumbnails()
         } else {
-            thumbnailTask?.cancel()
-            cachedWindows.forEach { $0.updatePreview(nil) }
-            windows.forEach { $0.updatePreview(nil) }
+            cancelThumbnailRefresh()
+            clearThumbnailCache()
         }
         persist?()
     }
@@ -859,7 +863,12 @@ final class WindowSwitcherModel: ObservableObject {
         panelController = panelController ?? WindowSwitcherPanelController(model: self)
         panelController?.show()
         reportPresentationLatency(startedAt: startedAt, cacheHit: cacheHit)
-        refreshThumbnails(for: snapshot, selectedIndex: selectedIndex, maximumCount: nil, requireShowing: true)
+        refreshThumbnails(
+            for: snapshot,
+            selectedIndex: selectedIndex,
+            maximumCount: Self.thumbnailCacheLimit,
+            requireShowing: true
+        )
         if manual {
             manualDismissTask?.cancel()
             manualDismissTask = Task { @MainActor [weak self] in
@@ -900,7 +909,7 @@ final class WindowSwitcherModel: ObservableObject {
         isShowing = false
         isManualSession = false
         panelController?.hide()
-        thumbnailTask?.cancel()
+        cancelThumbnailRefresh()
         if commit, let selected {
             focus(selected)
         }
@@ -1143,8 +1152,10 @@ final class WindowSwitcherModel: ObservableObject {
         maximumCount: Int?,
         requireShowing: Bool
     ) {
-        thumbnailTask?.cancel()
+        cancelThumbnailRefresh()
         guard settings.showThumbnails else { return }
+        let revision = thumbnailRevision
+        let maximumPixelSize = Self.thumbnailMaximumPixelSize
         let prioritized = WindowSwitcherThumbnailPriority.orderedIndices(
             count: items.count,
             selectedIndex: selectedIndex
@@ -1152,19 +1163,24 @@ final class WindowSwitcherModel: ObservableObject {
         let indices = maximumCount.map { Array(prioritized.prefix($0)) } ?? prioritized
         thumbnailTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer {
+                if self.thumbnailRevision == revision {
+                    self.thumbnailTask = nil
+                }
+            }
             for index in indices {
                 guard !Task.isCancelled, self.settings.showThumbnails else { return }
                 if requireShowing && !self.isShowing { return }
                 let item = items[index]
                 guard let windowID = item.windowID, item.canCapturePreview else { continue }
-                if let cached = self.thumbnailCache[windowID] {
+                if let cached = self.cachedThumbnail(for: windowID) {
                     item.updatePreview(cached)
                     continue
                 }
                 let captured = await Task.detached(priority: .utility) {
                     WindowSwitcherPreviewCapture.capture(
                         windowID: windowID,
-                        maximumPixelSize: CGSize(width: 320, height: 200)
+                        maximumPixelSize: maximumPixelSize
                     )
                 }.value
                 guard let captured else { continue }
@@ -1179,13 +1195,42 @@ final class WindowSwitcherModel: ObservableObject {
         }
     }
 
+    private func cancelThumbnailRefresh() {
+        thumbnailRevision += 1
+        thumbnailTask?.cancel()
+        thumbnailTask = nil
+    }
+
+    private func cachedThumbnail(for windowID: CGWindowID) -> NSImage? {
+        guard let image = thumbnailCache[windowID] else { return nil }
+        thumbnailCacheOrder.removeAll { $0 == windowID }
+        thumbnailCacheOrder.append(windowID)
+        return image
+    }
+
     private func storeThumbnail(_ image: NSImage, for windowID: CGWindowID) {
         thumbnailCache[windowID] = image
         thumbnailCacheOrder.removeAll { $0 == windowID }
         thumbnailCacheOrder.append(windowID)
-        while thumbnailCacheOrder.count > 64 {
+        while thumbnailCacheOrder.count > Self.thumbnailCacheLimit {
             let removed = thumbnailCacheOrder.removeFirst()
             thumbnailCache.removeValue(forKey: removed)
+            clearPreview(for: removed)
+        }
+    }
+
+    private func clearThumbnailCache() {
+        thumbnailCache.removeAll(keepingCapacity: false)
+        thumbnailCacheOrder.removeAll(keepingCapacity: false)
+        clearPreview(for: nil)
+    }
+
+    private func clearPreview(for windowID: CGWindowID?) {
+        var visited = Set<ObjectIdentifier>()
+        for item in cachedWindows + windows {
+            guard windowID == nil || item.windowID == windowID else { continue }
+            guard visited.insert(ObjectIdentifier(item)).inserted else { continue }
+            item.updatePreview(nil)
         }
     }
 
