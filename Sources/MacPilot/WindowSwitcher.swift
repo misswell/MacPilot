@@ -20,6 +20,8 @@ struct WindowSwitcherSettings: Codable, Equatable, Sendable {
     var includeHiddenApplications = false
     var showThumbnails = true
     var showWindowTitles = true
+    var previewSize = WindowSwitcherPreviewSize.medium
+    var showIconsOnly = false
 
     init() {}
 
@@ -30,7 +32,13 @@ struct WindowSwitcherSettings: Codable, Equatable, Sendable {
         includeHiddenApplications = try container.decodeIfPresent(Bool.self, forKey: .includeHiddenApplications) ?? false
         showThumbnails = try container.decodeIfPresent(Bool.self, forKey: .showThumbnails) ?? true
         showWindowTitles = try container.decodeIfPresent(Bool.self, forKey: .showWindowTitles) ?? true
+        previewSize = try container.decodeIfPresent(WindowSwitcherPreviewSize.self, forKey: .previewSize) ?? .medium
+        showIconsOnly = try container.decodeIfPresent(Bool.self, forKey: .showIconsOnly) ?? false
     }
+}
+
+enum WindowSwitcherPreviewSize: String, Codable, CaseIterable, Sendable {
+    case small, medium, large
 }
 
 enum WindowSwitcherSelection {
@@ -92,6 +100,7 @@ final class WindowSwitcherItem: ObservableObject, Identifiable, @unchecked Senda
     let icon: NSImage
     @Published private(set) var preview: NSImage?
     let axWindow: AXUIElement?
+    let frame: CGRect?
     let isMinimized: Bool
     let isHidden: Bool
     let canCapturePreview: Bool
@@ -106,6 +115,7 @@ final class WindowSwitcherItem: ObservableObject, Identifiable, @unchecked Senda
         icon: NSImage,
         preview: NSImage?,
         axWindow: AXUIElement?,
+        frame: CGRect?,
         isMinimized: Bool,
         isHidden: Bool,
         canCapturePreview: Bool
@@ -119,6 +129,7 @@ final class WindowSwitcherItem: ObservableObject, Identifiable, @unchecked Senda
         self.icon = icon
         self.preview = preview
         self.axWindow = axWindow
+        self.frame = frame
         self.isMinimized = isMinimized
         self.isHidden = isHidden
         self.canCapturePreview = canCapturePreview
@@ -214,6 +225,7 @@ private enum WindowSwitcherInventory {
                     application: application,
                     axWindow: axWindow,
                     serverRecord: record,
+                    frame: frame,
                     fallbackTitle: resolvedTitle,
                     index: index,
                     icon: icon,
@@ -230,6 +242,7 @@ private enum WindowSwitcherInventory {
                         application: application,
                         axWindow: nil,
                         serverRecord: record,
+                        frame: record.frame,
                         fallbackTitle: record.title,
                         index: index,
                         icon: icon,
@@ -269,6 +282,7 @@ private enum WindowSwitcherInventory {
         application: NSRunningApplication,
         axWindow: AXUIElement?,
         serverRecord: WindowSwitcherServerRecord?,
+        frame: CGRect?,
         fallbackTitle: String,
         index: Int,
         icon: NSImage,
@@ -294,6 +308,7 @@ private enum WindowSwitcherInventory {
             icon: icon,
             preview: nil,
             axWindow: axWindow,
+            frame: frame,
             isMinimized: minimized,
             isHidden: application.isHidden,
             canCapturePreview: serverRecord?.isOnScreen == true
@@ -612,6 +627,16 @@ final class WindowSwitcherModel: ObservableObject {
     private var mouseSelectionEnabled = true
     private var mouseSelectionAnchor: CGPoint?
 
+    var gridColumnCount: Int {
+        let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
+            ?? NSScreen.main ?? NSScreen.screens.first
+        let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
+        let preferredWidth = min(1080, max(680, visibleFrame.width - 80))
+        let tileWidth = settings.showIconsOnly ? 180 : settings.previewSize.tileWidth
+        let usableWidth = preferredWidth - 32 - 4
+        return max(1, Int((usableWidth + 10) / (tileWidth + 10)))
+    }
+
     init() {
         hasAccessibilityPermission = AXIsProcessTrusted()
         noteApplicationActivation(NSWorkspace.shared.frontmostApplication)
@@ -682,6 +707,21 @@ final class WindowSwitcherModel: ObservableObject {
 
     func setShowWindowTitles(_ enabled: Bool) {
         settings.showWindowTitles = enabled
+        persist?()
+    }
+
+    func setPreviewSize(_ size: WindowSwitcherPreviewSize) {
+        settings.previewSize = size
+        persist?()
+    }
+
+    func setShowIconsOnly(_ enabled: Bool) {
+        settings.showIconsOnly = enabled
+        if enabled {
+            cancelThumbnailRefresh()
+            clearThumbnailCache()
+            applyCachedPreviews(to: cachedWindows)
+        }
         persist?()
     }
 
@@ -1021,10 +1061,50 @@ final class WindowSwitcherModel: ObservableObject {
 
     private func noteApplicationActivation(_ application: NSRunningApplication?) {
         guard let processID = application?.processIdentifier, processID != getpid() else { return }
-        let frontmostWindowID = cachedWindows.first { $0.processID == processID }?.id
-        if let frontmostWindowID {
-            noteWindowActivation(frontmostWindowID)
+        if let focusedWindowID = focusedWindowID(of: processID) {
+            noteWindowActivation(focusedWindowID)
+        } else if let fallbackID = cachedWindows.first(where: { $0.processID == processID })?.id {
+            noteWindowActivation(fallbackID)
         }
+    }
+
+    private func focusedWindowID(of processID: pid_t) -> String? {
+        let appElement = AXUIElementCreateApplication(processID)
+        AXUIElementSetMessagingTimeout(appElement, 0.25)
+        var focusedWindowValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &focusedWindowValue
+        ) == .success else { return nil }
+        guard let focusedWindowValue,
+              CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID() else { return nil }
+        let focusedWindow = focusedWindowValue as! AXUIElement
+
+        var titleValue: CFTypeRef?
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        AXUIElementCopyAttributeValue(focusedWindow, kAXTitleAttribute as CFString, &titleValue)
+        AXUIElementCopyAttributeValue(focusedWindow, kAXPositionAttribute as CFString, &positionValue)
+        AXUIElementCopyAttributeValue(focusedWindow, kAXSizeAttribute as CFString, &sizeValue)
+        let title = titleValue as? String ?? ""
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        let hasPosition = positionValue.map {
+            CFGetTypeID($0) == AXValueGetTypeID() && AXValueGetValue($0 as! AXValue, .cgPoint, &position)
+        } ?? false
+        let hasSize = sizeValue.map {
+            CFGetTypeID($0) == AXValueGetTypeID() && AXValueGetValue($0 as! AXValue, .cgSize, &size)
+        } ?? false
+        let frame = hasPosition && hasSize ? CGRect(origin: position, size: size) : nil
+
+        return cachedWindows.first { item in
+            guard item.processID == processID else { return false }
+            if let frame, let itemFrame = item.frame {
+                return frame.intersects(itemFrame) && !frame.isNull && !itemFrame.isNull
+            }
+            return !title.isEmpty && item.title == title
+        }?.id
     }
 
     private func noteWindowActivation(_ windowID: String) {
@@ -1374,7 +1454,16 @@ private final class WindowSwitcherPanelController {
         let mouseLocation = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) }) ?? NSScreen.main ?? NSScreen.screens.first
         let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
-        let size = NSSize(width: min(940, max(620, visibleFrame.width - 80)), height: 220)
+        let preferredWidth = min(1080, max(680, visibleFrame.width - 80))
+        let columns = model?.gridColumnCount ?? 6
+        let windowCount = model?.windows.count ?? 0
+        let rows = max(1, (windowCount + columns - 1) / columns)
+        let tileHeight = model?.settings.showIconsOnly == true ? 92 : (model?.settings.previewSize.tileHeight ?? 132)
+        let contentHeight = CGFloat(rows) * CGFloat(tileHeight) + CGFloat(rows - 1) * 12 + 56
+        let size = NSSize(
+            width: preferredWidth,
+            height: min(visibleFrame.height - 80, max(188, contentHeight))
+        )
         let targetFrame = NSRect(
             x: visibleFrame.midX - size.width / 2,
             y: visibleFrame.midY - size.height / 2,
@@ -1424,14 +1513,19 @@ private struct WindowSwitcherOverlay: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 118)
             } else {
+                let columns = (0..<model.gridColumnCount).map { _ in
+                    GridItem(.flexible(minimum: model.settings.tileMinimumWidth), spacing: 10)
+                }
                 ScrollViewReader { proxy in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 10) {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                             ForEach(model.windows) { item in
                                 WindowSwitcherTile(
                                     item: item,
                                     isSelected: model.selectedItemID == item.id,
-                                    showTitle: model.settings.showWindowTitles
+                                    showTitle: model.settings.showWindowTitles,
+                                    showIconsOnly: model.settings.showIconsOnly,
+                                    previewSize: model.settings.previewSize
                                 ) {
                                     model.commitSelection(itemID: item.id)
                                 }
@@ -1442,7 +1536,7 @@ private struct WindowSwitcherOverlay: View {
                                 }
                             }
                         }
-                        .padding(.horizontal, 2)
+                        .padding(2)
                     }
                     .onChange(of: model.selectedItemID) { _, itemID in
                         guard let itemID else { return }
@@ -1453,11 +1547,11 @@ private struct WindowSwitcherOverlay: View {
                         proxy.scrollTo(itemID, anchor: .center)
                     }
                 }
-                .frame(height: 142)
+                .frame(maxHeight: .infinity)
             }
         }
         .padding(16)
-        .frame(minWidth: 560, minHeight: 188)
+        .frame(minWidth: 680, minHeight: 188)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.18)))
     }
@@ -1467,46 +1561,62 @@ private struct WindowSwitcherTile: View {
     @ObservedObject var item: WindowSwitcherItem
     let isSelected: Bool
     let showTitle: Bool
+    let showIconsOnly: Bool
+    let previewSize: WindowSwitcherPreviewSize
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 6) {
-                ZStack(alignment: .bottomLeading) {
-                    Group {
-                        if let preview = item.preview {
-                            Image(nsImage: preview)
-                                .resizable()
-                                .scaledToFit()
-                        } else {
-                            Image(nsImage: item.icon)
-                                .resizable()
-                                .scaledToFit()
-                                .padding(26)
-                        }
+                if showIconsOnly {
+                    HStack(spacing: 10) {
+                        Image(nsImage: item.icon)
+                            .resizable()
+                            .frame(width: 40, height: 40)
+                        Text(item.appName)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
                     }
-                    .frame(width: 126, height: 78)
-                    .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 9))
-                    .clipShape(RoundedRectangle(cornerRadius: 9))
-                    Image(nsImage: item.icon)
-                        .resizable()
-                        .frame(width: 24, height: 24)
-                        .padding(5)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
-                        .offset(x: 6, y: 12)
-                }
-                Text(item.appName)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                if showTitle {
-                    Text(item.displayTitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    .frame(width: previewSize.tileWidth - 16, alignment: .leading)
+                } else {
+                    ZStack(alignment: .bottomLeading) {
+                        Group {
+                            if let preview = item.preview {
+                                Image(nsImage: preview)
+                                    .resizable()
+                                    .scaledToFit()
+                            } else {
+                                Image(nsImage: item.icon)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .padding(26)
+                            }
+                        }
+                        .frame(width: previewSize.previewWidth, height: previewSize.previewHeight)
+                        .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 9))
+                        .clipShape(RoundedRectangle(cornerRadius: 9))
+                        Image(nsImage: item.icon)
+                            .resizable()
+                            .frame(width: 24, height: 24)
+                            .padding(5)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+                            .offset(x: 6, y: 12)
+                    }
+                    Text(item.appName)
+                        .font(.caption.weight(.semibold))
                         .lineLimit(1)
+                    if showTitle {
+                        Text(item.displayTitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
             .padding(8)
-            .frame(width: 144, alignment: .leading)
+            .frame(width: previewSize.tileWidth, alignment: .leading)
+            .frame(minHeight: showIconsOnly ? 72 : previewSize.tileHeight)
             .background(isSelected ? Color(nsColor: .systemBlue).opacity(0.24) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
             .overlay {
                 if isSelected {
@@ -1519,6 +1629,47 @@ private struct WindowSwitcherTile: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+private extension WindowSwitcherPreviewSize {
+    var previewWidth: CGFloat {
+        switch self {
+        case .small: return 88
+        case .medium: return 126
+        case .large: return 164
+        }
+    }
+
+    var previewHeight: CGFloat {
+        switch self {
+        case .small: return 56
+        case .medium: return 78
+        case .large: return 102
+        }
+    }
+
+    var tileWidth: CGFloat {
+        switch self {
+        case .small: return 110
+        case .medium: return 144
+        case .large: return 182
+        }
+    }
+
+    var tileHeight: CGFloat {
+        switch self {
+        case .small: return 96
+        case .medium: return 122
+        case .large: return 150
+        }
+    }
+}
+
+private extension WindowSwitcherSettings {
+    var tileMinimumWidth: CGFloat {
+        if showIconsOnly { return 180 }
+        return previewSize.tileWidth
     }
 }
 
@@ -1576,6 +1727,21 @@ struct WindowSwitcherSettingsView: View {
                     set: { windowSwitcher.setShowWindowTitles($0) }
                 )
             )
+            Toggle(
+                model.t("windowSwitcherShowIconsOnly"),
+                isOn: Binding(
+                    get: { windowSwitcher.settings.showIconsOnly },
+                    set: { windowSwitcher.setShowIconsOnly($0) }
+                )
+            )
+            Picker(model.t("windowSwitcherPreviewSize"), selection: Binding(
+                get: { windowSwitcher.settings.previewSize },
+                set: { windowSwitcher.setPreviewSize($0) }
+            )) {
+                Text(model.t("windowSwitcherPreviewSmall")).tag(WindowSwitcherPreviewSize.small)
+                Text(model.t("windowSwitcherPreviewMedium")).tag(WindowSwitcherPreviewSize.medium)
+                Text(model.t("windowSwitcherPreviewLarge")).tag(WindowSwitcherPreviewSize.large)
+            }
 
             if !windowSwitcher.hasAccessibilityPermission {
                 VStack(alignment: .leading, spacing: 8) {
