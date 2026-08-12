@@ -32,6 +32,7 @@ struct BLEWakeRecoveryTests {
     @MainActor
     @Test func overdueSignalTimeoutClearsThePreSleepPresence() async throws {
         let model = BLEUnlockModel()
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
         model.settings.signalTimeout = 0
         model.startMonitor(UUID())
 
@@ -43,6 +44,7 @@ struct BLEWakeRecoveryTests {
     @MainActor
     @Test func systemSleepFreezesTheOldSignalTimeout() async throws {
         let model = BLEUnlockModel()
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
         model.settings.signalTimeout = 0
         model.startMonitor(UUID())
 
