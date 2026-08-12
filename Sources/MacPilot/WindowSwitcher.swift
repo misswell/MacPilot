@@ -952,6 +952,7 @@ final class WindowSwitcherModel: ObservableObject {
         } else {
             next = reverse ? windows.count - 1 : 0
         }
+        noteWindowActivation(windows[next].id)
         objectWillChange.send()
         selectedIndex = next
         selectedItemID = windows[next].id
@@ -1032,8 +1033,8 @@ final class WindowSwitcherModel: ObservableObject {
             _ = AXUIElementSetAttributeValue(axWindow, kAXMainAttribute as CFString, true as CFTypeRef)
             _ = AXUIElementSetAttributeValue(axWindow, kAXFocusedAttribute as CFString, true as CFTypeRef)
         }
-        noteWindowActivation(item.id)
         noteApplicationActivation(application)
+        noteWindowActivation(item.id)
     }
 
     private func installWorkspaceObserver() {
@@ -1098,13 +1099,31 @@ final class WindowSwitcherModel: ObservableObject {
         } ?? false
         let frame = hasPosition && hasSize ? CGRect(origin: position, size: size) : nil
 
-        return cachedWindows.first { item in
-            guard item.processID == processID else { return false }
-            if let frame, let itemFrame = item.frame {
-                return frame.intersects(itemFrame) && !frame.isNull && !itemFrame.isNull
+        let candidates = cachedWindows.filter { $0.processID == processID }
+        if let identityMatch = candidates.first(where: { item in
+            guard let itemWindow = item.axWindow else { return false }
+            return CFEqual(focusedWindow, itemWindow)
+        }) {
+            return identityMatch.id
+        }
+        if !title.isEmpty {
+            if let exact = candidates.first(where: { $0.title == title }) {
+                return exact.id
             }
-            return !title.isEmpty && item.title == title
-        }?.id
+        }
+        guard let frame else { return candidates.first?.id }
+        return candidates
+            .compactMap { item -> (WindowSwitcherItem, CGFloat)? in
+                guard let itemFrame = item.frame, !itemFrame.isNull else { return nil }
+                return (item, frameDistance(frame, itemFrame))
+            }
+            .min { $0.1 < $1.1 }?
+            .0.id
+    }
+
+    private func frameDistance(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
+        abs(lhs.midX - rhs.midX) + abs(lhs.midY - rhs.midY)
+            + abs(lhs.width - rhs.width) + abs(lhs.height - rhs.height)
     }
 
     private func noteWindowActivation(_ windowID: String) {
