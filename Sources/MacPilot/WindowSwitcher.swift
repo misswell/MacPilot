@@ -571,6 +571,7 @@ final class WindowSwitcherModel: ObservableObject {
     private static let inventoryRefreshDebounce = Duration.milliseconds(200)
     private static let thumbnailCacheLimit = 24
     private static let thumbnailMaximumPixelSize = CGSize(width: 256, height: 160)
+    private static let mouseSelectionDistanceThreshold: CGFloat = 24
     private static let performanceLogger = Logger(
         subsystem: "com.misswell.macpilot",
         category: "WindowSwitcherPerformance"
@@ -608,6 +609,8 @@ final class WindowSwitcherModel: ObservableObject {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var manualDismissTask: Task<Void, Never>?
     private var panelController: WindowSwitcherPanelController?
+    private var mouseSelectionEnabled = true
+    private var mouseSelectionAnchor: CGPoint?
 
     init() {
         hasAccessibilityPermission = AXIsProcessTrusted()
@@ -717,6 +720,12 @@ final class WindowSwitcherModel: ObservableObject {
         objectWillChange.send()
         selectedIndex = index
         selectedItemID = itemID
+    }
+
+    func handleHover(itemID: String) {
+        unlockMouseSelectionIfMoved()
+        guard mouseSelectionEnabled else { return }
+        select(itemID: itemID)
     }
 
     func commitSelection(at index: Int? = nil) {
@@ -870,6 +879,7 @@ final class WindowSwitcherModel: ObservableObject {
         updatePanelContents(snapshot, selectedIndex: resolvedIndex)
         isManualSession = manual
         isShowing = true
+        resetMouseSelectionLock()
         panelController = panelController ?? WindowSwitcherPanelController(model: self)
         panelController?.show()
         reportPresentationLatency(startedAt: startedAt, cacheHit: cacheHit)
@@ -928,6 +938,8 @@ final class WindowSwitcherModel: ObservableObject {
         let selected = selectedIndex.flatMap { windows.indices.contains($0) ? windows[$0] : nil }
         isShowing = false
         isManualSession = false
+        mouseSelectionEnabled = true
+        mouseSelectionAnchor = nil
         panelController?.hide()
         cancelThumbnailRefresh()
         if commit, let selected {
@@ -944,6 +956,28 @@ final class WindowSwitcherModel: ObservableObject {
     private func cancelPendingSession() {
         pendingSession = nil
         tabIsDown = false
+    }
+
+    private func resetMouseSelectionLock() {
+        mouseSelectionEnabled = false
+        mouseSelectionAnchor = NSEvent.mouseLocation
+    }
+
+    private func unlockMouseSelectionIfMoved() {
+        guard !mouseSelectionEnabled else { return }
+        guard let anchor = mouseSelectionAnchor else {
+            mouseSelectionEnabled = true
+            mouseSelectionAnchor = nil
+            return
+        }
+        let mouse = NSEvent.mouseLocation
+        let deltaX = mouse.x - anchor.x
+        let deltaY = mouse.y - anchor.y
+        let threshold = Self.mouseSelectionDistanceThreshold
+        if (deltaX * deltaX + deltaY * deltaY) >= threshold * threshold {
+            mouseSelectionEnabled = true
+            mouseSelectionAnchor = nil
+        }
     }
 
     private func focus(_ item: WindowSwitcherItem) {
@@ -1401,8 +1435,10 @@ private struct WindowSwitcherOverlay: View {
                                 ) {
                                     model.commitSelection(itemID: item.id)
                                 }
-                                .onHover { isHovered in
-                                    if isHovered { model.select(itemID: item.id) }
+                                .onContinuousHover { phase in
+                                    if case .active = phase {
+                                        model.handleHover(itemID: item.id)
+                                    }
                                 }
                             }
                         }
