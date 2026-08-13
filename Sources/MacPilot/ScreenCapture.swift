@@ -928,11 +928,21 @@ final class ScreenCaptureModel: ObservableObject {
 
     private func captureFullscreenAndHandleResult() async {
         do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let display = activeDisplay(from: content.displays) else {
-                throw ScreenCaptureError.noDisplayFound
+            let image: CGImage
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                guard let display = activeDisplay(from: content.displays) else {
+                    throw ScreenCaptureError.noDisplayFound
+                }
+                image = try await captureDisplay(display, showsCursor: settings.showsCursor)
+            } catch {
+                guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main,
+                      let displayID = screen.displayID,
+                      let snapshot = SmartDisplaySnapshotCapture.capture(displayID: displayID) else {
+                    throw error
+                }
+                image = snapshot
             }
-            let image = try await captureDisplay(display, showsCursor: settings.showsCursor)
             handleCapturedImage(image)
         } catch {
             errorMessage = error.localizedDescription
@@ -941,19 +951,30 @@ final class ScreenCaptureModel: ObservableObject {
 
     private func captureActiveWindowAndHandleResult() async {
         do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-                  pid != getpid(),
-                  let window = preferredCaptureWindow(from: content.windows, processID: pid) else {
+            let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            guard let pid, pid != getpid() else {
                 throw ScreenCaptureError.captureFailed(AppText.value("scActiveWindowUnavailable", language: language))
             }
-            let filter = SCContentFilter(desktopIndependentWindow: window)
-            let configuration = SCStreamConfiguration()
-            configuration.scalesToFit = true
-            configuration.showsCursor = false
-            configuration.width = max(1, window.frame.width > 0 ? Int(window.frame.width * 2) : 1)
-            configuration.height = max(1, window.frame.height > 0 ? Int(window.frame.height * 2) : 1)
-            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            let image: CGImage
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                guard let window = preferredCaptureWindow(from: content.windows, processID: pid) else {
+                    throw ScreenCaptureError.captureFailed(AppText.value("scActiveWindowUnavailable", language: language))
+                }
+                let filter = SCContentFilter(desktopIndependentWindow: window)
+                let configuration = SCStreamConfiguration()
+                configuration.scalesToFit = true
+                configuration.showsCursor = false
+                configuration.width = max(1, window.frame.width > 0 ? Int(window.frame.width * 2) : 1)
+                configuration.height = max(1, window.frame.height > 0 ? Int(window.frame.height * 2) : 1)
+                image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            } catch {
+                guard let windowID = SmartWindowSnapshotCapture.frontmostWindowID(processID: pid),
+                      let fallback = SmartWindowSnapshotCapture.capture(windowID: windowID) else {
+                    throw error
+                }
+                image = fallback
+            }
             handleCapturedImage(image)
         } catch {
             errorMessage = error.localizedDescription
@@ -1188,48 +1209,43 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     private func captureAndSaveAllDisplays() async throws -> [ScreenCaptureSavedImage] {
-        let content: SCShareableContent
-        do {
-            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        } catch {
-            throw ScreenCaptureError.captureFailed(error.localizedDescription)
-        }
-
-        let displays: [SCDisplay]
-        if settings.captureAllDisplays {
-            displays = content.displays
-        } else {
-            displays = [content.displays.first].compactMap { $0 }
-        }
-
-        guard !displays.isEmpty else {
-            throw ScreenCaptureError.noDisplayFound
-        }
-
         let saveConfiguration = ScreenCaptureSaveConfiguration(
             outputFolder: settings.outputFolder,
             imageFormat: settings.imageFormat,
             quality: settings.quality
         )
         let showsCursor = settings.showsCursor
-        var results: [ScreenCaptureSavedImage] = []
-        let multiDisplay = displays.count > 1
-        for (index, display) in displays.enumerated() {
-            guard let image = try? await captureDisplay(display, showsCursor: showsCursor) else { continue }
-            let sendableImage = SendableScreenCaptureImage(value: image)
-            let displayIndex = multiDisplay ? index : nil
-            let date = Date()
-            let saved = try autoreleasepool {
+        var capturedImages: [(image: CGImage, displayIndex: Int?)] = []
+        if let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) {
+            let displays = settings.captureAllDisplays ? content.displays : [content.displays.first].compactMap { $0 }
+            let multiDisplay = displays.count > 1
+            for (index, display) in displays.enumerated() {
+                guard let image = try? await captureDisplay(display, showsCursor: showsCursor) else { continue }
+                capturedImages.append((image, multiDisplay ? index : nil))
+            }
+        }
+
+        if capturedImages.isEmpty {
+            let screens = settings.captureAllDisplays ? NSScreen.screens : [NSScreen.main].compactMap { $0 }
+            let multiDisplay = screens.count > 1
+            for (index, screen) in screens.enumerated() {
+                guard let displayID = screen.displayID,
+                      let image = SmartDisplaySnapshotCapture.capture(displayID: displayID) else { continue }
+                capturedImages.append((image, multiDisplay ? index : nil))
+            }
+        }
+
+        guard !capturedImages.isEmpty else { throw ScreenCaptureError.noDisplayFound }
+        return try capturedImages.map { captured in
+            try autoreleasepool {
                 try ScreenCaptureStorage.save(
-                    image: sendableImage,
-                    displayIndex: displayIndex,
-                    date: date,
+                    image: SendableScreenCaptureImage(value: captured.image),
+                    displayIndex: captured.displayIndex,
+                    date: Date(),
                     configuration: saveConfiguration
                 )
             }
-            results.append(saved)
         }
-        return results
     }
 
     private func captureDisplay(_ display: SCDisplay, showsCursor: Bool) async throws -> CGImage {

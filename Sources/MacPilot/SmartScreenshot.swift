@@ -2233,7 +2233,7 @@ private enum SmartAXTargetQuery {
     }
 }
 
-private extension NSScreen {
+extension NSScreen {
     var displayID: CGDirectDisplayID? {
         (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
     }
@@ -2791,6 +2791,43 @@ enum SmartDisplaySnapshotCapture {
 
     static func capture(displayID: CGDirectDisplayID) -> CGImage? {
         captureFunction?(displayID)
+    }
+}
+
+enum SmartWindowSnapshotCapture {
+    typealias CaptureFunction = @convention(c) (
+        CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption
+    ) -> CGImage?
+
+    private static let captureFunction: CaptureFunction? = {
+        guard let handle = dlopen(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+            RTLD_LAZY
+        ), let symbol = dlsym(handle, "CGWindowListCreateImage") else { return nil }
+        return unsafeBitCast(symbol, to: CaptureFunction.self)
+    }()
+
+    static func capture(windowID: CGWindowID) -> CGImage? {
+        captureFunction?(.null, .optionIncludingWindow, windowID, [.bestResolution, .boundsIgnoreFraming])
+    }
+
+    static func frontmostWindowID(processID: pid_t) -> CGWindowID? {
+        guard let info = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else { return nil }
+        let candidates: [(CGWindowID, CGFloat)] = info.compactMap { entry in
+            guard let ownerPID = entry[kCGWindowOwnerPID as String] as? pid_t,
+                  ownerPID == processID,
+                  let layer = entry[kCGWindowLayer as String] as? Int,
+                  layer == 0,
+                  let windowID = entry[kCGWindowNumber as String] as? NSNumber,
+                  let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: bounds),
+                  rect.width >= 80, rect.height >= 60 else { return nil }
+            return (CGWindowID(windowID.uint32Value), rect.width * rect.height)
+        }
+        return candidates.max(by: { $0.1 < $1.1 })?.0
     }
 }
 
