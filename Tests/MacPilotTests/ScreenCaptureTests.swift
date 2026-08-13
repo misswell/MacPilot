@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import CoreGraphics
+import Carbon.HIToolbox
 import Testing
 @testable import MacPilot
 
@@ -54,6 +55,47 @@ struct ScreenCaptureTests {
         let binding = SmartCaptureShortcutBinding(keyCode: 18, modifiers: [.control, .shift])
         let data = try JSONEncoder().encode(binding)
         #expect(try JSONDecoder().decode(SmartCaptureShortcutBinding.self, from: data) == binding)
+    }
+
+    @Test func smartCaptureShortcutRejectsUnmodifiedRegularKeysButAllowsFunctionKeys() {
+        #expect(SmartCaptureShortcutBinding(keyCode: UInt16(kVK_F1), modifiers: []).isValid)
+        #expect(!SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_A), modifiers: []).isValid)
+        #expect(SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_A), modifiers: [.command]).isValid)
+        #expect(!SmartCaptureShortcutBinding(keyCode: UInt16(kVK_Escape), modifiers: []).isValid)
+    }
+
+    @Test func settingsReplaceAnUnsafePersistedShortcutWithF1() {
+        let settings = ScreenCaptureSettings(
+            smartCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_A), modifiers: [])
+        )
+        #expect(settings.smartCaptureShortcut == .default)
+    }
+
+    @Test func storedSmartCaptureRectRoundTripsAndRejectsInvalidSizes() throws {
+        let stored = SmartCaptureStoredRect(CGRect(x: -20, y: 42, width: 320, height: 180))
+        let data = try JSONEncoder().encode(stored)
+        let decoded = try JSONDecoder().decode(SmartCaptureStoredRect.self, from: data)
+        #expect(decoded == stored)
+        #expect(decoded.isValid)
+        #expect(!SmartCaptureStoredRect(CGRect(x: 0, y: 0, width: 3, height: 20)).isValid)
+    }
+
+    @Test func smartCaptureClipboardCopiesAnImageAsPNG() throws {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let context = try #require(CGContext(
+            data: nil,
+            width: 4,
+            height: 4,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(NSColor.systemBlue.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        let pasteboard = NSPasteboard(name: .init("MacPilotTests-\(UUID().uuidString)"))
+        SmartCaptureClipboard.copy(image: try #require(context.makeImage()), to: pasteboard)
+        #expect(pasteboard.data(forType: .png) != nil)
     }
 
     @Test func selectionGeometryNormalizesBothDragDirections() {

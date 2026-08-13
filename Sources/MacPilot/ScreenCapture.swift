@@ -87,7 +87,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.showsCursor = showsCursor
         self.smartCaptureEnabled = smartCaptureEnabled
         self.pinSmartCaptures = pinSmartCaptures
-        self.smartCaptureShortcut = smartCaptureShortcut
+        self.smartCaptureShortcut = smartCaptureShortcut.isValid ? smartCaptureShortcut : .default
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -213,8 +213,10 @@ private enum ScreenCaptureStorage {
         fileFormatter.timeZone = .current
         var baseName = "MacPilot_\(fileFormatter.string(from: date))"
         if let displayIndex { baseName += "_display\(displayIndex + 1)" }
-        let fileURL = dayURL.appendingPathComponent(
-            "\(baseName).\(configuration.imageFormat.fileExtension)"
+        let fileURL = uniqueFileURL(
+            in: dayURL,
+            baseName: baseName,
+            fileExtension: configuration.imageFormat.fileExtension
         )
 
         guard let destination = CGImageDestinationCreateWithURL(
@@ -242,6 +244,43 @@ private enum ScreenCaptureStorage {
             url: fileURL,
             size: (attributes?[.size] as? NSNumber)?.int64Value ?? 0
         )
+    }
+
+    private static func uniqueFileURL(in directory: URL, baseName: String, fileExtension: String) -> URL {
+        var index = 1
+        while true {
+            let suffix = index == 1 ? "" : "_\(index)"
+            let candidate = directory.appendingPathComponent("\(baseName)\(suffix).\(fileExtension)")
+            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            index += 1
+        }
+    }
+
+    static func replace(
+        image: SendableScreenCaptureImage,
+        at url: URL,
+        configuration: ScreenCaptureSaveConfiguration
+    ) throws -> Int64 {
+        let temporaryURL = url.deletingLastPathComponent()
+            .appendingPathComponent(".MacPilot-edit-\(UUID().uuidString).\(configuration.imageFormat.fileExtension)")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        guard let destination = CGImageDestinationCreateWithURL(
+            temporaryURL as CFURL,
+            configuration.imageFormat.utType.identifier as CFString,
+            1,
+            nil
+        ) else { throw ScreenCaptureError.encodingFailed }
+        if configuration.imageFormat.supportsQuality {
+            CGImageDestinationAddImage(destination, image.value, [
+                kCGImageDestinationLossyCompressionQuality: configuration.quality
+            ] as CFDictionary)
+        } else {
+            CGImageDestinationAddImage(destination, image.value, nil)
+        }
+        guard CGImageDestinationFinalize(destination) else { throw ScreenCaptureError.encodingFailed }
+        _ = try FileManager.default.replaceItemAt(url, withItemAt: temporaryURL)
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     static func statistics(at folderURL: URL) -> ScreenCaptureStorageStatistics {
@@ -408,19 +447,28 @@ final class ScreenCaptureModel: ObservableObject {
     private var captureTask: Task<Void, Never>?
     private var permissionPollTask: Task<Void, Never>?
     private var diskUsageRevision = 0
+    private let lastAreaDefaultsKey = "MacPilot.smartCapture.lastArea"
     private lazy var smartCapture = SmartScreenshotController(
         language: { [weak self] in self?.language ?? .system },
         onCapture: { [weak self] image in self?.handleSmartCapture(image) },
         onError: { [weak self] error in
             Self.logger.error("Region capture failed: \(error.localizedDescription, privacy: .public)")
-            self?.errorMessage = error.localizedDescription
+            guard let self else { return }
+            if let shortcutError = error as? SmartCaptureShortcutError {
+                self.errorMessage = AppText.value(shortcutError.messageKey, language: self.language)
+            } else {
+                self.errorMessage = error.localizedDescription
+            }
         },
+        onSelectionRect: { [weak self] rect in self?.storeLastSmartCaptureArea(rect) },
         shortcutBinding: settings.smartCaptureShortcut
     )
 
+    @MainActor
     deinit {
         captureTask?.cancel()
         permissionPollTask?.cancel()
+        smartCapture.stop()
     }
 
     func shutdown() {
@@ -517,9 +565,26 @@ final class ScreenCaptureModel: ObservableObject {
         updateSmartCaptureRuntime()
     }
 
-    func setSmartCaptureShortcut(_ binding: SmartCaptureShortcutBinding) {
-        updateSettings { $0.smartCaptureShortcut = binding }
-        smartCapture.updateShortcutBinding(binding)
+    @discardableResult
+    func setSmartCaptureShortcut(_ binding: SmartCaptureShortcutBinding) -> Bool {
+        guard let error = smartCapture.updateShortcutBindingReturningError(binding) else {
+            updateSettings { $0.smartCaptureShortcut = binding }
+            errorMessage = nil
+            return true
+        }
+        errorMessage = AppText.value(error.messageKey, language: language)
+        return false
+    }
+
+    func suspendSmartCaptureShortcut() {
+        smartCapture.suspendShortcut()
+    }
+
+    func resumeSmartCaptureShortcut() {
+        smartCapture.resumeShortcut()
+        if settings.smartCaptureEnabled {
+            smartCapture.start()
+        }
     }
 
     func setPinSmartCaptures(_ value: Bool) {
@@ -529,6 +594,24 @@ final class ScreenCaptureModel: ObservableObject {
     func startSmartCapture() {
         guard ensureCapturePermissions() else { return }
         smartCapture.startSelection()
+    }
+
+    func repeatSmartCapture() {
+        guard ensureCapturePermissions(), let stored = loadLastSmartCaptureArea(), stored.isValid else {
+            errorMessage = AppText.value("scNoLastArea", language: language)
+            return
+        }
+        smartCapture.captureStoredRect(stored.rect)
+    }
+
+    private func storeLastSmartCaptureArea(_ rect: CGRect) {
+        guard let data = try? JSONEncoder().encode(SmartCaptureStoredRect(rect)) else { return }
+        UserDefaults.standard.set(data, forKey: lastAreaDefaultsKey)
+    }
+
+    private func loadLastSmartCaptureArea() -> SmartCaptureStoredRect? {
+        guard let data = UserDefaults.standard.data(forKey: lastAreaDefaultsKey) else { return nil }
+        return try? JSONDecoder().decode(SmartCaptureStoredRect.self, from: data)
     }
 
     private func updateSmartCaptureRuntime() {
@@ -546,15 +629,11 @@ final class ScreenCaptureModel: ObservableObject {
             errorMessage = ScreenCaptureError.permissionRequired.errorDescription
             return false
         }
-        guard AXIsProcessTrusted() else {
-            errorMessage = AppText.value("scSmartCaptureAccessibilityRequired", language: .system)
-            return false
-        }
         return true
     }
 
     private func handleSmartCapture(_ image: CGImage) {
-        smartCapture.showQuickAccess(image: image)
+        SmartCaptureClipboard.copy(image: image)
         let configuration = ScreenCaptureSaveConfiguration(
             outputFolder: smartCaptureOutputFolder(),
             imageFormat: settings.imageFormat,
@@ -581,10 +660,56 @@ final class ScreenCaptureModel: ObservableObject {
                 self.totalDiskUsage += saved.size
                 self.diskUsageRevision += 1
                 self.errorMessage = nil
+                self.smartCapture.showQuickAccess(
+                    image: image,
+                    savedURL: saved.url,
+                    onSave: { [weak self] image, url in
+                        self?.saveEditedSmartCapture(image: image, at: url, configuration: configuration)
+                    },
+                    onDelete: { [weak self] url in self?.deleteSmartCapture(at: url, size: saved.size) }
+                )
             } catch {
                 Self.logger.error("Smart capture save failed: \(error.localizedDescription, privacy: .public)")
                 self?.errorMessage = error.localizedDescription
+                self?.smartCapture.showQuickAccess(image: image, savedURL: nil, onSave: nil, onDelete: nil)
             }
+        }
+    }
+
+    private func saveEditedSmartCapture(
+        image: CGImage,
+        at url: URL?,
+        configuration: ScreenCaptureSaveConfiguration
+    ) {
+        guard let url else { return }
+        let sendableImage = SendableScreenCaptureImage(value: image)
+        Task { [weak self] in
+            do {
+                let size = try await Task.detached(priority: .utility) {
+                    try ScreenCaptureStorage.replace(
+                        image: sendableImage,
+                        at: url,
+                        configuration: configuration
+                    )
+                }.value
+                guard let self else { return }
+                self.lastCaptureSize = size
+                SmartCaptureClipboard.copy(image: image)
+            } catch {
+                self?.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func deleteSmartCapture(at url: URL?, size: Int64) {
+        guard let url else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+            screenshotCount = max(0, screenshotCount - 1)
+            totalDiskUsage = max(0, totalDiskUsage - size)
+            diskUsageRevision += 1
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -965,6 +1090,8 @@ struct ScreenCaptureView: View {
                     showingSmartShortcutEditor = true
                 }
                 .buttonStyle(.bordered)
+                Button(t("scRepeatArea")) { capture.repeatSmartCapture() }
+                    .buttonStyle(.bordered)
                 Button(t("scSmartCaptureNow")) { capture.startSmartCapture() }
                     .buttonStyle(.borderedProminent)
             }
@@ -1298,6 +1425,7 @@ private struct SmartCaptureShortcutEditor: View {
     @ObservedObject var capture: ScreenCaptureModel
     @State private var recordedKeyCode: UInt16?
     @State private var recordedModifiers: InputSourceShortcutModifiers
+    @State private var validationMessage: String?
 
     init(capture: ScreenCaptureModel) {
         self.capture = capture
@@ -1317,6 +1445,11 @@ private struct SmartCaptureShortcutEditor: View {
                 modifiers: $recordedModifiers,
                 placeholder: AppText.value("scRecordShortcut", language: appModel.language)
             )
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
             HStack {
                 Button(AppText.value("scResetShortcut", language: appModel.language)) {
                     recordedKeyCode = SmartCaptureShortcutBinding.default.keyCode
@@ -1331,15 +1464,18 @@ private struct SmartCaptureShortcutEditor: View {
         }
         .padding(24)
         .frame(width: 460)
+        .onAppear { capture.suspendSmartCaptureShortcut() }
+        .onDisappear { capture.resumeSmartCaptureShortcut() }
     }
 
     private func save() {
         guard let recordedKeyCode else { return }
-        capture.setSmartCaptureShortcut(SmartCaptureShortcutBinding(
+        let didSave = capture.setSmartCaptureShortcut(SmartCaptureShortcutBinding(
             keyCode: recordedKeyCode,
             modifiers: recordedModifiers
         ))
-        dismiss()
+        if didSave { dismiss() }
+        else { validationMessage = capture.errorMessage }
     }
 }
 
@@ -1387,8 +1523,14 @@ private final class SmartCaptureShortcutRecorderNSView: NSView {
             UInt16(kVK_Shift), UInt16(kVK_RightShift), UInt16(kVK_Control), UInt16(kVK_RightControl),
             UInt16(kVK_Option), UInt16(kVK_RightOption), UInt16(kVK_Command), UInt16(kVK_RightCommand)
         ]
-        guard !modifierKeys.contains(event.keyCode) else { return }
-        onCapture?(event.keyCode, InputSourceShortcutModifiers(event.modifierFlags))
+        guard !modifierKeys.contains(event.keyCode), event.keyCode != UInt16(kVK_Escape) else { return }
+        let modifiers = InputSourceShortcutModifiers(event.modifierFlags)
+        let isFunctionKey = SmartCaptureShortcutBinding(
+            keyCode: event.keyCode,
+            modifiers: []
+        ).validationError == nil
+        guard isFunctionKey || !modifiers.isEmpty else { return }
+        onCapture?(event.keyCode, modifiers)
         needsDisplay = true
     }
 
