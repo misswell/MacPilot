@@ -1688,13 +1688,19 @@ private struct SmartCaptureShortcutEditor: View {
                 modifiers: $recordedModifiers,
                 placeholder: AppText.value("scRecordShortcut", language: appModel.language)
             )
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
             if let validationMessage {
                 Text(validationMessage)
                     .font(.caption)
                     .foregroundStyle(.red)
             }
             HStack {
-                Button(AppText.value("scResetShortcut", language: appModel.language)) {
+                Button(AppText.value(
+                    "scResetShortcut",
+                    language: appModel.language,
+                    arguments: [kind.defaultBinding.displayName]
+                )) {
                     let binding = kind.defaultBinding
                     recordedKeyCode = binding.keyCode
                     recordedModifiers = binding.modifiers
@@ -1754,33 +1760,79 @@ private final class SmartCaptureShortcutRecorderNSView: NSView {
     var modifiers: InputSourceShortcutModifiers = []
     var placeholder = ""
     var onCapture: ((UInt16, InputSourceShortcutModifiers) -> Void)?
+    private var isFocused = false {
+        didSet { needsDisplay = true }
+    }
 
     override var acceptsFirstResponder: Bool { true }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { window?.makeFirstResponder(self) }
+        guard window != nil else { return }
+        // The sheet may not have become key at the point this view is
+        // attached. Deferring one turn makes the recorder reliably focusable
+        // when the editor opens, while mouseDown below still lets the user
+        // explicitly re-focus it at any time.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            window.makeFirstResponder(self)
+        }
     }
 
     override func keyDown(with event: NSEvent) {
+        record(event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Command-modified combinations are offered to menu key equivalents
+        // before keyDown. Capture them here so shortcuts such as ⌘⇧4 can be
+        // recorded instead of triggering the menu/system action.
+        guard record(event) else { return super.performKeyEquivalent(with: event) }
+        return true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result { isFocused = true }
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result { isFocused = false }
+        return result
+    }
+
+    @discardableResult
+    private func record(_ event: NSEvent) -> Bool {
         let modifierKeys: Set<UInt16> = [
             UInt16(kVK_Shift), UInt16(kVK_RightShift), UInt16(kVK_Control), UInt16(kVK_RightControl),
             UInt16(kVK_Option), UInt16(kVK_RightOption), UInt16(kVK_Command), UInt16(kVK_RightCommand)
         ]
-        guard !modifierKeys.contains(event.keyCode), event.keyCode != UInt16(kVK_Escape) else { return }
+        guard !modifierKeys.contains(event.keyCode), event.keyCode != UInt16(kVK_Escape) else { return false }
         let modifiers = InputSourceShortcutModifiers(event.modifierFlags)
         let isFunctionKey = SmartCaptureShortcutBinding(
             keyCode: event.keyCode,
             modifiers: []
         ).validationError == nil
-        guard isFunctionKey || !modifiers.isEmpty else { return }
+        guard isFunctionKey || !modifiers.isEmpty else { return false }
         onCapture?(event.keyCode, modifiers)
         needsDisplay = true
+        return true
     }
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.controlBackgroundColor.setFill()
         dirtyRect.fill()
+        if isFocused {
+            NSColor.controlAccentColor.withAlphaComponent(0.16).setFill()
+            dirtyRect.fill()
+        }
         let title = keyCode.map { modifiers.symbolDescription + MacPilotKeyCode.displayName(for: $0) } ?? placeholder
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 15, weight: .medium),
@@ -1791,7 +1843,7 @@ private final class SmartCaptureShortcutRecorderNSView: NSView {
             at: NSPoint(x: bounds.midX - textSize.width / 2, y: bounds.midY - textSize.height / 2),
             withAttributes: attributes
         )
-        NSColor.separatorColor.setStroke()
+        (isFocused ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
         NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8).stroke()
     }
 }
