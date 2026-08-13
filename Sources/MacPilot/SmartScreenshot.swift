@@ -226,6 +226,10 @@ final class SmartScreenshotController {
     private var latestPointerLocation: CGPoint?
     private var shortcutBinding: SmartCaptureShortcutBinding
     private var shortcutSuspended = false
+    /// Whether the feature is enabled and expects a Carbon registration.
+    /// This is distinct from the registration handles because registration
+    /// can fail when another app or macOS already owns the combination.
+    private var shortcutRegistrationRequested = false
 
     init(
         language: @escaping () -> AppLanguage,
@@ -242,7 +246,9 @@ final class SmartScreenshotController {
     }
 
     func start() {
-        guard !shortcutSuspended, shortcutHotKey == nil, shortcutEventHandler == nil else { return }
+        guard !shortcutSuspended else { return }
+        shortcutRegistrationRequested = true
+        guard shortcutHotKey == nil, shortcutEventHandler == nil else { return }
         if let error = registerShortcut() {
             onError(error)
         }
@@ -255,9 +261,15 @@ final class SmartScreenshotController {
         unregisterShortcut()
     }
 
-    func resumeShortcut() {
+    /// Ends shortcut-editing mode. Registration is optional because the
+    /// settings sheet can also be opened while the feature itself is off.
+    /// In that case we must not silently re-enable the global shortcut when
+    /// the sheet is dismissed.
+    func resumeShortcut(register: Bool = true) {
         shortcutSuspended = false
-        start()
+        if register {
+            start()
+        }
     }
 
     private func registerShortcut() -> SmartCaptureShortcutError? {
@@ -367,7 +379,11 @@ final class SmartScreenshotController {
             unregisterShortcut()
             return nil
         }
-        guard wasRegistered else {
+        // If the feature is enabled but its previous registration failed,
+        // changing the binding must still probe/register the new candidate.
+        // Otherwise a conflicting shortcut could be persisted as if it had
+        // been activated successfully.
+        guard wasRegistered || shortcutRegistrationRequested else {
             shortcutBinding = binding
             return nil
         }
@@ -388,6 +404,7 @@ final class SmartScreenshotController {
     }
 
     func stop() {
+        shortcutRegistrationRequested = false
         cancelSelection()
         pendingTargetUpdate?.cancel()
         pendingTargetUpdate = nil

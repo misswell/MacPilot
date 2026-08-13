@@ -579,10 +579,7 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     func resumeSmartCaptureShortcut() {
-        smartCapture.resumeShortcut()
-        if settings.smartCaptureEnabled {
-            smartCapture.start()
-        }
+        smartCapture.resumeShortcut(register: settings.smartCaptureEnabled)
     }
 
     func setPinSmartCaptures(_ value: Bool) {
