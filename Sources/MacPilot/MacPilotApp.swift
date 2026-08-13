@@ -496,8 +496,8 @@ enum AppText {
         ,
         "screenCapture": "截屏与贴图", "screenCaptureSubtitle": "使用可自定义快捷键智能识别窗口和界面元素边界，支持贴图、OCR、标注与低资源定时截屏。",
         "scSmartCapture": "智能截图", "scSmartCaptureHint": "移动鼠标自动识别窗口或界面元素，单击截图，Esc 或右键取消。",
-        "scSmartCaptureNow": "开始截图", "scAreaCaptureNow": "区域框选截图", "scApplicationWindowCaptureNow": "应用窗口框选截图", "scFullscreenCaptureNow": "全屏截图", "scActiveWindowCaptureNow": "当前窗口截图", "scAreaAnnotateNow": "区域截图并标注", "scOCRCaptureNow": "区域截图并 OCR", "scEditShortcuts": "修改截图快捷键", "scEnableSmartCapture": "启用全局快捷键", "scChangeShortcut": "修改快捷键",
-        "scShortcutModes": "截图快捷入口", "scStartMode": "开始", "scSmartCaptureShortcut": "智能元素截图快捷键", "scAreaCaptureShortcut": "区域框选截图快捷键", "scFullscreenCaptureShortcut": "全屏截图快捷键", "scActiveWindowCaptureShortcut": "当前窗口截图快捷键", "scAreaAnnotateShortcut": "区域截图并标注快捷键", "scOCRShortcut": "OCR 截图快捷键",
+        "scSmartCaptureNow": "开始截图", "scAreaCaptureNow": "区域框选截图", "scApplicationWindowCaptureNow": "应用窗口框选截图", "scFullscreenCaptureNow": "全屏截图", "scActiveWindowCaptureNow": "当前窗口截图", "scAreaAnnotateNow": "区域截图并标注", "scOCRCaptureNow": "区域截图并 OCR", "scScrollingCaptureNow": "滚动长截图", "scObjectCutoutNow": "抠图截图", "scEditShortcuts": "修改截图快捷键", "scEnableSmartCapture": "启用全局快捷键", "scChangeShortcut": "修改快捷键",
+        "scShortcutModes": "截图快捷入口", "scStartMode": "开始", "scSmartCaptureShortcut": "智能元素截图快捷键", "scAreaCaptureShortcut": "区域框选截图快捷键", "scFullscreenCaptureShortcut": "全屏截图快捷键", "scActiveWindowCaptureShortcut": "当前窗口截图快捷键", "scAreaAnnotateShortcut": "区域截图并标注快捷键", "scOCRShortcut": "OCR 截图快捷键", "scScrollingShortcut": "滚动长截图快捷键", "scObjectCutoutShortcut": "抠图截图快捷键",
         "scRepeatArea": "重复上次区域", "scNoLastArea": "还没有可重复的区域截图。",
         "scSmartCaptureAccessibilityRequired": "智能截图需要辅助功能权限。请在设置中明确点击授权后再试。",
         "scPinAfterSmartCapture": "截图后自动贴图", "scQuickAccessTitle": "截图快捷操作", "scQuickAccessHint": "截图后显示快捷操作，可复制、标注或按需贴图；不会自动贴图。", "scCaptureAreaUnavailable": "上次选择的区域已不可用。", "scCaptureCoordinateUnavailable": "无法定位鼠标所在显示器，请重试。", "scCaptureOutsideDisplay": "所选区域不在显示器范围内。", "scCaptureMultiDisplayAllocationFailed": "无法创建跨显示器截图。", "scCaptureMultiDisplayCompositionFailed": "无法合成跨显示器截图。", "scActiveWindowUnavailable": "没有找到当前应用窗口。",
@@ -511,7 +511,8 @@ enum AppText {
         "scOpenKeyboardSettings": "打开系统键盘快捷键设置",
         "scRecordShortcut": "点击后按下快捷键…", "scResetShortcut": "恢复默认（%@）", "scPin": "贴图",
         "scSmartCaptureResources": "空闲时仅监听自定义快捷键，不采集屏幕、不轮询；OCR 与标注仅在使用时加载。智能元素识别需要辅助功能权限。",
-        "scPinTitle": "MacPilot 贴图", "scCopy": "复制", "scAnnotate": "标注", "scClose": "关闭", "scReveal": "在访达中显示", "scDelete": "删除", "scOCR": "OCR",
+        "scPinTitle": "MacPilot 贴图", "scCopy": "复制", "scAnnotate": "标注", "scClose": "关闭", "scReveal": "在访达中显示", "scDelete": "删除", "scOCR": "OCR", "scScrollingTitle": "滚动长截图", "scScrollingHint": "在选定区域内滚动页面，MacPilot 会自动采样并拼接；完成后点击“完成”。", "scScrollingFrames": "已采样 %d 帧", "scObjectCutoutFailed": "抠图失败：%@",
+        "scHistory": "截图历史", "scHistoryEmpty": "还没有截图记录。", "scScrollingStitchFailed": "无法拼接滚动截图。请减少滚动幅度后重试。",
         "scOCRNoText": "未识别到文字。", "scOCRCopied": "OCR 文字已复制", "scOK": "好",
         "scAnnotateTitle": "MacPilot 标注", "scAnnotationTool": "工具", "scAnnotationRectangle": "矩形",
         "scAnnotationArrow": "箭头", "scAnnotationText": "文字", "scUndo": "撤销", "scCancel": "取消",
@@ -735,8 +736,8 @@ enum AppText {
             ,
             "screenCapture": "Capture & Pin", "screenCaptureSubtitle": "Use a customizable shortcut to detect window and UI element bounds, then pin, OCR, annotate, or run low-resource scheduled captures.",
             "scSmartCapture": "Smart Capture", "scSmartCaptureHint": "Move the pointer to detect a window or UI element, click to capture, or press Escape/right-click to cancel.",
-            "scSmartCaptureNow": "Start Capture", "scAreaCaptureNow": "Capture Area", "scApplicationWindowCaptureNow": "Capture Application Window", "scFullscreenCaptureNow": "Capture Full Screen", "scActiveWindowCaptureNow": "Capture Current Window", "scAreaAnnotateNow": "Capture and Annotate", "scOCRCaptureNow": "Capture Area and OCR", "scEditShortcuts": "Edit Screenshot Shortcuts", "scEnableSmartCapture": "Enable the global shortcut", "scChangeShortcut": "Change Shortcut",
-            "scShortcutModes": "Screenshot shortcuts", "scStartMode": "Start", "scSmartCaptureShortcut": "Smart element shortcut", "scAreaCaptureShortcut": "Area capture shortcut", "scFullscreenCaptureShortcut": "Fullscreen capture shortcut", "scActiveWindowCaptureShortcut": "Active window shortcut", "scAreaAnnotateShortcut": "Area and annotate shortcut", "scOCRShortcut": "OCR capture shortcut",
+            "scSmartCaptureNow": "Start Capture", "scAreaCaptureNow": "Capture Area", "scApplicationWindowCaptureNow": "Capture Application Window", "scFullscreenCaptureNow": "Capture Full Screen", "scActiveWindowCaptureNow": "Capture Current Window", "scAreaAnnotateNow": "Capture and Annotate", "scOCRCaptureNow": "Capture Area and OCR", "scScrollingCaptureNow": "Scrolling Screenshot", "scObjectCutoutNow": "Object Cutout", "scEditShortcuts": "Edit Screenshot Shortcuts", "scEnableSmartCapture": "Enable the global shortcut", "scChangeShortcut": "Change Shortcut",
+            "scShortcutModes": "Screenshot shortcuts", "scStartMode": "Start", "scSmartCaptureShortcut": "Smart element shortcut", "scAreaCaptureShortcut": "Area capture shortcut", "scFullscreenCaptureShortcut": "Fullscreen capture shortcut", "scActiveWindowCaptureShortcut": "Active window shortcut", "scAreaAnnotateShortcut": "Area and annotate shortcut", "scOCRShortcut": "OCR capture shortcut", "scScrollingShortcut": "Scrolling screenshot shortcut", "scObjectCutoutShortcut": "Object cutout shortcut",
             "scRepeatArea": "Repeat Last Area", "scNoLastArea": "There is no previous area to repeat.",
             "scSmartCaptureAccessibilityRequired": "Smart Capture requires Accessibility access. Grant it explicitly in Settings, then try again.",
             "scPinAfterSmartCapture": "Pin after smart capture", "scQuickAccessTitle": "Screenshot Actions", "scQuickAccessHint": "After capture, choose to copy, annotate, or pin. Pinning is never automatic.", "scCaptureAreaUnavailable": "The last selected area is no longer available.", "scCaptureCoordinateUnavailable": "The pointer could not be mapped to a display. Try again.", "scCaptureOutsideDisplay": "The selected region is outside the display.", "scCaptureMultiDisplayAllocationFailed": "Unable to allocate a multi-display screenshot.", "scCaptureMultiDisplayCompositionFailed": "Unable to compose the multi-display screenshot.", "scActiveWindowUnavailable": "No active application window was found.",
@@ -750,7 +751,8 @@ enum AppText {
             "scOpenKeyboardSettings": "Open Keyboard Shortcuts settings",
             "scRecordShortcut": "Click, then press a shortcut…", "scResetShortcut": "Restore default (%@)", "scPin": "Pin",
             "scSmartCaptureResources": "While idle, MacPilot only listens for your shortcut—no screen stream or polling. OCR and annotation load only when used. Smart elements require Accessibility access.",
-            "scPinTitle": "MacPilot Pin", "scCopy": "Copy", "scAnnotate": "Annotate", "scClose": "Close", "scReveal": "Show in Finder", "scDelete": "Delete", "scOCR": "OCR",
+            "scPinTitle": "MacPilot Pin", "scCopy": "Copy", "scAnnotate": "Annotate", "scClose": "Close", "scReveal": "Show in Finder", "scDelete": "Delete", "scOCR": "OCR", "scScrollingTitle": "Scrolling Screenshot", "scScrollingHint": "Scroll inside the selected area. MacPilot samples and stitches the page; click Done when finished.", "scScrollingFrames": "%d sampled frames", "scObjectCutoutFailed": "Object cutout failed: %@",
+            "scHistory": "Screenshot History", "scHistoryEmpty": "No screenshots yet.", "scScrollingStitchFailed": "The scrolling frames could not be stitched. Try smaller scroll steps.",
             "scOCRNoText": "No text was detected.", "scOCRCopied": "OCR copied to clipboard", "scOK": "OK",
             "scAnnotateTitle": "MacPilot Annotate", "scAnnotationTool": "Tool", "scAnnotationRectangle": "Rectangle",
             "scAnnotationArrow": "Arrow", "scAnnotationText": "Text", "scUndo": "Undo", "scCancel": "Cancel",
@@ -3186,6 +3188,8 @@ struct MenuBarView: View {
         Button(model.t("scActiveWindowCaptureNow")) { deferCaptureAction { model.screenCapture.captureActiveWindow() } }
         Button(model.t("scAreaAnnotateNow")) { deferCaptureAction { model.screenCapture.startAreaAnnotateCapture() } }
         Button(model.t("scOCRCaptureNow")) { deferCaptureAction { model.screenCapture.startOCRCapture() } }
+        Button(model.t("scScrollingCaptureNow")) { deferCaptureAction { model.screenCapture.startScrollingCapture() } }
+        Button(model.t("scObjectCutoutNow")) { deferCaptureAction { model.screenCapture.startObjectCutoutCapture() } }
         Button(model.t("screenCapture")) { model.requestedSection = .capture; showMainWindow() }
         if pictureInPicture.settings.showMenuBarIcon {
             Divider()

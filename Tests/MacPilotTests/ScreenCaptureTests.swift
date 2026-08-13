@@ -126,13 +126,17 @@ struct ScreenCaptureTests {
         #expect(ScreenCaptureShortcutKind.activeWindow.defaultBinding.displayName == "⇧⌘9")
         #expect(ScreenCaptureShortcutKind.areaAnnotate.defaultBinding.displayName == "⇧⌘7")
         #expect(ScreenCaptureShortcutKind.ocr.defaultBinding.displayName == "⇧⌘2")
+        #expect(ScreenCaptureShortcutKind.scrolling.defaultBinding.displayName == "⇧⌘6")
+        #expect(ScreenCaptureShortcutKind.objectCutout.defaultBinding.displayName == "⇧⌘1")
 
         let settings = ScreenCaptureSettings(
             areaCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_6), modifiers: [.command, .option]),
             fullscreenCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_F8), modifiers: [.control]),
             activeWindowCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_W), modifiers: [.option, .command]),
             areaAnnotateShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_A), modifiers: [.control, .shift]),
-            ocrShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_O), modifiers: [.command, .shift])
+            ocrShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_O), modifiers: [.command, .shift]),
+            scrollingCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_6), modifiers: [.control, .shift]),
+            objectCutoutShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_1), modifiers: [.option, .shift])
         )
         let decoded = try JSONDecoder().decode(ScreenCaptureSettings.self, from: JSONEncoder().encode(settings))
         #expect(decoded.areaCaptureShortcut == settings.areaCaptureShortcut)
@@ -140,6 +144,8 @@ struct ScreenCaptureTests {
         #expect(decoded.activeWindowCaptureShortcut == settings.activeWindowCaptureShortcut)
         #expect(decoded.areaAnnotateShortcut == settings.areaAnnotateShortcut)
         #expect(decoded.ocrShortcut == settings.ocrShortcut)
+        #expect(decoded.scrollingCaptureShortcut == settings.scrollingCaptureShortcut)
+        #expect(decoded.objectCutoutShortcut == settings.objectCutoutShortcut)
     }
 
     @Test @MainActor func screenCaptureModelAppliesAndPersistsEveryShortcutKind() {
@@ -154,7 +160,9 @@ struct ScreenCaptureTests {
             (.fullscreen, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_B), modifiers: [.command, .shift])),
             (.activeWindow, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_C), modifiers: [.command, .option])),
             (.areaAnnotate, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_D), modifiers: [.control, .shift])),
-            (.ocr, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_E), modifiers: [.command, .control]))
+            (.ocr, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_E), modifiers: [.command, .control])),
+            (.scrolling, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_F), modifiers: [.command, .control])),
+            (.objectCutout, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_G), modifiers: [.command, .control]))
         ]
 
         for (kind, binding) in bindings {
@@ -185,6 +193,8 @@ struct ScreenCaptureTests {
         #expect(decoded.activeWindowCaptureShortcut == ScreenCaptureShortcutKind.activeWindow.defaultBinding)
         #expect(decoded.areaAnnotateShortcut == ScreenCaptureShortcutKind.areaAnnotate.defaultBinding)
         #expect(decoded.ocrShortcut == ScreenCaptureShortcutKind.ocr.defaultBinding)
+        #expect(decoded.scrollingCaptureShortcut == ScreenCaptureShortcutKind.scrolling.defaultBinding)
+        #expect(decoded.objectCutoutShortcut == ScreenCaptureShortcutKind.objectCutout.defaultBinding)
     }
 
     @Test func settingsReplaceAnUnsafePersistedShortcutWithF1() {
@@ -219,6 +229,54 @@ struct ScreenCaptureTests {
         let pasteboard = NSPasteboard(name: .init("MacPilotTests-\(UUID().uuidString)"))
         SmartCaptureClipboard.copy(image: try #require(context.makeImage()), to: pasteboard)
         #expect(pasteboard.data(forType: .png) != nil)
+    }
+
+    @Test func scrollingStitcherFindsStableVerticalOverlap() throws {
+        let first = try #require(makeTestImage(width: 40, height: 80, color: .systemBlue))
+        let second = try #require(makeTestImage(width: 40, height: 80, color: .systemBlue))
+        #expect(ScreenCaptureVerticalStitcher.bestOverlap(previous: first, current: second, minimumOverlap: 8, tolerance: 1) == 79)
+    }
+
+    @Test func scrollingStitcherRejectsDifferentWidths() throws {
+        let first = try #require(makeTestImage(width: 20, height: 20, color: .systemBlue))
+        let second = try #require(makeTestImage(width: 21, height: 20, color: .systemBlue))
+        #expect(ScreenCaptureVerticalStitcher.stitch([first, second]) == nil)
+    }
+
+    @Test func scrollingStitcherReturnsSingleFrameUnchanged() throws {
+        let image = try #require(makeTestImage(width: 20, height: 20, color: .systemRed))
+        #expect(ScreenCaptureVerticalStitcher.stitch([image]) === image)
+    }
+
+    @Test func historyStoreTrimsAndRemovesMissingFiles() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MacPilotHistory-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("capture.png")
+        try Data([1, 2, 3]).write(to: url)
+        let suiteName = "MacPilotHistoryTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let item = SmartCaptureHistoryItem(url: url, width: 10, height: 20, byteCount: 3)
+        SmartCaptureHistoryStore.save([item], defaults: defaults)
+        #expect(SmartCaptureHistoryStore.load(defaults: defaults) == [item])
+        try FileManager.default.removeItem(at: url)
+        #expect(SmartCaptureHistoryStore.load(defaults: defaults).isEmpty)
+    }
+
+    private func makeTestImage(width: Int, height: Int, color: NSColor) -> CGImage? {
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.setFillColor(color.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     @Test func selectionGeometryNormalizesBothDragDirections() {
@@ -396,6 +454,8 @@ struct ScreenCaptureTests {
         #expect(settings.activeWindowCaptureShortcut == ScreenCaptureShortcutKind.activeWindow.defaultBinding)
         #expect(settings.areaAnnotateShortcut == ScreenCaptureShortcutKind.areaAnnotate.defaultBinding)
         #expect(settings.ocrShortcut == ScreenCaptureShortcutKind.ocr.defaultBinding)
+        #expect(settings.scrollingCaptureShortcut == ScreenCaptureShortcutKind.scrolling.defaultBinding)
+        #expect(settings.objectCutoutShortcut == ScreenCaptureShortcutKind.objectCutout.defaultBinding)
     }
 
     @Test func qualityIsClampedToValidRange() {

@@ -89,6 +89,8 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
     case activeWindow
     case areaAnnotate
     case ocr
+    case scrolling
+    case objectCutout
 
     var defaultBinding: SmartCaptureShortcutBinding {
         switch self {
@@ -119,6 +121,16 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
                 keyCode: UInt16(kVK_ANSI_2),
                 modifiers: [.command, .shift]
             )
+        case .scrolling:
+            return SmartCaptureShortcutBinding(
+                keyCode: UInt16(kVK_ANSI_6),
+                modifiers: [.command, .shift]
+            )
+        case .objectCutout:
+            return SmartCaptureShortcutBinding(
+                keyCode: UInt16(kVK_ANSI_1),
+                modifiers: [.command, .shift]
+            )
         }
     }
 
@@ -130,6 +142,8 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
         case .activeWindow: return "scActiveWindowCaptureShortcut"
         case .areaAnnotate: return "scAreaAnnotateShortcut"
         case .ocr: return "scOCRShortcut"
+        case .scrolling: return "scScrollingShortcut"
+        case .objectCutout: return "scObjectCutoutShortcut"
         }
     }
 
@@ -144,6 +158,8 @@ enum SmartCaptureSelectionMode: Equatable, Sendable {
     case applicationWindow
     case areaAnnotate
     case ocr
+    case scrolling
+    case objectCutout
 }
 
 enum SmartCaptureShortcutError: Error, Equatable {
@@ -560,6 +576,8 @@ private enum SmartCaptureCarbonHotKey {
     static let ocrID: UInt32 = 5
     static let activeWindowID: UInt32 = 6
     static let areaAnnotateID: UInt32 = 7
+    static let scrollingID: UInt32 = 8
+    static let objectCutoutID: UInt32 = 9
 
     static func identifier(_ id: UInt32) -> EventHotKeyID {
         EventHotKeyID(signature: signature, id: id)
@@ -582,6 +600,8 @@ private enum SmartCaptureCarbonHotKey {
         case .activeWindow: return identifier(activeWindowID)
         case .areaAnnotate: return identifier(areaAnnotateID)
         case .ocr: return identifier(ocrID)
+        case .scrolling: return identifier(scrollingID)
+        case .objectCutout: return identifier(objectCutoutID)
         }
     }
 }
@@ -903,6 +923,8 @@ final class SmartScreenshotController {
     private let onActiveWindowCapture: () -> Void
     private let onAreaAnnotateCapture: (CGImage) -> Void
     private let onOCRCapture: (CGImage) -> Void
+    private let onScrollingCapture: (CGImage) -> Void
+    private let onObjectCutoutCapture: (CGImage) -> Void
     private var shortcutContext: SmartShortcutContext?
     nonisolated(unsafe) private var shortcutHotKey: EventHotKeyRef?
     nonisolated(unsafe) private var selectionCancelHotKey: EventHotKeyRef?
@@ -915,6 +937,7 @@ final class SmartScreenshotController {
     private var pinControllers: [UUID: SmartPinWindowController] = [:]
     private var quickAccessControllers: [UUID: SmartQuickAccessWindowController] = [:]
     private var inlineAnnotationControllers: [UUID: SmartAnnotationWindowController] = [:]
+    private var scrollingControllers: [UUID: SmartScrollingCaptureWindowController] = [:]
     private var isSelecting = false
     private var pendingTargetUpdate: DispatchWorkItem?
     private var latestPointerLocation: CGPoint?
@@ -949,7 +972,9 @@ final class SmartScreenshotController {
         onFullscreenCapture: @escaping () -> Void = {},
         onActiveWindowCapture: @escaping () -> Void = {},
         onAreaAnnotateCapture: @escaping (CGImage) -> Void = { _ in },
-        onOCRCapture: @escaping (CGImage) -> Void = { _ in }
+        onOCRCapture: @escaping (CGImage) -> Void = { _ in },
+        onScrollingCapture: @escaping (CGImage) -> Void = { _ in },
+        onObjectCutoutCapture: @escaping (CGImage) -> Void = { _ in }
     ) {
         self.language = language
         self.onCapture = onCapture
@@ -962,6 +987,8 @@ final class SmartScreenshotController {
         self.onActiveWindowCapture = onActiveWindowCapture
         self.onAreaAnnotateCapture = onAreaAnnotateCapture
         self.onOCRCapture = onOCRCapture
+        self.onScrollingCapture = onScrollingCapture
+        self.onObjectCutoutCapture = onObjectCutoutCapture
     }
 
     func start() {
@@ -1108,7 +1135,7 @@ final class SmartScreenshotController {
         var registeredKinds: Set<ScreenCaptureShortcutKind> = []
         fallbackShortcutBindings.removeAll { $0.id != SmartCaptureCarbonHotKey.captureID }
         unregisterAdditionalShortcuts()
-        for kind in [ScreenCaptureShortcutKind.area, .fullscreen, .activeWindow, .areaAnnotate, .ocr] {
+        for kind in [ScreenCaptureShortcutKind.area, .fullscreen, .activeWindow, .areaAnnotate, .ocr, .scrolling, .objectCutout] {
             guard let binding = additionalShortcutBindings[kind], binding.isValid else { continue }
             guard !registeredBindings.contains(binding), binding != shortcutBinding else {
                 Self.logger.error("Skipping duplicate screenshot shortcut \(kind.rawValue, privacy: .public)")
@@ -1124,6 +1151,8 @@ final class SmartScreenshotController {
             case .activeWindow: id = SmartCaptureCarbonHotKey.activeWindowID
             case .areaAnnotate: id = SmartCaptureCarbonHotKey.areaAnnotateID
             case .ocr: id = SmartCaptureCarbonHotKey.ocrID
+            case .scrolling: id = SmartCaptureCarbonHotKey.scrollingID
+            case .objectCutout: id = SmartCaptureCarbonHotKey.objectCutoutID
             case .smartElement: continue
             }
             let systemConflict = !SmartCaptureSystemShortcutDetector.conflicts(for: binding).isEmpty
@@ -1455,6 +1484,9 @@ final class SmartScreenshotController {
         let inlineAnnotationControllers = Array(self.inlineAnnotationControllers.values)
         self.inlineAnnotationControllers.removeAll(keepingCapacity: false)
         for controller in inlineAnnotationControllers { controller.close() }
+        let scrollingControllers = Array(self.scrollingControllers.values)
+        self.scrollingControllers.removeAll(keepingCapacity: false)
+        for controller in scrollingControllers { controller.close() }
     }
 
     deinit {
@@ -1669,6 +1701,10 @@ final class SmartScreenshotController {
             startSelection(mode: .areaAnnotate)
         case SmartCaptureCarbonHotKey.ocrID:
             startSelection(mode: .ocr)
+        case SmartCaptureCarbonHotKey.scrollingID:
+            startSelection(mode: .scrolling)
+        case SmartCaptureCarbonHotKey.objectCutoutID:
+            startSelection(mode: .objectCutout)
         default:
             break
         }
@@ -1884,6 +1920,14 @@ final class SmartScreenshotController {
                     self.onOCRCapture(image)
                 } else if captureMode == .areaAnnotate {
                     self.onAreaAnnotateCapture(image)
+                } else if captureMode == .scrolling {
+                    self.presentScrollingCapture(
+                        initialImage: image,
+                        for: rect,
+                        quartzClickPoint: quartzClickPoint
+                    )
+                } else if captureMode == .objectCutout {
+                    self.onObjectCutoutCapture(image)
                 } else {
                     self.onCapture(image)
                 }
@@ -1891,6 +1935,30 @@ final class SmartScreenshotController {
                 self?.onError(error)
             }
         }
+    }
+
+    private func presentScrollingCapture(
+        initialImage: CGImage,
+        for rect: CGRect,
+        quartzClickPoint: CGPoint
+    ) {
+        let id = UUID()
+        let controller = SmartScrollingCaptureWindowController(
+            initialImage: initialImage,
+            rect: rect,
+            quartzClickPoint: quartzClickPoint,
+            language: language(),
+            onComplete: { [weak self] image in
+                guard let self else { return }
+                self.scrollingControllers.removeValue(forKey: id)
+                self.onScrollingCapture(image)
+            },
+            onClose: { [weak self] in
+                self?.scrollingControllers.removeValue(forKey: id)
+            }
+        )
+        scrollingControllers[id] = controller
+        controller.show()
     }
 }
 
@@ -2204,6 +2272,190 @@ private final class SmartCaptureOverlayView: NSView {
     private func globalPoint(_ event: NSEvent) -> CGPoint {
         let local = convert(event.locationInWindow, from: nil)
         return CGPoint(x: screenFrame.minX + local.x, y: screenFrame.minY + local.y)
+    }
+}
+
+/// Snapzy-style scrolling capture HUD.  The selected region remains owned by
+/// the foreground app while this small floating panel listens for wheel events
+/// and samples the region after every scroll settle.  Completion stitches the
+/// frames using `ScreenCaptureVerticalStitcher` and returns one image through
+/// the normal post-capture pipeline.
+@MainActor
+private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDelegate {
+    private var frames: [CGImage]
+    private let rect: CGRect
+    private let quartzClickPoint: CGPoint
+    private let language: AppLanguage
+    private let onComplete: (CGImage) -> Void
+    private let onClose: () -> Void
+    private var panel: NSPanel?
+    private var scrollMonitor: Any?
+    private var localScrollMonitor: Any?
+    private var settleTask: Task<Void, Never>?
+    private var isCapturing = false
+
+    init(
+        initialImage: CGImage,
+        rect: CGRect,
+        quartzClickPoint: CGPoint,
+        language: AppLanguage,
+        onComplete: @escaping (CGImage) -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self.frames = [initialImage]
+        self.rect = rect
+        self.quartzClickPoint = quartzClickPoint
+        self.language = language
+        self.onComplete = onComplete
+        self.onClose = onClose
+    }
+
+    func show() {
+        let panel = NSPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 370, height: 148),
+            styleMask: [.titled, .closable, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = AppText.value("scScrollingTitle", language: language)
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+        panel.delegate = self
+        installContent(in: panel)
+        panel.setFrameOrigin(Self.panelOrigin(for: rect, size: panel.frame.size))
+        panel.orderFrontRegardless()
+        self.panel = panel
+        installScrollMonitors()
+    }
+
+    func close() {
+        settleTask?.cancel()
+        settleTask = nil
+        removeScrollMonitors()
+        panel?.close()
+        panel = nil
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        settleTask?.cancel()
+        settleTask = nil
+        removeScrollMonitors()
+        panel?.contentView = nil
+        panel = nil
+        onClose()
+    }
+
+    private func installContent(in panel: NSPanel) {
+        panel.contentView = NSHostingView(rootView: SmartScrollingCaptureView(
+            frameCount: frames.count,
+            language: language,
+            onFinish: { [weak self] in self?.finish() },
+            onCancel: { [weak self] in self?.close() }
+        ))
+    }
+
+    private func refreshContent() {
+        guard let panel else { return }
+        installContent(in: panel)
+    }
+
+    private func installScrollMonitors() {
+        let mask: NSEvent.EventTypeMask = [.scrollWheel]
+        scrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
+            Task { @MainActor [weak self] in self?.handleScroll(event) }
+        }
+        localScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            Task { @MainActor [weak self] in self?.handleScroll(event) }
+            return event
+        }
+    }
+
+    private func removeScrollMonitors() {
+        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+        if let localScrollMonitor { NSEvent.removeMonitor(localScrollMonitor) }
+        scrollMonitor = nil
+        localScrollMonitor = nil
+    }
+
+    private func handleScroll(_ event: NSEvent) {
+        guard panel != nil,
+              !isCapturing,
+              rect.contains(NSEvent.mouseLocation),
+              abs(event.scrollingDeltaY) > 0.1 || abs(event.scrollingDeltaX) > 0.1 else { return }
+        settleTask?.cancel()
+        settleTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            await self?.captureSettledFrame()
+        }
+    }
+
+    private func captureSettledFrame() async {
+        guard panel != nil, !isCapturing, frames.count < 30 else { return }
+        isCapturing = true
+        defer { isCapturing = false }
+        do {
+            let image = try await SmartScreenImageCapture.capture(
+                appKitRect: rect,
+                quartzClickPoint: quartzClickPoint
+            )
+            frames.append(image)
+            refreshContent()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = AppText.value("scScrollingTitle", language: language)
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: AppText.value("scOK", language: language))
+            alert.runModal()
+        }
+    }
+
+    private func finish() {
+        guard let image = ScreenCaptureVerticalStitcher.stitch(frames) else {
+            let alert = NSAlert()
+            alert.messageText = AppText.value("scScrollingTitle", language: language)
+            alert.informativeText = AppText.value("scScrollingStitchFailed", language: language)
+            alert.addButton(withTitle: AppText.value("scOK", language: language))
+            alert.runModal()
+            close()
+            return
+        }
+        close()
+        onComplete(image)
+    }
+
+    private static func panelOrigin(for selection: CGRect, size: CGSize) -> CGPoint {
+        let screen = NSScreen.screens.first { $0.frame.intersects(selection) } ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let x = min(max(selection.maxX + 12, visible.minX + 8), visible.maxX - size.width - 8)
+        let y = min(max(selection.maxY - size.height, visible.minY + 8), visible.maxY - size.height - 8)
+        return CGPoint(x: x, y: y)
+    }
+}
+
+private struct SmartScrollingCaptureView: View {
+    let frameCount: Int
+    let language: AppLanguage
+    let onFinish: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(AppText.value("scScrollingHint", language: language))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Label(AppText.value("scScrollingFrames", language: language, frameCount), systemImage: "square.stack.3d.up")
+                Spacer()
+                Button(AppText.value("scCancel", language: language), action: onCancel)
+                Button(AppText.value("scDone", language: language), action: onFinish)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

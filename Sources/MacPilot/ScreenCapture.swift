@@ -62,6 +62,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
     var activeWindowCaptureShortcut: SmartCaptureShortcutBinding
     var areaAnnotateShortcut: SmartCaptureShortcutBinding
     var ocrShortcut: SmartCaptureShortcutBinding
+    var scrollingCaptureShortcut: SmartCaptureShortcutBinding
+    var objectCutoutShortcut: SmartCaptureShortcutBinding
 
     init(
         isEnabled: Bool = false,
@@ -81,7 +83,9 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         fullscreenCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.fullscreen.defaultBinding,
         activeWindowCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.activeWindow.defaultBinding,
         areaAnnotateShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.areaAnnotate.defaultBinding,
-        ocrShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.ocr.defaultBinding
+        ocrShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.ocr.defaultBinding,
+        scrollingCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.scrolling.defaultBinding,
+        objectCutoutShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.objectCutout.defaultBinding
     ) {
         self.isEnabled = isEnabled
         self.outputFolder = outputFolder
@@ -101,13 +105,15 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.activeWindowCaptureShortcut = activeWindowCaptureShortcut.isValid ? activeWindowCaptureShortcut : ScreenCaptureShortcutKind.activeWindow.defaultBinding
         self.areaAnnotateShortcut = areaAnnotateShortcut.isValid ? areaAnnotateShortcut : ScreenCaptureShortcutKind.areaAnnotate.defaultBinding
         self.ocrShortcut = ocrShortcut.isValid ? ocrShortcut : ScreenCaptureShortcutKind.ocr.defaultBinding
+        self.scrollingCaptureShortcut = scrollingCaptureShortcut.isValid ? scrollingCaptureShortcut : ScreenCaptureShortcutKind.scrolling.defaultBinding
+        self.objectCutoutShortcut = objectCutoutShortcut.isValid ? objectCutoutShortcut : ScreenCaptureShortcutKind.objectCutout.defaultBinding
     }
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled, outputFolder, busyStartHour, busyEndHour
         case busyIntervalMinutes, idleIntervalMinutes, imageFormat, quality
         case maxRetentionDays, captureAllDisplays, showsCursor, smartCaptureEnabled
-        case smartCaptureShortcut, areaCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut
+        case smartCaptureShortcut, areaCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut
     }
 
     init(from decoder: Decoder) throws {
@@ -130,7 +136,9 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
             fullscreenCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .fullscreenCaptureShortcut) ?? ScreenCaptureShortcutKind.fullscreen.defaultBinding,
             activeWindowCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .activeWindowCaptureShortcut) ?? ScreenCaptureShortcutKind.activeWindow.defaultBinding,
             areaAnnotateShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .areaAnnotateShortcut) ?? ScreenCaptureShortcutKind.areaAnnotate.defaultBinding,
-            ocrShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .ocrShortcut) ?? ScreenCaptureShortcutKind.ocr.defaultBinding
+            ocrShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .ocrShortcut) ?? ScreenCaptureShortcutKind.ocr.defaultBinding,
+            scrollingCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .scrollingCaptureShortcut) ?? ScreenCaptureShortcutKind.scrolling.defaultBinding,
+            objectCutoutShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .objectCutoutShortcut) ?? ScreenCaptureShortcutKind.objectCutout.defaultBinding
         )
     }
 
@@ -458,6 +466,7 @@ final class ScreenCaptureModel: ObservableObject {
     @Published private(set) var hasScreenPermission = false
     @Published private(set) var nextCaptureDate: Date?
     @Published private(set) var isLoopRunning = false
+    @Published private(set) var captureHistory: [SmartCaptureHistoryItem] = []
     var language: AppLanguage = .system
 
     var persist: (() -> Void)?
@@ -486,12 +495,16 @@ final class ScreenCaptureModel: ObservableObject {
             .fullscreen: settings.fullscreenCaptureShortcut,
             .activeWindow: settings.activeWindowCaptureShortcut,
             .areaAnnotate: settings.areaAnnotateShortcut,
-            .ocr: settings.ocrShortcut
+            .ocr: settings.ocrShortcut,
+            .scrolling: settings.scrollingCaptureShortcut,
+            .objectCutout: settings.objectCutoutShortcut
         ],
         onFullscreenCapture: { [weak self] in self?.captureFullscreen() },
         onActiveWindowCapture: { [weak self] in self?.captureActiveWindow() },
         onAreaAnnotateCapture: { [weak self] image in self?.presentAreaAnnotation(image) },
-        onOCRCapture: { [weak self] image in self?.handleOCRCapture(image) }
+        onOCRCapture: { [weak self] image in self?.handleOCRCapture(image) },
+        onScrollingCapture: { [weak self] image in self?.handleSmartCapture(image) },
+        onObjectCutoutCapture: { [weak self] image in self?.handleObjectCutout(image) }
     )
 
     deinit {
@@ -518,7 +531,9 @@ final class ScreenCaptureModel: ObservableObject {
             .fullscreen: newSettings.fullscreenCaptureShortcut,
             .activeWindow: newSettings.activeWindowCaptureShortcut,
             .areaAnnotate: newSettings.areaAnnotateShortcut,
-            .ocr: newSettings.ocrShortcut
+            .ocr: newSettings.ocrShortcut,
+            .scrolling: newSettings.scrollingCaptureShortcut,
+            .objectCutout: newSettings.objectCutoutShortcut
         ])
         diskUsageRevision += 1
         hasScreenPermission = CGPreflightScreenCaptureAccess()
@@ -527,6 +542,7 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     func activateFromConfiguration() {
+        captureHistory = SmartCaptureHistoryStore.load()
         Task { await refreshDiskUsage() }
         updateSmartCaptureRuntime()
         if settings.isEnabled {
@@ -610,6 +626,8 @@ final class ScreenCaptureModel: ObservableObject {
         case .activeWindow: updated.activeWindowCaptureShortcut = binding
         case .areaAnnotate: updated.areaAnnotateShortcut = binding
         case .ocr: updated.ocrShortcut = binding
+        case .scrolling: updated.scrollingCaptureShortcut = binding
+        case .objectCutout: updated.objectCutoutShortcut = binding
         }
         guard binding.isValid else {
             errorMessage = AppText.value(binding.validationError?.messageKey ?? "scShortcutRegistrationFailed", language: language)
@@ -620,7 +638,7 @@ final class ScreenCaptureModel: ObservableObject {
             return false
         }
         if kind != .smartElement {
-            let others = [updated.areaCaptureShortcut, updated.fullscreenCaptureShortcut, updated.activeWindowCaptureShortcut, updated.areaAnnotateShortcut, updated.ocrShortcut]
+            let others = [updated.areaCaptureShortcut, updated.fullscreenCaptureShortcut, updated.activeWindowCaptureShortcut, updated.areaAnnotateShortcut, updated.ocrShortcut, updated.scrollingCaptureShortcut, updated.objectCutoutShortcut]
             if others.filter({ $0 == binding }).count > 1 {
                 errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
                 return false
@@ -631,7 +649,9 @@ final class ScreenCaptureModel: ObservableObject {
             .fullscreen: updated.fullscreenCaptureShortcut,
             .activeWindow: updated.activeWindowCaptureShortcut,
             .areaAnnotate: updated.areaAnnotateShortcut,
-            .ocr: updated.ocrShortcut
+            .ocr: updated.ocrShortcut,
+            .scrolling: updated.scrollingCaptureShortcut,
+            .objectCutout: updated.objectCutoutShortcut
         ]
         if kind == .smartElement {
             guard setSmartCaptureShortcut(binding) else { return false }
@@ -646,6 +666,8 @@ final class ScreenCaptureModel: ObservableObject {
                 $0.activeWindowCaptureShortcut = updated.activeWindowCaptureShortcut
                 $0.areaAnnotateShortcut = updated.areaAnnotateShortcut
                 $0.ocrShortcut = updated.ocrShortcut
+                $0.scrollingCaptureShortcut = updated.scrollingCaptureShortcut
+                $0.objectCutoutShortcut = updated.objectCutoutShortcut
             }
             errorMessage = nil
         }
@@ -660,12 +682,14 @@ final class ScreenCaptureModel: ObservableObject {
         case .activeWindow: return settings.activeWindowCaptureShortcut
         case .areaAnnotate: return settings.areaAnnotateShortcut
         case .ocr: return settings.ocrShortcut
+        case .scrolling: return settings.scrollingCaptureShortcut
+        case .objectCutout: return settings.objectCutoutShortcut
         }
     }
 
     @discardableResult
     func setSmartCaptureShortcut(_ binding: SmartCaptureShortcutBinding) -> Bool {
-        if [settings.areaCaptureShortcut, settings.fullscreenCaptureShortcut, settings.activeWindowCaptureShortcut, settings.areaAnnotateShortcut, settings.ocrShortcut].contains(binding) {
+        if [settings.areaCaptureShortcut, settings.fullscreenCaptureShortcut, settings.activeWindowCaptureShortcut, settings.areaAnnotateShortcut, settings.ocrShortcut, settings.scrollingCaptureShortcut, settings.objectCutoutShortcut].contains(binding) {
             errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
             return false
         }
@@ -714,6 +738,32 @@ final class ScreenCaptureModel: ObservableObject {
 
     func startAreaAnnotateCapture() {
         startSelection(mode: .areaAnnotate)
+    }
+
+    func startScrollingCapture() {
+        startSelection(mode: .scrolling)
+    }
+
+    func startObjectCutoutCapture() {
+        startSelection(mode: .objectCutout)
+    }
+
+    private func handleObjectCutout(_ image: CGImage) {
+        Task { [weak self] in
+            do {
+                let cutout = try await ScreenCaptureObjectCutout.removeBackground(from: image)
+                await MainActor.run { self?.handleCapturedImage(cutout, imageFormat: .png) }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    self.errorMessage = AppText.value(
+                        "scObjectCutoutFailed",
+                        language: self.language,
+                        arguments: [error.localizedDescription]
+                    )
+                }
+            }
+        }
     }
 
     /// Starts an interactive capture after the user explicitly requested it.
@@ -769,11 +819,15 @@ final class ScreenCaptureModel: ObservableObject {
         handleCapturedImage(image)
     }
 
-    private func handleCapturedImage(_ image: CGImage, displayIndex: Int? = nil) {
+    private func handleCapturedImage(
+        _ image: CGImage,
+        displayIndex: Int? = nil,
+        imageFormat: ScreenCaptureImageFormat? = nil
+    ) {
         SmartCaptureClipboard.copy(image: image)
         let configuration = ScreenCaptureSaveConfiguration(
             outputFolder: smartCaptureOutputFolder(),
-            imageFormat: settings.imageFormat,
+            imageFormat: imageFormat ?? settings.imageFormat,
             quality: settings.quality
         )
         let sendableImage = SendableScreenCaptureImage(value: image)
@@ -796,6 +850,18 @@ final class ScreenCaptureModel: ObservableObject {
                 self.screenshotCount += 1
                 self.totalDiskUsage += saved.size
                 self.diskUsageRevision += 1
+                self.captureHistory.removeAll { $0.url == saved.url }
+                self.captureHistory.insert(
+                    SmartCaptureHistoryItem(
+                        url: saved.url,
+                        width: image.width,
+                        height: image.height,
+                        byteCount: saved.size
+                    ),
+                    at: 0
+                )
+                self.captureHistory = Array(self.captureHistory.prefix(60))
+                SmartCaptureHistoryStore.save(self.captureHistory)
                 self.errorMessage = nil
                 self.smartCapture.showQuickAccess(
                     image: image,
@@ -826,9 +892,11 @@ final class ScreenCaptureModel: ObservableObject {
                 let text = (request.results ?? [])
                     .compactMap { $0.topCandidates(1).first?.string }
                     .joined(separator: "\n")
+                let qrCodes = (try? ScreenCaptureQRCode.detect(in: sendableImage.value)) ?? []
+                let combined = (qrCodes + (text.isEmpty ? [] : [text])).joined(separator: "\n")
                 await MainActor.run {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
+                    NSPasteboard.general.setString(combined, forType: .string)
                 }
             } catch {
                 Task { @MainActor [weak self] in
@@ -926,9 +994,26 @@ final class ScreenCaptureModel: ObservableObject {
             screenshotCount = max(0, screenshotCount - 1)
             totalDiskUsage = max(0, totalDiskUsage - size)
             diskUsageRevision += 1
+            if let item = captureHistory.first(where: { $0.url == url }) {
+                captureHistory = SmartCaptureHistoryStore.remove(item.id, from: captureHistory)
+                SmartCaptureHistoryStore.save(captureHistory)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func deleteHistoryItem(_ item: SmartCaptureHistoryItem) {
+        if FileManager.default.fileExists(atPath: item.path) {
+            try? FileManager.default.removeItem(at: item.url)
+        }
+        captureHistory = SmartCaptureHistoryStore.remove(item.id, from: captureHistory)
+        SmartCaptureHistoryStore.save(captureHistory)
+        Task { await refreshDiskUsage() }
+    }
+
+    func revealHistoryItem(_ item: SmartCaptureHistoryItem) {
+        NSWorkspace.shared.activateFileViewerSelecting([item.url])
     }
 
     private func smartCaptureOutputFolder() -> String {
@@ -953,7 +1038,8 @@ final class ScreenCaptureModel: ObservableObject {
             hasScreenPermission = true
             return
         }
-        // Opens System Settings -> Screen Recording. Permission takes effect after app restart.
+        // Permission is requested only by this explicit settings action. All
+        // capture shortcuts and menu entries remain side-effect free.
         _ = CGRequestScreenCaptureAccess()
         startPermissionPoll()
     }
@@ -1260,6 +1346,7 @@ struct ScreenCaptureView: View {
                     outputCard
                     scheduleCard
                     qualityCard
+                    historyCard
                     statusCard
                 }
                 .padding(.horizontal, 36)
@@ -1336,6 +1423,8 @@ struct ScreenCaptureView: View {
             shortcutRow(.activeWindow, action: { capture.captureActiveWindow() })
             shortcutRow(.areaAnnotate, action: { capture.startAreaAnnotateCapture() })
             shortcutRow(.ocr, action: { capture.startOCRCapture() })
+            shortcutRow(.scrolling, action: { capture.startScrollingCapture() })
+            shortcutRow(.objectCutout, action: { capture.startObjectCutoutCapture() })
         }
         .padding(20)
         .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
@@ -1356,7 +1445,7 @@ struct ScreenCaptureView: View {
 
     private func shortcutRow(_ kind: ScreenCaptureShortcutKind, action: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: kind == .area ? "rectangle.dashed" : kind == .fullscreen ? "rectangle.inset.filled" : kind == .activeWindow ? "macwindow" : "text.viewfinder")
+            Image(systemName: kind == .area ? "rectangle.dashed" : kind == .fullscreen ? "rectangle.inset.filled" : kind == .activeWindow ? "macwindow" : kind == .scrolling ? "arrow.down.to.line.compact" : kind == .objectCutout ? "person.crop.circle" : "text.viewfinder")
                 .foregroundStyle(.secondary)
                 .frame(width: 22)
             Text(t(kind.titleKey))
@@ -1664,6 +1753,53 @@ struct ScreenCaptureView: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
     }
 
+    private var historyCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(t("scHistory")).font(.headline)
+                Spacer()
+                Text("\(capture.captureHistory.count)")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            if capture.captureHistory.isEmpty {
+                Text(t("scHistoryEmpty"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(spacing: 8) {
+                    ForEach(capture.captureHistory) { item in
+                        HStack(spacing: 10) {
+                            SmartCaptureHistoryThumbnail(url: item.url)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.url.lastPathComponent)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text("\(item.width) × \(item.height) · \(ByteCountFormatter.string(fromByteCount: item.byteCount, countStyle: .file))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Text(item.date.formatted(.dateTime.month().day().hour().minute().locale(appModel.language.locale)))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(t("scReveal")) { capture.revealHistoryItem(item) }
+                                .buttonStyle(.bordered)
+                            Button(role: .destructive) { capture.deleteHistoryItem(item) } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
+    }
+
     private func statusItem(_ label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
@@ -1672,6 +1808,40 @@ struct ScreenCaptureView: View {
             Text(value)
                 .font(.system(.body, design: .monospaced))
         }
+    }
+}
+
+private struct SmartCaptureHistoryThumbnail: View {
+    let url: URL
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ZStack {
+                    Color.secondary.opacity(0.12)
+                    Image(systemName: "photo")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(width: 100, height: 68)
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .task(id: url) {
+            if let thumbnail = await SmartCaptureThumbnail.load(url: url) {
+                image = NSImage(
+                    cgImage: thumbnail,
+                    size: NSSize(width: thumbnail.width, height: thumbnail.height)
+                )
+            } else {
+                image = nil
+            }
+        }
+        .onDisappear { image = nil }
     }
 }
 
