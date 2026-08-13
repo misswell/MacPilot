@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 import SwiftUI
 import Vision
 
