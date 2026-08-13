@@ -1313,8 +1313,14 @@ struct ScreenCaptureView: View {
                 .foregroundStyle(.secondary)
 
             Divider()
-            Text(t("scShortcutModes"))
-                .font(.subheadline.weight(.medium))
+            HStack {
+                Text(t("scShortcutModes"))
+                    .font(.subheadline.weight(.medium))
+                Spacer()
+                Text(t("scEditShortcuts"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             shortcutRow(.area, action: { capture.startAreaCapture() })
             shortcutRow(.fullscreen, action: { capture.captureFullscreen() })
             shortcutRow(.activeWindow, action: { capture.captureActiveWindow() })
@@ -1680,6 +1686,15 @@ private struct SmartCaptureShortcutEditor: View {
         VStack(alignment: .leading, spacing: 18) {
             Text(AppText.value(kind.titleKey, language: appModel.language))
                 .font(.title2.bold())
+            HStack(spacing: 8) {
+                Image(systemName: "keyboard")
+                    .foregroundStyle(.tint)
+                Text(capture.shortcutBinding(for: kind).displayName)
+                    .font(.system(.body, design: .monospaced).weight(.semibold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
             Text(AppText.value("scShortcutHint", language: appModel.language))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -1731,16 +1746,19 @@ private struct SmartCaptureShortcutEditor: View {
         }
         .padding(24)
         .frame(width: 460)
+        .onChange(of: recordedKeyCode) { _, _ in validationMessage = nil }
+        .onChange(of: recordedModifiers) { _, _ in validationMessage = nil }
         .onAppear { capture.suspendSmartCaptureShortcut() }
         .onDisappear { capture.resumeSmartCaptureShortcut() }
     }
 
     private func save() {
         guard let recordedKeyCode else { return }
-        let didSave = capture.setShortcut(kind, binding: SmartCaptureShortcutBinding(
+        let binding = SmartCaptureShortcutBinding(
             keyCode: recordedKeyCode,
             modifiers: recordedModifiers
-        ))
+        )
+        let didSave = capture.setShortcut(kind, binding: binding)
         if didSave { dismiss() }
         else { validationMessage = capture.errorMessage }
     }

@@ -496,7 +496,7 @@ enum AppText {
         ,
         "screenCapture": "截屏与贴图", "screenCaptureSubtitle": "使用可自定义快捷键智能识别窗口和界面元素边界，支持贴图、OCR、标注与低资源定时截屏。",
         "scSmartCapture": "智能截图", "scSmartCaptureHint": "移动鼠标自动识别窗口或界面元素，单击截图，Esc 或右键取消。",
-        "scSmartCaptureNow": "开始截图", "scEnableSmartCapture": "启用全局快捷键", "scChangeShortcut": "修改快捷键",
+        "scSmartCaptureNow": "开始截图", "scAreaCaptureNow": "区域框选截图", "scFullscreenCaptureNow": "全屏截图", "scActiveWindowCaptureNow": "当前窗口截图", "scAreaAnnotateNow": "区域截图并标注", "scOCRCaptureNow": "区域截图并 OCR", "scEditShortcuts": "修改截图快捷键", "scEnableSmartCapture": "启用全局快捷键", "scChangeShortcut": "修改快捷键",
         "scShortcutModes": "截图快捷入口", "scStartMode": "开始", "scSmartCaptureShortcut": "智能元素截图快捷键", "scAreaCaptureShortcut": "区域框选截图快捷键", "scFullscreenCaptureShortcut": "全屏截图快捷键", "scActiveWindowCaptureShortcut": "当前窗口截图快捷键", "scAreaAnnotateShortcut": "区域截图并标注快捷键", "scOCRShortcut": "OCR 截图快捷键",
         "scRepeatArea": "重复上次区域", "scNoLastArea": "还没有可重复的区域截图。",
         "scSmartCaptureAccessibilityRequired": "智能截图需要辅助功能权限。请在设置中明确点击授权后再试。",
@@ -735,7 +735,7 @@ enum AppText {
             ,
             "screenCapture": "Capture & Pin", "screenCaptureSubtitle": "Use a customizable shortcut to detect window and UI element bounds, then pin, OCR, annotate, or run low-resource scheduled captures.",
             "scSmartCapture": "Smart Capture", "scSmartCaptureHint": "Move the pointer to detect a window or UI element, click to capture, or press Escape/right-click to cancel.",
-            "scSmartCaptureNow": "Start Capture", "scEnableSmartCapture": "Enable the global shortcut", "scChangeShortcut": "Change Shortcut",
+            "scSmartCaptureNow": "Start Capture", "scAreaCaptureNow": "Capture Area", "scFullscreenCaptureNow": "Capture Full Screen", "scActiveWindowCaptureNow": "Capture Current Window", "scAreaAnnotateNow": "Capture and Annotate", "scOCRCaptureNow": "Capture Area and OCR", "scEditShortcuts": "Edit Screenshot Shortcuts", "scEnableSmartCapture": "Enable the global shortcut", "scChangeShortcut": "Change Shortcut",
             "scShortcutModes": "Screenshot shortcuts", "scStartMode": "Start", "scSmartCaptureShortcut": "Smart element shortcut", "scAreaCaptureShortcut": "Area capture shortcut", "scFullscreenCaptureShortcut": "Fullscreen capture shortcut", "scActiveWindowCaptureShortcut": "Active window shortcut", "scAreaAnnotateShortcut": "Area and annotate shortcut", "scOCRShortcut": "OCR capture shortcut",
             "scRepeatArea": "Repeat Last Area", "scNoLastArea": "There is no previous area to repeat.",
             "scSmartCaptureAccessibilityRequired": "Smart Capture requires Accessibility access. Grant it explicitly in Settings, then try again.",
@@ -3180,6 +3180,11 @@ struct MenuBarView: View {
         Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
         Divider()
         Button(model.t("scSmartCaptureNow")) { model.screenCapture.startSmartCapture() }
+        Button(model.t("scAreaCaptureNow")) { model.screenCapture.startAreaCapture() }
+        Button(model.t("scFullscreenCaptureNow")) { model.screenCapture.captureFullscreen() }
+        Button(model.t("scActiveWindowCaptureNow")) { model.screenCapture.captureActiveWindow() }
+        Button(model.t("scAreaAnnotateNow")) { model.screenCapture.startAreaAnnotateCapture() }
+        Button(model.t("scOCRCaptureNow")) { model.screenCapture.startOCRCapture() }
         Button(model.t("screenCapture")) { model.requestedSection = .capture; showMainWindow() }
         if pictureInPicture.settings.showMenuBarIcon {
             Divider()
