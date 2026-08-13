@@ -203,10 +203,6 @@ struct AccessibilityRecoveryRequest {
     private static let key = "MacPilot.requestAccessibilityAfterReset"
     private static let legacyKey = "OctoPilot.requestAccessibilityAfterReset"
 
-    static func schedule(in defaults: UserDefaults = .standard) {
-        defaults.set(true, forKey: key)
-    }
-
     static func consume(
         from defaults: UserDefaults = .standard,
         legacyDefaults: UserDefaults? = UserDefaults(suiteName: AppIdentity.legacyBundleIdentifier)
@@ -913,7 +909,7 @@ final class MacPilotModel: ObservableObject {
         }
         evaluateRules()
         scheduleLaunchPlanForCurrentBootIfNeeded()
-        requestAccessibilityAfterResetIfNeeded()
+        clearLegacyAccessibilityRecoveryRequest()
         ble.persist = { [weak self] in self?.saveIfReady() }
         fileCompression.persist = { [weak self] in self?.saveIfReady() }
         screenCapture.persist = { [weak self] in self?.saveIfReady() }
@@ -942,7 +938,9 @@ final class MacPilotModel: ObservableObject {
 
     @discardableResult
     func requestWindowControlAccess(presentRecoveryGuidance: Bool = true) -> Bool {
-        let trusted = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        // Feature toggles and startup paths must never trigger a TCC prompt.
+        // Permission requests are reserved for explicit Grant buttons.
+        let trusted = AXIsProcessTrusted()
         if !trusted && presentRecoveryGuidance { showWindowControlGuidance() }
         return trusted
     }
@@ -984,7 +982,6 @@ final class MacPilotModel: ObservableObject {
                 if presentFailureAlert { showAlert(message) }
                 return message
             }
-            AccessibilityRecoveryRequest.schedule()
             return nil
         case .failure(let description):
             let message = t("accessibilityResetFailed", description)
@@ -1035,11 +1032,10 @@ final class MacPilotModel: ObservableObject {
         NSApp.terminate(nil)
     }
 
-    private func requestAccessibilityAfterResetIfNeeded() {
-        guard AccessibilityRecoveryRequest.consume() else { return }
-        DispatchQueue.main.async { [weak self] in
-            self?.requestWindowControlAccess()
-        }
+    private func clearLegacyAccessibilityRecoveryRequest() {
+        // Older builds persisted a one-shot flag that prompted again on the
+        // next launch. Consume it without requesting access.
+        _ = AccessibilityRecoveryRequest.consume()
     }
 
     func dismissAlert() {

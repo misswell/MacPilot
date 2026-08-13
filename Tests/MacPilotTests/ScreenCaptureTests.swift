@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CoreGraphics
 import Testing
 @testable import MacPilot
@@ -39,6 +40,41 @@ struct ScreenCaptureTests {
         #expect(!SmartCaptureShortcut.matches(keyCode: 120, flags: CGEventFlags(), isRepeat: false))
         #expect(!SmartCaptureShortcut.matches(keyCode: 122, flags: [.maskCommand], isRepeat: false))
         #expect(!SmartCaptureShortcut.matches(keyCode: 122, flags: CGEventFlags(), isRepeat: true))
+    }
+
+    @Test func smartAnnotationRendererBurnsRedShapesIntoTheImage() throws {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let context = try #require(CGContext(
+            data: nil,
+            width: 200,
+            height: 120,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(NSColor.white.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 200, height: 120))
+        let source = try #require(context.makeImage())
+
+        let rendered = try #require(SmartAnnotationRenderer.render(
+            image: source,
+            annotations: [.rectangle(CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5))]
+        ))
+        let bitmap = NSBitmapImageRep(cgImage: rendered)
+        var redPixels = 0
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                if color.redComponent > 0.75,
+                   color.redComponent > color.greenComponent * 1.7,
+                   color.redComponent > color.blueComponent * 1.7 {
+                    redPixels += 1
+                }
+            }
+        }
+
+        #expect(redPixels > 300)
     }
 
     @Test func screenCaptureResetUsesCurrentBundleIdentifier() {

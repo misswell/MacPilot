@@ -22,12 +22,12 @@ struct LaunchRuleCodingTests {
         #expect(command.arguments == ["reset", "Accessibility", "com.misswell.macpilot"])
     }
 
-    @Test func accessibilityRecoveryRequestIsConsumedOnlyOnce() throws {
+    @Test func legacyAccessibilityRecoveryRequestIsClearedWithoutRescheduling() throws {
         let suiteName = "MacPilotTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        AccessibilityRecoveryRequest.schedule(in: defaults)
+        defaults.set(true, forKey: "MacPilot.requestAccessibilityAfterReset")
 
         #expect(AccessibilityRecoveryRequest.consume(from: defaults, legacyDefaults: nil))
         #expect(!AccessibilityRecoveryRequest.consume(from: defaults, legacyDefaults: nil))

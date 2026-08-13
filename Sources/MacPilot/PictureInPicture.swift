@@ -2742,7 +2742,6 @@ final class PictureInPictureModel: ObservableObject {
     @discardableResult
     func createSession(source: PiPSource, region: PiPRegion) -> PiPSession? {
         guard hasScreenPermission || CGPreflightScreenCaptureAccess() else {
-            requestScreenPermission()
             errorMessage = PictureInPictureError.permissionRequired.localizedDescription
             return nil
         }

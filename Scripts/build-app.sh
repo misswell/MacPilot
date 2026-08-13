@@ -49,8 +49,14 @@ cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 ENTITLEMENTS="$ROOT/Resources/MacPilot.entitlements"
 DEVELOPER_ID="${MACPILOT_DEVELOPER_ID:-${OCTOPILOT_DEVELOPER_ID:-}}"
+EXPECTED_DEVELOPER_ID="Developer ID Application: Guofeng Liu (U8U443D7ZL)"
 SIGNING_IDENTITY="$DEVELOPER_ID"
 if [[ -n "$DEVELOPER_ID" ]]; then
+    if [[ "$DEVELOPER_ID" != "$EXPECTED_DEVELOPER_ID" ]]; then
+        echo "ERROR: Refusing signing identity that differs from production: $DEVELOPER_ID" >&2
+        echo "Expected: $EXPECTED_DEVELOPER_ID" >&2
+        exit 1
+    fi
     echo "Using Developer ID identity: $DEVELOPER_ID"
 else
     INSTALLED_DEVELOPER_ID="$(codesign -dv --verbose=4 "/Applications/$APP_BUNDLE_NAME" 2>&1 \
@@ -61,8 +67,8 @@ else
         | sort -u)"
     if [[ -n "$INSTALLED_DEVELOPER_ID" ]] && grep -Fqx "$INSTALLED_DEVELOPER_ID" <<< "$LOCAL_DEVELOPER_IDS"; then
         LOCAL_DEVELOPER_ID="$INSTALLED_DEVELOPER_ID"
-    elif [[ "$(wc -l <<< "$LOCAL_DEVELOPER_IDS" | tr -d ' ')" == "1" ]]; then
-        LOCAL_DEVELOPER_ID="$LOCAL_DEVELOPER_IDS"
+    elif grep -Fqx "$EXPECTED_DEVELOPER_ID" <<< "$LOCAL_DEVELOPER_IDS"; then
+        LOCAL_DEVELOPER_ID="$EXPECTED_DEVELOPER_ID"
     else
         LOCAL_DEVELOPER_ID=""
     fi
@@ -70,6 +76,11 @@ else
         | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' \
         | head -1)"
     if [[ -n "$LOCAL_DEVELOPER_ID" ]]; then
+        if [[ "$LOCAL_DEVELOPER_ID" != "$EXPECTED_DEVELOPER_ID" ]]; then
+            echo "ERROR: Installed app uses an unexpected Developer ID: $LOCAL_DEVELOPER_ID" >&2
+            echo "Expected: $EXPECTED_DEVELOPER_ID" >&2
+            exit 1
+        fi
         SIGNING_IDENTITY="$LOCAL_DEVELOPER_ID"
         echo "Using production-matched Developer ID identity: $LOCAL_DEVELOPER_ID"
     elif [[ "${MACPILOT_ALLOW_UNSTABLE_SIGNING:-0}" == "1" && -n "$LOCAL_DEVELOPMENT_ID" ]]; then

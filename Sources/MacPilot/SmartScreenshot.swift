@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
+import OSLog
 @preconcurrency import ScreenCaptureKit
 import SwiftUI
 import Vision
@@ -94,14 +95,46 @@ private func smartShortcutEventCallback(
     return nil
 }
 
+private func smartSelectionEventCallback(
+    _ proxy: CGEventTapProxy,
+    _ type: CGEventType,
+    _ event: CGEvent,
+    _ userInfo: UnsafeMutableRawPointer?
+) -> Unmanaged<CGEvent>? {
+    guard let userInfo else { return Unmanaged.passUnretained(event) }
+    let context = Unmanaged<SmartShortcutContext>.fromOpaque(userInfo).takeUnretainedValue()
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        Task { @MainActor in context.controller?.reenableSelectionTap() }
+        return Unmanaged.passUnretained(event)
+    }
+    let location = event.location
+    Task { @MainActor in
+        switch type {
+        case .mouseMoved, .leftMouseDragged, .rightMouseDragged:
+            context.controller?.selectionPointerMoved(toQuartzPoint: location)
+        case .leftMouseDown:
+            context.controller?.selectionClicked(atQuartzPoint: location)
+        case .rightMouseDown:
+            context.controller?.cancelSelection()
+        default:
+            break
+        }
+    }
+    return type == .leftMouseDown || type == .rightMouseDown ? nil : Unmanaged.passUnretained(event)
+}
+
 @MainActor
 final class SmartScreenshotController {
+    nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     private let language: () -> AppLanguage
     private let onCapture: (CGImage) -> Void
+    private let onError: (Error) -> Void
     private var shortcutTap: CFMachPort?
     private var shortcutSource: CFRunLoopSource?
     private var shortcutContext: SmartShortcutContext?
     private var fallbackKeyMonitor: Any?
+    private var selectionTap: CFMachPort?
+    private var selectionSource: CFRunLoopSource?
     private var overlays: [SmartCaptureOverlayPanel] = []
     private var currentTarget: CGRect?
     private var pinControllers: [UUID: SmartPinWindowController] = [:]
@@ -109,9 +142,14 @@ final class SmartScreenshotController {
     private var pendingTargetUpdate: DispatchWorkItem?
     private var latestPointerLocation: CGPoint?
 
-    init(language: @escaping () -> AppLanguage, onCapture: @escaping (CGImage) -> Void) {
+    init(
+        language: @escaping () -> AppLanguage,
+        onCapture: @escaping (CGImage) -> Void,
+        onError: @escaping (Error) -> Void
+    ) {
         self.language = language
         self.onCapture = onCapture
+        self.onError = onError
     }
 
     func start() {
@@ -126,6 +164,7 @@ final class SmartScreenshotController {
             callback: smartShortcutEventCallback,
             userInfo: Unmanaged.passUnretained(context).toOpaque()
         ) else {
+            Self.logger.error("Global F1 event tap could not be created; installing NSEvent fallback")
             fallbackKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard SmartCaptureShortcut.matches(
                     keyCode: event.keyCode,
@@ -142,6 +181,7 @@ final class SmartScreenshotController {
         shortcutSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        Self.logger.info("Global F1 event tap enabled")
     }
 
     func stop() {
@@ -167,26 +207,36 @@ final class SmartScreenshotController {
 
     func startSelection() {
         guard !isSelecting else { return }
-        guard CGPreflightScreenCaptureAccess(), AXIsProcessTrusted() else { return }
+        guard CGPreflightScreenCaptureAccess(), AXIsProcessTrusted() else {
+            Self.logger.error("Selection rejected because required permissions are unavailable")
+            return
+        }
         isSelecting = true
         shortcutContext?.setSelecting(true)
-        currentTarget = nil
+        let initialPoint = NSEvent.mouseLocation
+        currentTarget = SmartAXTargetQuery.target(at: initialPoint)
+        Self.logger.info("Selection started; initial target available: \(self.currentTarget != nil)")
         overlays = NSScreen.screens.map { screen in
             let panel = SmartCaptureOverlayPanel(screen: screen)
+            panel.overlayView.targetFrame = currentTarget
             panel.overlayView.onMove = { [weak self] point in self?.updateTarget(at: point) }
             panel.overlayView.onCommit = { [weak self] point in self?.commit(at: point) }
             panel.overlayView.onCancel = { [weak self] in self?.cancelSelection() }
             panel.orderFrontRegardless()
             return panel
         }
+        installSelectionTap()
         NSCursor.crosshair.set()
-        updateTarget(at: NSEvent.mouseLocation)
     }
 
     func cancelSelection() {
         guard isSelecting || !overlays.isEmpty else { return }
         isSelecting = false
+        pendingTargetUpdate?.cancel()
+        pendingTargetUpdate = nil
+        latestPointerLocation = nil
         shortcutContext?.setSelecting(false)
+        removeSelectionTap()
         currentTarget = nil
         let current = overlays
         overlays.removeAll(keepingCapacity: false)
@@ -201,10 +251,55 @@ final class SmartScreenshotController {
     func pin(image: CGImage) {
         let id = UUID()
         let controller = SmartPinWindowController(image: image, language: language()) { [weak self] in
+            Self.logger.info("Pin controller removed")
             self?.pinControllers.removeValue(forKey: id)
         }
         pinControllers[id] = controller
         controller.show()
+    }
+
+    func reenableSelectionTap() {
+        if let selectionTap { CGEvent.tapEnable(tap: selectionTap, enable: true) }
+    }
+
+    func selectionPointerMoved(toQuartzPoint point: CGPoint) {
+        guard let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        updateTarget(at: appKitPoint)
+    }
+
+    func selectionClicked(atQuartzPoint point: CGPoint) {
+        guard let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        commit(at: appKitPoint)
+    }
+
+    private func installSelectionTap() {
+        removeSelectionTap()
+        guard let context = shortcutContext else { return }
+        let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .rightMouseDown, .leftMouseDragged, .rightMouseDragged]
+        let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: smartSelectionEventCallback,
+            userInfo: Unmanaged.passUnretained(context).toOpaque()
+        ) else {
+            Self.logger.error("Selection mouse event tap could not be created")
+            return
+        }
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        selectionTap = tap
+        selectionSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    private func removeSelectionTap() {
+        if let selectionSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), selectionSource, .commonModes) }
+        if let selectionTap { CFMachPortInvalidate(selectionTap) }
+        selectionSource = nil
+        selectionTap = nil
     }
 
     private func updateTarget(at appKitPoint: CGPoint) {
@@ -228,22 +323,42 @@ final class SmartScreenshotController {
     }
 
     private func commit(at point: CGPoint) {
-        guard let target = currentTarget, target.contains(point) else { return }
-        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(target) }) else { return }
+        let target = currentTarget.flatMap { $0.contains(point) ? $0 : nil }
+            ?? SmartAXTargetQuery.target(at: point)
+        guard let target else {
+            Self.logger.error("Selection click had no capture target")
+            return
+        }
+        guard let quartzPoint = SmartAXTargetQuery.quartzPoint(fromAppKitPoint: point) else {
+            Self.logger.error("Selection click could not be converted to display coordinates")
+            return
+        }
+        Self.logger.info("Committing smart capture target \(String(describing: target), privacy: .public)")
         cancelSelection()
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(80))
-            guard let image = try? await SmartScreenImageCapture.capture(rect: target, on: screen) else { return }
-            self?.onCapture(image)
+            do {
+                let image = try await SmartScreenImageCapture.capture(
+                    appKitRect: target,
+                    quartzClickPoint: quartzPoint
+                )
+                self?.onCapture(image)
+            } catch {
+                self?.onError(error)
+            }
         }
     }
+}
+
+private extension CGRect {
+    var area: CGFloat { isNull || isEmpty ? 0 : width * height }
 }
 
 private enum SmartAXTargetQuery {
     private static let maximumDepth = 25
 
     static func target(at appKitPoint: CGPoint) -> CGRect? {
-        guard let quartzPoint = quartzPoint(from: appKitPoint) else { return windowFrame(at: appKitPoint) }
+        guard let quartzPoint = quartzPoint(fromAppKitPoint: appKitPoint) else { return windowFrame(at: appKitPoint) }
         let system = AXUIElementCreateSystemWide()
         var rawElement: AXUIElement?
         guard AXUIElementCopyElementAtPosition(system, Float(quartzPoint.x), Float(quartzPoint.y), &rawElement) == .success,
@@ -299,9 +414,19 @@ private enum SmartAXTargetQuery {
         return nil
     }
 
-    private static func quartzPoint(from point: CGPoint) -> CGPoint? {
+    static func quartzPoint(fromAppKitPoint point: CGPoint) -> CGPoint? {
         guard let mainHeight = NSScreen.screens.first(where: { $0.displayID == CGMainDisplayID() })?.frame.height else { return nil }
         return CGPoint(x: point.x, y: mainHeight - point.y)
+    }
+
+    static func appKitPoint(fromQuartzPoint point: CGPoint) -> CGPoint? {
+        guard let mainHeight = NSScreen.screens.first(where: { $0.displayID == CGMainDisplayID() })?.frame.height else { return nil }
+        return CGPoint(x: point.x, y: mainHeight - point.y)
+    }
+
+    static func quartzRect(fromAppKitRect rect: CGRect) -> CGRect? {
+        guard let mainHeight = NSScreen.screens.first(where: { $0.displayID == CGMainDisplayID() })?.frame.height else { return nil }
+        return CGRect(x: rect.minX, y: mainHeight - rect.maxY, width: rect.width, height: rect.height).integral
     }
 
     private static func appKitRect(fromQuartzRect rect: CGRect) -> CGRect? {
@@ -408,23 +533,44 @@ private final class SmartCaptureOverlayView: NSView {
 
 @MainActor
 private enum SmartScreenImageCapture {
-    static func capture(rect: CGRect, on screen: NSScreen) async throws -> CGImage {
-        guard let displayID = screen.displayID else { throw ScreenCaptureError.noDisplayFound }
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
+    nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
+
+    static func capture(appKitRect: CGRect, quartzClickPoint: CGPoint) async throws -> CGImage {
+        guard let quartzRect = SmartAXTargetQuery.quartzRect(fromAppKitRect: appKitRect) else {
+            throw ScreenCaptureError.noDisplayFound
+        }
+        if #available(macOS 15.2, *) {
+            do {
+                return try await captureDisplayAgnosticRect(quartzRect)
+            } catch {
+                Self.logger.error("Display-agnostic region capture failed; trying display enumeration: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        var displays: [SCDisplay] = []
+        for delay in [0, 80, 160, 320] {
+            if delay > 0 { try await Task.sleep(for: .milliseconds(delay)) }
+            let content = try await SCShareableContent.current
+            displays = content.displays
+            if !displays.isEmpty { break }
+        }
+        Self.logger.info("ScreenCaptureKit returned \(displays.count) displays")
+        let display = displays.first(where: { $0.frame.contains(quartzClickPoint) })
+            ?? displays.max { lhs, rhs in
+                lhs.frame.intersection(quartzRect).area < rhs.frame.intersection(quartzRect).area
+            }
+        guard let display else {
             throw ScreenCaptureError.noDisplayFound
         }
         let configuration = SCStreamConfiguration()
-        let sourceRect = CGRect(
-            x: rect.minX - screen.frame.minX,
-            y: screen.frame.maxY - rect.maxY,
-            width: rect.width,
-            height: rect.height
-        ).intersection(CGRect(origin: .zero, size: screen.frame.size))
+        let clippedRect = quartzRect.intersection(display.frame)
+        let sourceRect = clippedRect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
         guard !sourceRect.isEmpty else { throw ScreenCaptureError.captureFailed("The selected region is outside the display.") }
+        let scaleX = CGFloat(display.width) / max(1, display.frame.width)
+        let scaleY = CGFloat(display.height) / max(1, display.frame.height)
         configuration.sourceRect = sourceRect
-        configuration.width = max(1, Int(sourceRect.width * screen.backingScaleFactor))
-        configuration.height = max(1, Int(sourceRect.height * screen.backingScaleFactor))
+        configuration.width = max(1, Int(sourceRect.width * scaleX))
+        configuration.height = max(1, Int(sourceRect.height * scaleY))
         configuration.scalesToFit = true
         configuration.showsCursor = false
         return try await SCScreenshotManager.captureImage(
@@ -432,10 +578,26 @@ private enum SmartScreenImageCapture {
             configuration: configuration
         )
     }
+
+    @available(macOS 15.2, *)
+    private static func captureDisplayAgnosticRect(_ rect: CGRect) async throws -> CGImage {
+        try await withCheckedThrowingContinuation { continuation in
+            SCScreenshotManager.captureImage(in: rect) { image, error in
+                if let image {
+                    continuation.resume(returning: image)
+                } else {
+                    continuation.resume(throwing: ScreenCaptureError.captureFailed(
+                        error?.localizedDescription ?? "ScreenCaptureKit returned no image."
+                    ))
+                }
+            }
+        }
+    }
 }
 
 @MainActor
 private final class SmartPinWindowController: NSObject, NSWindowDelegate {
+    nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     private var image: CGImage
     private let language: AppLanguage
     private let onClose: () -> Void
@@ -467,14 +629,17 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
         panel.center()
         panel.orderFrontRegardless()
         self.panel = panel
+        Self.logger.info("Pin window shown")
     }
 
     func close() {
+        Self.logger.info("Pin close requested")
         panel?.close()
         panel = nil
     }
 
     func windowWillClose(_ notification: Notification) {
+        Self.logger.info("Pin window will close")
         annotationController?.close()
         annotationController = nil
         panel?.contentView = nil
@@ -514,13 +679,24 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
     }
 
     private func openAnnotation() {
+        Self.logger.info("Annotation requested; hiding pin window")
         annotationController?.close()
-        let controller = SmartAnnotationWindowController(image: image, language: language) { [weak self] annotated in
-            guard let self else { return }
-            self.image = annotated
-            if let panel = self.panel { self.installContent(in: panel) }
-            self.annotationController = nil
-        }
+        panel?.orderOut(nil)
+        let controller = SmartAnnotationWindowController(
+            image: image,
+            language: language,
+            onComplete: { [weak self] annotated in
+                Self.logger.info("Annotation completed; updating pin image")
+                guard let self else { return }
+                self.image = annotated
+                if let panel = self.panel { self.installContent(in: panel) }
+            },
+            onClose: { [weak self] in
+                Self.logger.info("Annotation closed; restoring pin window")
+                self?.panel?.orderFrontRegardless()
+                self?.annotationController = nil
+            }
+        )
         annotationController = controller
         controller.show()
     }
@@ -601,7 +777,7 @@ private enum SmartAnnotationTool: String, CaseIterable, Identifiable {
     }
 }
 
-private enum SmartAnnotation: Equatable {
+enum SmartAnnotation: Equatable {
     case rectangle(CGRect)
     case arrow(CGPoint, CGPoint)
     case text(String, CGPoint)
@@ -617,16 +793,25 @@ private final class SmartAnnotationModel: ObservableObject {
 
 @MainActor
 private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
+    nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     private let image: CGImage
     private let language: AppLanguage
     private let onComplete: (CGImage) -> Void
+    private let onClose: () -> Void
     private let model = SmartAnnotationModel()
     private var window: NSWindow?
+    private var didNotifyClose = false
 
-    init(image: CGImage, language: AppLanguage, onComplete: @escaping (CGImage) -> Void) {
+    init(
+        image: CGImage,
+        language: AppLanguage,
+        onComplete: @escaping (CGImage) -> Void,
+        onClose: @escaping () -> Void
+    ) {
         self.image = image
         self.language = language
         self.onComplete = onComplete
+        self.onClose = onClose
     }
 
     func show() {
@@ -637,6 +822,7 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
             defer: false
         )
         window.title = AppText.value("scAnnotateTitle", language: language)
+        window.level = .floating
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentView = NSHostingView(rootView: SmartAnnotationEditor(
@@ -647,8 +833,8 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
             onComplete: { [weak self] in self?.complete() }
         ))
         window.center()
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         self.window = window
     }
 
@@ -658,14 +844,19 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
     }
 
     private func complete() {
+        Self.logger.info("Rendering annotations")
         guard let rendered = SmartAnnotationRenderer.render(image: image, annotations: model.annotations) else { return }
         onComplete(rendered)
         close()
     }
 
     func windowWillClose(_ notification: Notification) {
+        Self.logger.info("Annotation window will close")
         window?.contentView = nil
         window = nil
+        guard !didNotifyClose else { return }
+        didNotifyClose = true
+        onClose()
     }
 }
 
@@ -692,7 +883,10 @@ private struct SmartAnnotationEditor: View {
                 Button(AppText.value("scUndo", language: language), action: model.undo).disabled(model.annotations.isEmpty)
                 Spacer()
                 Button(AppText.value("scCancel", language: language), action: onCancel)
-                Button(AppText.value("scDone", language: language), action: onComplete).buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.cancelAction)
+                Button(AppText.value("scDone", language: language), action: onComplete)
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
             }
             .padding(10)
 
@@ -804,7 +998,7 @@ private struct SmartAnnotationEditor: View {
     }
 }
 
-private enum SmartAnnotationRenderer {
+enum SmartAnnotationRenderer {
     static func render(image: CGImage, annotations: [SmartAnnotation]) -> CGImage? {
         let width = image.width, height = image.height
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }

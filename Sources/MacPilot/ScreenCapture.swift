@@ -6,6 +6,7 @@ import CoreGraphics
 import CoreImage
 import CoreMedia
 import Foundation
+import OSLog
 @preconcurrency import ScreenCaptureKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -382,6 +383,7 @@ enum ScreenCaptureResetExecution: Sendable {
 
 @MainActor
 final class ScreenCaptureModel: ObservableObject {
+    private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     @Published private(set) var settings = ScreenCaptureSettings()
     @Published private(set) var isCapturing = false
     @Published private(set) var lastCaptureDate: Date?
@@ -403,7 +405,11 @@ final class ScreenCaptureModel: ObservableObject {
     private var diskUsageRevision = 0
     private lazy var smartCapture = SmartScreenshotController(
         language: { [weak self] in self?.language ?? .system },
-        onCapture: { [weak self] image in self?.handleSmartCapture(image) }
+        onCapture: { [weak self] image in self?.handleSmartCapture(image) },
+        onError: { [weak self] error in
+            Self.logger.error("Region capture failed: \(error.localizedDescription, privacy: .public)")
+            self?.errorMessage = error.localizedDescription
+        }
     )
 
     deinit {
@@ -514,7 +520,7 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     private func updateSmartCaptureRuntime() {
-        if settings.smartCaptureEnabled, AXIsProcessTrusted() {
+        if settings.smartCaptureEnabled {
             smartCapture.start()
         } else {
             smartCapture.stop()
@@ -564,6 +570,7 @@ final class ScreenCaptureModel: ObservableObject {
                 self.diskUsageRevision += 1
                 self.errorMessage = nil
             } catch {
+                Self.logger.error("Smart capture save failed: \(error.localizedDescription, privacy: .public)")
                 self?.errorMessage = error.localizedDescription
             }
         }
@@ -628,7 +635,8 @@ final class ScreenCaptureModel: ObservableObject {
             hasScreenPermission = CGPreflightScreenCaptureAccess()
         }
         if !hasScreenPermission {
-            requestScreenPermission()
+            isPermissionError = true
+            errorMessage = ScreenCaptureError.permissionRequired.errorDescription
             return
         }
         startCaptureLoop()
@@ -675,7 +683,6 @@ final class ScreenCaptureModel: ObservableObject {
         if !hasScreenPermission {
             hasScreenPermission = CGPreflightScreenCaptureAccess()
             if !hasScreenPermission {
-                requestScreenPermission()
                 isPermissionError = true
                 errorMessage = ScreenCaptureError.permissionRequired.errorDescription
                 return
