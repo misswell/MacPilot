@@ -141,6 +141,7 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
 enum SmartCaptureSelectionMode: Equatable, Sendable {
     case smartElement
     case manualArea
+    case applicationWindow
     case areaAnnotate
     case ocr
 }
@@ -191,6 +192,142 @@ enum SmartCaptureSelectionGeometry {
 
     static func isMeaningful(_ rect: CGRect, minimumSize: CGFloat = 4) -> Bool {
         rect.width >= minimumSize && rect.height >= minimumSize
+    }
+}
+
+/// The small, platform-independent state machine behind the live area
+/// selection gesture.  Snapzy keeps the overlay visible while the user is
+/// drawing, moving, or switching to application-window mode; keeping those
+/// transitions in a value type makes the same behaviour available to both the
+/// CGEvent tap and the AppKit fallback view.
+enum SmartCaptureSelectionInteractionMode: Equatable, Sendable {
+    case area
+    case applicationWindow
+}
+
+enum SmartCaptureSelectionAction: Equatable, Sendable {
+    case none
+    case selectionChanged(CGRect)
+    case commit(CGRect)
+    case cancel
+    case repeatLastArea
+    case modeChanged(SmartCaptureSelectionInteractionMode)
+}
+
+struct SmartCaptureSelectionState: Equatable, Sendable {
+    private(set) var mode: SmartCaptureSelectionInteractionMode = .area
+    private(set) var selectionRect: CGRect?
+    private(set) var dragStart: CGPoint?
+    private(set) var lastPointer: CGPoint?
+    private(set) var isDragging = false
+    private var isSpacePressed = false
+    private var clickTarget: CGRect?
+    private var hasDrawnSelection = false
+    private var nudgeOffset = CGPoint.zero
+
+    mutating func reset(mode: SmartCaptureSelectionInteractionMode = .area) {
+        self.mode = mode
+        selectionRect = nil
+        dragStart = nil
+        lastPointer = nil
+        isDragging = false
+        isSpacePressed = false
+        clickTarget = nil
+        hasDrawnSelection = false
+        nudgeOffset = .zero
+    }
+
+    mutating func pointerDown(at point: CGPoint, target: CGRect?) -> SmartCaptureSelectionAction {
+        lastPointer = point
+        clickTarget = target?.integral
+        dragStart = point
+        selectionRect = CGRect(origin: point, size: .zero)
+        isDragging = true
+        isSpacePressed = false
+        nudgeOffset = .zero
+        return .selectionChanged(.zero)
+    }
+
+    mutating func pointerDragged(to point: CGPoint) -> SmartCaptureSelectionAction {
+        guard isDragging else { return .none }
+        let previous = lastPointer ?? point
+        lastPointer = point
+        if isSpacePressed, let selectionRect, !selectionRect.isEmpty {
+            let delta = CGPoint(x: point.x - previous.x, y: point.y - previous.y)
+            let moved = selectionRect.offsetBy(dx: delta.x, dy: delta.y)
+            self.selectionRect = moved
+            if let dragStart {
+                self.dragStart = CGPoint(x: dragStart.x + delta.x, y: dragStart.y + delta.y)
+            }
+            return .selectionChanged(moved)
+        }
+        guard let dragStart else { return .none }
+        let rect = SmartCaptureSelectionGeometry.rect(from: dragStart, to: point)
+            .offsetBy(dx: nudgeOffset.x, dy: nudgeOffset.y)
+        selectionRect = rect
+        hasDrawnSelection = !rect.isEmpty
+        return .selectionChanged(rect)
+    }
+
+    mutating func pointerUp(at point: CGPoint) -> SmartCaptureSelectionAction {
+        lastPointer = point
+        guard isDragging else { return .none }
+        _ = pointerDragged(to: point)
+        isDragging = false
+        isSpacePressed = false
+        dragStart = nil
+        guard let selectionRect,
+              SmartCaptureSelectionGeometry.isMeaningful(selectionRect) else {
+            if let clickTarget, SmartCaptureSelectionGeometry.isMeaningful(clickTarget) {
+                self.clickTarget = nil
+                return .commit(clickTarget)
+            }
+            if hasDrawnSelection {
+                clickTarget = nil
+                return .none
+            }
+            return .none
+        }
+        clickTarget = nil
+        hasDrawnSelection = false
+        return .commit(selectionRect.integral)
+    }
+
+    mutating func keyDown(keyCode: UInt16, modifiers: InputSourceShortcutModifiers = []) -> SmartCaptureSelectionAction {
+        switch keyCode {
+        case UInt16(kVK_Escape):
+            return .cancel
+        case UInt16(kVK_Return), UInt16(kVK_ANSI_KeypadEnter):
+            guard !isDragging, mode == .area else { return .none }
+            return .repeatLastArea
+        case UInt16(kVK_Space):
+            guard isDragging else { return .none }
+            isSpacePressed = true
+            return .none
+        case UInt16(kVK_ANSI_A):
+            guard !isDragging else { return .none }
+            mode = mode == .area ? .applicationWindow : .area
+            selectionRect = nil
+            return .modeChanged(mode)
+        case UInt16(kVK_LeftArrow), UInt16(kVK_RightArrow), UInt16(kVK_UpArrow), UInt16(kVK_DownArrow):
+            guard isDragging, let selectionRect, !selectionRect.isEmpty else { return .none }
+            let distance: CGFloat = modifiers.contains(.shift) ? 10 : 1
+            let dx: CGFloat = keyCode == UInt16(kVK_LeftArrow) ? -distance : keyCode == UInt16(kVK_RightArrow) ? distance : 0
+            let dy: CGFloat = keyCode == UInt16(kVK_DownArrow) ? -distance : keyCode == UInt16(kVK_UpArrow) ? distance : 0
+            nudgeOffset.x += dx
+            nudgeOffset.y += dy
+            let moved = selectionRect.offsetBy(dx: dx, dy: dy)
+            self.selectionRect = moved
+            return .selectionChanged(moved)
+        default:
+            return .none
+        }
+    }
+
+    mutating func keyUp(keyCode: UInt16) {
+        if keyCode == UInt16(kVK_Space) {
+            isSpacePressed = false
+        }
     }
 }
 
@@ -682,15 +819,27 @@ private func smartCaptureSelectionEventTapCallback(
         return nil
     case .keyDown:
         let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
-        if keyCode == UInt16(kVK_Escape) {
-            if Thread.isMainThread {
-                MainActor.assumeIsolated { controller?.cancelSelection() }
-            } else {
-                Task { @MainActor in controller?.cancelSelection() }
+        let modifiers = InputSourceShortcutModifiers(event.flags)
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                _ = controller?.handleSelectionKeyDown(keyCode: keyCode, modifiers: modifiers)
             }
             return nil
         }
-        return Unmanaged.passUnretained(event)
+        Task { @MainActor in
+            _ = controller?.handleSelectionKeyDown(keyCode: keyCode, modifiers: modifiers)
+        }
+        return nil
+    case .keyUp:
+        let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                _ = controller?.handleSelectionKeyUp(keyCode: keyCode)
+            }
+            return nil
+        }
+        Task { @MainActor in controller?.handleSelectionKeyUp(keyCode: keyCode) }
+        return nil
     default:
         return Unmanaged.passUnretained(event)
     }
@@ -728,6 +877,7 @@ final class SmartScreenshotController {
     private let onCapture: (CGImage) -> Void
     private let onError: (Error) -> Void
     private let onSelectionRect: (CGRect) -> Void
+    private let onRepeatLastArea: () -> Void
     private let onFullscreenCapture: () -> Void
     private let onActiveWindowCapture: () -> Void
     private let onAreaAnnotateCapture: (CGImage) -> Void
@@ -765,12 +915,14 @@ final class SmartScreenshotController {
     nonisolated(unsafe) private var selectionEventTapSource: CFRunLoopSource?
     nonisolated(unsafe) private var selectionEventTapContext: SmartCaptureSelectionEventTapContext?
     private var selectionMode: SmartCaptureSelectionMode = .smartElement
+    private var selectionInteraction = SmartCaptureSelectionState()
 
     init(
         language: @escaping () -> AppLanguage,
         onCapture: @escaping (CGImage) -> Void,
         onError: @escaping (Error) -> Void,
         onSelectionRect: @escaping (CGRect) -> Void = { _ in },
+        onRepeatLastArea: @escaping () -> Void = {},
         shortcutBinding: SmartCaptureShortcutBinding = .default,
         additionalShortcutBindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding] = [:],
         onFullscreenCapture: @escaping () -> Void = {},
@@ -782,6 +934,7 @@ final class SmartScreenshotController {
         self.onCapture = onCapture
         self.onError = onError
         self.onSelectionRect = onSelectionRect
+        self.onRepeatLastArea = onRepeatLastArea
         self.shortcutBinding = shortcutBinding
         self.additionalShortcutBindings = additionalShortcutBindings
         self.onFullscreenCapture = onFullscreenCapture
@@ -1054,7 +1207,8 @@ final class SmartScreenshotController {
             CGEventType.leftMouseDragged,
             CGEventType.leftMouseUp,
             CGEventType.rightMouseDown,
-            CGEventType.keyDown
+            CGEventType.keyDown,
+            CGEventType.keyUp
         ] {
             eventMask |= CGEventMask(1) << type.rawValue
         }
@@ -1300,20 +1454,30 @@ final class SmartScreenshotController {
         }
         isSelecting = true
         selectionMode = mode
+        selectionInteraction.reset(mode: mode == .applicationWindow ? .applicationWindow : .area)
         manualSelectionCoordinateFailure = false
         lastSelectionCoordinateFailureLogAt = 0
         registerSelectionCancelShortcut()
         let initialPoint = NSEvent.mouseLocation
         currentTarget = mode == .smartElement ? SmartAXTargetQuery.target(at: initialPoint) : nil
+        if mode == .applicationWindow {
+            currentTarget = SmartAXTargetQuery.applicationWindowTarget(at: initialPoint)
+        }
         Self.logger.info("Selection started; initial target available: \(self.currentTarget != nil)")
         overlays = NSScreen.screens.map { screen in
             let panel = SmartCaptureOverlayPanel(screen: screen)
             panel.overlayView.targetFrame = currentTarget
             panel.overlayView.onMove = { [weak self] point in self?.updateTarget(at: point) }
-            panel.overlayView.onMouseDown = { [weak self] point in self?.beginManualSelection(at: point) }
-            panel.overlayView.onMouseDragged = { [weak self] point in self?.updateManualSelection(to: point) }
-            panel.overlayView.onMouseUp = { [weak self] point in self?.finishManualSelection(at: point) }
+            panel.overlayView.onMouseDown = { [weak self] point in self?.handleSelectionMouseDown(atAppKitPoint: point) }
+            panel.overlayView.onMouseDragged = { [weak self] point in self?.handleSelectionMouseDragged(atAppKitPoint: point) }
+            panel.overlayView.onMouseUp = { [weak self] point in self?.handleSelectionMouseUp(atAppKitPoint: point) }
             panel.overlayView.onCancel = { [weak self] in self?.cancelSelection() }
+            panel.overlayView.onKeyDown = { [weak self] keyCode, modifiers in
+                _ = self?.handleSelectionKeyDown(keyCode: keyCode, modifiers: modifiers)
+            }
+            panel.overlayView.onKeyUp = { [weak self] keyCode in
+                _ = self?.handleSelectionKeyUp(keyCode: keyCode)
+            }
             panel.orderFrontRegardless()
             return panel
         }
@@ -1377,6 +1541,7 @@ final class SmartScreenshotController {
         latestPointerLocation = nil
         manualSelectionStart = nil
         manualSelectionRect = nil
+        selectionInteraction.reset()
         manualSelectionCoordinateFailure = false
         stopSelectionEventTap()
         unregisterSelectionCancelShortcut()
@@ -1447,7 +1612,9 @@ final class SmartScreenshotController {
     }
 
     private func updateTarget(at appKitPoint: CGPoint) {
-        guard isSelecting, selectionMode == .smartElement, manualSelectionStart == nil else { return }
+        guard isSelecting,
+              (selectionMode == .smartElement || selectionMode == .applicationWindow),
+              manualSelectionStart == nil else { return }
         latestPointerLocation = appKitPoint
         guard pendingTargetUpdate == nil else { return }
         let work = DispatchWorkItem { [weak self] in
@@ -1497,7 +1664,14 @@ final class SmartScreenshotController {
             return
         }
         manualSelectionCoordinateFailure = false
-        beginManualSelection(at: appKitPoint)
+        let target = selectionMode == .smartElement || selectionMode == .applicationWindow ? currentTarget : nil
+        applySelectionAction(selectionInteraction.pointerDown(at: appKitPoint, target: target))
+    }
+
+    private func handleSelectionMouseDown(atAppKitPoint point: CGPoint) {
+        guard isSelecting else { return }
+        let target = selectionMode == .smartElement || selectionMode == .applicationWindow ? currentTarget : nil
+        applySelectionAction(selectionInteraction.pointerDown(at: point, target: target))
     }
 
     func handleSelectionMouseDragged(atQuartzPoint point: CGPoint) {
@@ -1509,7 +1683,12 @@ final class SmartScreenshotController {
             }
             return
         }
-        updateManualSelection(to: appKitPoint)
+        applySelectionAction(selectionInteraction.pointerDragged(to: appKitPoint))
+    }
+
+    private func handleSelectionMouseDragged(atAppKitPoint point: CGPoint) {
+        guard isSelecting else { return }
+        applySelectionAction(selectionInteraction.pointerDragged(to: point))
     }
 
     func handleSelectionMouseUp(atQuartzPoint point: CGPoint) {
@@ -1524,7 +1703,37 @@ final class SmartScreenshotController {
             cancelSelection()
             return
         }
-        finishManualSelection(at: appKitPoint)
+        let action = selectionInteraction.pointerUp(at: appKitPoint)
+        if action == .none, selectionMode == .smartElement {
+            commit(at: appKitPoint)
+        } else {
+            applySelectionAction(action)
+        }
+    }
+
+    private func handleSelectionMouseUp(atAppKitPoint point: CGPoint) {
+        guard isSelecting else { return }
+        let action = selectionInteraction.pointerUp(at: point)
+        if action == .none, selectionMode == .smartElement {
+            commit(at: point)
+        } else {
+            applySelectionAction(action)
+        }
+    }
+
+    @discardableResult
+    func handleSelectionKeyDown(keyCode: UInt16, modifiers: InputSourceShortcutModifiers = []) -> Bool {
+        guard isSelecting else { return false }
+        let action = selectionInteraction.keyDown(keyCode: keyCode, modifiers: modifiers)
+        applySelectionAction(action)
+        return action != .none
+    }
+
+    @discardableResult
+    func handleSelectionKeyUp(keyCode: UInt16) -> Bool {
+        guard isSelecting else { return false }
+        selectionInteraction.keyUp(keyCode: keyCode)
+        return keyCode == UInt16(kVK_Space)
     }
 
     private func reportSelectionCoordinateFailure() {
@@ -1543,48 +1752,53 @@ final class SmartScreenshotController {
     }
 
     private func resolveTarget(at appKitPoint: CGPoint) {
-        let target = SmartAXTargetQuery.target(at: appKitPoint)
+        let target: CGRect?
+        switch selectionMode {
+        case .smartElement:
+            target = SmartAXTargetQuery.target(at: appKitPoint)
+        case .applicationWindow:
+            target = SmartAXTargetQuery.applicationWindowTarget(at: appKitPoint)
+        default:
+            target = nil
+        }
         guard target != currentTarget else { return }
         currentTarget = target
         for overlay in overlays { overlay.overlayView.targetFrame = target }
     }
 
-    private func beginManualSelection(at point: CGPoint) {
-        guard isSelecting else { return }
-        manualSelectionStart = point
-        manualSelectionRect = CGRect(origin: point, size: .zero)
-        currentTarget = nil
-        updateOverlaySelection()
-    }
-
-    private func updateManualSelection(to point: CGPoint) {
-        guard let start = manualSelectionStart, isSelecting else { return }
-        manualSelectionRect = SmartCaptureSelectionGeometry.rect(from: start, to: point)
-        updateOverlaySelection()
-    }
-
-    private func finishManualSelection(at point: CGPoint) {
-        guard manualSelectionStart != nil else { return }
-        updateManualSelection(to: point)
-        let rect = manualSelectionRect ?? .zero
-        let start = manualSelectionStart ?? point
-        manualSelectionStart = nil
-        manualSelectionRect = nil
-        if SmartCaptureSelectionGeometry.isMeaningful(rect) {
+    private func applySelectionAction(_ action: SmartCaptureSelectionAction) {
+        switch action {
+        case .none:
+            updateOverlaySelection()
+        case .selectionChanged(let rect):
+            manualSelectionRect = rect.isEmpty ? nil : rect
+            manualSelectionStart = selectionInteraction.dragStart
+            if selectionInteraction.mode == .area {
+                currentTarget = nil
+            }
+            updateOverlaySelection()
+        case .commit(let rect):
+            manualSelectionRect = nil
+            manualSelectionStart = nil
+            if selectionMode == .manualArea { onSelectionRect(rect) }
             guard let quartzPoint = SmartAXTargetQuery.quartzPoint(fromAppKitPoint: CGPoint(x: rect.midX, y: rect.midY)) else {
                 reportSelectionCoordinateFailure()
                 cancelSelection()
                 return
             }
-            if selectionMode == .manualArea {
-                onSelectionRect(rect)
-            }
             finishCapture(rect: rect, quartzClickPoint: quartzPoint)
-        } else {
-            if selectionMode == .smartElement {
-                commit(at: start)
-            } else {
-                cancelSelection()
+        case .cancel:
+            cancelSelection()
+        case .repeatLastArea:
+            onRepeatLastArea()
+        case .modeChanged(let mode):
+            selectionMode = mode == .applicationWindow ? .applicationWindow : .manualArea
+            currentTarget = nil
+            manualSelectionRect = nil
+            manualSelectionStart = nil
+            updateOverlaySelection()
+            if selectionMode == .applicationWindow, let point = latestPointerLocation {
+                resolveTarget(at: point)
             }
         }
     }
@@ -1597,8 +1811,15 @@ final class SmartScreenshotController {
     }
 
     private func commit(at point: CGPoint) {
-        let target = currentTarget.flatMap { $0.contains(point) ? $0 : nil }
-            ?? SmartAXTargetQuery.target(at: point)
+        let target: CGRect?
+        switch selectionMode {
+        case .applicationWindow:
+            target = currentTarget.flatMap { $0.contains(point) ? $0 : nil }
+                ?? SmartAXTargetQuery.applicationWindowTarget(at: point)
+        default:
+            target = currentTarget.flatMap { $0.contains(point) ? $0 : nil }
+                ?? SmartAXTargetQuery.target(at: point)
+        }
         guard let target else {
             Self.logger.error("Selection click had no capture target")
             return
@@ -1668,6 +1889,10 @@ private enum SmartAXTargetQuery {
             depth += 1
         }
         return SmartCaptureTargetResolver.resolve(elementChain: chain, windowFrame: window)
+    }
+
+    static func applicationWindowTarget(at appKitPoint: CGPoint) -> CGRect? {
+        windowFrame(at: appKitPoint)?.integral
     }
 
     private static func snapshot(_ element: AXUIElement) -> SmartCaptureElement? {
@@ -1845,6 +2070,8 @@ private final class SmartCaptureOverlayView: NSView {
     var onMouseDragged: ((CGPoint) -> Void)?
     var onMouseUp: ((CGPoint) -> Void)?
     var onCancel: (() -> Void)?
+    var onKeyDown: ((UInt16, InputSourceShortcutModifiers) -> Void)?
+    var onKeyUp: ((UInt16) -> Void)?
     var targetFrame: CGRect? { didSet { needsDisplay = true } }
     var selectionRect: CGRect? { didSet { needsDisplay = true } }
     private let screenFrame: CGRect
@@ -1877,7 +2104,20 @@ private final class SmartCaptureOverlayView: NSView {
     override func mouseUp(with event: NSEvent) { onMouseUp?(globalPoint(event)) }
     override func rightMouseDown(with event: NSEvent) { onCancel?() }
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { onCancel?() } else { super.keyDown(with: event) }
+        let keyCode = event.keyCode
+        let modifiers = InputSourceShortcutModifiers(event.modifierFlags)
+        if keyCode == UInt16(kVK_Escape) || keyCode == UInt16(kVK_Space) ||
+            keyCode == UInt16(kVK_ANSI_A) || keyCode == UInt16(kVK_Return) ||
+            keyCode == UInt16(kVK_ANSI_KeypadEnter) ||
+            [UInt16(kVK_LeftArrow), UInt16(kVK_RightArrow), UInt16(kVK_UpArrow), UInt16(kVK_DownArrow)].contains(keyCode) {
+            onKeyDown?(keyCode, modifiers)
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    override func keyUp(with event: NSEvent) {
+        onKeyUp?(event.keyCode)
     }
 
     override func draw(_ dirtyRect: NSRect) {

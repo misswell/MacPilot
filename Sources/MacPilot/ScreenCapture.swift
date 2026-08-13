@@ -479,6 +479,7 @@ final class ScreenCaptureModel: ObservableObject {
             }
         },
         onSelectionRect: { [weak self] rect in self?.storeLastSmartCaptureArea(rect) },
+        onRepeatLastArea: { [weak self] in self?.repeatSmartCapture() },
         shortcutBinding: settings.smartCaptureShortcut,
         additionalShortcutBindings: [
             .area: settings.areaCaptureShortcut,
@@ -693,6 +694,11 @@ final class ScreenCaptureModel: ObservableObject {
     func startAreaCapture() {
         guard ensureCapturePermissions() else { return }
         smartCapture.startSelection(mode: .manualArea)
+    }
+
+    func startApplicationWindowCapture() {
+        guard ensureCapturePermissions() else { return }
+        smartCapture.startSelection(mode: .applicationWindow)
     }
 
     func captureFullscreen() {

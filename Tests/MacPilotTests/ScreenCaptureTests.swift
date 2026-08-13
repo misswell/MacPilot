@@ -227,6 +227,45 @@ struct ScreenCaptureTests {
         #expect(!SmartCaptureSelectionGeometry.isMeaningful(CGRect(x: 0, y: 0, width: 3.9, height: 20)))
     }
 
+    @Test func areaSelectionStateCommitsDraggedRectangle() {
+        var state = SmartCaptureSelectionState()
+        #expect(state.pointerDown(at: CGPoint(x: 240, y: 180), target: nil) == .selectionChanged(.zero))
+        #expect(state.pointerDragged(to: CGPoint(x: 80, y: 40)) == .selectionChanged(CGRect(x: 80, y: 40, width: 160, height: 140)))
+        #expect(state.pointerUp(at: CGPoint(x: 80, y: 40)) == .commit(CGRect(x: 80, y: 40, width: 160, height: 140)))
+        #expect(!state.isDragging)
+    }
+
+    @Test func areaSelectionStateSupportsSpaceMoveAndArrowNudge() {
+        var state = SmartCaptureSelectionState()
+        _ = state.pointerDown(at: CGPoint(x: 100, y: 100), target: nil)
+        _ = state.pointerDragged(to: CGPoint(x: 200, y: 180))
+        #expect(state.keyDown(keyCode: UInt16(kVK_RightArrow)) == .selectionChanged(CGRect(x: 101, y: 100, width: 100, height: 80)))
+        #expect(state.keyDown(keyCode: UInt16(kVK_DownArrow), modifiers: [.shift]) == .selectionChanged(CGRect(x: 101, y: 90, width: 100, height: 80)))
+        #expect(state.pointerUp(at: CGPoint(x: 200, y: 180)) == .commit(CGRect(x: 101, y: 90, width: 100, height: 80)))
+
+        var moved = SmartCaptureSelectionState()
+        _ = moved.pointerDown(at: CGPoint(x: 100, y: 100), target: nil)
+        _ = moved.pointerDragged(to: CGPoint(x: 200, y: 180))
+        #expect(moved.keyDown(keyCode: UInt16(kVK_Space)) == .none)
+        #expect(moved.pointerDragged(to: CGPoint(x: 220, y: 200)) == .selectionChanged(CGRect(x: 120, y: 120, width: 100, height: 80)))
+        moved.keyUp(keyCode: UInt16(kVK_Space))
+        #expect(moved.pointerUp(at: CGPoint(x: 220, y: 200)) == .commit(CGRect(x: 120, y: 120, width: 100, height: 80)))
+    }
+
+    @Test func areaSelectionStateTogglesApplicationModeAndCommitsWindowTarget() {
+        var state = SmartCaptureSelectionState()
+        #expect(state.keyDown(keyCode: UInt16(kVK_ANSI_A)) == .modeChanged(.applicationWindow))
+        #expect(state.mode == .applicationWindow)
+        #expect(state.pointerDown(at: CGPoint(x: 200, y: 200), target: CGRect(x: 40, y: 60, width: 500, height: 300)) == .selectionChanged(.zero))
+        #expect(state.pointerUp(at: CGPoint(x: 200, y: 200)) == .commit(CGRect(x: 40, y: 60, width: 500, height: 300)))
+    }
+
+    @Test func areaSelectionStateEscapeCancelsAndReturnRequestsRepeat() {
+        var state = SmartCaptureSelectionState()
+        #expect(state.keyDown(keyCode: UInt16(kVK_Escape)) == .cancel)
+        #expect(state.keyDown(keyCode: UInt16(kVK_Return)) == .repeatLastArea)
+    }
+
     @Test func smartAnnotationRendererBurnsRedShapesIntoTheImage() throws {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let context = try #require(CGContext(
