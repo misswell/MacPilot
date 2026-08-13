@@ -58,6 +58,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
     var smartCaptureEnabled: Bool
     var smartCaptureShortcut: SmartCaptureShortcutBinding
     var areaCaptureShortcut: SmartCaptureShortcutBinding
+    var repeatAreaCaptureShortcut: SmartCaptureShortcutBinding
+    var applicationWindowCaptureShortcut: SmartCaptureShortcutBinding
     var fullscreenCaptureShortcut: SmartCaptureShortcutBinding
     var activeWindowCaptureShortcut: SmartCaptureShortcutBinding
     var areaAnnotateShortcut: SmartCaptureShortcutBinding
@@ -80,6 +82,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         smartCaptureEnabled: Bool = true,
         smartCaptureShortcut: SmartCaptureShortcutBinding = .default,
         areaCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.area.defaultBinding,
+        repeatAreaCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.repeatArea.defaultBinding,
+        applicationWindowCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.applicationWindow.defaultBinding,
         fullscreenCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.fullscreen.defaultBinding,
         activeWindowCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.activeWindow.defaultBinding,
         areaAnnotateShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.areaAnnotate.defaultBinding,
@@ -101,6 +105,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.smartCaptureEnabled = smartCaptureEnabled
         self.smartCaptureShortcut = smartCaptureShortcut.isValid ? smartCaptureShortcut : .default
         self.areaCaptureShortcut = areaCaptureShortcut.isValid ? areaCaptureShortcut : ScreenCaptureShortcutKind.area.defaultBinding
+        self.repeatAreaCaptureShortcut = repeatAreaCaptureShortcut.isValid ? repeatAreaCaptureShortcut : ScreenCaptureShortcutKind.repeatArea.defaultBinding
+        self.applicationWindowCaptureShortcut = applicationWindowCaptureShortcut.isValid ? applicationWindowCaptureShortcut : ScreenCaptureShortcutKind.applicationWindow.defaultBinding
         self.fullscreenCaptureShortcut = fullscreenCaptureShortcut.isValid ? fullscreenCaptureShortcut : ScreenCaptureShortcutKind.fullscreen.defaultBinding
         self.activeWindowCaptureShortcut = activeWindowCaptureShortcut.isValid ? activeWindowCaptureShortcut : ScreenCaptureShortcutKind.activeWindow.defaultBinding
         self.areaAnnotateShortcut = areaAnnotateShortcut.isValid ? areaAnnotateShortcut : ScreenCaptureShortcutKind.areaAnnotate.defaultBinding
@@ -113,7 +119,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         case isEnabled, outputFolder, busyStartHour, busyEndHour
         case busyIntervalMinutes, idleIntervalMinutes, imageFormat, quality
         case maxRetentionDays, captureAllDisplays, showsCursor, smartCaptureEnabled
-        case smartCaptureShortcut, areaCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut
+        case smartCaptureShortcut, areaCaptureShortcut, repeatAreaCaptureShortcut, applicationWindowCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut
     }
 
     init(from decoder: Decoder) throws {
@@ -133,6 +139,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
             smartCaptureEnabled: try c.decodeIfPresent(Bool.self, forKey: .smartCaptureEnabled) ?? true,
             smartCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .smartCaptureShortcut) ?? .default,
             areaCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .areaCaptureShortcut) ?? ScreenCaptureShortcutKind.area.defaultBinding,
+            repeatAreaCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .repeatAreaCaptureShortcut) ?? ScreenCaptureShortcutKind.repeatArea.defaultBinding,
+            applicationWindowCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .applicationWindowCaptureShortcut) ?? ScreenCaptureShortcutKind.applicationWindow.defaultBinding,
             fullscreenCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .fullscreenCaptureShortcut) ?? ScreenCaptureShortcutKind.fullscreen.defaultBinding,
             activeWindowCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .activeWindowCaptureShortcut) ?? ScreenCaptureShortcutKind.activeWindow.defaultBinding,
             areaAnnotateShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .areaAnnotateShortcut) ?? ScreenCaptureShortcutKind.areaAnnotate.defaultBinding,
@@ -492,6 +500,8 @@ final class ScreenCaptureModel: ObservableObject {
         shortcutBinding: settings.smartCaptureShortcut,
         additionalShortcutBindings: [
             .area: settings.areaCaptureShortcut,
+            .repeatArea: settings.repeatAreaCaptureShortcut,
+            .applicationWindow: settings.applicationWindowCaptureShortcut,
             .fullscreen: settings.fullscreenCaptureShortcut,
             .activeWindow: settings.activeWindowCaptureShortcut,
             .areaAnnotate: settings.areaAnnotateShortcut,
@@ -528,6 +538,8 @@ final class ScreenCaptureModel: ObservableObject {
         smartCapture.updateShortcutBinding(newSettings.smartCaptureShortcut)
         smartCapture.updateAdditionalShortcutBindings([
             .area: newSettings.areaCaptureShortcut,
+            .repeatArea: newSettings.repeatAreaCaptureShortcut,
+            .applicationWindow: newSettings.applicationWindowCaptureShortcut,
             .fullscreen: newSettings.fullscreenCaptureShortcut,
             .activeWindow: newSettings.activeWindowCaptureShortcut,
             .areaAnnotate: newSettings.areaAnnotateShortcut,
@@ -622,6 +634,8 @@ final class ScreenCaptureModel: ObservableObject {
         switch kind {
         case .smartElement: updated.smartCaptureShortcut = binding
         case .area: updated.areaCaptureShortcut = binding
+        case .repeatArea: updated.repeatAreaCaptureShortcut = binding
+        case .applicationWindow: updated.applicationWindowCaptureShortcut = binding
         case .fullscreen: updated.fullscreenCaptureShortcut = binding
         case .activeWindow: updated.activeWindowCaptureShortcut = binding
         case .areaAnnotate: updated.areaAnnotateShortcut = binding
@@ -638,7 +652,7 @@ final class ScreenCaptureModel: ObservableObject {
             return false
         }
         if kind != .smartElement {
-            let others = [updated.areaCaptureShortcut, updated.fullscreenCaptureShortcut, updated.activeWindowCaptureShortcut, updated.areaAnnotateShortcut, updated.ocrShortcut, updated.scrollingCaptureShortcut, updated.objectCutoutShortcut]
+            let others = [updated.areaCaptureShortcut, updated.repeatAreaCaptureShortcut, updated.applicationWindowCaptureShortcut, updated.fullscreenCaptureShortcut, updated.activeWindowCaptureShortcut, updated.areaAnnotateShortcut, updated.ocrShortcut, updated.scrollingCaptureShortcut, updated.objectCutoutShortcut]
             if others.filter({ $0 == binding }).count > 1 {
                 errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
                 return false
@@ -646,6 +660,8 @@ final class ScreenCaptureModel: ObservableObject {
         }
         let bindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding] = [
             .area: updated.areaCaptureShortcut,
+            .repeatArea: updated.repeatAreaCaptureShortcut,
+            .applicationWindow: updated.applicationWindowCaptureShortcut,
             .fullscreen: updated.fullscreenCaptureShortcut,
             .activeWindow: updated.activeWindowCaptureShortcut,
             .areaAnnotate: updated.areaAnnotateShortcut,
@@ -662,6 +678,8 @@ final class ScreenCaptureModel: ObservableObject {
             }
             updateSettings {
                 $0.areaCaptureShortcut = updated.areaCaptureShortcut
+                $0.repeatAreaCaptureShortcut = updated.repeatAreaCaptureShortcut
+                $0.applicationWindowCaptureShortcut = updated.applicationWindowCaptureShortcut
                 $0.fullscreenCaptureShortcut = updated.fullscreenCaptureShortcut
                 $0.activeWindowCaptureShortcut = updated.activeWindowCaptureShortcut
                 $0.areaAnnotateShortcut = updated.areaAnnotateShortcut
@@ -678,6 +696,8 @@ final class ScreenCaptureModel: ObservableObject {
         switch kind {
         case .smartElement: return settings.smartCaptureShortcut
         case .area: return settings.areaCaptureShortcut
+        case .repeatArea: return settings.repeatAreaCaptureShortcut
+        case .applicationWindow: return settings.applicationWindowCaptureShortcut
         case .fullscreen: return settings.fullscreenCaptureShortcut
         case .activeWindow: return settings.activeWindowCaptureShortcut
         case .areaAnnotate: return settings.areaAnnotateShortcut
@@ -689,7 +709,7 @@ final class ScreenCaptureModel: ObservableObject {
 
     @discardableResult
     func setSmartCaptureShortcut(_ binding: SmartCaptureShortcutBinding) -> Bool {
-        if [settings.areaCaptureShortcut, settings.fullscreenCaptureShortcut, settings.activeWindowCaptureShortcut, settings.areaAnnotateShortcut, settings.ocrShortcut, settings.scrollingCaptureShortcut, settings.objectCutoutShortcut].contains(binding) {
+        if [settings.areaCaptureShortcut, settings.repeatAreaCaptureShortcut, settings.applicationWindowCaptureShortcut, settings.fullscreenCaptureShortcut, settings.activeWindowCaptureShortcut, settings.areaAnnotateShortcut, settings.ocrShortcut, settings.scrollingCaptureShortcut, settings.objectCutoutShortcut].contains(binding) {
             errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
             return false
         }
@@ -1419,6 +1439,8 @@ struct ScreenCaptureView: View {
                     .foregroundStyle(.secondary)
             }
             shortcutRow(.area, action: { capture.startAreaCapture() })
+            shortcutRow(.repeatArea, action: { capture.repeatSmartCapture() })
+            shortcutRow(.applicationWindow, action: { capture.startApplicationWindowCapture() })
             shortcutRow(.fullscreen, action: { capture.captureFullscreen() })
             shortcutRow(.activeWindow, action: { capture.captureActiveWindow() })
             shortcutRow(.areaAnnotate, action: { capture.startAreaAnnotateCapture() })
@@ -1445,7 +1467,7 @@ struct ScreenCaptureView: View {
 
     private func shortcutRow(_ kind: ScreenCaptureShortcutKind, action: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: kind == .area ? "rectangle.dashed" : kind == .fullscreen ? "rectangle.inset.filled" : kind == .activeWindow ? "macwindow" : kind == .scrolling ? "arrow.down.to.line.compact" : kind == .objectCutout ? "person.crop.circle" : "text.viewfinder")
+            Image(systemName: kind == .area ? "rectangle.dashed" : kind == .repeatArea ? "arrow.clockwise" : kind == .applicationWindow ? "macwindow.on.rectangle" : kind == .fullscreen ? "rectangle.inset.filled" : kind == .activeWindow ? "macwindow" : kind == .scrolling ? "arrow.down.to.line.compact" : kind == .objectCutout ? "person.crop.circle" : "text.viewfinder")
                 .foregroundStyle(.secondary)
                 .frame(width: 22)
             Text(t(kind.titleKey))
@@ -2002,7 +2024,9 @@ private final class SmartCaptureShortcutRecorderNSView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        record(event)
+        if !record(event) {
+            super.keyDown(with: event)
+        }
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -2045,7 +2069,10 @@ private final class SmartCaptureShortcutRecorderNSView: NSView {
         if let error = binding.validationError {
             onRejected?(error)
             needsDisplay = true
-            return true
+            // Escape is reserved for cancelling the editor/selection. Let it
+            // continue through the responder chain after showing the inline
+            // validation message instead of trapping the sheet in recording.
+            return error != .reservedKey
         }
         onCapture?(event.keyCode, modifiers)
         needsDisplay = true

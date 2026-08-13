@@ -85,6 +85,8 @@ struct SmartCaptureShortcutBinding: Codable, Equatable, Hashable, Sendable {
 enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Sendable {
     case smartElement
     case area
+    case repeatArea
+    case applicationWindow
     case fullscreen
     case activeWindow
     case areaAnnotate
@@ -100,6 +102,20 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
             return SmartCaptureShortcutBinding(
                 keyCode: UInt16(kVK_ANSI_4),
                 modifiers: [.command, .shift]
+            )
+        case .repeatArea:
+            // Snapzy's repeat-area shortcut is deliberately distinct from
+            // the area selector and mirrors macOS's clipboard variant.
+            return SmartCaptureShortcutBinding(
+                keyCode: UInt16(kVK_ANSI_4),
+                modifiers: [.control, .command, .shift]
+            )
+        case .applicationWindow:
+            // A separate global entry point complements the in-overlay `A`
+            // mode switch while keeping the action reachable from any app.
+            return SmartCaptureShortcutBinding(
+                keyCode: UInt16(kVK_ANSI_A),
+                modifiers: [.control, .command]
             )
         case .fullscreen:
             return SmartCaptureShortcutBinding(
@@ -138,6 +154,8 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
         switch self {
         case .smartElement: return "scSmartCaptureShortcut"
         case .area: return "scAreaCaptureShortcut"
+        case .repeatArea: return "scRepeatAreaShortcut"
+        case .applicationWindow: return "scApplicationWindowShortcut"
         case .fullscreen: return "scFullscreenCaptureShortcut"
         case .activeWindow: return "scActiveWindowCaptureShortcut"
         case .areaAnnotate: return "scAreaAnnotateShortcut"
@@ -578,6 +596,8 @@ private enum SmartCaptureCarbonHotKey {
     static let areaAnnotateID: UInt32 = 7
     static let scrollingID: UInt32 = 8
     static let objectCutoutID: UInt32 = 9
+    static let repeatAreaID: UInt32 = 10
+    static let applicationWindowID: UInt32 = 11
 
     static func identifier(_ id: UInt32) -> EventHotKeyID {
         EventHotKeyID(signature: signature, id: id)
@@ -596,6 +616,8 @@ private enum SmartCaptureCarbonHotKey {
         switch kind {
         case .smartElement: return identifier(captureID)
         case .area: return identifier(areaID)
+        case .repeatArea: return identifier(repeatAreaID)
+        case .applicationWindow: return identifier(applicationWindowID)
         case .fullscreen: return identifier(fullscreenID)
         case .activeWindow: return identifier(activeWindowID)
         case .areaAnnotate: return identifier(areaAnnotateID)
@@ -958,6 +980,8 @@ final class SmartScreenshotController {
     nonisolated(unsafe) private var selectionEventTap: CFMachPort?
     nonisolated(unsafe) private var selectionEventTapSource: CFRunLoopSource?
     nonisolated(unsafe) private var selectionEventTapContext: SmartCaptureSelectionEventTapContext?
+    nonisolated(unsafe) private var selectionLocalMonitor: Any?
+    nonisolated(unsafe) private var selectionGlobalMonitor: Any?
     private var selectionMode: SmartCaptureSelectionMode = .smartElement
     private var selectionInteraction = SmartCaptureSelectionState()
 
@@ -1135,7 +1159,7 @@ final class SmartScreenshotController {
         var registeredKinds: Set<ScreenCaptureShortcutKind> = []
         fallbackShortcutBindings.removeAll { $0.id != SmartCaptureCarbonHotKey.captureID }
         unregisterAdditionalShortcuts()
-        for kind in [ScreenCaptureShortcutKind.area, .fullscreen, .activeWindow, .areaAnnotate, .ocr, .scrolling, .objectCutout] {
+        for kind in [ScreenCaptureShortcutKind.area, .repeatArea, .applicationWindow, .fullscreen, .activeWindow, .areaAnnotate, .ocr, .scrolling, .objectCutout] {
             guard let binding = additionalShortcutBindings[kind], binding.isValid else { continue }
             guard !registeredBindings.contains(binding), binding != shortcutBinding else {
                 Self.logger.error("Skipping duplicate screenshot shortcut \(kind.rawValue, privacy: .public)")
@@ -1147,6 +1171,8 @@ final class SmartScreenshotController {
             let id: UInt32
             switch kind {
             case .area: id = SmartCaptureCarbonHotKey.areaID
+            case .repeatArea: id = SmartCaptureCarbonHotKey.repeatAreaID
+            case .applicationWindow: id = SmartCaptureCarbonHotKey.applicationWindowID
             case .fullscreen: id = SmartCaptureCarbonHotKey.fullscreenID
             case .activeWindow: id = SmartCaptureCarbonHotKey.activeWindowID
             case .areaAnnotate: id = SmartCaptureCarbonHotKey.areaAnnotateID
@@ -1293,6 +1319,74 @@ final class SmartScreenshotController {
         selectionEventTapSource = nil
         selectionEventTap = nil
         selectionEventTapContext = nil
+    }
+
+    private func installSelectionEventMonitors() {
+        guard selectionLocalMonitor == nil, selectionGlobalMonitor == nil else { return }
+        let mask: NSEvent.EventTypeMask = [
+            .mouseMoved,
+            .leftMouseDown,
+            .leftMouseDragged,
+            .leftMouseUp,
+            .rightMouseDown,
+            .keyDown,
+            .keyUp
+        ]
+        selectionLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            guard let self else { return event }
+            return self.handleSelectionMonitorEvent(event) ? nil : event
+        }
+        selectionGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
+            self?.handleSelectionMonitorEvent(event)
+        }
+    }
+
+    private func removeSelectionEventMonitors() {
+        if let selectionLocalMonitor { NSEvent.removeMonitor(selectionLocalMonitor) }
+        if let selectionGlobalMonitor { NSEvent.removeMonitor(selectionGlobalMonitor) }
+        selectionLocalMonitor = nil
+        selectionGlobalMonitor = nil
+    }
+
+    /// Routes monitor fallback events through the same selection state machine
+    /// used by the CGEvent tap and overlay view. Global monitors are
+    /// observe-only, while local events are consumed once handled.
+    @discardableResult
+    private func handleSelectionMonitorEvent(_ event: NSEvent) -> Bool {
+        guard isSelecting else { return false }
+        // `NSEvent.mouseLocation` is sampled at callback time and can lag a
+        // queued drag event. Prefer the event's own window location when it
+        // is available; global monitor events still use the current pointer.
+        let point = event.window.map { window in
+            let local = event.locationInWindow
+            return window.convertPoint(toScreen: local)
+        } ?? NSEvent.mouseLocation
+        switch event.type {
+        case .mouseMoved:
+            updateTarget(at: point)
+            return true
+        case .leftMouseDown:
+            handleSelectionMouseDown(atAppKitPoint: point)
+            return true
+        case .leftMouseDragged:
+            handleSelectionMouseDragged(atAppKitPoint: point)
+            return true
+        case .leftMouseUp:
+            handleSelectionMouseUp(atAppKitPoint: point)
+            return true
+        case .rightMouseDown:
+            cancelSelection()
+            return true
+        case .keyDown:
+            return handleSelectionKeyDown(
+                keyCode: event.keyCode,
+                modifiers: InputSourceShortcutModifiers(event.modifierFlags)
+            )
+        case .keyUp:
+            return handleSelectionKeyUp(keyCode: event.keyCode)
+        default:
+            return false
+        }
     }
 
     @discardableResult
@@ -1492,6 +1586,8 @@ final class SmartScreenshotController {
     deinit {
         if let selectionEventTap { CGEvent.tapEnable(tap: selectionEventTap, enable: false) }
         if let shortcutEventTap { CGEvent.tapEnable(tap: shortcutEventTap, enable: false) }
+        if let selectionLocalMonitor { NSEvent.removeMonitor(selectionLocalMonitor) }
+        if let selectionGlobalMonitor { NSEvent.removeMonitor(selectionGlobalMonitor) }
         if let selectionCancelHotKey { UnregisterEventHotKey(selectionCancelHotKey) }
         if let shortcutHotKey { UnregisterEventHotKey(shortcutHotKey) }
         for hotKey in additionalShortcutHotKeys.values { UnregisterEventHotKey(hotKey) }
@@ -1542,13 +1638,12 @@ final class SmartScreenshotController {
         }
         let selectionEventTapReady = refreshSelectionEventTap()
         if !selectionEventTapReady {
-            // The overlay itself remains a usable fallback when Accessibility
-            // is unavailable (for example when capture was started from the
-            // settings window).  A global capture started from another app
-            // may otherwise leave the non-activating panel without a reliable
-            // event source. Prefer the panel's own key-window path and only
-            // activate MacPilot if the panel still cannot receive input.
+            // Observe both events delivered to the overlay app and events
+            // delivered to the previously frontmost app. Without
+            // Accessibility, the first drag/up from another app otherwise
+            // bypasses the non-activating panel and never commits.
             Self.logger.warning("Selection event tap unavailable; using foreground overlay input")
+            installSelectionEventMonitors()
         }
         if let activePanel = overlays.first(where: { $0.frame.contains(initialPoint) }) ?? overlays.first {
             activePanel.makeKeyAndOrderFront(nil)
@@ -1603,6 +1698,7 @@ final class SmartScreenshotController {
         selectionInteraction.reset()
         manualSelectionCoordinateFailure = false
         stopSelectionEventTap()
+        removeSelectionEventMonitors()
         unregisterSelectionCancelShortcut()
         currentTarget = nil
         let current = overlays
@@ -1693,6 +1789,10 @@ final class SmartScreenshotController {
             startSelection(mode: .smartElement)
         case SmartCaptureCarbonHotKey.areaID:
             startSelection(mode: .manualArea)
+        case SmartCaptureCarbonHotKey.repeatAreaID:
+            onRepeatLastArea()
+        case SmartCaptureCarbonHotKey.applicationWindowID:
+            startSelection(mode: .applicationWindow)
         case SmartCaptureCarbonHotKey.fullscreenID:
             captureFullscreen()
         case SmartCaptureCarbonHotKey.activeWindowID:
@@ -1720,7 +1820,7 @@ final class SmartScreenshotController {
     }
 
     func handleSelectionMouseDown(atQuartzPoint point: CGPoint) {
-        guard isSelecting else { return }
+        guard isSelecting, !selectionInteraction.isDragging else { return }
         guard let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else {
             reportSelectionCoordinateFailure()
             cancelSelection()
@@ -1732,7 +1832,7 @@ final class SmartScreenshotController {
     }
 
     private func handleSelectionMouseDown(atAppKitPoint point: CGPoint) {
-        guard isSelecting else { return }
+        guard isSelecting, !selectionInteraction.isDragging else { return }
         let target = selectionMode == .smartElement || selectionMode == .applicationWindow ? currentTarget : nil
         applySelectionAction(selectionInteraction.pointerDown(at: point, target: target))
     }

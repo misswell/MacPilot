@@ -58,8 +58,12 @@ struct ScreenCaptureTests {
                 binding: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .shift])
             ),
             SmartCaptureShortcutEventBinding(
-                id: 4,
-                binding: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_3), modifiers: [.command, .shift])
+                id: 10,
+                binding: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.control, .command, .shift])
+            ),
+            SmartCaptureShortcutEventBinding(
+                id: 11,
+                binding: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_A), modifiers: [.control, .command])
             )
         ]
 
@@ -69,6 +73,18 @@ struct ScreenCaptureTests {
             isRepeat: false,
             bindings: bindings
         ) == 3)
+        #expect(SmartCaptureShortcutRouting.matchingID(
+            keyCode: UInt16(kVK_ANSI_4),
+            flags: [.maskControl, .maskCommand, .maskShift],
+            isRepeat: false,
+            bindings: bindings
+        ) == 10)
+        #expect(SmartCaptureShortcutRouting.matchingID(
+            keyCode: UInt16(kVK_ANSI_A),
+            flags: [.maskControl, .maskCommand],
+            isRepeat: false,
+            bindings: bindings
+        ) == 11)
     }
 
     @Test func shortcutEventRoutingIgnoresRepeatsAndUnconfiguredCombinations() {
@@ -122,6 +138,8 @@ struct ScreenCaptureTests {
 
     @Test func snapzyStyleScreenshotShortcutDefaultsAreConfigurableAndPersisted() throws {
         #expect(ScreenCaptureShortcutKind.area.defaultBinding.displayName == "⇧⌘4")
+        #expect(ScreenCaptureShortcutKind.repeatArea.defaultBinding.displayName == "⌃⇧⌘4")
+        #expect(ScreenCaptureShortcutKind.applicationWindow.defaultBinding.displayName == "⌃⌘A")
         #expect(ScreenCaptureShortcutKind.fullscreen.defaultBinding.displayName == "⇧⌘3")
         #expect(ScreenCaptureShortcutKind.activeWindow.defaultBinding.displayName == "⇧⌘9")
         #expect(ScreenCaptureShortcutKind.areaAnnotate.defaultBinding.displayName == "⇧⌘7")
@@ -131,8 +149,10 @@ struct ScreenCaptureTests {
 
         let settings = ScreenCaptureSettings(
             areaCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_6), modifiers: [.command, .option]),
+            repeatAreaCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_R), modifiers: [.control, .command]),
+            applicationWindowCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_W), modifiers: [.option, .command]),
             fullscreenCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_F8), modifiers: [.control]),
-            activeWindowCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_W), modifiers: [.option, .command]),
+            activeWindowCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_X), modifiers: [.option, .command]),
             areaAnnotateShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_A), modifiers: [.control, .shift]),
             ocrShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_O), modifiers: [.command, .shift]),
             scrollingCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_6), modifiers: [.control, .shift]),
@@ -140,6 +160,8 @@ struct ScreenCaptureTests {
         )
         let decoded = try JSONDecoder().decode(ScreenCaptureSettings.self, from: JSONEncoder().encode(settings))
         #expect(decoded.areaCaptureShortcut == settings.areaCaptureShortcut)
+        #expect(decoded.repeatAreaCaptureShortcut == settings.repeatAreaCaptureShortcut)
+        #expect(decoded.applicationWindowCaptureShortcut == settings.applicationWindowCaptureShortcut)
         #expect(decoded.fullscreenCaptureShortcut == settings.fullscreenCaptureShortcut)
         #expect(decoded.activeWindowCaptureShortcut == settings.activeWindowCaptureShortcut)
         #expect(decoded.areaAnnotateShortcut == settings.areaAnnotateShortcut)
@@ -157,6 +179,8 @@ struct ScreenCaptureTests {
         let bindings: [(ScreenCaptureShortcutKind, SmartCaptureShortcutBinding)] = [
             (.smartElement, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_F8), modifiers: [])),
             (.area, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_A), modifiers: [.control, .option])),
+            (.repeatArea, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_R), modifiers: [.control, .command])),
+            (.applicationWindow, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_W), modifiers: [.command, .option])),
             (.fullscreen, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_B), modifiers: [.command, .shift])),
             (.activeWindow, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_C), modifiers: [.command, .option])),
             (.areaAnnotate, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_D), modifiers: [.control, .shift])),
@@ -189,6 +213,8 @@ struct ScreenCaptureTests {
     @Test func legacyScreenCaptureSettingsUseSnapzyStyleShortcutDefaults() throws {
         let decoded = try JSONDecoder().decode(ScreenCaptureSettings.self, from: Data("{}".utf8))
         #expect(decoded.areaCaptureShortcut == ScreenCaptureShortcutKind.area.defaultBinding)
+        #expect(decoded.repeatAreaCaptureShortcut == ScreenCaptureShortcutKind.repeatArea.defaultBinding)
+        #expect(decoded.applicationWindowCaptureShortcut == ScreenCaptureShortcutKind.applicationWindow.defaultBinding)
         #expect(decoded.fullscreenCaptureShortcut == ScreenCaptureShortcutKind.fullscreen.defaultBinding)
         #expect(decoded.activeWindowCaptureShortcut == ScreenCaptureShortcutKind.activeWindow.defaultBinding)
         #expect(decoded.areaAnnotateShortcut == ScreenCaptureShortcutKind.areaAnnotate.defaultBinding)
@@ -450,6 +476,8 @@ struct ScreenCaptureTests {
         #expect(settings.smartCaptureEnabled == true)
         #expect(settings.smartCaptureShortcut == .default)
         #expect(settings.areaCaptureShortcut == ScreenCaptureShortcutKind.area.defaultBinding)
+        #expect(settings.repeatAreaCaptureShortcut == ScreenCaptureShortcutKind.repeatArea.defaultBinding)
+        #expect(settings.applicationWindowCaptureShortcut == ScreenCaptureShortcutKind.applicationWindow.defaultBinding)
         #expect(settings.fullscreenCaptureShortcut == ScreenCaptureShortcutKind.fullscreen.defaultBinding)
         #expect(settings.activeWindowCaptureShortcut == ScreenCaptureShortcutKind.activeWindow.defaultBinding)
         #expect(settings.areaAnnotateShortcut == ScreenCaptureShortcutKind.areaAnnotate.defaultBinding)
@@ -494,6 +522,8 @@ struct ScreenCaptureTests {
             showsCursor: false,
             smartCaptureShortcut: SmartCaptureShortcutBinding(keyCode: 0, modifiers: [.command, .shift]),
             areaCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_6), modifiers: [.command, .shift]),
+            repeatAreaCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_R), modifiers: [.control, .command]),
+            applicationWindowCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_W), modifiers: [.option, .command]),
             fullscreenCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_F8), modifiers: [.control]),
             ocrShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_O), modifiers: [.option, .shift])
         )
