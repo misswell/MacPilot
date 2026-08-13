@@ -35,14 +35,50 @@ enum SmartCaptureTargetResolver {
     }
 }
 
+struct SmartCaptureShortcutBinding: Codable, Equatable, Sendable {
+    var keyCode: UInt16
+    var modifiers: InputSourceShortcutModifiers
+
+    static let `default` = Self(keyCode: UInt16(kVK_F1), modifiers: [])
+
+    init(keyCode: UInt16 = UInt16(kVK_F1), modifiers: InputSourceShortcutModifiers = []) {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+    }
+
+    var displayName: String {
+        modifiers.symbolDescription + MacPilotKeyCode.displayName(for: keyCode)
+    }
+
+    func matches(keyCode: UInt16, flags: CGEventFlags, isRepeat: Bool) -> Bool {
+        guard self.keyCode == keyCode, !isRepeat else { return false }
+        return InputSourceShortcutModifiers(flags) == modifiers
+    }
+}
+
+enum SmartCaptureSelectionGeometry {
+    static func rect(from start: CGPoint, to end: CGPoint) -> CGRect {
+        CGRect(
+            x: min(start.x, end.x),
+            y: min(start.y, end.y),
+            width: abs(end.x - start.x),
+            height: abs(end.y - start.y)
+        ).integral
+    }
+
+    static func isMeaningful(_ rect: CGRect, minimumSize: CGFloat = 4) -> Bool {
+        rect.width >= minimumSize && rect.height >= minimumSize
+    }
+}
+
 enum SmartCaptureShortcut {
-    static func matches(keyCode: UInt16, flags: CGEventFlags, isRepeat: Bool) -> Bool {
-        let shortcutModifiers: CGEventFlags = [
-            .maskCommand, .maskControl, .maskAlternate, .maskShift
-        ]
-        return keyCode == UInt16(kVK_F1)
-            && flags.intersection(shortcutModifiers).isEmpty
-            && !isRepeat
+    static func matches(
+        keyCode: UInt16,
+        flags: CGEventFlags,
+        isRepeat: Bool,
+        binding: SmartCaptureShortcutBinding = .default
+    ) -> Bool {
+        binding.matches(keyCode: keyCode, flags: flags, isRepeat: isRepeat)
     }
 }
 
@@ -50,9 +86,11 @@ private final class SmartShortcutContext: @unchecked Sendable {
     weak var controller: SmartScreenshotController?
     private let lock = NSLock()
     private var selecting = false
+    private var binding: SmartCaptureShortcutBinding
 
-    init(controller: SmartScreenshotController) {
+    init(controller: SmartScreenshotController, binding: SmartCaptureShortcutBinding) {
         self.controller = controller
+        self.binding = binding
     }
 
     func setSelecting(_ value: Bool) {
@@ -66,6 +104,19 @@ private final class SmartShortcutContext: @unchecked Sendable {
         let value = selecting && keyCode == UInt16(kVK_Escape)
         lock.unlock()
         return value
+    }
+
+    func update(binding: SmartCaptureShortcutBinding) {
+        lock.lock()
+        self.binding = binding
+        lock.unlock()
+    }
+
+    func currentBinding() -> SmartCaptureShortcutBinding {
+        lock.lock()
+        let binding = self.binding
+        lock.unlock()
+        return binding
     }
 }
 
@@ -88,7 +139,7 @@ private func smartShortcutEventCallback(
         Task { @MainActor in context.controller?.cancelSelection() }
         return nil
     }
-    guard SmartCaptureShortcut.matches(keyCode: keyCode, flags: event.flags, isRepeat: isRepeat) else {
+    guard context.currentBinding().matches(keyCode: keyCode, flags: event.flags, isRepeat: isRepeat) else {
         return Unmanaged.passUnretained(event)
     }
     Task { @MainActor in context.controller?.startSelection() }
@@ -110,17 +161,28 @@ private func smartSelectionEventCallback(
     let location = event.location
     Task { @MainActor in
         switch type {
-        case .mouseMoved, .leftMouseDragged, .rightMouseDragged:
+        case .mouseMoved:
             context.controller?.selectionPointerMoved(toQuartzPoint: location)
         case .leftMouseDown:
-            context.controller?.selectionClicked(atQuartzPoint: location)
+            context.controller?.selectionMouseDown(atQuartzPoint: location)
+        case .leftMouseDragged:
+            context.controller?.selectionMouseDragged(toQuartzPoint: location)
+        case .leftMouseUp:
+            context.controller?.selectionMouseUp(atQuartzPoint: location)
         case .rightMouseDown:
             context.controller?.cancelSelection()
+        case .rightMouseDragged:
+            context.controller?.selectionPointerMoved(toQuartzPoint: location)
         default:
             break
         }
     }
-    return type == .leftMouseDown || type == .rightMouseDown ? nil : Unmanaged.passUnretained(event)
+    switch type {
+    case .mouseMoved, .leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown, .rightMouseDragged:
+        return nil
+    default:
+        return Unmanaged.passUnretained(event)
+    }
 }
 
 @MainActor
@@ -137,24 +199,30 @@ final class SmartScreenshotController {
     private var selectionSource: CFRunLoopSource?
     private var overlays: [SmartCaptureOverlayPanel] = []
     private var currentTarget: CGRect?
+    private var manualSelectionStart: CGPoint?
+    private var manualSelectionRect: CGRect?
     private var pinControllers: [UUID: SmartPinWindowController] = [:]
+    private var quickAccessControllers: [UUID: SmartQuickAccessWindowController] = [:]
     private var isSelecting = false
     private var pendingTargetUpdate: DispatchWorkItem?
     private var latestPointerLocation: CGPoint?
+    private var shortcutBinding: SmartCaptureShortcutBinding
 
     init(
         language: @escaping () -> AppLanguage,
         onCapture: @escaping (CGImage) -> Void,
-        onError: @escaping (Error) -> Void
+        onError: @escaping (Error) -> Void,
+        shortcutBinding: SmartCaptureShortcutBinding = .default
     ) {
         self.language = language
         self.onCapture = onCapture
         self.onError = onError
+        self.shortcutBinding = shortcutBinding
     }
 
     func start() {
         guard shortcutTap == nil, fallbackKeyMonitor == nil else { return }
-        let context = SmartShortcutContext(controller: self)
+        let context = SmartShortcutContext(controller: self, binding: shortcutBinding)
         let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -166,7 +234,7 @@ final class SmartScreenshotController {
         ) else {
             Self.logger.error("Global F1 event tap could not be created; installing NSEvent fallback")
             fallbackKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard SmartCaptureShortcut.matches(
+                guard context.currentBinding().matches(
                     keyCode: event.keyCode,
                     flags: CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue)),
                     isRepeat: event.isARepeat
@@ -184,11 +252,18 @@ final class SmartScreenshotController {
         Self.logger.info("Global F1 event tap enabled")
     }
 
+    func updateShortcutBinding(_ binding: SmartCaptureShortcutBinding) {
+        shortcutBinding = binding
+        shortcutContext?.update(binding: binding)
+    }
+
     func stop() {
         cancelSelection()
         pendingTargetUpdate?.cancel()
         pendingTargetUpdate = nil
         latestPointerLocation = nil
+        manualSelectionStart = nil
+        manualSelectionRect = nil
         if let shortcutSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), shortcutSource, .commonModes) }
         if let shortcutTap { CFMachPortInvalidate(shortcutTap) }
         shortcutSource = nil
@@ -199,6 +274,9 @@ final class SmartScreenshotController {
         let controllers = Array(pinControllers.values)
         pinControllers.removeAll(keepingCapacity: false)
         for controller in controllers { controller.close() }
+        let quickAccessControllers = Array(self.quickAccessControllers.values)
+        self.quickAccessControllers.removeAll(keepingCapacity: false)
+        for controller in quickAccessControllers { controller.close() }
     }
 
     func reenableShortcutTap() {
@@ -220,7 +298,9 @@ final class SmartScreenshotController {
             let panel = SmartCaptureOverlayPanel(screen: screen)
             panel.overlayView.targetFrame = currentTarget
             panel.overlayView.onMove = { [weak self] point in self?.updateTarget(at: point) }
-            panel.overlayView.onCommit = { [weak self] point in self?.commit(at: point) }
+            panel.overlayView.onMouseDown = { [weak self] point in self?.beginManualSelection(at: point) }
+            panel.overlayView.onMouseDragged = { [weak self] point in self?.updateManualSelection(to: point) }
+            panel.overlayView.onMouseUp = { [weak self] point in self?.finishManualSelection(at: point) }
             panel.overlayView.onCancel = { [weak self] in self?.cancelSelection() }
             panel.orderFrontRegardless()
             return panel
@@ -235,6 +315,8 @@ final class SmartScreenshotController {
         pendingTargetUpdate?.cancel()
         pendingTargetUpdate = nil
         latestPointerLocation = nil
+        manualSelectionStart = nil
+        manualSelectionRect = nil
         shortcutContext?.setSelecting(false)
         removeSelectionTap()
         currentTarget = nil
@@ -258,6 +340,25 @@ final class SmartScreenshotController {
         controller.show()
     }
 
+    func showQuickAccess(image: CGImage) {
+        // Keep only the latest result preview alive. This bounds retained image
+        // memory when the user captures repeatedly without opening the actions.
+        let previous = Array(quickAccessControllers.values)
+        quickAccessControllers.removeAll(keepingCapacity: false)
+        for controller in previous { controller.close() }
+        let id = UUID()
+        let controller = SmartQuickAccessWindowController(
+            image: image,
+            language: language(),
+            onPin: { [weak self] image in self?.pin(image: image) },
+            onClose: { [weak self] in
+                self?.quickAccessControllers.removeValue(forKey: id)
+            }
+        )
+        quickAccessControllers[id] = controller
+        controller.show()
+    }
+
     func reenableSelectionTap() {
         if let selectionTap { CGEvent.tapEnable(tap: selectionTap, enable: true) }
     }
@@ -267,15 +368,25 @@ final class SmartScreenshotController {
         updateTarget(at: appKitPoint)
     }
 
-    func selectionClicked(atQuartzPoint point: CGPoint) {
+    func selectionMouseDown(atQuartzPoint point: CGPoint) {
         guard let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
-        commit(at: appKitPoint)
+        beginManualSelection(at: appKitPoint)
+    }
+
+    func selectionMouseDragged(toQuartzPoint point: CGPoint) {
+        guard let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        updateManualSelection(to: appKitPoint)
+    }
+
+    func selectionMouseUp(atQuartzPoint point: CGPoint) {
+        guard let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        finishManualSelection(at: appKitPoint)
     }
 
     private func installSelectionTap() {
         removeSelectionTap()
         guard let context = shortcutContext else { return }
-        let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .rightMouseDown, .leftMouseDragged, .rightMouseDragged]
+        let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown, .rightMouseDragged]
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -303,7 +414,7 @@ final class SmartScreenshotController {
     }
 
     private func updateTarget(at appKitPoint: CGPoint) {
-        guard isSelecting else { return }
+        guard isSelecting, manualSelectionStart == nil else { return }
         latestPointerLocation = appKitPoint
         guard pendingTargetUpdate == nil else { return }
         let work = DispatchWorkItem { [weak self] in
@@ -322,6 +433,45 @@ final class SmartScreenshotController {
         for overlay in overlays { overlay.overlayView.targetFrame = target }
     }
 
+    private func beginManualSelection(at point: CGPoint) {
+        guard isSelecting else { return }
+        manualSelectionStart = point
+        manualSelectionRect = CGRect(origin: point, size: .zero)
+        currentTarget = nil
+        updateOverlaySelection()
+    }
+
+    private func updateManualSelection(to point: CGPoint) {
+        guard let start = manualSelectionStart, isSelecting else { return }
+        manualSelectionRect = SmartCaptureSelectionGeometry.rect(from: start, to: point)
+        updateOverlaySelection()
+    }
+
+    private func finishManualSelection(at point: CGPoint) {
+        guard manualSelectionStart != nil else { return }
+        updateManualSelection(to: point)
+        let rect = manualSelectionRect ?? .zero
+        let start = manualSelectionStart ?? point
+        manualSelectionStart = nil
+        manualSelectionRect = nil
+        if SmartCaptureSelectionGeometry.isMeaningful(rect) {
+            guard let quartzPoint = SmartAXTargetQuery.quartzPoint(fromAppKitPoint: CGPoint(x: rect.midX, y: rect.midY)) else {
+                cancelSelection()
+                return
+            }
+            finishCapture(rect: rect, quartzClickPoint: quartzPoint)
+        } else {
+            commit(at: start)
+        }
+    }
+
+    private func updateOverlaySelection() {
+        for overlay in overlays {
+            overlay.overlayView.selectionRect = manualSelectionRect
+            overlay.overlayView.targetFrame = manualSelectionRect == nil ? currentTarget : nil
+        }
+    }
+
     private func commit(at point: CGPoint) {
         let target = currentTarget.flatMap { $0.contains(point) ? $0 : nil }
             ?? SmartAXTargetQuery.target(at: point)
@@ -331,16 +481,25 @@ final class SmartScreenshotController {
         }
         guard let quartzPoint = SmartAXTargetQuery.quartzPoint(fromAppKitPoint: point) else {
             Self.logger.error("Selection click could not be converted to display coordinates")
+            cancelSelection()
             return
         }
         Self.logger.info("Committing smart capture target \(String(describing: target), privacy: .public)")
+        finishCapture(rect: target, quartzClickPoint: quartzPoint)
+    }
+
+    private func finishCapture(rect: CGRect, quartzClickPoint: CGPoint) {
+        guard !rect.isEmpty else {
+            cancelSelection()
+            return
+        }
         cancelSelection()
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(80))
             do {
                 let image = try await SmartScreenImageCapture.capture(
-                    appKitRect: target,
-                    quartzClickPoint: quartzPoint
+                    appKitRect: rect,
+                    quartzClickPoint: quartzClickPoint
                 )
                 self?.onCapture(image)
             } catch {
@@ -415,23 +574,97 @@ private enum SmartAXTargetQuery {
     }
 
     static func quartzPoint(fromAppKitPoint point: CGPoint) -> CGPoint? {
-        guard let mainHeight = NSScreen.screens.first(where: { $0.displayID == CGMainDisplayID() })?.frame.height else { return nil }
-        return CGPoint(x: point.x, y: mainHeight - point.y)
+        guard let mapping = DisplayMapping.best(forAppKitPoint: point) else { return nil }
+        return CGPoint(
+            x: mapping.quartzFrame.minX + point.x - mapping.appKitFrame.minX,
+            y: mapping.quartzFrame.maxY - (point.y - mapping.appKitFrame.minY)
+        )
     }
 
     static func appKitPoint(fromQuartzPoint point: CGPoint) -> CGPoint? {
-        guard let mainHeight = NSScreen.screens.first(where: { $0.displayID == CGMainDisplayID() })?.frame.height else { return nil }
-        return CGPoint(x: point.x, y: mainHeight - point.y)
+        guard let mapping = DisplayMapping.best(forQuartzPoint: point) else { return nil }
+        return CGPoint(
+            x: mapping.appKitFrame.minX + point.x - mapping.quartzFrame.minX,
+            y: mapping.appKitFrame.maxY - (point.y - mapping.quartzFrame.minY)
+        )
     }
 
     static func quartzRect(fromAppKitRect rect: CGRect) -> CGRect? {
-        guard let mainHeight = NSScreen.screens.first(where: { $0.displayID == CGMainDisplayID() })?.frame.height else { return nil }
-        return CGRect(x: rect.minX, y: mainHeight - rect.maxY, width: rect.width, height: rect.height).integral
+        let points = [
+            CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
+            CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY)
+        ]
+        let converted = points.compactMap { point -> CGPoint? in
+            guard let mapping = DisplayMapping.best(forAppKitPoint: point) else { return nil }
+            return CGPoint(
+                x: mapping.quartzFrame.minX + point.x - mapping.appKitFrame.minX,
+                y: mapping.quartzFrame.maxY - (point.y - mapping.appKitFrame.minY)
+            )
+        }
+        guard converted.count == points.count else { return nil }
+        return CGRect(
+            x: converted.map(\.x).min() ?? 0,
+            y: converted.map(\.y).min() ?? 0,
+            width: (converted.map(\.x).max() ?? 0) - (converted.map(\.x).min() ?? 0),
+            height: (converted.map(\.y).max() ?? 0) - (converted.map(\.y).min() ?? 0)
+        ).integral
+    }
+
+    static func displayCount(intersectingAppKitRect rect: CGRect) -> Int {
+        NSScreen.screens.reduce(into: 0) { count, screen in
+            let intersection = screen.frame.intersection(rect)
+            if intersection.width > 0, intersection.height > 0 { count += 1 }
+        }
     }
 
     private static func appKitRect(fromQuartzRect rect: CGRect) -> CGRect? {
-        guard let mainHeight = NSScreen.screens.first(where: { $0.displayID == CGMainDisplayID() })?.frame.height else { return nil }
-        return CGRect(x: rect.minX, y: mainHeight - rect.maxY, width: rect.width, height: rect.height).integral
+        let points = [
+            CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
+            CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY)
+        ]
+        let converted = points.compactMap { point -> CGPoint? in
+            guard let mapping = DisplayMapping.best(forQuartzPoint: point) else { return nil }
+            return CGPoint(
+                x: mapping.appKitFrame.minX + point.x - mapping.quartzFrame.minX,
+                y: mapping.appKitFrame.maxY - (point.y - mapping.quartzFrame.minY)
+            )
+        }
+        guard converted.count == points.count else { return nil }
+        return CGRect(
+            x: converted.map(\.x).min() ?? 0,
+            y: converted.map(\.y).min() ?? 0,
+            width: (converted.map(\.x).max() ?? 0) - (converted.map(\.x).min() ?? 0),
+            height: (converted.map(\.y).max() ?? 0) - (converted.map(\.y).min() ?? 0)
+        ).integral
+    }
+
+    private struct DisplayMapping {
+        let quartzFrame: CGRect
+        let appKitFrame: CGRect
+
+        static func all() -> [Self] {
+            NSScreen.screens.compactMap { screen in
+                guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+                return Self(
+                    quartzFrame: CGDisplayBounds(CGDirectDisplayID(number.uint32Value)),
+                    appKitFrame: screen.frame
+                )
+            }
+        }
+
+        static func best(forAppKitPoint point: CGPoint) -> Self? {
+            all().min { distance(point, to: $0.appKitFrame) < distance(point, to: $1.appKitFrame) }
+        }
+
+        static func best(forQuartzPoint point: CGPoint) -> Self? {
+            all().min { distance(point, to: $0.quartzFrame) < distance(point, to: $1.quartzFrame) }
+        }
+
+        private static func distance(_ point: CGPoint, to rect: CGRect) -> CGFloat {
+            let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+            let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+            return dx * dx + dy * dy
+        }
     }
 }
 
@@ -467,9 +700,12 @@ private final class SmartCaptureOverlayPanel: NSPanel {
 
 private final class SmartCaptureOverlayView: NSView {
     var onMove: ((CGPoint) -> Void)?
-    var onCommit: ((CGPoint) -> Void)?
+    var onMouseDown: ((CGPoint) -> Void)?
+    var onMouseDragged: ((CGPoint) -> Void)?
+    var onMouseUp: ((CGPoint) -> Void)?
     var onCancel: (() -> Void)?
     var targetFrame: CGRect? { didSet { needsDisplay = true } }
+    var selectionRect: CGRect? { didSet { needsDisplay = true } }
     private let screenFrame: CGRect
     private var trackingAreaReference: NSTrackingArea?
 
@@ -495,7 +731,9 @@ private final class SmartCaptureOverlayView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) { onMove?(globalPoint(event)) }
-    override func mouseDown(with event: NSEvent) { onCommit?(globalPoint(event)) }
+    override func mouseDown(with event: NSEvent) { onMouseDown?(globalPoint(event)) }
+    override func mouseDragged(with event: NSEvent) { onMouseDragged?(globalPoint(event)) }
+    override func mouseUp(with event: NSEvent) { onMouseUp?(globalPoint(event)) }
     override func rightMouseDown(with event: NSEvent) { onCancel?() }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { onCancel?() } else { super.keyDown(with: event) }
@@ -504,6 +742,27 @@ private final class SmartCaptureOverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.black.withAlphaComponent(0.25).setFill()
         bounds.fill()
+        if let selectionRect, !selectionRect.isEmpty {
+            let local = selectionRect.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY)
+            NSGraphicsContext.current?.saveGraphicsState()
+            NSColor.clear.setFill()
+            local.fill(using: .copy)
+            NSGraphicsContext.current?.restoreGraphicsState()
+            let path = NSBezierPath(rect: local.insetBy(dx: -1, dy: -1))
+            path.lineWidth = 2
+            NSColor.white.setStroke()
+            path.stroke()
+            let label = "\(Int(selectionRect.width)) × \(Int(selectionRect.height))"
+            label.draw(
+                at: CGPoint(x: local.minX + 8, y: max(8, local.minY - 24)),
+                withAttributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
+                    .foregroundColor: NSColor.white,
+                    .backgroundColor: NSColor.black.withAlphaComponent(0.65)
+                ]
+            )
+            return
+        }
         guard let targetFrame else { return }
         let local = targetFrame.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY)
         NSGraphicsContext.current?.saveGraphicsState()
@@ -538,6 +797,11 @@ private enum SmartScreenImageCapture {
     static func capture(appKitRect: CGRect, quartzClickPoint: CGPoint) async throws -> CGImage {
         guard let quartzRect = SmartAXTargetQuery.quartzRect(fromAppKitRect: appKitRect) else {
             throw ScreenCaptureError.noDisplayFound
+        }
+        if #unavailable(macOS 15.2), SmartAXTargetQuery.displayCount(intersectingAppKitRect: appKitRect) > 1 {
+            throw ScreenCaptureError.captureFailed(
+                "The selected region spans multiple displays. Multi-display region capture requires macOS 15.2 or later."
+            )
         }
         if #available(macOS 15.2, *) {
             do {
@@ -591,6 +855,141 @@ private enum SmartScreenImageCapture {
                     ))
                 }
             }
+        }
+    }
+}
+
+@MainActor
+private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate {
+    private var image: CGImage
+    private let language: AppLanguage
+    private let onPin: (CGImage) -> Void
+    private let onClose: () -> Void
+    private var panel: NSPanel?
+    private var annotationController: SmartAnnotationWindowController?
+
+    init(
+        image: CGImage,
+        language: AppLanguage,
+        onPin: @escaping (CGImage) -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self.image = image
+        self.language = language
+        self.onPin = onPin
+        self.onClose = onClose
+    }
+
+    func show() {
+        let maxSize = CGSize(width: 420, height: 320)
+        let scale = min(1, maxSize.width / CGFloat(image.width), maxSize.height / CGFloat(image.height))
+        let size = CGSize(
+            width: max(260, CGFloat(image.width) * scale),
+            height: max(190, CGFloat(image.height) * scale + 48)
+        )
+        let panel = NSPanel(
+            contentRect: CGRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = AppText.value("scQuickAccessTitle", language: language)
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+        panel.delegate = self
+        installContent(in: panel)
+        panel.center()
+        panel.orderFrontRegardless()
+        self.panel = panel
+    }
+
+    func close() {
+        panel?.close()
+        panel = nil
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        annotationController?.close()
+        annotationController = nil
+        panel?.contentView = nil
+        panel = nil
+        onClose()
+    }
+
+    private func installContent(in panel: NSPanel) {
+        panel.contentView = NSHostingView(rootView: SmartQuickAccessView(
+            image: image,
+            language: language,
+            onCopy: { [weak self] in self?.copyImage() },
+            onAnnotate: { [weak self] in self?.openAnnotation() },
+            onPin: { [weak self] in self?.pinImage() },
+            onClose: { [weak self] in self?.close() }
+        ))
+    }
+
+    private func copyImage() {
+        let representation = NSBitmapImageRep(cgImage: image)
+        guard let data = representation.representation(using: .png, properties: [:]) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setData(data, forType: .png)
+    }
+
+    private func pinImage() {
+        let image = image
+        close()
+        onPin(image)
+    }
+
+    private func openAnnotation() {
+        annotationController?.close()
+        panel?.orderOut(nil)
+        let controller = SmartAnnotationWindowController(
+            image: image,
+            language: language,
+            onComplete: { [weak self] annotated in
+                guard let self else { return }
+                self.image = annotated
+                if let panel = self.panel { self.installContent(in: panel) }
+            },
+            onClose: { [weak self] in
+                self?.panel?.orderFrontRegardless()
+                self?.annotationController = nil
+            }
+        )
+        annotationController = controller
+        controller.show()
+    }
+}
+
+private struct SmartQuickAccessView: View {
+    let image: CGImage
+    let language: AppLanguage
+    let onCopy: () -> Void
+    let onAnnotate: () -> Void
+    let onPin: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button(action: onCopy) { Label(AppText.value("scCopy", language: language), systemImage: "doc.on.doc") }
+                Button(action: onAnnotate) { Label(AppText.value("scAnnotate", language: language), systemImage: "pencil.tip.crop.circle") }
+                Button(action: onPin) { Label(AppText.value("scPin", language: language), systemImage: "pin") }
+                Spacer()
+                Button(action: onClose) { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+                    .help(AppText.value("scClose", language: language))
+            }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 10)
+            .frame(height: 42)
+            .background(.ultraThinMaterial)
+
+            Image(decorative: image, scale: 1)
+                .resizable()
+                .scaledToFit()
+                .background(Color.black.opacity(0.04))
         }
     }
 }
@@ -669,7 +1068,7 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
         let sendableImage = SendableSmartImage(value: image)
         Task { [weak self] in
             guard let text = try? await SmartOCRService.recognize(image: sendableImage), !text.isEmpty else {
-                self?.showMessage(title: "OCR", message: AppText.value("scOCRNoText", language: self?.language ?? .system))
+                self?.showMessage(title: AppText.value("scOCR", language: self?.language ?? .system), message: AppText.value("scOCRNoText", language: self?.language ?? .system))
                 return
             }
             NSPasteboard.general.clearContents()
@@ -722,7 +1121,7 @@ private struct SmartPinView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Button(action: onCopy) { Label(AppText.value("scCopy", language: language), systemImage: "doc.on.doc") }
-                Button(action: onOCR) { Label("OCR", systemImage: "text.viewfinder") }
+                Button(action: onOCR) { Label(AppText.value("scOCR", language: language), systemImage: "text.viewfinder") }
                 Button(action: onAnnotate) { Label(AppText.value("scAnnotate", language: language), systemImage: "pencil.tip.crop.circle") }
                 Spacer()
                 Button(action: onClose) { Image(systemName: "xmark") }.help(AppText.value("scClose", language: language))

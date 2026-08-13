@@ -2,6 +2,7 @@
 // Periodic screenshot capture with busy/idle scheduling and high-efficiency HEIC encoding.
 
 import AppKit
+import Carbon.HIToolbox
 import CoreGraphics
 import CoreImage
 import CoreMedia
@@ -55,6 +56,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
     var showsCursor: Bool
     var smartCaptureEnabled: Bool
     var pinSmartCaptures: Bool
+    var smartCaptureShortcut: SmartCaptureShortcutBinding
 
     init(
         isEnabled: Bool = false,
@@ -69,7 +71,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         captureAllDisplays: Bool = false,
         showsCursor: Bool = true,
         smartCaptureEnabled: Bool = true,
-        pinSmartCaptures: Bool = true
+        pinSmartCaptures: Bool = true,
+        smartCaptureShortcut: SmartCaptureShortcutBinding = .default
     ) {
         self.isEnabled = isEnabled
         self.outputFolder = outputFolder
@@ -84,12 +87,13 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.showsCursor = showsCursor
         self.smartCaptureEnabled = smartCaptureEnabled
         self.pinSmartCaptures = pinSmartCaptures
+        self.smartCaptureShortcut = smartCaptureShortcut
     }
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled, outputFolder, busyStartHour, busyEndHour
         case busyIntervalMinutes, idleIntervalMinutes, imageFormat, quality
-        case maxRetentionDays, captureAllDisplays, showsCursor, smartCaptureEnabled, pinSmartCaptures
+        case maxRetentionDays, captureAllDisplays, showsCursor, smartCaptureEnabled, pinSmartCaptures, smartCaptureShortcut
     }
 
     init(from decoder: Decoder) throws {
@@ -107,7 +111,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
             captureAllDisplays: try c.decodeIfPresent(Bool.self, forKey: .captureAllDisplays) ?? false,
             showsCursor: try c.decodeIfPresent(Bool.self, forKey: .showsCursor) ?? true,
             smartCaptureEnabled: try c.decodeIfPresent(Bool.self, forKey: .smartCaptureEnabled) ?? true,
-            pinSmartCaptures: try c.decodeIfPresent(Bool.self, forKey: .pinSmartCaptures) ?? true
+            pinSmartCaptures: try c.decodeIfPresent(Bool.self, forKey: .pinSmartCaptures) ?? true,
+            smartCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .smartCaptureShortcut) ?? .default
         )
     }
 
@@ -409,7 +414,8 @@ final class ScreenCaptureModel: ObservableObject {
         onError: { [weak self] error in
             Self.logger.error("Region capture failed: \(error.localizedDescription, privacy: .public)")
             self?.errorMessage = error.localizedDescription
-        }
+        },
+        shortcutBinding: settings.smartCaptureShortcut
     )
 
     deinit {
@@ -430,6 +436,7 @@ final class ScreenCaptureModel: ObservableObject {
     func applyLoadedSettings(_ newSettings: ScreenCaptureSettings) {
         isLoading = true
         settings = newSettings
+        smartCapture.updateShortcutBinding(newSettings.smartCaptureShortcut)
         diskUsageRevision += 1
         hasScreenPermission = CGPreflightScreenCaptureAccess()
         isPermissionError = false
@@ -510,6 +517,11 @@ final class ScreenCaptureModel: ObservableObject {
         updateSmartCaptureRuntime()
     }
 
+    func setSmartCaptureShortcut(_ binding: SmartCaptureShortcutBinding) {
+        updateSettings { $0.smartCaptureShortcut = binding }
+        smartCapture.updateShortcutBinding(binding)
+    }
+
     func setPinSmartCaptures(_ value: Bool) {
         updateSettings { $0.pinSmartCaptures = value }
     }
@@ -542,7 +554,7 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     private func handleSmartCapture(_ image: CGImage) {
-        if settings.pinSmartCaptures { smartCapture.pin(image: image) }
+        smartCapture.showQuickAccess(image: image)
         let configuration = ScreenCaptureSaveConfiguration(
             outputFolder: smartCaptureOutputFolder(),
             imageFormat: settings.imageFormat,
@@ -883,6 +895,7 @@ struct ScreenCaptureView: View {
     @EnvironmentObject private var appModel: MacPilotModel
     @ObservedObject var capture: ScreenCaptureModel
     @State private var showingFolderPicker = false
+    @State private var showingSmartShortcutEditor = false
     @State private var resetFailureMessage: String?
 
     var body: some View {
@@ -914,6 +927,9 @@ struct ScreenCaptureView: View {
                 capture.setOutputFolder(url)
             }
         }
+        .sheet(isPresented: $showingSmartShortcutEditor) {
+            SmartCaptureShortcutEditor(capture: capture)
+        }
     }
 
     private func t(_ key: String, _ args: CVarArg...) -> String {
@@ -940,11 +956,15 @@ struct ScreenCaptureView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text("F1")
+                Text(capture.settings.smartCaptureShortcut.displayName)
                     .font(.system(.body, design: .monospaced).weight(.semibold))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                Button(t("scChangeShortcut")) {
+                    showingSmartShortcutEditor = true
+                }
+                .buttonStyle(.bordered)
                 Button(t("scSmartCaptureNow")) { capture.startSmartCapture() }
                     .buttonStyle(.borderedProminent)
             }
@@ -955,10 +975,9 @@ struct ScreenCaptureView: View {
                 get: { capture.settings.smartCaptureEnabled },
                 set: { capture.setSmartCaptureEnabled($0) }
             ))
-            Toggle(t("scPinAfterSmartCapture"), isOn: Binding(
-                get: { capture.settings.pinSmartCaptures },
-                set: { capture.setPinSmartCaptures($0) }
-            ))
+            Text(t("scQuickAccessHint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Text(t("scSmartCaptureResources"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1270,5 +1289,123 @@ struct ScreenCaptureView: View {
             Text(value)
                 .font(.system(.body, design: .monospaced))
         }
+    }
+}
+
+private struct SmartCaptureShortcutEditor: View {
+    @EnvironmentObject private var appModel: MacPilotModel
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var capture: ScreenCaptureModel
+    @State private var recordedKeyCode: UInt16?
+    @State private var recordedModifiers: InputSourceShortcutModifiers
+
+    init(capture: ScreenCaptureModel) {
+        self.capture = capture
+        _recordedKeyCode = State(initialValue: capture.settings.smartCaptureShortcut.keyCode)
+        _recordedModifiers = State(initialValue: capture.settings.smartCaptureShortcut.modifiers)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(AppText.value("scChangeShortcut", language: appModel.language))
+                .font(.title2.bold())
+            Text(AppText.value("scShortcutHint", language: appModel.language))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            SmartCaptureShortcutRecorder(
+                keyCode: $recordedKeyCode,
+                modifiers: $recordedModifiers,
+                placeholder: AppText.value("scRecordShortcut", language: appModel.language)
+            )
+            HStack {
+                Button(AppText.value("scResetShortcut", language: appModel.language)) {
+                    recordedKeyCode = SmartCaptureShortcutBinding.default.keyCode
+                    recordedModifiers = SmartCaptureShortcutBinding.default.modifiers
+                }
+                Spacer()
+                Button(AppText.value("cancel", language: appModel.language), role: .cancel) { dismiss() }
+                Button(AppText.value("save", language: appModel.language)) { save() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(recordedKeyCode == nil)
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
+    }
+
+    private func save() {
+        guard let recordedKeyCode else { return }
+        capture.setSmartCaptureShortcut(SmartCaptureShortcutBinding(
+            keyCode: recordedKeyCode,
+            modifiers: recordedModifiers
+        ))
+        dismiss()
+    }
+}
+
+private struct SmartCaptureShortcutRecorder: NSViewRepresentable {
+    @Binding var keyCode: UInt16?
+    @Binding var modifiers: InputSourceShortcutModifiers
+    let placeholder: String
+
+    func makeNSView(context: Context) -> SmartCaptureShortcutRecorderNSView {
+        let view = SmartCaptureShortcutRecorderNSView()
+        view.keyCode = keyCode
+        view.modifiers = modifiers
+        view.placeholder = placeholder
+        view.onCapture = { keyCode, modifiers in
+            self.keyCode = keyCode
+            self.modifiers = modifiers
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: SmartCaptureShortcutRecorderNSView, context: Context) {
+        nsView.keyCode = keyCode
+        nsView.modifiers = modifiers
+        nsView.placeholder = placeholder
+        nsView.needsDisplay = true
+    }
+}
+
+@MainActor
+private final class SmartCaptureShortcutRecorderNSView: NSView {
+    var keyCode: UInt16?
+    var modifiers: InputSourceShortcutModifiers = []
+    var placeholder = ""
+    var onCapture: ((UInt16, InputSourceShortcutModifiers) -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { window?.makeFirstResponder(self) }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let modifierKeys: Set<UInt16> = [
+            UInt16(kVK_Shift), UInt16(kVK_RightShift), UInt16(kVK_Control), UInt16(kVK_RightControl),
+            UInt16(kVK_Option), UInt16(kVK_RightOption), UInt16(kVK_Command), UInt16(kVK_RightCommand)
+        ]
+        guard !modifierKeys.contains(event.keyCode) else { return }
+        onCapture?(event.keyCode, InputSourceShortcutModifiers(event.modifierFlags))
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.controlBackgroundColor.setFill()
+        dirtyRect.fill()
+        let title = keyCode.map { modifiers.symbolDescription + MacPilotKeyCode.displayName(for: $0) } ?? placeholder
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 15, weight: .medium),
+            .foregroundColor: keyCode == nil ? NSColor.secondaryLabelColor : NSColor.labelColor
+        ]
+        let textSize = title.size(withAttributes: attributes)
+        title.draw(
+            at: NSPoint(x: bounds.midX - textSize.width / 2, y: bounds.midY - textSize.height / 2),
+            withAttributes: attributes
+        )
+        NSColor.separatorColor.setStroke()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8).stroke()
     }
 }

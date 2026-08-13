@@ -42,6 +42,26 @@ struct ScreenCaptureTests {
         #expect(!SmartCaptureShortcut.matches(keyCode: 122, flags: CGEventFlags(), isRepeat: true))
     }
 
+    @Test func smartCaptureShortcutMatchesCustomKeyAndModifiers() {
+        let binding = SmartCaptureShortcutBinding(keyCode: 0, modifiers: [.command, .option])
+        #expect(binding.displayName == "⌥⌘A")
+        #expect(binding.matches(keyCode: 0, flags: [.maskCommand, .maskAlternate], isRepeat: false))
+        #expect(!binding.matches(keyCode: 0, flags: [.maskCommand], isRepeat: false))
+        #expect(!binding.matches(keyCode: 1, flags: [.maskCommand, .maskAlternate], isRepeat: false))
+    }
+
+    @Test func smartCaptureShortcutBindingRoundTripsThroughCodable() throws {
+        let binding = SmartCaptureShortcutBinding(keyCode: 18, modifiers: [.control, .shift])
+        let data = try JSONEncoder().encode(binding)
+        #expect(try JSONDecoder().decode(SmartCaptureShortcutBinding.self, from: data) == binding)
+    }
+
+    @Test func selectionGeometryNormalizesBothDragDirections() {
+        #expect(SmartCaptureSelectionGeometry.rect(from: CGPoint(x: 40, y: 80), to: CGPoint(x: 10, y: 20)) == CGRect(x: 10, y: 20, width: 30, height: 60))
+        #expect(SmartCaptureSelectionGeometry.isMeaningful(CGRect(x: 0, y: 0, width: 4, height: 4)))
+        #expect(!SmartCaptureSelectionGeometry.isMeaningful(CGRect(x: 0, y: 0, width: 3.9, height: 20)))
+    }
+
     @Test func smartAnnotationRendererBurnsRedShapesIntoTheImage() throws {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let context = try #require(CGContext(
@@ -167,6 +187,7 @@ struct ScreenCaptureTests {
         #expect(settings.showsCursor == true)
         #expect(settings.smartCaptureEnabled == true)
         #expect(settings.pinSmartCaptures == true)
+        #expect(settings.smartCaptureShortcut == .default)
     }
 
     @Test func qualityIsClampedToValidRange() {
@@ -202,7 +223,8 @@ struct ScreenCaptureTests {
             quality: 0.85,
             maxRetentionDays: 7,
             captureAllDisplays: true,
-            showsCursor: false
+            showsCursor: false,
+            smartCaptureShortcut: SmartCaptureShortcutBinding(keyCode: 0, modifiers: [.command, .shift])
         )
         let encoder = JSONEncoder()
         let data = try encoder.encode(original)
@@ -221,6 +243,7 @@ struct ScreenCaptureTests {
         #expect(decoded.quality == 0.7)
         #expect(decoded.smartCaptureEnabled == true)
         #expect(decoded.pinSmartCaptures == true)
+        #expect(decoded.smartCaptureShortcut == .default)
     }
 
     @Test func smartCaptureSettingsRoundTripWhenDisabled() throws {
