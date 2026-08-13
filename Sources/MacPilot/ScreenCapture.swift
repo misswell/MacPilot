@@ -464,11 +464,9 @@ final class ScreenCaptureModel: ObservableObject {
         shortcutBinding: settings.smartCaptureShortcut
     )
 
-    @MainActor
     deinit {
         captureTask?.cancel()
         permissionPollTask?.cancel()
-        smartCapture.stop()
     }
 
     func shutdown() {
