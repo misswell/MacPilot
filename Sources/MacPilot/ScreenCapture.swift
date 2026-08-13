@@ -232,19 +232,23 @@ private enum ScreenCaptureStorage {
 
     static func statistics(at folderURL: URL) -> ScreenCaptureStorageStatistics {
         var statistics = ScreenCaptureStorageStatistics()
-        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
-        guard let enumerator = FileManager.default.enumerator(
-            at: folderURL,
-            includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles]
-        ) else { return statistics }
+        let folder = folderURL.path
+        guard let enumerator = FileManager.default.enumerator(atPath: folder) else {
+            return statistics
+        }
 
-        while let fileURL = enumerator.nextObject() as? URL {
-            guard imageExtensions.contains(fileURL.pathExtension.lowercased()) else { continue }
-            guard let values = try? fileURL.resourceValues(forKeys: Set(keys)),
-                  values.isRegularFile == true else { continue }
-            statistics.bytes += Int64(values.fileSize ?? 0)
-            statistics.count += 1
+        while let path = enumerator.nextObject() as? String {
+            autoreleasepool {
+                guard imageExtensions.contains((path as NSString).pathExtension.lowercased()) else {
+                    return
+                }
+                let fullPath = (folder as NSString).appendingPathComponent(path)
+                guard let attributes = try? FileManager.default.attributesOfItem(atPath: fullPath),
+                      let fileType = attributes[.type] as? FileAttributeType,
+                      fileType == .typeRegular else { return }
+                statistics.bytes += (attributes[.size] as? NSNumber)?.int64Value ?? 0
+                statistics.count += 1
+            }
         }
         return statistics
     }
@@ -646,14 +650,14 @@ final class ScreenCaptureModel: ObservableObject {
             let sendableImage = SendableScreenCaptureImage(value: image)
             let displayIndex = multiDisplay ? index : nil
             let date = Date()
-            let saved = try await Task.detached(priority: .utility) {
+            let saved = try autoreleasepool {
                 try ScreenCaptureStorage.save(
                     image: sendableImage,
                     displayIndex: displayIndex,
                     date: date,
                     configuration: saveConfiguration
                 )
-            }.value
+            }
             results.append(saved)
         }
         return results

@@ -674,7 +674,6 @@ final class WindowSwitcherModel: ObservableObject {
     private var inventoryRevision = 0
     private var inventorySignature: Int?
     private var pendingSession: WindowSwitcherPendingSession?
-    private var focusedWindowTask: Task<Void, Never>?
     private var thumbnailTask: Task<Void, Never>?
     private var thumbnailRevision = 0
     private var thumbnailCache: [CGWindowID: NSImage] = [:]
@@ -755,8 +754,6 @@ final class WindowSwitcherModel: ObservableObject {
         cancelPendingSession()
         manualDismissTask?.cancel()
         manualDismissTask = nil
-        focusedWindowTask?.cancel()
-        focusedWindowTask = nil
         inventoryRevision += 1
         inventoryTask?.cancel()
         inventoryTask = nil
@@ -1171,18 +1168,11 @@ final class WindowSwitcherModel: ObservableObject {
             noteWindowActivation(fallbackID)
             return
         }
-        focusedWindowTask?.cancel()
-        focusedWindowTask = Task { @MainActor [weak self] in
-            let focusedWindowID = await Task.detached(priority: .utility) {
-                WindowSwitcherFocusedWindowResolver.resolve(
-                    processID: processID,
-                    candidates: candidates
-                )
-            }.value
-            guard !Task.isCancelled, let self, self.isRuntimeActive else { return }
-            self.focusedWindowTask = nil
-            self.noteWindowActivation(focusedWindowID ?? fallbackID)
-        }
+        let focusedWindowID = WindowSwitcherFocusedWindowResolver.resolve(
+            processID: processID,
+            candidates: candidates
+        )
+        noteWindowActivation(focusedWindowID ?? fallbackID)
     }
 
     private func noteWindowActivation(_ windowID: String) {
