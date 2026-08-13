@@ -747,6 +747,8 @@ final class SmartScreenshotController {
     private var isSelecting = false
     private var pendingTargetUpdate: DispatchWorkItem?
     private var latestPointerLocation: CGPoint?
+    private var lastSelectionCoordinateFailureLogAt: CFAbsoluteTime = 0
+    private var manualSelectionCoordinateFailure = false
     private var shortcutBinding: SmartCaptureShortcutBinding
     private var shortcutSuspended = false
     /// Whether the feature is enabled and expects a Carbon registration.
@@ -1099,6 +1101,7 @@ final class SmartScreenshotController {
         }
         if let requiredKind,
            let candidate = bindings[requiredKind],
+           shortcutRegistrationRequested,
            (candidate == shortcutBinding || !probeShortcut(candidate, kind: requiredKind)) {
             return .registrationFailed
         }
@@ -1217,6 +1220,10 @@ final class SmartScreenshotController {
         let previousBinding = shortcutBinding
         let wasRegistered = shortcutHotKey != nil || shortcutEventHandler != nil
         if shortcutSuspended {
+            guard shortcutRegistrationRequested else {
+                shortcutBinding = binding
+                return nil
+            }
             shortcutBinding = binding
             if let error = registerShortcut() {
                 shortcutBinding = previousBinding
@@ -1293,6 +1300,8 @@ final class SmartScreenshotController {
         }
         isSelecting = true
         selectionMode = mode
+        manualSelectionCoordinateFailure = false
+        lastSelectionCoordinateFailureLogAt = 0
         registerSelectionCancelShortcut()
         let initialPoint = NSEvent.mouseLocation
         currentTarget = mode == .smartElement ? SmartAXTargetQuery.target(at: initialPoint) : nil
@@ -1308,19 +1317,42 @@ final class SmartScreenshotController {
             panel.orderFrontRegardless()
             return panel
         }
-        _ = refreshSelectionEventTap()
+        let selectionEventTapReady = refreshSelectionEventTap()
+        if !selectionEventTapReady {
+            // The overlay itself remains a usable fallback when Accessibility
+            // is unavailable (for example when capture was started from the
+            // settings window).  A global capture started from another app
+            // may otherwise leave the non-activating panel without a reliable
+            // event source. Prefer the panel's own key-window path and only
+            // activate MacPilot if the panel still cannot receive input.
+            Self.logger.warning("Selection event tap unavailable; using foreground overlay input")
+        }
         if let activePanel = overlays.first(where: { $0.frame.contains(initialPoint) }) ?? overlays.first {
             activePanel.makeKeyAndOrderFront(nil)
             activePanel.makeFirstResponder(activePanel.overlayView)
+            if !selectionEventTapReady {
+                // Give the non-activating panel a run-loop turn to become key
+                // before taking the app foreground. This avoids stealing the
+                // user's active app when the panel can already receive input.
+                DispatchQueue.main.async { [weak activePanel] in
+                    guard let activePanel, !activePanel.isKeyWindow else { return }
+                    NSApp.activate(ignoringOtherApps: true)
+                    activePanel.makeKeyAndOrderFront(nil)
+                    activePanel.makeFirstResponder(activePanel.overlayView)
+                }
+            }
         }
         NSCursor.crosshair.set()
     }
 
     func captureStoredRect(_ rect: CGRect) {
         guard SmartCaptureSelectionGeometry.isMeaningful(rect),
-              NSScreen.screens.contains(where: { $0.frame.intersection(rect).width > 0 && $0.frame.intersection(rect).height > 0 }),
-              let quartzPoint = SmartAXTargetQuery.quartzPoint(fromAppKitPoint: CGPoint(x: rect.midX, y: rect.midY)) else {
+              NSScreen.screens.contains(where: { $0.frame.intersection(rect).width > 0 && $0.frame.intersection(rect).height > 0 }) else {
             onError(ScreenCaptureError.captureFailed(AppText.value("scCaptureAreaUnavailable", language: language())))
+            return
+        }
+        guard let quartzPoint = SmartAXTargetQuery.quartzPoint(fromAppKitPoint: CGPoint(x: rect.midX, y: rect.midY)) else {
+            reportSelectionCoordinateFailure()
             return
         }
         selectionMode = .manualArea
@@ -1345,6 +1377,7 @@ final class SmartScreenshotController {
         latestPointerLocation = nil
         manualSelectionStart = nil
         manualSelectionRect = nil
+        manualSelectionCoordinateFailure = false
         stopSelectionEventTap()
         unregisterSelectionCancelShortcut()
         currentTarget = nil
@@ -1448,23 +1481,65 @@ final class SmartScreenshotController {
     }
 
     func handleSelectionMouseMoved(atQuartzPoint point: CGPoint) {
-        guard isSelecting, let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        guard isSelecting else { return }
+        guard let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else {
+            logSelectionCoordinateFailureIfNeeded()
+            return
+        }
         updateTarget(at: appKitPoint)
     }
 
     func handleSelectionMouseDown(atQuartzPoint point: CGPoint) {
-        guard isSelecting, let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        guard isSelecting else { return }
+        guard let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else {
+            reportSelectionCoordinateFailure()
+            cancelSelection()
+            return
+        }
+        manualSelectionCoordinateFailure = false
         beginManualSelection(at: appKitPoint)
     }
 
     func handleSelectionMouseDragged(atQuartzPoint point: CGPoint) {
-        guard isSelecting, let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        guard isSelecting else { return }
+        guard let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else {
+            logSelectionCoordinateFailureIfNeeded()
+            if manualSelectionStart != nil {
+                manualSelectionCoordinateFailure = true
+            }
+            return
+        }
         updateManualSelection(to: appKitPoint)
     }
 
     func handleSelectionMouseUp(atQuartzPoint point: CGPoint) {
-        guard isSelecting, let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        guard isSelecting else { return }
+        guard !manualSelectionCoordinateFailure else {
+            reportSelectionCoordinateFailure()
+            cancelSelection()
+            return
+        }
+        guard let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else {
+            reportSelectionCoordinateFailure()
+            cancelSelection()
+            return
+        }
         finishManualSelection(at: appKitPoint)
+    }
+
+    private func reportSelectionCoordinateFailure() {
+        Self.logger.error("Selection pointer could not be mapped to a display")
+        lastSelectionCoordinateFailureLogAt = CFAbsoluteTimeGetCurrent()
+        onError(ScreenCaptureError.captureFailed(
+            AppText.value("scCaptureCoordinateUnavailable", language: language())
+        ))
+    }
+
+    private func logSelectionCoordinateFailureIfNeeded() {
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastSelectionCoordinateFailureLogAt >= 1 else { return }
+        lastSelectionCoordinateFailureLogAt = now
+        Self.logger.error("Selection pointer could not be mapped to a display")
     }
 
     private func resolveTarget(at appKitPoint: CGPoint) {
@@ -1496,12 +1571,13 @@ final class SmartScreenshotController {
         manualSelectionStart = nil
         manualSelectionRect = nil
         if SmartCaptureSelectionGeometry.isMeaningful(rect) {
-            if selectionMode == .manualArea {
-                onSelectionRect(rect)
-            }
             guard let quartzPoint = SmartAXTargetQuery.quartzPoint(fromAppKitPoint: CGPoint(x: rect.midX, y: rect.midY)) else {
+                reportSelectionCoordinateFailure()
                 cancelSelection()
                 return
+            }
+            if selectionMode == .manualArea {
+                onSelectionRect(rect)
             }
             finishCapture(rect: rect, quartzClickPoint: quartzPoint)
         } else {
@@ -1528,7 +1604,7 @@ final class SmartScreenshotController {
             return
         }
         guard let quartzPoint = SmartAXTargetQuery.quartzPoint(fromAppKitPoint: point) else {
-            Self.logger.error("Selection click could not be converted to display coordinates")
+            reportSelectionCoordinateFailure()
             cancelSelection()
             return
         }
@@ -1749,6 +1825,9 @@ private final class SmartCaptureOverlayPanel: NSPanel {
         )
         level = .screenSaver
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        acceptsMouseMovedEvents = true
+        hidesOnDeactivate = false
+        becomesKeyOnlyIfNeeded = false
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
