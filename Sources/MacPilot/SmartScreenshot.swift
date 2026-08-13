@@ -35,7 +35,7 @@ enum SmartCaptureTargetResolver {
     }
 }
 
-struct SmartCaptureShortcutBinding: Codable, Equatable, Sendable {
+struct SmartCaptureShortcutBinding: Codable, Equatable, Hashable, Sendable {
     var keyCode: UInt16
     var modifiers: InputSourceShortcutModifiers
 
@@ -51,7 +51,10 @@ struct SmartCaptureShortcutBinding: Codable, Equatable, Sendable {
     }
 
     var validationError: SmartCaptureShortcutError? {
-        if keyCode == UInt16(kVK_Escape), modifiers.isEmpty {
+        // Escape is reserved by every selection overlay for cancellation;
+        // keeping it unavailable with modifiers avoids an ambiguous cancel
+        // versus capture gesture while a selection is active.
+        if keyCode == UInt16(kVK_Escape) {
             return .reservedKey
         }
         if modifiers.isEmpty && !Self.functionKeyCodes.contains(keyCode) {
@@ -74,6 +77,72 @@ struct SmartCaptureShortcutBinding: Codable, Equatable, Sendable {
         guard self.keyCode == keyCode, !isRepeat else { return false }
         return InputSourceShortcutModifiers(flags) == modifiers
     }
+}
+
+/// Screenshot entry points exposed by the capture settings.  Smart Element
+/// keeps the original F1 behaviour, while the remaining defaults mirror the
+/// familiar macOS/Snapzy capture workflow.
+enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Sendable {
+    case smartElement
+    case area
+    case fullscreen
+    case activeWindow
+    case areaAnnotate
+    case ocr
+
+    var defaultBinding: SmartCaptureShortcutBinding {
+        switch self {
+        case .smartElement:
+            return .default
+        case .area:
+            return SmartCaptureShortcutBinding(
+                keyCode: UInt16(kVK_ANSI_4),
+                modifiers: [.command, .shift]
+            )
+        case .fullscreen:
+            return SmartCaptureShortcutBinding(
+                keyCode: UInt16(kVK_ANSI_3),
+                modifiers: [.command, .shift]
+            )
+        case .activeWindow:
+            return SmartCaptureShortcutBinding(
+                keyCode: UInt16(kVK_ANSI_9),
+                modifiers: [.command, .shift]
+            )
+        case .areaAnnotate:
+            return SmartCaptureShortcutBinding(
+                keyCode: UInt16(kVK_ANSI_7),
+                modifiers: [.command, .shift]
+            )
+        case .ocr:
+            return SmartCaptureShortcutBinding(
+                keyCode: UInt16(kVK_ANSI_2),
+                modifiers: [.command, .shift]
+            )
+        }
+    }
+
+    var titleKey: String {
+        switch self {
+        case .smartElement: return "scSmartCaptureShortcut"
+        case .area: return "scAreaCaptureShortcut"
+        case .fullscreen: return "scFullscreenCaptureShortcut"
+        case .activeWindow: return "scActiveWindowCaptureShortcut"
+        case .areaAnnotate: return "scAreaAnnotateShortcut"
+        case .ocr: return "scOCRShortcut"
+        }
+    }
+
+    var editorTitleKey: String { "scChangeShortcut" }
+
+    var id: String { rawValue }
+}
+
+enum SmartCaptureSelectionMode: Equatable, Sendable {
+    case smartElement
+    case manualArea
+    case areaAnnotate
+    case ocr
 }
 
 enum SmartCaptureShortcutError: Error, Equatable {
@@ -157,6 +226,11 @@ private enum SmartCaptureCarbonHotKey {
     static let signature: OSType = 0x4D504341 // "MPCA"
     static let captureID: UInt32 = 1
     static let cancelID: UInt32 = 2
+    static let areaID: UInt32 = 3
+    static let fullscreenID: UInt32 = 4
+    static let ocrID: UInt32 = 5
+    static let activeWindowID: UInt32 = 6
+    static let areaAnnotateID: UInt32 = 7
 
     static func identifier(_ id: UInt32) -> EventHotKeyID {
         EventHotKeyID(signature: signature, id: id)
@@ -169,6 +243,17 @@ private enum SmartCaptureCarbonHotKey {
         if binding.modifiers.contains(.control) { modifiers |= UInt32(controlKey) }
         if binding.modifiers.contains(.shift) { modifiers |= UInt32(shiftKey) }
         return modifiers
+    }
+
+    static func identifier(for kind: ScreenCaptureShortcutKind) -> EventHotKeyID {
+        switch kind {
+        case .smartElement: return identifier(captureID)
+        case .area: return identifier(areaID)
+        case .fullscreen: return identifier(fullscreenID)
+        case .activeWindow: return identifier(activeWindowID)
+        case .areaAnnotate: return identifier(areaAnnotateID)
+        case .ocr: return identifier(ocrID)
+        }
     }
 }
 
@@ -198,7 +283,17 @@ private func smartShortcutCarbonEventHandler(
         if hotKeyID.id == SmartCaptureCarbonHotKey.cancelID {
             controller.cancelSelection()
         } else if hotKeyID.id == SmartCaptureCarbonHotKey.captureID {
-            controller.startSelection()
+            controller.startSelection(mode: .smartElement)
+        } else if hotKeyID.id == SmartCaptureCarbonHotKey.areaID {
+            controller.startSelection(mode: .manualArea)
+        } else if hotKeyID.id == SmartCaptureCarbonHotKey.fullscreenID {
+            controller.captureFullscreen()
+        } else if hotKeyID.id == SmartCaptureCarbonHotKey.activeWindowID {
+            controller.captureActiveWindow()
+        } else if hotKeyID.id == SmartCaptureCarbonHotKey.areaAnnotateID {
+            controller.startSelection(mode: .areaAnnotate)
+        } else if hotKeyID.id == SmartCaptureCarbonHotKey.ocrID {
+            controller.startSelection(mode: .ocr)
         }
     }
     return noErr
@@ -211,16 +306,22 @@ final class SmartScreenshotController {
     private let onCapture: (CGImage) -> Void
     private let onError: (Error) -> Void
     private let onSelectionRect: (CGRect) -> Void
+    private let onFullscreenCapture: () -> Void
+    private let onActiveWindowCapture: () -> Void
+    private let onAreaAnnotateCapture: (CGImage) -> Void
+    private let onOCRCapture: (CGImage) -> Void
     private var shortcutContext: SmartShortcutContext?
     nonisolated(unsafe) private var shortcutHotKey: EventHotKeyRef?
     nonisolated(unsafe) private var selectionCancelHotKey: EventHotKeyRef?
     nonisolated(unsafe) private var shortcutEventHandler: EventHandlerRef?
+    private var shortcutEventHandlerIsTransient = false
     private var overlays: [SmartCaptureOverlayPanel] = []
     private var currentTarget: CGRect?
     private var manualSelectionStart: CGPoint?
     private var manualSelectionRect: CGRect?
     private var pinControllers: [UUID: SmartPinWindowController] = [:]
     private var quickAccessControllers: [UUID: SmartQuickAccessWindowController] = [:]
+    private var inlineAnnotationControllers: [UUID: SmartAnnotationWindowController] = [:]
     private var isSelecting = false
     private var pendingTargetUpdate: DispatchWorkItem?
     private var latestPointerLocation: CGPoint?
@@ -230,19 +331,32 @@ final class SmartScreenshotController {
     /// This is distinct from the registration handles because registration
     /// can fail when another app or macOS already owns the combination.
     private var shortcutRegistrationRequested = false
+    private var additionalShortcutBindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding]
+    nonisolated(unsafe) private var additionalShortcutHotKeys: [ScreenCaptureShortcutKind: EventHotKeyRef] = [:]
+    private var selectionMode: SmartCaptureSelectionMode = .smartElement
 
     init(
         language: @escaping () -> AppLanguage,
         onCapture: @escaping (CGImage) -> Void,
         onError: @escaping (Error) -> Void,
         onSelectionRect: @escaping (CGRect) -> Void = { _ in },
-        shortcutBinding: SmartCaptureShortcutBinding = .default
+        shortcutBinding: SmartCaptureShortcutBinding = .default,
+        additionalShortcutBindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding] = [:],
+        onFullscreenCapture: @escaping () -> Void = {},
+        onActiveWindowCapture: @escaping () -> Void = {},
+        onAreaAnnotateCapture: @escaping (CGImage) -> Void = { _ in },
+        onOCRCapture: @escaping (CGImage) -> Void = { _ in }
     ) {
         self.language = language
         self.onCapture = onCapture
         self.onError = onError
         self.onSelectionRect = onSelectionRect
         self.shortcutBinding = shortcutBinding
+        self.additionalShortcutBindings = additionalShortcutBindings
+        self.onFullscreenCapture = onFullscreenCapture
+        self.onActiveWindowCapture = onActiveWindowCapture
+        self.onAreaAnnotateCapture = onAreaAnnotateCapture
+        self.onOCRCapture = onOCRCapture
     }
 
     func start() {
@@ -251,7 +365,13 @@ final class SmartScreenshotController {
         guard shortcutHotKey == nil, shortcutEventHandler == nil else { return }
         if let error = registerShortcut() {
             onError(error)
+            return
         }
+        // Keep the primary smart-capture shortcut usable even when a system
+        // shortcut (for example ⌘⇧3/4) prevents one of the optional entry
+        // points from being registered. The settings editor can then be used
+        // to replace the conflicting entry without losing the working one.
+        _ = registerAdditionalShortcuts()
     }
 
     /// Temporarily releases the global registration while the shortcut recorder
@@ -259,6 +379,7 @@ final class SmartScreenshotController {
     func suspendShortcut() {
         shortcutSuspended = true
         unregisterShortcut()
+        unregisterAdditionalShortcuts()
     }
 
     /// Ends shortcut-editing mode. Registration is optional because the
@@ -315,6 +436,7 @@ final class SmartScreenshotController {
         }
         shortcutContext = context
         shortcutEventHandler = handler
+        shortcutEventHandlerIsTransient = false
         shortcutHotKey = hotKey
         Self.logger.info("Global shortcut registered: \(self.shortcutBinding.displayName, privacy: .public)")
         return nil
@@ -322,6 +444,7 @@ final class SmartScreenshotController {
 
     private func unregisterShortcut() {
         unregisterSelectionCancelShortcut()
+        unregisterAdditionalShortcuts()
         if let shortcutHotKey {
             UnregisterEventHotKey(shortcutHotKey)
         }
@@ -333,10 +456,132 @@ final class SmartScreenshotController {
         shortcutContext = nil
     }
 
-    private func registerSelectionCancelShortcut() {
-        guard selectionCancelHotKey == nil,
+    func updateAdditionalShortcutBindings(_ bindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding]) {
+        _ = updateAdditionalShortcutBindingsReturningError(bindings)
+    }
+
+    @discardableResult
+    private func registerAdditionalShortcuts() -> Set<ScreenCaptureShortcutKind> {
+        guard shortcutContext != nil, shortcutEventHandler != nil else { return [] }
+        var registeredBindings: [SmartCaptureShortcutBinding] = []
+        var registeredKinds: Set<ScreenCaptureShortcutKind> = []
+        unregisterAdditionalShortcuts()
+        for kind in [ScreenCaptureShortcutKind.area, .fullscreen, .activeWindow, .areaAnnotate, .ocr] {
+            guard let binding = additionalShortcutBindings[kind], binding.isValid else { continue }
+            guard !registeredBindings.contains(binding), binding != shortcutBinding else {
+                Self.logger.error("Skipping duplicate screenshot shortcut \(kind.rawValue, privacy: .public)")
+                continue
+            }
+            let id: UInt32
+            switch kind {
+            case .area: id = SmartCaptureCarbonHotKey.areaID
+            case .fullscreen: id = SmartCaptureCarbonHotKey.fullscreenID
+            case .activeWindow: id = SmartCaptureCarbonHotKey.activeWindowID
+            case .areaAnnotate: id = SmartCaptureCarbonHotKey.areaAnnotateID
+            case .ocr: id = SmartCaptureCarbonHotKey.ocrID
+            case .smartElement: continue
+            }
+            var hotKey: EventHotKeyRef?
+            let status = RegisterEventHotKey(
+                UInt32(binding.keyCode),
+                SmartCaptureCarbonHotKey.modifiers(for: binding),
+                SmartCaptureCarbonHotKey.identifier(id),
+                GetApplicationEventTarget(),
+                OptionBits(kEventHotKeyNoOptions),
+                &hotKey
+            )
+            guard status == noErr, let hotKey else {
+                Self.logger.error("Could not register \(kind.rawValue) shortcut \(binding.displayName, privacy: .public): \(status, privacy: .public)")
+                continue
+            }
+            additionalShortcutHotKeys[kind] = hotKey
+            registeredBindings.append(binding)
+            registeredKinds.insert(kind)
+        }
+        return registeredKinds
+    }
+
+    private func unregisterAdditionalShortcuts() {
+        for hotKey in additionalShortcutHotKeys.values { UnregisterEventHotKey(hotKey) }
+        additionalShortcutHotKeys.removeAll(keepingCapacity: false)
+    }
+
+    @discardableResult
+    func updateAdditionalShortcutBindingsReturningError(
+        _ bindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding],
+        requiredKind: ScreenCaptureShortcutKind? = nil
+    ) -> SmartCaptureShortcutError? {
+        for binding in bindings.values {
+            if let error = binding.validationError { return error }
+        }
+        if let requiredKind,
+           let candidate = bindings[requiredKind],
+           (candidate == shortcutBinding || !probeShortcut(candidate, kind: requiredKind)) {
+            return .registrationFailed
+        }
+        let previous = additionalShortcutBindings
+        additionalShortcutBindings = bindings
+        // When the feature is disabled, or when its primary shortcut could
+        // not be registered, keep the new value in memory and let a later
+        // activation retry registration. This makes shortcut editing usable
+        // even if another app temporarily owns the old combination.
+        guard !shortcutSuspended,
+              shortcutRegistrationRequested,
               shortcutContext != nil,
-              shortcutEventHandler != nil else { return }
+              shortcutEventHandler != nil else { return nil }
+        unregisterAdditionalShortcuts()
+        let registeredKinds = registerAdditionalShortcuts()
+        if let requiredKind,
+           bindings[requiredKind] != nil,
+           !registeredKinds.contains(requiredKind) {
+            additionalShortcutBindings = previous
+            _ = registerAdditionalShortcuts()
+            return .registrationFailed
+        }
+        return nil
+    }
+
+    /// Probe a candidate while the shortcut editor has suspended all live
+    /// registrations. Carbon lets us reserve the combination briefly without
+    /// installing a handler; immediately releasing it leaves the editor
+    /// suspended while still detecting macOS/other-app conflicts.
+    private func probeShortcut(_ binding: SmartCaptureShortcutBinding, kind: ScreenCaptureShortcutKind) -> Bool {
+        guard binding.isValid, binding != shortcutBinding else { return false }
+        var hotKey: EventHotKeyRef?
+        let status = RegisterEventHotKey(
+            UInt32(binding.keyCode),
+            SmartCaptureCarbonHotKey.modifiers(for: binding),
+            SmartCaptureCarbonHotKey.identifier(for: kind),
+            GetApplicationEventTarget(),
+            OptionBits(kEventHotKeyNoOptions),
+            &hotKey
+        )
+        if let hotKey { UnregisterEventHotKey(hotKey) }
+        return status == noErr
+    }
+
+    private func registerSelectionCancelShortcut() {
+        guard selectionCancelHotKey == nil else { return }
+        if shortcutContext == nil || shortcutEventHandler == nil {
+            let context = SmartShortcutContext(controller: self)
+            var eventType = EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyPressed)
+            )
+            var handler: EventHandlerRef?
+            let status = InstallEventHandler(
+                GetApplicationEventTarget(),
+                smartShortcutCarbonEventHandler,
+                1,
+                &eventType,
+                Unmanaged.passUnretained(context).toOpaque(),
+                &handler
+            )
+            guard status == noErr, let handler else { return }
+            shortcutContext = context
+            shortcutEventHandler = handler
+            shortcutEventHandlerIsTransient = true
+        }
         var hotKey: EventHotKeyRef?
         let status = RegisterEventHotKey(
             UInt32(kVK_Escape),
@@ -348,6 +593,12 @@ final class SmartScreenshotController {
         )
         guard status == noErr, let hotKey else {
             Self.logger.error("Could not register Escape cancellation shortcut: \(status, privacy: .public)")
+            if shortcutEventHandlerIsTransient {
+                if let shortcutEventHandler { RemoveEventHandler(shortcutEventHandler) }
+                shortcutEventHandler = nil
+                shortcutContext = nil
+                shortcutEventHandlerIsTransient = false
+            }
             return
         }
         selectionCancelHotKey = hotKey
@@ -358,6 +609,12 @@ final class SmartScreenshotController {
             UnregisterEventHotKey(selectionCancelHotKey)
         }
         selectionCancelHotKey = nil
+        if shortcutEventHandlerIsTransient {
+            if let shortcutEventHandler { RemoveEventHandler(shortcutEventHandler) }
+            shortcutEventHandler = nil
+            shortcutContext = nil
+            shortcutEventHandlerIsTransient = false
+        }
     }
 
     func updateShortcutBinding(_ binding: SmartCaptureShortcutBinding) {
@@ -397,6 +654,10 @@ final class SmartScreenshotController {
             }
             return error
         }
+        // Optional entry points may be claimed by macOS (⌘⇧3/4, for
+        // example). Keep the newly registered primary shortcut usable even
+        // when one of those optional registrations cannot be restored.
+        _ = registerAdditionalShortcuts()
         if isSelecting {
             registerSelectionCancelShortcut()
         }
@@ -411,6 +672,7 @@ final class SmartScreenshotController {
         latestPointerLocation = nil
         manualSelectionStart = nil
         manualSelectionRect = nil
+        selectionMode = .smartElement
         unregisterShortcut()
         let controllers = Array(pinControllers.values)
         pinControllers.removeAll(keepingCapacity: false)
@@ -418,15 +680,19 @@ final class SmartScreenshotController {
         let quickAccessControllers = Array(self.quickAccessControllers.values)
         self.quickAccessControllers.removeAll(keepingCapacity: false)
         for controller in quickAccessControllers { controller.close() }
+        let inlineAnnotationControllers = Array(self.inlineAnnotationControllers.values)
+        self.inlineAnnotationControllers.removeAll(keepingCapacity: false)
+        for controller in inlineAnnotationControllers { controller.close() }
     }
 
     deinit {
         if let selectionCancelHotKey { UnregisterEventHotKey(selectionCancelHotKey) }
         if let shortcutHotKey { UnregisterEventHotKey(shortcutHotKey) }
+        for hotKey in additionalShortcutHotKeys.values { UnregisterEventHotKey(hotKey) }
         if let shortcutEventHandler { RemoveEventHandler(shortcutEventHandler) }
     }
 
-    func startSelection() {
+    func startSelection(mode: SmartCaptureSelectionMode = .smartElement) {
         guard !isSelecting else { return }
         guard CGPreflightScreenCaptureAccess() else {
             Self.logger.error("Selection rejected because required permissions are unavailable")
@@ -434,9 +700,10 @@ final class SmartScreenshotController {
             return
         }
         isSelecting = true
+        selectionMode = mode
         registerSelectionCancelShortcut()
         let initialPoint = NSEvent.mouseLocation
-        currentTarget = SmartAXTargetQuery.target(at: initialPoint)
+        currentTarget = mode == .smartElement ? SmartAXTargetQuery.target(at: initialPoint) : nil
         Self.logger.info("Selection started; initial target available: \(self.currentTarget != nil)")
         overlays = NSScreen.screens.map { screen in
             let panel = SmartCaptureOverlayPanel(screen: screen)
@@ -456,10 +723,21 @@ final class SmartScreenshotController {
         guard SmartCaptureSelectionGeometry.isMeaningful(rect),
               NSScreen.screens.contains(where: { $0.frame.intersection(rect).width > 0 && $0.frame.intersection(rect).height > 0 }),
               let quartzPoint = SmartAXTargetQuery.quartzPoint(fromAppKitPoint: CGPoint(x: rect.midX, y: rect.midY)) else {
-            onError(ScreenCaptureError.captureFailed("The last selected area is no longer available."))
+            onError(ScreenCaptureError.captureFailed(AppText.value("scCaptureAreaUnavailable", language: language())))
             return
         }
+        selectionMode = .manualArea
         finishCapture(rect: rect, quartzClickPoint: quartzPoint)
+    }
+
+    func captureFullscreen() {
+        guard !isSelecting else { cancelSelection(); return }
+        onFullscreenCapture()
+    }
+
+    func captureActiveWindow() {
+        guard !isSelecting else { cancelSelection(); return }
+        onActiveWindowCapture()
     }
 
     func cancelSelection() {
@@ -492,6 +770,24 @@ final class SmartScreenshotController {
         controller.show()
     }
 
+    func presentInlineAnnotation(for image: CGImage) {
+        let id = UUID()
+        let controller = SmartAnnotationWindowController(
+            image: image,
+            language: language(),
+            onComplete: { [weak self] annotated in
+                guard let self else { return }
+                self.inlineAnnotationControllers.removeValue(forKey: id)
+                self.onCapture(annotated)
+            },
+            onClose: { [weak self] in
+                self?.inlineAnnotationControllers.removeValue(forKey: id)
+            }
+        )
+        inlineAnnotationControllers[id] = controller
+        controller.show()
+    }
+
     func showQuickAccess(
         image: CGImage,
         savedURL: URL? = nil,
@@ -520,7 +816,7 @@ final class SmartScreenshotController {
     }
 
     private func updateTarget(at appKitPoint: CGPoint) {
-        guard isSelecting, manualSelectionStart == nil else { return }
+        guard isSelecting, selectionMode == .smartElement, manualSelectionStart == nil else { return }
         latestPointerLocation = appKitPoint
         guard pendingTargetUpdate == nil else { return }
         let work = DispatchWorkItem { [weak self] in
@@ -561,14 +857,20 @@ final class SmartScreenshotController {
         manualSelectionStart = nil
         manualSelectionRect = nil
         if SmartCaptureSelectionGeometry.isMeaningful(rect) {
-            onSelectionRect(rect)
+            if selectionMode == .manualArea {
+                onSelectionRect(rect)
+            }
             guard let quartzPoint = SmartAXTargetQuery.quartzPoint(fromAppKitPoint: CGPoint(x: rect.midX, y: rect.midY)) else {
                 cancelSelection()
                 return
             }
             finishCapture(rect: rect, quartzClickPoint: quartzPoint)
         } else {
-            commit(at: start)
+            if selectionMode == .smartElement {
+                commit(at: start)
+            } else {
+                cancelSelection()
+            }
         }
     }
 
@@ -600,6 +902,7 @@ final class SmartScreenshotController {
             cancelSelection()
             return
         }
+        let captureMode = selectionMode
         cancelSelection()
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(80))
@@ -608,7 +911,14 @@ final class SmartScreenshotController {
                     appKitRect: rect,
                     quartzClickPoint: quartzClickPoint
                 )
-                self?.onCapture(image)
+                guard let self else { return }
+                if captureMode == .ocr {
+                    self.onOCRCapture(image)
+                } else if captureMode == .areaAnnotate {
+                    self.onAreaAnnotateCapture(image)
+                } else {
+                    self.onCapture(image)
+                }
             } catch {
                 self?.onError(error)
             }
@@ -953,7 +1263,7 @@ private enum SmartScreenImageCapture {
         let clippedRect = quartzRect.intersection(display.frame)
         let sourceRect = clippedRect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
         guard !sourceRect.isEmpty else {
-            throw ScreenCaptureError.captureFailed("The selected region is outside the display.")
+            throw ScreenCaptureError.captureFailed(AppText.value("scCaptureOutsideDisplay", language: .system))
         }
         let configuration = SCStreamConfiguration()
         let scaleX = CGFloat(display.width) / max(1, display.frame.width)
@@ -984,7 +1294,7 @@ private enum SmartScreenImageCapture {
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else {
-            throw ScreenCaptureError.captureFailed("Unable to allocate the multi-display image.")
+            throw ScreenCaptureError.captureFailed(AppText.value("scCaptureMultiDisplayAllocationFailed", language: .system))
         }
         context.setFillColor(NSColor.black.cgColor)
         context.fill(CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight))
@@ -1002,7 +1312,7 @@ private enum SmartScreenImageCapture {
             context.draw(image, in: destination)
         }
         guard let image = context.makeImage() else {
-            throw ScreenCaptureError.captureFailed("Unable to compose the multi-display image.")
+            throw ScreenCaptureError.captureFailed(AppText.value("scCaptureMultiDisplayCompositionFailed", language: .system))
         }
         return image
     }
