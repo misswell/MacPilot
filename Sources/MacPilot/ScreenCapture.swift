@@ -89,7 +89,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         areaAnnotateShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.areaAnnotate.defaultBinding,
         ocrShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.ocr.defaultBinding,
         scrollingCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.scrolling.defaultBinding,
-        objectCutoutShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.objectCutout.defaultBinding
+        objectCutoutShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.objectCutout.defaultBinding,
+        migrateLegacyScreenshotShortcuts: Bool = false
     ) {
         self.isEnabled = isEnabled
         self.outputFolder = outputFolder
@@ -104,10 +105,19 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.showsCursor = showsCursor
         self.smartCaptureEnabled = smartCaptureEnabled
         self.smartCaptureShortcut = smartCaptureShortcut.isValid ? smartCaptureShortcut : .default
-        self.areaCaptureShortcut = areaCaptureShortcut.isValid ? areaCaptureShortcut : ScreenCaptureShortcutKind.area.defaultBinding
-        self.repeatAreaCaptureShortcut = repeatAreaCaptureShortcut.isValid ? repeatAreaCaptureShortcut : ScreenCaptureShortcutKind.repeatArea.defaultBinding
+        let safeAreaShortcut = areaCaptureShortcut.isValid ? areaCaptureShortcut : ScreenCaptureShortcutKind.area.defaultBinding
+        let safeRepeatAreaShortcut = repeatAreaCaptureShortcut.isValid ? repeatAreaCaptureShortcut : ScreenCaptureShortcutKind.repeatArea.defaultBinding
+        let safeFullscreenShortcut = fullscreenCaptureShortcut.isValid ? fullscreenCaptureShortcut : ScreenCaptureShortcutKind.fullscreen.defaultBinding
+        self.areaCaptureShortcut = migrateLegacyScreenshotShortcuts
+            ? ScreenCaptureShortcutKind.area.migratedBinding(safeAreaShortcut)
+            : safeAreaShortcut
+        self.repeatAreaCaptureShortcut = migrateLegacyScreenshotShortcuts
+            ? ScreenCaptureShortcutKind.repeatArea.migratedBinding(safeRepeatAreaShortcut)
+            : safeRepeatAreaShortcut
         self.applicationWindowCaptureShortcut = applicationWindowCaptureShortcut.isValid ? applicationWindowCaptureShortcut : ScreenCaptureShortcutKind.applicationWindow.defaultBinding
-        self.fullscreenCaptureShortcut = fullscreenCaptureShortcut.isValid ? fullscreenCaptureShortcut : ScreenCaptureShortcutKind.fullscreen.defaultBinding
+        self.fullscreenCaptureShortcut = migrateLegacyScreenshotShortcuts
+            ? ScreenCaptureShortcutKind.fullscreen.migratedBinding(safeFullscreenShortcut)
+            : safeFullscreenShortcut
         self.activeWindowCaptureShortcut = activeWindowCaptureShortcut.isValid ? activeWindowCaptureShortcut : ScreenCaptureShortcutKind.activeWindow.defaultBinding
         self.areaAnnotateShortcut = areaAnnotateShortcut.isValid ? areaAnnotateShortcut : ScreenCaptureShortcutKind.areaAnnotate.defaultBinding
         self.ocrShortcut = ocrShortcut.isValid ? ocrShortcut : ScreenCaptureShortcutKind.ocr.defaultBinding
@@ -146,7 +156,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
             areaAnnotateShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .areaAnnotateShortcut) ?? ScreenCaptureShortcutKind.areaAnnotate.defaultBinding,
             ocrShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .ocrShortcut) ?? ScreenCaptureShortcutKind.ocr.defaultBinding,
             scrollingCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .scrollingCaptureShortcut) ?? ScreenCaptureShortcutKind.scrolling.defaultBinding,
-            objectCutoutShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .objectCutoutShortcut) ?? ScreenCaptureShortcutKind.objectCutout.defaultBinding
+            objectCutoutShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .objectCutoutShortcut) ?? ScreenCaptureShortcutKind.objectCutout.defaultBinding,
+            migrateLegacyScreenshotShortcuts: true
         )
     }
 
@@ -2065,7 +2076,7 @@ private final class SmartCaptureShortcutRecorderNSView: NSView {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // Command-modified combinations are offered to menu key equivalents
-        // before keyDown. Capture them here so shortcuts such as ⌘⇧4 can be
+        // before keyDown. Capture them here so command-modified shortcuts can be
         // recorded instead of triggering the menu/system action.
         guard record(event) else { return super.performKeyEquivalent(with: event) }
         return true

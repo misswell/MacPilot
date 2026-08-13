@@ -149,10 +149,10 @@ struct ScreenCaptureTests {
     }
 
     @Test func snapzyStyleScreenshotShortcutDefaultsAreConfigurableAndPersisted() throws {
-        #expect(ScreenCaptureShortcutKind.area.defaultBinding.displayName == "⇧⌘4")
-        #expect(ScreenCaptureShortcutKind.repeatArea.defaultBinding.displayName == "⌃⇧⌘4")
+        #expect(ScreenCaptureShortcutKind.area.defaultBinding.displayName == "⌃⌥⌘4")
+        #expect(ScreenCaptureShortcutKind.repeatArea.defaultBinding.displayName == "⌃⌥⇧⌘4")
         #expect(ScreenCaptureShortcutKind.applicationWindow.defaultBinding.displayName == "⌃⌘A")
-        #expect(ScreenCaptureShortcutKind.fullscreen.defaultBinding.displayName == "⇧⌘3")
+        #expect(ScreenCaptureShortcutKind.fullscreen.defaultBinding.displayName == "⌃⌥⌘3")
         #expect(ScreenCaptureShortcutKind.activeWindow.defaultBinding.displayName == "⇧⌘9")
         #expect(ScreenCaptureShortcutKind.areaAnnotate.defaultBinding.displayName == "⇧⌘7")
         #expect(ScreenCaptureShortcutKind.ocr.defaultBinding.displayName == "⇧⌘2")
@@ -233,6 +233,21 @@ struct ScreenCaptureTests {
         #expect(decoded.ocrShortcut == ScreenCaptureShortcutKind.ocr.defaultBinding)
         #expect(decoded.scrollingCaptureShortcut == ScreenCaptureShortcutKind.scrolling.defaultBinding)
         #expect(decoded.objectCutoutShortcut == ScreenCaptureShortcutKind.objectCutout.defaultBinding)
+    }
+
+    @Test func legacyMacOSScreenshotDefaultsMigrateToWorkingMacPilotShortcuts() throws {
+        let legacyJSON = """
+        {
+          "areaCaptureShortcut": { "keyCode": 21, "modifiers": 9 },
+          "repeatAreaCaptureShortcut": { "keyCode": 21, "modifiers": 11 },
+          "fullscreenCaptureShortcut": { "keyCode": 20, "modifiers": 9 }
+        }
+        """.data(using: .utf8)!
+        let legacy = try JSONDecoder().decode(ScreenCaptureSettings.self, from: legacyJSON)
+
+        #expect(legacy.areaCaptureShortcut == ScreenCaptureShortcutKind.area.defaultBinding)
+        #expect(legacy.repeatAreaCaptureShortcut == ScreenCaptureShortcutKind.repeatArea.defaultBinding)
+        #expect(legacy.fullscreenCaptureShortcut == ScreenCaptureShortcutKind.fullscreen.defaultBinding)
     }
 
     @Test func settingsReplaceAnUnsafePersistedShortcutWithF1() {
