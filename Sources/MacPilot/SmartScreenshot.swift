@@ -1473,6 +1473,12 @@ final class SmartScreenshotController {
             onError(ScreenCaptureError.permissionRequired)
             return
         }
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else {
+            Self.logger.error("Selection rejected because no display is available")
+            onError(ScreenCaptureError.noDisplayFound)
+            return
+        }
         isSelecting = true
         selectionMode = mode
         selectionInteraction.reset(mode: mode == .applicationWindow ? .applicationWindow : .area)
@@ -1485,8 +1491,8 @@ final class SmartScreenshotController {
             currentTarget = SmartAXTargetQuery.applicationWindowTarget(at: initialPoint)
         }
         Self.logger.info("Selection started; initial target available: \(self.currentTarget != nil)")
-        overlays = NSScreen.screens.map { screen in
-            let panel = SmartCaptureOverlayPanel(screen: screen)
+        overlays = screens.map { screen in
+            let panel = SmartCaptureOverlayPanel(screenFrame: screen.frame)
             panel.overlayView.targetFrame = currentTarget
             panel.overlayView.onMove = { [weak self] point in self?.updateTarget(at: point) }
             panel.overlayView.onMouseDown = { [weak self] point in self?.handleSelectionMouseDown(atAppKitPoint: point) }
@@ -2066,10 +2072,10 @@ private extension NSScreen {
 private final class SmartCaptureOverlayPanel: NSPanel {
     let overlayView: SmartCaptureOverlayView
 
-    init(screen: NSScreen) {
-        overlayView = SmartCaptureOverlayView(screenFrame: screen.frame)
+    init(screenFrame: CGRect) {
+        overlayView = SmartCaptureOverlayView(screenFrame: screenFrame)
         super.init(
-            contentRect: screen.frame,
+            contentRect: screenFrame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -2084,7 +2090,7 @@ private final class SmartCaptureOverlayPanel: NSPanel {
         hasShadow = false
         sharingType = .none
         contentView = overlayView
-        setFrame(screen.frame, display: false)
+        setFrame(screenFrame, display: false)
     }
 
     override var canBecomeKey: Bool { true }

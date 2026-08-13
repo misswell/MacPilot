@@ -3179,13 +3179,13 @@ struct MenuBarView: View {
             .disabled(!windowSwitcher.settings.isEnabled || !windowSwitcher.hasAccessibilityPermission)
         Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
         Divider()
-        Button(model.t("scSmartCaptureNow")) { model.screenCapture.startSmartCapture() }
-        Button(model.t("scAreaCaptureNow")) { model.screenCapture.startAreaCapture() }
-        Button(model.t("scApplicationWindowCaptureNow")) { model.screenCapture.startApplicationWindowCapture() }
-        Button(model.t("scFullscreenCaptureNow")) { model.screenCapture.captureFullscreen() }
-        Button(model.t("scActiveWindowCaptureNow")) { model.screenCapture.captureActiveWindow() }
-        Button(model.t("scAreaAnnotateNow")) { model.screenCapture.startAreaAnnotateCapture() }
-        Button(model.t("scOCRCaptureNow")) { model.screenCapture.startOCRCapture() }
+        Button(model.t("scSmartCaptureNow")) { deferCaptureAction { model.screenCapture.startSmartCapture() } }
+        Button(model.t("scAreaCaptureNow")) { deferCaptureAction { model.screenCapture.startAreaCapture() } }
+        Button(model.t("scApplicationWindowCaptureNow")) { deferCaptureAction { model.screenCapture.startApplicationWindowCapture() } }
+        Button(model.t("scFullscreenCaptureNow")) { deferCaptureAction { model.screenCapture.captureFullscreen() } }
+        Button(model.t("scActiveWindowCaptureNow")) { deferCaptureAction { model.screenCapture.captureActiveWindow() } }
+        Button(model.t("scAreaAnnotateNow")) { deferCaptureAction { model.screenCapture.startAreaAnnotateCapture() } }
+        Button(model.t("scOCRCaptureNow")) { deferCaptureAction { model.screenCapture.startOCRCapture() } }
         Button(model.t("screenCapture")) { model.requestedSection = .capture; showMainWindow() }
         if pictureInPicture.settings.showMenuBarIcon {
             Divider()
@@ -3218,6 +3218,13 @@ struct MenuBarView: View {
             NSApp.activate(ignoringOtherApps: true)
             if let window = mainWindow { present(window) }
         }
+    }
+
+    /// NSMenu remains in its tracking loop while a menu item action runs. Let
+    /// it close before creating the screen-level overlay, otherwise AppKit can
+    /// immediately order the new panel out or keep the menu as the key window.
+    private func deferCaptureAction(_ action: @escaping @MainActor @Sendable () -> Void) {
+        DispatchQueue.main.async(execute: action)
     }
 
     private var mainWindow: NSWindow? {

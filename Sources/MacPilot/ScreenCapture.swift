@@ -687,18 +687,15 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     func startSmartCapture() {
-        guard ensureCapturePermissions() else { return }
-        smartCapture.startSelection()
+        startSelection(mode: .smartElement)
     }
 
     func startAreaCapture() {
-        guard ensureCapturePermissions() else { return }
-        smartCapture.startSelection(mode: .manualArea)
+        startSelection(mode: .manualArea)
     }
 
     func startApplicationWindowCapture() {
-        guard ensureCapturePermissions() else { return }
-        smartCapture.startSelection(mode: .applicationWindow)
+        startSelection(mode: .applicationWindow)
     }
 
     func captureFullscreen() {
@@ -712,13 +709,20 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     func startOCRCapture() {
-        guard ensureCapturePermissions() else { return }
-        smartCapture.startSelection(mode: .ocr)
+        startSelection(mode: .ocr)
     }
 
     func startAreaAnnotateCapture() {
+        startSelection(mode: .areaAnnotate)
+    }
+
+    /// Starts an interactive capture after the user explicitly requested it.
+    /// When Screen Recording is not yet granted, report the state and leave
+    /// the explicit permission request to the settings-page grant button.
+    /// Global shortcuts must never trigger a fresh TCC prompt implicitly.
+    private func startSelection(mode: SmartCaptureSelectionMode) {
         guard ensureCapturePermissions() else { return }
-        smartCapture.startSelection(mode: .areaAnnotate)
+        smartCapture.startSelection(mode: mode)
     }
 
     private func presentAreaAnnotation(_ image: CGImage) {
@@ -1707,7 +1711,10 @@ private struct SmartCaptureShortcutEditor: View {
             SmartCaptureShortcutRecorder(
                 keyCode: $recordedKeyCode,
                 modifiers: $recordedModifiers,
-                placeholder: AppText.value("scRecordShortcut", language: appModel.language)
+                placeholder: AppText.value("scRecordShortcut", language: appModel.language),
+                onRejected: { error in
+                    validationMessage = AppText.value(error.messageKey, language: appModel.language)
+                }
             )
             .frame(maxWidth: .infinity)
             .frame(height: 52)
@@ -1774,12 +1781,14 @@ private struct SmartCaptureShortcutRecorder: NSViewRepresentable {
     @Binding var keyCode: UInt16?
     @Binding var modifiers: InputSourceShortcutModifiers
     let placeholder: String
+    let onRejected: (SmartCaptureShortcutError) -> Void
 
     func makeNSView(context: Context) -> SmartCaptureShortcutRecorderNSView {
         let view = SmartCaptureShortcutRecorderNSView()
         view.keyCode = keyCode
         view.modifiers = modifiers
         view.placeholder = placeholder
+        view.onRejected = onRejected
         view.onCapture = { keyCode, modifiers in
             self.keyCode = keyCode
             self.modifiers = modifiers
@@ -1791,6 +1800,7 @@ private struct SmartCaptureShortcutRecorder: NSViewRepresentable {
         nsView.keyCode = keyCode
         nsView.modifiers = modifiers
         nsView.placeholder = placeholder
+        nsView.onRejected = onRejected
         nsView.needsDisplay = true
     }
 }
@@ -1801,6 +1811,7 @@ private final class SmartCaptureShortcutRecorderNSView: NSView {
     var modifiers: InputSourceShortcutModifiers = []
     var placeholder = ""
     var onCapture: ((UInt16, InputSourceShortcutModifiers) -> Void)?
+    var onRejected: ((SmartCaptureShortcutError) -> Void)?
     private var isFocused = false {
         didSet { needsDisplay = true }
     }
@@ -1855,13 +1866,17 @@ private final class SmartCaptureShortcutRecorderNSView: NSView {
             UInt16(kVK_Shift), UInt16(kVK_RightShift), UInt16(kVK_Control), UInt16(kVK_RightControl),
             UInt16(kVK_Option), UInt16(kVK_RightOption), UInt16(kVK_Command), UInt16(kVK_RightCommand)
         ]
-        guard !modifierKeys.contains(event.keyCode), event.keyCode != UInt16(kVK_Escape) else { return false }
+        guard !modifierKeys.contains(event.keyCode) else { return false }
         let modifiers = InputSourceShortcutModifiers(event.modifierFlags)
-        let isFunctionKey = SmartCaptureShortcutBinding(
+        let binding = SmartCaptureShortcutBinding(
             keyCode: event.keyCode,
-            modifiers: []
-        ).validationError == nil
-        guard isFunctionKey || !modifiers.isEmpty else { return false }
+            modifiers: modifiers
+        )
+        if let error = binding.validationError {
+            onRejected?(error)
+            needsDisplay = true
+            return true
+        }
         onCapture?(event.keyCode, modifiers)
         needsDisplay = true
         return true
