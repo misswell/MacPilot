@@ -83,8 +83,8 @@ struct SmartCaptureShortcutBinding: Codable, Equatable, Hashable, Sendable {
 
 /// Screenshot entry points exposed by the capture settings. Smart Element
 /// keeps the original F1 behaviour. The area/fullscreen defaults retain the
-/// familiar 3/4 key positions but add Option (and Control for the repeat
-/// action), because macOS owns the plain Command-Shift screenshot shortcuts.
+/// familiar 3/4 key positions but add Option, because macOS owns the plain
+/// Command-Shift screenshot shortcuts.
 enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Sendable {
     case smartElement
     case area
@@ -102,9 +102,9 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
         case .smartElement:
             return .default
         case .area:
-            return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .option, .control])
+            return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .option])
         case .repeatArea:
-            return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .option, .control, .shift])
+            return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .option, .shift])
         case .applicationWindow:
             // A separate global entry point complements the in-overlay `A`
             // mode switch while keeping the action reachable from any app.
@@ -113,7 +113,7 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
                 modifiers: [.control, .command]
             )
         case .fullscreen:
-            return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_3), modifiers: [.command, .option, .control])
+            return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_3), modifiers: [.command, .option])
         case .activeWindow:
             return SmartCaptureShortcutBinding(
                 keyCode: UInt16(kVK_ANSI_9),
@@ -147,11 +147,14 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
     /// shipped defaults; a user-selected binding must remain untouched.
     func migratedBinding(_ binding: SmartCaptureShortcutBinding) -> SmartCaptureShortcutBinding {
         switch self {
-        case .area where binding == SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .shift]):
+        case .area where binding == SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .shift])
+            || binding == SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .option, .control]):
             return defaultBinding
-        case .repeatArea where binding == SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.control, .command, .shift]):
+        case .repeatArea where binding == SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.control, .command, .shift])
+            || binding == SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .option, .control, .shift]):
             return defaultBinding
-        case .fullscreen where binding == SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_3), modifiers: [.command, .shift]):
+        case .fullscreen where binding == SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_3), modifiers: [.command, .shift])
+            || binding == SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_3), modifiers: [.command, .option, .control]):
             return defaultBinding
         default:
             return binding
