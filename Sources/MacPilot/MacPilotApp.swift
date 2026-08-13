@@ -3190,6 +3190,10 @@ struct MenuBarView: View {
         Button(model.t("scOCRCaptureNow")) { deferCaptureAction { model.screenCapture.startOCRCapture() } }
         Button(model.t("scScrollingCaptureNow")) { deferCaptureAction { model.screenCapture.startScrollingCapture() } }
         Button(model.t("scObjectCutoutNow")) { deferCaptureAction { model.screenCapture.startObjectCutoutCapture() } }
+        Button(model.t("scEditShortcuts")) {
+            model.requestedSection = .capture
+            showMainWindow()
+        }
         Button(model.t("screenCapture")) { model.requestedSection = .capture; showMainWindow() }
         if pictureInPicture.settings.showMenuBarIcon {
             Divider()
