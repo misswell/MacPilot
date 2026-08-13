@@ -122,6 +122,18 @@ struct ScreenCaptureTests {
         #expect(SmartCaptureSystemShortcutDetector.conflicts(for: binding, hotkeys: hotkeys) == [.area])
     }
 
+    @Test func systemScreenshotShortcutConflictIsARejectedShortcutError() {
+        let hotkeys: [String: Any] = [
+            "28": [
+                "enabled": true,
+                "value": ["parameters": [NSNumber(value: 65535), NSNumber(value: kVK_ANSI_4), NSNumber(value: 1179648)]]
+            ]
+        ]
+        let binding = SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .shift])
+        #expect(SmartCaptureSystemShortcutDetector.conflicts(for: binding, hotkeys: hotkeys) == [.area])
+        #expect(SmartCaptureShortcutError.systemShortcutConflict.messageKey == "scShortcutSystemConflict")
+    }
+
     @Test func smartCaptureShortcutBindingRoundTripsThroughCodable() throws {
         let binding = SmartCaptureShortcutBinding(keyCode: 18, modifiers: [.control, .shift])
         let data = try JSONEncoder().encode(binding)

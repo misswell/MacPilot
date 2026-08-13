@@ -185,12 +185,14 @@ enum SmartCaptureSelectionMode: Equatable, Sendable {
 enum SmartCaptureShortcutError: Error, Equatable {
     case reservedKey
     case modifierRequired
+    case systemShortcutConflict
     case registrationFailed
 
     var messageKey: String {
         switch self {
         case .reservedKey: return "scShortcutReserved"
         case .modifierRequired: return "scShortcutModifierRequired"
+        case .systemShortcutConflict: return "scShortcutSystemConflict"
         case .registrationFailed: return "scShortcutRegistrationFailed"
         }
     }
@@ -486,9 +488,9 @@ private final class SmartCaptureShortcutEventTapContext: @unchecked Sendable {
     }
 
     /// Once a fallback shortcut has matched, consume the matching key-up and
-    /// modifier transitions as well. This prevents the same sequence from
-    /// leaking to ordinary applications; macOS's own screenshot service may
-    /// still require the user to disable its symbolic hotkey in System Settings.
+    /// modifier transitions as well. This keeps the helper safe for any
+    /// future non-system fallback without pretending it can override macOS's
+    /// screenshot service.
     func beginSuppressing(keyCode: UInt16, flags: CGEventFlags) {
         lock.lock()
         suppressedKeyCode = keyCode
@@ -631,9 +633,9 @@ private enum SmartCaptureCarbonHotKey {
 }
 
 /// macOS screenshot symbolic hotkeys use the same key combinations as the
-/// Snapzy-style defaults. Carbon registration cannot claim those combinations;
-/// the fallback event tap can, but the settings UI should still explain the
-/// conflict instead of silently racing the system screenshot service.
+/// Snapzy-style defaults. Carbon cannot claim those combinations, so the
+/// settings UI reports the conflict and requires a different binding instead
+/// of silently racing the system screenshot service.
 enum SmartCaptureSystemShortcutConflict: Equatable {
     case area
     case fullscreen
@@ -1026,10 +1028,9 @@ final class SmartScreenshotController {
             onError(error)
             return
         }
-        // Keep the primary smart-capture shortcut usable even when a system
-        // shortcut (for example ⌘⇧3/4) prevents one of the optional entry
-        // points from being registered. The settings editor can then be used
-        // to replace the conflicting entry without losing the working one.
+        // Optional entry points may be disabled by a system conflict; the
+        // settings editor marks those bindings and lets the user replace them
+        // without affecting the working primary shortcut.
         _ = registerAdditionalShortcuts()
         _ = refreshShortcutEventTap()
     }
@@ -1061,6 +1062,16 @@ final class SmartScreenshotController {
     }
 
     private func registerValidatedShortcut() -> SmartCaptureShortcutError? {
+        // Carbon cannot claim a shortcut that macOS owns for its screenshot
+        // service.  Do not install an event-tap fallback here: on current
+        // macOS releases the screenshot service can run before third-party
+        // taps, which would make the setting look saved while the shortcut
+        // still launches Apple's UI.  The editor asks the user to choose a
+        // non-conflicting combination instead.
+        guard SmartCaptureSystemShortcutDetector.conflicts(for: shortcutBinding).isEmpty else {
+            Self.logger.error("System screenshot shortcut conflict for \(self.shortcutBinding.displayName, privacy: .public)")
+            return .systemShortcutConflict
+        }
         let context = SmartShortcutContext(controller: self)
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -1080,18 +1091,15 @@ final class SmartScreenshotController {
             return .registrationFailed
         }
 
-        let systemConflict = !SmartCaptureSystemShortcutDetector.conflicts(for: shortcutBinding).isEmpty
         var hotKey: EventHotKeyRef?
-        let hotKeyStatus: OSStatus = systemConflict
-            ? OSStatus(-9876)
-            : RegisterEventHotKey(
-                UInt32(shortcutBinding.keyCode),
-                SmartCaptureCarbonHotKey.modifiers(for: shortcutBinding),
-                SmartCaptureCarbonHotKey.identifier(SmartCaptureCarbonHotKey.captureID),
-                GetApplicationEventTarget(),
-                OptionBits(kEventHotKeyNoOptions),
-                &hotKey
-            )
+        let hotKeyStatus: OSStatus = RegisterEventHotKey(
+            UInt32(shortcutBinding.keyCode),
+            SmartCaptureCarbonHotKey.modifiers(for: shortcutBinding),
+            SmartCaptureCarbonHotKey.identifier(SmartCaptureCarbonHotKey.captureID),
+            GetApplicationEventTarget(),
+            OptionBits(kEventHotKeyNoOptions),
+            &hotKey
+        )
         shortcutContext = context
         shortcutEventHandler = handler
         shortcutEventHandlerIsTransient = false
@@ -1101,37 +1109,11 @@ final class SmartScreenshotController {
             return nil
         }
 
-        // Do not use a CGEvent tap to steal a shortcut owned by another app.
-        // The fallback is reserved for macOS screenshot symbolic hotkeys that
-        // Carbon intentionally refuses; the editor warns users that macOS's
-        // own action may still need to be disabled in System Settings.
-        guard AXIsProcessTrusted(),
-              !SmartCaptureSystemShortcutDetector.conflicts(for: shortcutBinding).isEmpty else {
-            if let shortcutEventHandler { RemoveEventHandler(shortcutEventHandler) }
-            shortcutEventHandler = nil
-            shortcutContext = nil
-            Self.logger.error("Could not register shortcut \(self.shortcutBinding.displayName, privacy: .public): \(hotKeyStatus, privacy: .public)")
-            return .registrationFailed
-        }
-
-        // macOS owns ⌘⇧3/4 (and users may have other system shortcuts). Carbon
-        // refuses those combinations; use the tap as a targeted fallback for
-        // our action while the editor guides the user through disabling the
-        // duplicate system shortcut.
-        fallbackShortcutBindings = [SmartCaptureShortcutEventBinding(
-            id: SmartCaptureCarbonHotKey.captureID,
-            binding: shortcutBinding
-        )]
-        guard refreshShortcutEventTap() else {
-            if let shortcutEventHandler { RemoveEventHandler(shortcutEventHandler) }
-            shortcutEventHandler = nil
-            shortcutContext = nil
-            fallbackShortcutBindings.removeAll(keepingCapacity: false)
-            Self.logger.error("Could not register shortcut \(self.shortcutBinding.displayName, privacy: .public): \(hotKeyStatus, privacy: .public)")
-            return .registrationFailed
-        }
-        Self.logger.info("Global shortcut registered through event tap: \(self.shortcutBinding.displayName, privacy: .public)")
-        return nil
+        if let shortcutEventHandler { RemoveEventHandler(shortcutEventHandler) }
+        shortcutEventHandler = nil
+        shortcutContext = nil
+        Self.logger.error("Could not register shortcut \(self.shortcutBinding.displayName, privacy: .public): \(hotKeyStatus, privacy: .public)")
+        return .registrationFailed
     }
 
     private func unregisterShortcut() {
@@ -1159,7 +1141,7 @@ final class SmartScreenshotController {
         guard shortcutContext != nil, shortcutEventHandler != nil else { return [] }
         var registeredBindings: [SmartCaptureShortcutBinding] = []
         var registeredKinds: Set<ScreenCaptureShortcutKind> = []
-        fallbackShortcutBindings.removeAll { $0.id != SmartCaptureCarbonHotKey.captureID }
+        fallbackShortcutBindings.removeAll(keepingCapacity: true)
         unregisterAdditionalShortcuts()
         for kind in [ScreenCaptureShortcutKind.area, .repeatArea, .applicationWindow, .fullscreen, .activeWindow, .areaAnnotate, .ocr, .scrolling, .objectCutout] {
             guard let binding = additionalShortcutBindings[kind], binding.isValid else { continue }
@@ -1183,28 +1165,22 @@ final class SmartScreenshotController {
             case .objectCutout: id = SmartCaptureCarbonHotKey.objectCutoutID
             case .smartElement: continue
             }
-            let systemConflict = !SmartCaptureSystemShortcutDetector.conflicts(for: binding).isEmpty
+            let systemConflicts = SmartCaptureSystemShortcutDetector.conflicts(for: binding)
+            if !systemConflicts.isEmpty {
+                Self.logger.error("Skipping \(kind.rawValue, privacy: .public) shortcut \(binding.displayName, privacy: .public) because macOS owns it")
+                continue
+            }
             var hotKey: EventHotKeyRef?
-            let status: OSStatus = systemConflict
-                ? OSStatus(-9876)
-                : RegisterEventHotKey(
-                    UInt32(binding.keyCode),
-                    SmartCaptureCarbonHotKey.modifiers(for: binding),
-                    SmartCaptureCarbonHotKey.identifier(id),
-                    GetApplicationEventTarget(),
-                    OptionBits(kEventHotKeyNoOptions),
-                    &hotKey
-                )
+            let status: OSStatus = RegisterEventHotKey(
+                UInt32(binding.keyCode),
+                SmartCaptureCarbonHotKey.modifiers(for: binding),
+                SmartCaptureCarbonHotKey.identifier(id),
+                GetApplicationEventTarget(),
+                OptionBits(kEventHotKeyNoOptions),
+                &hotKey
+            )
             guard status == noErr, let hotKey else {
                 Self.logger.error("Could not register \(kind.rawValue) shortcut \(binding.displayName, privacy: .public): \(status, privacy: .public)")
-                if AXIsProcessTrusted(),
-                   !SmartCaptureSystemShortcutDetector.conflicts(for: binding).isEmpty {
-                    fallbackShortcutBindings.append(SmartCaptureShortcutEventBinding(id: id, binding: binding))
-                    // A system screenshot symbolic hotkey is intentionally
-                    // accepted when Accessibility is available; the editor
-                    // warns that macOS's own shortcut may also run.
-                    registeredKinds.insert(kind)
-                }
                 continue
             }
             additionalShortcutHotKeys[kind] = hotKey
@@ -1401,9 +1377,18 @@ final class SmartScreenshotController {
         }
         if let requiredKind,
            let candidate = bindings[requiredKind],
-           shortcutRegistrationRequested,
-           (candidate == shortcutBinding || !probeShortcut(candidate, kind: requiredKind)) {
-            return .registrationFailed
+           !SmartCaptureSystemShortcutDetector.conflicts(for: candidate).isEmpty {
+            return .systemShortcutConflict
+        }
+        if let requiredKind,
+           let candidate = bindings[requiredKind],
+           shortcutRegistrationRequested {
+            if candidate == shortcutBinding {
+                return .registrationFailed
+            }
+            if !probeShortcut(candidate, kind: requiredKind) {
+                return .registrationFailed
+            }
         }
         let previous = additionalShortcutBindings
         additionalShortcutBindings = bindings
@@ -1446,10 +1431,7 @@ final class SmartScreenshotController {
         )
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if status == noErr { return true }
-        // Carbon deliberately refuses the combinations reserved by macOS's
-        // screenshot service (⌘⇧3/4 by default). They are still safe for our
-        // event-tap fallback when Accessibility is trusted.
-        return AXIsProcessTrusted() && !SmartCaptureSystemShortcutDetector.conflicts(for: binding).isEmpty
+        return false
     }
 
     private func registerSelectionCancelShortcut() {
@@ -1516,6 +1498,9 @@ final class SmartScreenshotController {
     @discardableResult
     func updateShortcutBindingReturningError(_ binding: SmartCaptureShortcutBinding) -> SmartCaptureShortcutError? {
         guard binding.validationError == nil else { return binding.validationError }
+        if !SmartCaptureSystemShortcutDetector.conflicts(for: binding).isEmpty {
+            return .systemShortcutConflict
+        }
         guard binding != shortcutBinding else { return nil }
         let previousBinding = shortcutBinding
         let wasRegistered = shortcutHotKey != nil || shortcutEventHandler != nil

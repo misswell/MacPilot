@@ -672,8 +672,8 @@ final class ScreenCaptureModel: ObservableObject {
         if kind == .smartElement {
             guard setSmartCaptureShortcut(binding) else { return false }
         } else {
-            guard smartCapture.updateAdditionalShortcutBindingsReturningError(bindings, requiredKind: kind) == nil else {
-                errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
+            if let error = smartCapture.updateAdditionalShortcutBindingsReturningError(bindings, requiredKind: kind) {
+                errorMessage = AppText.value(error.messageKey, language: language)
                 return false
             }
             updateSettings {
@@ -1488,6 +1488,14 @@ struct ScreenCaptureView: View {
                 .frame(width: 22)
             Text(t(kind.titleKey))
             Spacer()
+            if let conflict = SmartCaptureSystemShortcutDetector.conflicts(
+                for: capture.shortcutBinding(for: kind)
+            ).first {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(AppText.value(conflict.titleKey, language: appModel.language))
+                    .accessibilityLabel(AppText.value(conflict.titleKey, language: appModel.language))
+            }
             shortcutBadge(for: kind)
             Button(t("scChangeShortcut")) { editShortcut(kind) }
                 .buttonStyle(.bordered)
@@ -1916,6 +1924,14 @@ private struct SmartCaptureShortcutEditor: View {
             Text(AppText.value("scShortcutHint", language: appModel.language))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            if !candidateConflicts.isEmpty {
+                Label(
+                    AppText.value("scShortcutSystemConflict", language: appModel.language),
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
             SmartCaptureShortcutRecorder(
                 keyCode: $recordedKeyCode,
                 modifiers: $recordedModifiers,
@@ -1931,12 +1947,7 @@ private struct SmartCaptureShortcutEditor: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
-            if let conflict = SmartCaptureSystemShortcutDetector.conflicts(
-                for: SmartCaptureShortcutBinding(
-                    keyCode: recordedKeyCode ?? kind.defaultBinding.keyCode,
-                    modifiers: recordedModifiers
-                )
-            ).first {
+            if let conflict = candidateConflicts.first {
                 HStack(spacing: 8) {
                     Text(AppText.value(conflict.titleKey, language: appModel.language))
                         .font(.caption)
@@ -1962,7 +1973,7 @@ private struct SmartCaptureShortcutEditor: View {
                 Button(AppText.value("cancel", language: appModel.language), role: .cancel) { dismiss() }
                 Button(AppText.value("save", language: appModel.language)) { save() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(recordedKeyCode == nil)
+                    .disabled(recordedKeyCode == nil || candidateBinding.validationError != nil || !candidateConflicts.isEmpty)
             }
         }
         .padding(24)
@@ -1974,14 +1985,21 @@ private struct SmartCaptureShortcutEditor: View {
     }
 
     private func save() {
-        guard let recordedKeyCode else { return }
-        let binding = SmartCaptureShortcutBinding(
-            keyCode: recordedKeyCode,
-            modifiers: recordedModifiers
-        )
-        let didSave = capture.setShortcut(kind, binding: binding)
+        guard recordedKeyCode != nil else { return }
+        let didSave = capture.setShortcut(kind, binding: candidateBinding)
         if didSave { dismiss() }
         else { validationMessage = capture.errorMessage }
+    }
+
+    private var candidateBinding: SmartCaptureShortcutBinding {
+        SmartCaptureShortcutBinding(
+            keyCode: recordedKeyCode ?? kind.defaultBinding.keyCode,
+            modifiers: recordedModifiers
+        )
+    }
+
+    private var candidateConflicts: [SmartCaptureSystemShortcutConflict] {
+        SmartCaptureSystemShortcutDetector.conflicts(for: candidateBinding)
     }
 }
 
