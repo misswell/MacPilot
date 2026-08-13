@@ -602,12 +602,7 @@ private enum SmartAXTargetQuery {
             )
         }
         guard converted.count == points.count else { return nil }
-        return CGRect(
-            x: converted.map(\.x).min() ?? 0,
-            y: converted.map(\.y).min() ?? 0,
-            width: (converted.map(\.x).max() ?? 0) - (converted.map(\.x).min() ?? 0),
-            height: (converted.map(\.y).max() ?? 0) - (converted.map(\.y).min() ?? 0)
-        ).integral
+        return boundingRect(of: converted)
     }
 
     static func displayCount(intersectingAppKitRect rect: CGRect) -> Int {
@@ -630,12 +625,22 @@ private enum SmartAXTargetQuery {
             )
         }
         guard converted.count == points.count else { return nil }
-        return CGRect(
-            x: converted.map(\.x).min() ?? 0,
-            y: converted.map(\.y).min() ?? 0,
-            width: (converted.map(\.x).max() ?? 0) - (converted.map(\.x).min() ?? 0),
-            height: (converted.map(\.y).max() ?? 0) - (converted.map(\.y).min() ?? 0)
-        ).integral
+        return boundingRect(of: converted)
+    }
+
+    private static func boundingRect(of points: [CGPoint]) -> CGRect? {
+        guard let first = points.first else { return nil }
+        var minX = first.x
+        var maxX = first.x
+        var minY = first.y
+        var maxY = first.y
+        for point in points.dropFirst() {
+            minX = min(minX, point.x)
+            maxX = max(maxX, point.x)
+            minY = min(minY, point.y)
+            maxY = max(maxY, point.y)
+        }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY).integral
     }
 
     private struct DisplayMapping {
