@@ -498,7 +498,16 @@ enum AppText {
         "compressionErrorCommand": "macOS 压缩命令失败：%@", "compressionErrorCoordination": "无法安全协调文件访问：%@", "compressionErrorFileInUse": "文件正被其他进程使用，已跳过。", "compressionErrorReplacement": "无法原子替换原文件。",
         "compressionFolderIssue": "%@：%@"
         ,
-        "screenCapture": "截屏记录", "screenCaptureSubtitle": "定时截取屏幕画面并保存到指定文件夹，支持忙时/闲时不同间隔，使用 HEIC 高效压缩。",
+        "screenCapture": "截屏与贴图", "screenCaptureSubtitle": "F1 智能识别窗口和界面元素边界，支持贴图、OCR、标注与低资源定时截屏。",
+        "scSmartCapture": "智能截图", "scSmartCaptureHint": "移动鼠标自动识别窗口或界面元素，单击截图，Esc 或右键取消。",
+        "scSmartCaptureNow": "开始截图", "scEnableSmartCapture": "启用 F1 全局快捷键",
+        "scSmartCaptureAccessibilityRequired": "智能截图需要辅助功能权限。请在设置中明确点击授权后再试。",
+        "scPinAfterSmartCapture": "截图后自动贴图", "scSmartCaptureResources": "空闲时仅监听 F1，不采集屏幕、不轮询；OCR 与标注仅在使用时加载。智能元素识别需要辅助功能权限。",
+        "scPinTitle": "MacPilot 贴图", "scCopy": "复制", "scAnnotate": "标注", "scClose": "关闭",
+        "scOCRNoText": "未识别到文字。", "scOCRCopied": "OCR 文字已复制", "scOK": "好",
+        "scAnnotateTitle": "MacPilot 标注", "scAnnotationTool": "工具", "scAnnotationRectangle": "矩形",
+        "scAnnotationArrow": "箭头", "scAnnotationText": "文字", "scUndo": "撤销", "scCancel": "取消",
+        "scDone": "完成", "scAnnotationTextTitle": "标注文字", "scText": "文字", "scAdd": "添加",
         "scOutputFolder": "保存文件夹", "scNoFolder": "尚未选择文件夹", "scChooseFolder": "选择文件夹…",
         "scCaptureAllDisplays": "截取所有显示器", "scCaptureAllDisplaysHint": "多显示器时分别保存每块屏幕的画面。",
         "scShowCursor": "包含鼠标光标",
@@ -716,7 +725,16 @@ enum AppText {
             "compressionErrorCommand": "The macOS compression command failed: %@", "compressionErrorCoordination": "The file could not be coordinated safely: %@", "compressionErrorFileInUse": "The file is open in another process and was skipped.", "compressionErrorReplacement": "The original file could not be replaced atomically.",
             "compressionFolderIssue": "%@: %@"
             ,
-            "screenCapture": "Screen Capture", "screenCaptureSubtitle": "Periodically capture screenshots to a chosen folder, with separate busy/idle intervals and efficient HEIC compression.",
+            "screenCapture": "Capture & Pin", "screenCaptureSubtitle": "Press F1 to detect window and UI element bounds, then pin, OCR, annotate, or run low-resource scheduled captures.",
+            "scSmartCapture": "Smart Capture", "scSmartCaptureHint": "Move the pointer to detect a window or UI element, click to capture, or press Escape/right-click to cancel.",
+            "scSmartCaptureNow": "Start Capture", "scEnableSmartCapture": "Enable the global F1 shortcut",
+            "scSmartCaptureAccessibilityRequired": "Smart Capture requires Accessibility access. Grant it explicitly in Settings, then try again.",
+            "scPinAfterSmartCapture": "Pin after smart capture", "scSmartCaptureResources": "While idle, MacPilot only listens for F1—no screen stream or polling. OCR and annotation load only when used. Smart elements require Accessibility access.",
+            "scPinTitle": "MacPilot Pin", "scCopy": "Copy", "scAnnotate": "Annotate", "scClose": "Close",
+            "scOCRNoText": "No text was detected.", "scOCRCopied": "OCR copied to clipboard", "scOK": "OK",
+            "scAnnotateTitle": "MacPilot Annotate", "scAnnotationTool": "Tool", "scAnnotationRectangle": "Rectangle",
+            "scAnnotationArrow": "Arrow", "scAnnotationText": "Text", "scUndo": "Undo", "scCancel": "Cancel",
+            "scDone": "Done", "scAnnotationTextTitle": "Annotation text", "scText": "Text", "scAdd": "Add",
             "scOutputFolder": "Output Folder", "scNoFolder": "No folder selected", "scChooseFolder": "Choose Folder…",
             "scCaptureAllDisplays": "Capture all displays", "scCaptureAllDisplaysHint": "Save each display separately when using multiple monitors.",
             "scShowCursor": "Include mouse cursor",
@@ -842,7 +860,7 @@ final class MacPilotModel: ObservableObject {
     @Published private(set) var isResettingAccessibility = false
     @Published private(set) var isResettingScreenCapture = false
     @Published private(set) var launchesAtLogin = false
-    @Published var language: AppLanguage = .system { didSet { windowSwitcher.language = language; saveIfReady() } }
+    @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; windowSwitcher.language = language; saveIfReady() } }
     let ble = BLEUnlockModel()
     let updater = SoftwareUpdater()
     let fileCompression = FolderCompressionModel()
@@ -886,6 +904,13 @@ final class MacPilotModel: ObservableObject {
         refreshLoginItemState()
         startObservingWorkspace()
         startSafetyChecks()
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak screenCapture] _ in
+            Task { @MainActor in screenCapture?.shutdown() }
+        }
         evaluateRules()
         scheduleLaunchPlanForCurrentBootIfNeeded()
         requestAccessibilityAfterResetIfNeeded()
@@ -3133,6 +3158,9 @@ struct MenuBarView: View {
         Button(model.t("windowSwitcherTestNow")) { windowSwitcher.showSwitcherNow() }
             .disabled(!windowSwitcher.settings.isEnabled || !windowSwitcher.hasAccessibilityPermission)
         Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
+        Divider()
+        Button(model.t("scSmartCaptureNow")) { model.screenCapture.startSmartCapture() }
+        Button(model.t("screenCapture")) { model.requestedSection = .capture; showMainWindow() }
         if pictureInPicture.settings.showMenuBarIcon {
             Divider()
             Toggle(pictureInPicture.settings.isEnabled ? model.t("pipEnabledStatus") : model.t("pipDisabledStatus"),

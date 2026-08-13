@@ -53,26 +53,44 @@ SIGNING_IDENTITY="$DEVELOPER_ID"
 if [[ -n "$DEVELOPER_ID" ]]; then
     echo "Using Developer ID identity: $DEVELOPER_ID"
 else
-    LOCAL_SIGNING_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+    INSTALLED_DEVELOPER_ID="$(codesign -dv --verbose=4 "/Applications/$APP_BUNDLE_NAME" 2>&1 \
+        | sed -n 's/^Authority=\(Developer ID Application:.*\)$/\1/p' \
+        | head -1 || true)"
+    LOCAL_DEVELOPER_IDS="$(security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' \
+        | sort -u)"
+    if [[ -n "$INSTALLED_DEVELOPER_ID" ]] && grep -Fqx "$INSTALLED_DEVELOPER_ID" <<< "$LOCAL_DEVELOPER_IDS"; then
+        LOCAL_DEVELOPER_ID="$INSTALLED_DEVELOPER_ID"
+    elif [[ "$(wc -l <<< "$LOCAL_DEVELOPER_IDS" | tr -d ' ')" == "1" ]]; then
+        LOCAL_DEVELOPER_ID="$LOCAL_DEVELOPER_IDS"
+    else
+        LOCAL_DEVELOPER_ID=""
+    fi
+    LOCAL_DEVELOPMENT_ID="$(security find-identity -v -p codesigning 2>/dev/null \
         | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' \
         | head -1)"
-    if [[ -n "$LOCAL_SIGNING_ID" ]]; then
-        SIGNING_IDENTITY="$LOCAL_SIGNING_ID"
-        echo "Using local development identity: $LOCAL_SIGNING_ID"
-    else
+    if [[ -n "$LOCAL_DEVELOPER_ID" ]]; then
+        SIGNING_IDENTITY="$LOCAL_DEVELOPER_ID"
+        echo "Using production-matched Developer ID identity: $LOCAL_DEVELOPER_ID"
+    elif [[ "${MACPILOT_ALLOW_UNSTABLE_SIGNING:-0}" == "1" && -n "$LOCAL_DEVELOPMENT_ID" ]]; then
+        SIGNING_IDENTITY="$LOCAL_DEVELOPMENT_ID"
+        echo "WARNING: Developer ID identity unavailable; using local development identity: $LOCAL_DEVELOPMENT_ID"
+        echo "macOS may treat this build as a different app for privacy permissions."
+    elif [[ "${MACPILOT_ALLOW_UNSTABLE_SIGNING:-0}" == "1" ]]; then
         codesign --force --deep --sign - "$APP"
         echo "WARNING: Signed ad-hoc because no stable signing identity was found."
         echo "Screen Recording and Accessibility permissions may need to be granted again after every rebuild."
+    else
+        echo "ERROR: A Developer ID Application identity is required so development and production share privacy permissions." >&2
+        echo "Set MACPILOT_DEVELOPER_ID, or explicitly set MACPILOT_ALLOW_UNSTABLE_SIGNING=1 to permit a TCC-unstable fallback." >&2
+        exit 1
     fi
 fi
 
 if [[ -n "$SIGNING_IDENTITY" ]]; then
     # TCC stores the designated requirement when Screen Recording or
-    # Accessibility is granted.  Development and Developer ID certificates
-    # can have different team identifiers on this machine, so do not derive
-    # the requirement from whichever certificate happens to be selected.
-    # The stable bundle identifier plus Apple's code-signing anchor is the
-    # common identity used by both build variants.
+    # Accessibility is granted. Keep the bundle identifier and Apple signing
+    # anchor stable across local and release builds.
     SHARED_REQUIREMENT="designated => identifier \"$BUNDLE_IDENTIFIER\" and anchor apple generic"
 
     # Sign nested code independently. Passing the main app's custom

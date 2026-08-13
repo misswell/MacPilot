@@ -52,6 +52,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
     var maxRetentionDays: Int
     var captureAllDisplays: Bool
     var showsCursor: Bool
+    var smartCaptureEnabled: Bool
+    var pinSmartCaptures: Bool
 
     init(
         isEnabled: Bool = false,
@@ -64,7 +66,9 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         quality: Double = 0.7,
         maxRetentionDays: Int = 30,
         captureAllDisplays: Bool = false,
-        showsCursor: Bool = true
+        showsCursor: Bool = true,
+        smartCaptureEnabled: Bool = true,
+        pinSmartCaptures: Bool = true
     ) {
         self.isEnabled = isEnabled
         self.outputFolder = outputFolder
@@ -77,12 +81,14 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.maxRetentionDays = max(0, maxRetentionDays)
         self.captureAllDisplays = captureAllDisplays
         self.showsCursor = showsCursor
+        self.smartCaptureEnabled = smartCaptureEnabled
+        self.pinSmartCaptures = pinSmartCaptures
     }
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled, outputFolder, busyStartHour, busyEndHour
         case busyIntervalMinutes, idleIntervalMinutes, imageFormat, quality
-        case maxRetentionDays, captureAllDisplays, showsCursor
+        case maxRetentionDays, captureAllDisplays, showsCursor, smartCaptureEnabled, pinSmartCaptures
     }
 
     init(from decoder: Decoder) throws {
@@ -98,7 +104,9 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
             quality: try c.decodeIfPresent(Double.self, forKey: .quality) ?? 0.7,
             maxRetentionDays: try c.decodeIfPresent(Int.self, forKey: .maxRetentionDays) ?? 30,
             captureAllDisplays: try c.decodeIfPresent(Bool.self, forKey: .captureAllDisplays) ?? false,
-            showsCursor: try c.decodeIfPresent(Bool.self, forKey: .showsCursor) ?? true
+            showsCursor: try c.decodeIfPresent(Bool.self, forKey: .showsCursor) ?? true,
+            smartCaptureEnabled: try c.decodeIfPresent(Bool.self, forKey: .smartCaptureEnabled) ?? true,
+            pinSmartCaptures: try c.decodeIfPresent(Bool.self, forKey: .pinSmartCaptures) ?? true
         )
     }
 
@@ -386,16 +394,29 @@ final class ScreenCaptureModel: ObservableObject {
     @Published private(set) var hasScreenPermission = false
     @Published private(set) var nextCaptureDate: Date?
     @Published private(set) var isLoopRunning = false
+    var language: AppLanguage = .system
 
     var persist: (() -> Void)?
     private var isLoading = false
     private var captureTask: Task<Void, Never>?
     private var permissionPollTask: Task<Void, Never>?
     private var diskUsageRevision = 0
+    private lazy var smartCapture = SmartScreenshotController(
+        language: { [weak self] in self?.language ?? .system },
+        onCapture: { [weak self] image in self?.handleSmartCapture(image) }
+    )
 
     deinit {
         captureTask?.cancel()
         permissionPollTask?.cancel()
+    }
+
+    func shutdown() {
+        captureTask?.cancel()
+        captureTask = nil
+        permissionPollTask?.cancel()
+        permissionPollTask = nil
+        smartCapture.stop()
     }
 
     // MARK: - Configuration lifecycle
@@ -411,6 +432,7 @@ final class ScreenCaptureModel: ObservableObject {
 
     func activateFromConfiguration() {
         Task { await refreshDiskUsage() }
+        updateSmartCaptureRuntime()
         if settings.isEnabled {
             checkAndStartCapture()
         }
@@ -475,6 +497,85 @@ final class ScreenCaptureModel: ObservableObject {
 
     func setShowsCursor(_ value: Bool) {
         updateSettings { $0.showsCursor = value }
+    }
+
+    func setSmartCaptureEnabled(_ value: Bool) {
+        updateSettings { $0.smartCaptureEnabled = value }
+        updateSmartCaptureRuntime()
+    }
+
+    func setPinSmartCaptures(_ value: Bool) {
+        updateSettings { $0.pinSmartCaptures = value }
+    }
+
+    func startSmartCapture() {
+        guard ensureCapturePermissions() else { return }
+        smartCapture.startSelection()
+    }
+
+    private func updateSmartCaptureRuntime() {
+        if settings.smartCaptureEnabled, AXIsProcessTrusted() {
+            smartCapture.start()
+        } else {
+            smartCapture.stop()
+        }
+    }
+
+    private func ensureCapturePermissions() -> Bool {
+        hasScreenPermission = CGPreflightScreenCaptureAccess()
+        guard hasScreenPermission else {
+            isPermissionError = true
+            errorMessage = ScreenCaptureError.permissionRequired.errorDescription
+            return false
+        }
+        guard AXIsProcessTrusted() else {
+            errorMessage = AppText.value("scSmartCaptureAccessibilityRequired", language: .system)
+            return false
+        }
+        return true
+    }
+
+    private func handleSmartCapture(_ image: CGImage) {
+        if settings.pinSmartCaptures { smartCapture.pin(image: image) }
+        let configuration = ScreenCaptureSaveConfiguration(
+            outputFolder: smartCaptureOutputFolder(),
+            imageFormat: settings.imageFormat,
+            quality: settings.quality
+        )
+        let sendableImage = SendableScreenCaptureImage(value: image)
+        Task { [weak self] in
+            do {
+                let saved = try await Task.detached(priority: .utility) {
+                    try autoreleasepool {
+                        try ScreenCaptureStorage.save(
+                            image: sendableImage,
+                            displayIndex: nil,
+                            date: Date(),
+                            configuration: configuration
+                        )
+                    }
+                }.value
+                guard let self else { return }
+                self.lastCaptureDate = Date()
+                self.lastCaptureSize = saved.size
+                self.captureCount += 1
+                self.screenshotCount += 1
+                self.totalDiskUsage += saved.size
+                self.diskUsageRevision += 1
+                self.errorMessage = nil
+            } catch {
+                self?.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func smartCaptureOutputFolder() -> String {
+        if settings.isOutputFolderValid { return settings.outputFolder }
+        let pictures = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Pictures")
+        let folder = pictures.appendingPathComponent("MacPilot Screenshots", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder.path
     }
 
     private func updateSettings(_ mutate: (inout ScreenCaptureSettings) -> Void) {
@@ -791,6 +892,7 @@ struct ScreenCaptureView: View {
 
             ScrollView {
                 VStack(spacing: 16) {
+                    smartCaptureCard
                     outputCard
                     scheduleCard
                     qualityCard
@@ -809,6 +911,53 @@ struct ScreenCaptureView: View {
 
     private func t(_ key: String, _ args: CVarArg...) -> String {
         AppText.value(key, language: appModel.language, arguments: args)
+    }
+
+    // MARK: - Output folder card
+
+    private var smartCaptureCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 13).fill(Color.blue.opacity(0.13))
+                    Image(systemName: "viewfinder")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.blue)
+                }
+                .frame(width: 52, height: 52)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(t("scSmartCapture")).font(.headline)
+                    Text(t("scSmartCaptureHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("F1")
+                    .font(.system(.body, design: .monospaced).weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                Button(t("scSmartCaptureNow")) { capture.startSmartCapture() }
+                    .buttonStyle(.borderedProminent)
+            }
+
+            Divider()
+
+            Toggle(t("scEnableSmartCapture"), isOn: Binding(
+                get: { capture.settings.smartCaptureEnabled },
+                set: { capture.setSmartCaptureEnabled($0) }
+            ))
+            Toggle(t("scPinAfterSmartCapture"), isOn: Binding(
+                get: { capture.settings.pinSmartCaptures },
+                set: { capture.setPinSmartCaptures($0) }
+            ))
+            Text(t("scSmartCaptureResources"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(20)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
     }
 
     // MARK: - Output folder card

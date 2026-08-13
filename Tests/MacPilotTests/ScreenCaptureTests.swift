@@ -1,8 +1,45 @@
 import Foundation
+import CoreGraphics
 import Testing
 @testable import MacPilot
 
 struct ScreenCaptureTests {
+
+    @Test func smartCapturePrefersTheSmallestMeaningfulElement() {
+        let window = CGRect(x: 100, y: 100, width: 900, height: 700)
+        let chain = [
+            SmartCaptureElement(role: "AXButton", frame: CGRect(x: 180, y: 160, width: 120, height: 36)),
+            SmartCaptureElement(role: "AXGroup", frame: CGRect(x: 150, y: 140, width: 500, height: 300))
+        ]
+
+        #expect(SmartCaptureTargetResolver.resolve(elementChain: chain, windowFrame: window) == chain[0].frame)
+    }
+
+    @Test func smartCaptureSkipsTinyAndWindowSizedElements() {
+        let window = CGRect(x: 100, y: 100, width: 900, height: 700)
+        let expected = CGRect(x: 160, y: 140, width: 420, height: 260)
+        let chain = [
+            SmartCaptureElement(role: "AXImage", frame: CGRect(x: 170, y: 150, width: 7, height: 7)),
+            SmartCaptureElement(role: "AXGroup", frame: expected),
+            SmartCaptureElement(role: "AXScrollArea", frame: CGRect(x: 105, y: 105, width: 890, height: 690))
+        ]
+
+        #expect(SmartCaptureTargetResolver.resolve(elementChain: chain, windowFrame: window) == expected)
+    }
+
+    @Test func smartCaptureFallsBackToTheWindow() {
+        let window = CGRect(x: -700, y: 80, width: 640, height: 520)
+        let chain = [SmartCaptureElement(role: "AXApplication", frame: window)]
+
+        #expect(SmartCaptureTargetResolver.resolve(elementChain: chain, windowFrame: window) == window)
+    }
+
+    @Test func smartCaptureShortcutMatchesPlainF1Only() {
+        #expect(SmartCaptureShortcut.matches(keyCode: 122, flags: CGEventFlags(), isRepeat: false))
+        #expect(!SmartCaptureShortcut.matches(keyCode: 120, flags: CGEventFlags(), isRepeat: false))
+        #expect(!SmartCaptureShortcut.matches(keyCode: 122, flags: [.maskCommand], isRepeat: false))
+        #expect(!SmartCaptureShortcut.matches(keyCode: 122, flags: CGEventFlags(), isRepeat: true))
+    }
 
     @Test func screenCaptureResetUsesCurrentBundleIdentifier() {
         let command = ScreenCaptureResetCommand(bundleIdentifier: "com.misswell.macpilot")
@@ -92,6 +129,8 @@ struct ScreenCaptureTests {
         #expect(settings.maxRetentionDays == 30)
         #expect(settings.captureAllDisplays == false)
         #expect(settings.showsCursor == true)
+        #expect(settings.smartCaptureEnabled == true)
+        #expect(settings.pinSmartCaptures == true)
     }
 
     @Test func qualityIsClampedToValidRange() {
@@ -144,6 +183,17 @@ struct ScreenCaptureTests {
         #expect(decoded.busyIntervalMinutes == 10)
         #expect(decoded.imageFormat == .heic)
         #expect(decoded.quality == 0.7)
+        #expect(decoded.smartCaptureEnabled == true)
+        #expect(decoded.pinSmartCaptures == true)
+    }
+
+    @Test func smartCaptureSettingsRoundTripWhenDisabled() throws {
+        let original = ScreenCaptureSettings(smartCaptureEnabled: false, pinSmartCaptures: false)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(ScreenCaptureSettings.self, from: data)
+
+        #expect(decoded.smartCaptureEnabled == false)
+        #expect(decoded.pinSmartCaptures == false)
     }
 
     // MARK: - Output folder validation
