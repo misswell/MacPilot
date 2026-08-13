@@ -51,6 +51,61 @@ struct ScreenCaptureTests {
         #expect(!binding.matches(keyCode: 1, flags: [.maskCommand, .maskAlternate], isRepeat: false))
     }
 
+    @Test func shortcutEventRoutingFindsTheConfiguredAreaBinding() {
+        let bindings = [
+            SmartCaptureShortcutEventBinding(
+                id: 3,
+                binding: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .shift])
+            ),
+            SmartCaptureShortcutEventBinding(
+                id: 4,
+                binding: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_3), modifiers: [.command, .shift])
+            )
+        ]
+
+        #expect(SmartCaptureShortcutRouting.matchingID(
+            keyCode: UInt16(kVK_ANSI_4),
+            flags: [.maskCommand, .maskShift],
+            isRepeat: false,
+            bindings: bindings
+        ) == 3)
+    }
+
+    @Test func shortcutEventRoutingIgnoresRepeatsAndUnconfiguredCombinations() {
+        let binding = SmartCaptureShortcutEventBinding(
+            id: 3,
+            binding: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .shift])
+        )
+
+        #expect(SmartCaptureShortcutRouting.matchingID(
+            keyCode: UInt16(kVK_ANSI_4),
+            flags: [.maskCommand, .maskShift],
+            isRepeat: true,
+            bindings: [binding]
+        ) == nil)
+        #expect(SmartCaptureShortcutRouting.matchingID(
+            keyCode: UInt16(kVK_ANSI_5),
+            flags: [.maskCommand, .maskShift],
+            isRepeat: false,
+            bindings: [binding]
+        ) == nil)
+    }
+
+    @Test func systemScreenshotShortcutDetectorFindsEnabledAreaConflict() {
+        let hotkeys: [String: Any] = [
+            "28": [
+                "enabled": true,
+                "value": ["parameters": [NSNumber(value: 65535), NSNumber(value: kVK_ANSI_4), NSNumber(value: 1179648)]]
+            ],
+            "30": [
+                "enabled": false,
+                "value": ["parameters": [NSNumber(value: 65535), NSNumber(value: kVK_ANSI_3), NSNumber(value: 1179648)]]
+            ]
+        ]
+        let binding = SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .shift])
+        #expect(SmartCaptureSystemShortcutDetector.conflicts(for: binding, hotkeys: hotkeys) == [.area])
+    }
+
     @Test func smartCaptureShortcutBindingRoundTripsThroughCodable() throws {
         let binding = SmartCaptureShortcutBinding(keyCode: 18, modifiers: [.control, .shift])
         let data = try JSONEncoder().encode(binding)

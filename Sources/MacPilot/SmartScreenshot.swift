@@ -214,11 +214,182 @@ enum SmartCaptureShortcut {
     }
 }
 
+/// A shortcut binding paired with the Carbon/event-tap identifier used to
+/// dispatch it. Keeping this tiny value type separate from the registration
+/// handles makes the fallback path deterministic and unit-testable.
+struct SmartCaptureShortcutEventBinding: Equatable, Sendable {
+    let id: UInt32
+    let binding: SmartCaptureShortcutBinding
+}
+
+enum SmartCaptureShortcutRouting {
+    static let eventMask: CGEventMask = {
+        var mask: CGEventMask = 0
+        for type in [CGEventType.keyDown, .keyUp, .flagsChanged] {
+            mask |= CGEventMask(1) << type.rawValue
+        }
+        return mask
+    }()
+
+    static func matchingID(
+        keyCode: UInt16,
+        flags: CGEventFlags,
+        isRepeat: Bool,
+        bindings: [SmartCaptureShortcutEventBinding]
+    ) -> UInt32? {
+        bindings.first {
+            $0.binding.matches(keyCode: keyCode, flags: flags, isRepeat: isRepeat)
+        }?.id
+    }
+}
+
 private final class SmartShortcutContext: @unchecked Sendable {
     weak var controller: SmartScreenshotController?
 
     init(controller: SmartScreenshotController) {
         self.controller = controller
+    }
+}
+
+private final class SmartCaptureShortcutEventTapContext: @unchecked Sendable {
+    weak var controller: SmartScreenshotController?
+    private let lock = NSLock()
+    private var bindings: [SmartCaptureShortcutEventBinding]
+    private var eventTap: CFMachPort?
+    private var suppressedKeyCode: UInt16?
+    private var suppressedModifiers: CGEventFlags = []
+    private var suppressedKeyUpReceived = false
+    private var suppressionDeadline: CFAbsoluteTime = 0
+
+    init(
+        controller: SmartScreenshotController,
+        bindings: [SmartCaptureShortcutEventBinding]
+    ) {
+        self.controller = controller
+        self.bindings = bindings
+    }
+
+    func update(bindings: [SmartCaptureShortcutEventBinding]) {
+        lock.lock()
+        self.bindings = bindings
+        suppressedKeyCode = nil
+        suppressedModifiers = []
+        suppressedKeyUpReceived = false
+        suppressionDeadline = 0
+        lock.unlock()
+    }
+
+    func matchingID(keyCode: UInt16, flags: CGEventFlags, isRepeat: Bool) -> UInt32? {
+        lock.lock()
+        let bindings = self.bindings
+        lock.unlock()
+        return SmartCaptureShortcutRouting.matchingID(
+            keyCode: keyCode,
+            flags: flags,
+            isRepeat: isRepeat,
+            bindings: bindings
+        )
+    }
+
+    /// Once a fallback shortcut has matched, consume the matching key-up and
+    /// modifier transitions as well. This prevents the same sequence from
+    /// leaking to ordinary applications; macOS's own screenshot service may
+    /// still require the user to disable its symbolic hotkey in System Settings.
+    func beginSuppressing(keyCode: UInt16, flags: CGEventFlags) {
+        lock.lock()
+        suppressedKeyCode = keyCode
+        suppressedModifiers = flags.intersection([.maskShift, .maskControl, .maskAlternate, .maskCommand])
+        suppressedKeyUpReceived = false
+        suppressionDeadline = CFAbsoluteTimeGetCurrent() + 1.0
+        lock.unlock()
+    }
+
+    func shouldConsumeKeyDown(keyCode: UInt16) -> Bool {
+        lock.lock()
+        clearExpiredSuppressionIfNeeded()
+        let shouldConsume = suppressedKeyCode == keyCode
+        lock.unlock()
+        return shouldConsume
+    }
+
+    func finishSuppressing(keyCode: UInt16) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        clearExpiredSuppressionIfNeeded()
+        guard suppressedKeyCode == keyCode else { return false }
+        suppressedKeyUpReceived = true
+        if suppressedModifiers.isEmpty {
+            suppressedKeyCode = nil
+        }
+        return true
+    }
+
+    func consumeModifierTransition(flags: CGEventFlags) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        clearExpiredSuppressionIfNeeded()
+        guard suppressedKeyCode != nil else { return false }
+        if suppressedKeyUpReceived,
+           flags.intersection(suppressedModifiers).isEmpty {
+            suppressedKeyCode = nil
+            suppressedModifiers = []
+            suppressedKeyUpReceived = false
+        }
+        return true
+    }
+
+    func resetSuppression() {
+        lock.lock()
+        suppressedKeyCode = nil
+        suppressedModifiers = []
+        suppressedKeyUpReceived = false
+        suppressionDeadline = 0
+        lock.unlock()
+    }
+
+    private func clearExpiredSuppressionIfNeeded() {
+        guard suppressedKeyCode != nil, suppressionDeadline > 0,
+              CFAbsoluteTimeGetCurrent() >= suppressionDeadline else { return }
+        suppressedKeyCode = nil
+        suppressedModifiers = []
+        suppressedKeyUpReceived = false
+        suppressionDeadline = 0
+    }
+
+    func setEventTap(_ eventTap: CFMachPort?) {
+        lock.lock()
+        self.eventTap = eventTap
+        lock.unlock()
+    }
+
+    func reenableEventTap() {
+        lock.lock()
+        let eventTap = self.eventTap
+        lock.unlock()
+        if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
+    }
+}
+
+private final class SmartCaptureSelectionEventTapContext: @unchecked Sendable {
+    weak var controller: SmartScreenshotController?
+    private let lock = NSLock()
+    private var eventTap: CFMachPort?
+
+    init(controller: SmartScreenshotController) {
+        self.controller = controller
+    }
+
+    func setEventTap(_ eventTap: CFMachPort?) {
+        lock.lock()
+        self.eventTap = eventTap
+        lock.unlock()
+    }
+
+    func reenableEventTap() {
+        lock.lock()
+        let eventTap = self.eventTap
+        lock.unlock()
+        if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
     }
 }
 
@@ -257,6 +428,274 @@ private enum SmartCaptureCarbonHotKey {
     }
 }
 
+/// macOS screenshot symbolic hotkeys use the same key combinations as the
+/// Snapzy-style defaults. Carbon registration cannot claim those combinations;
+/// the fallback event tap can, but the settings UI should still explain the
+/// conflict instead of silently racing the system screenshot service.
+enum SmartCaptureSystemShortcutConflict: Equatable {
+    case area
+    case fullscreen
+    case screenshotOptions
+
+    var titleKey: String {
+        switch self {
+        case .area: return "scSystemShortcutArea"
+        case .fullscreen: return "scSystemShortcutFullscreen"
+        case .screenshotOptions: return "scSystemShortcutOptions"
+        }
+    }
+}
+
+enum SmartCaptureSystemShortcutDetector {
+    enum SystemHotkeyID: Int, CaseIterable {
+        case saveAreaToFile = 28
+        case copyAreaToClipboard = 29
+        case saveScreenToFile = 30
+        case copyScreenToClipboard = 31
+        case screenshotOptions = 184
+    }
+
+    static func conflicts(for candidate: SmartCaptureShortcutBinding) -> [SmartCaptureSystemShortcutConflict] {
+        guard let hotkeys = readHotkeys() else { return [] }
+        return conflicts(for: candidate, hotkeys: hotkeys)
+    }
+
+    static func openSystemSettings() {
+        let urls = [
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Screenshots",
+            "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts",
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension"
+        ]
+        for value in urls {
+            guard let url = URL(string: value), NSWorkspace.shared.open(url) else { continue }
+            return
+        }
+    }
+
+    private static func readHotkeys() -> [String: Any]? {
+        if let prefs = UserDefaults(suiteName: "com.apple.symbolichotkeys"),
+           let hotkeys = prefs.dictionary(forKey: "AppleSymbolicHotKeys") {
+            return hotkeys
+        }
+        guard let value = CFPreferencesCopyAppValue(
+            "AppleSymbolicHotKeys" as CFString,
+            "com.apple.symbolichotkeys" as CFString
+        ) else { return nil }
+        return value as? [String: Any]
+    }
+
+    private static func isEnabled(id: SystemHotkeyID, in hotkeys: [String: Any]) -> Bool {
+        guard let entry = hotkeys[String(id.rawValue)] as? [String: Any] else { return false }
+        if let enabled = entry["enabled"] as? Bool { return enabled }
+        if let enabled = entry["enabled"] as? NSNumber { return enabled.boolValue }
+        return true
+    }
+
+    private static func binding(for id: SystemHotkeyID, in hotkeys: [String: Any]) -> SmartCaptureShortcutBinding? {
+        guard let entry = hotkeys[String(id.rawValue)] as? [String: Any],
+              let value = entry["value"] as? [String: Any],
+              let parameters = value["parameters"] as? [Any],
+              parameters.count >= 3,
+              let keyCode = integerValue(parameters[1]),
+              let flags = integerValue(parameters[2]) else {
+            return id.defaultBinding
+        }
+        // AppleSymbolicHotKeys stores modifier flags as NSEvent raw values
+        // (e.g. 1_179_648 for ⌘⇧), not Carbon's cmdKey/shiftKey bits.
+        return SmartCaptureShortcutBinding(
+            keyCode: UInt16(clamping: keyCode),
+            modifiers: modifiers(fromSystemFlags: UInt64(flags))
+        )
+    }
+
+    private static func integerValue(_ value: Any) -> Int? {
+        switch value {
+        case let number as NSNumber: return number.intValue
+        case let value as Int: return value
+        case let value as Int32: return Int(value)
+        case let value as UInt32: return Int(value)
+        case let value as UInt64: return Int(value)
+        default: return nil
+        }
+    }
+
+    private static func modifiers(fromSystemFlags flags: UInt64) -> InputSourceShortcutModifiers {
+        var result: InputSourceShortcutModifiers = []
+        if flags & UInt64(NSEvent.ModifierFlags.shift.rawValue) != 0 { result.insert(.shift) }
+        if flags & UInt64(NSEvent.ModifierFlags.control.rawValue) != 0 { result.insert(.control) }
+        if flags & UInt64(NSEvent.ModifierFlags.option.rawValue) != 0 { result.insert(.option) }
+        if flags & UInt64(NSEvent.ModifierFlags.command.rawValue) != 0 { result.insert(.command) }
+        return result
+    }
+}
+
+extension SmartCaptureSystemShortcutDetector {
+    /// Test seam for symbolic-hotkey dictionaries. The production detector
+    /// reads the same AppleSymbolicHotKeys structure via UserDefaults/CFPreferences.
+    static func conflicts(
+        for candidate: SmartCaptureShortcutBinding,
+        hotkeys: [String: Any]
+    ) -> [SmartCaptureSystemShortcutConflict] {
+        var conflicts: [SmartCaptureSystemShortcutConflict] = []
+        for id in SystemHotkeyID.allCases {
+            guard isEnabled(id: id, in: hotkeys),
+                  let systemBinding = binding(for: id, in: hotkeys),
+                  systemBinding == candidate else { continue }
+            let conflict: SmartCaptureSystemShortcutConflict
+            switch id {
+            case .saveAreaToFile, .copyAreaToClipboard: conflict = .area
+            case .saveScreenToFile, .copyScreenToClipboard: conflict = .fullscreen
+            case .screenshotOptions: conflict = .screenshotOptions
+            }
+            if !conflicts.contains(conflict) { conflicts.append(conflict) }
+        }
+        return conflicts
+    }
+}
+
+private extension SmartCaptureSystemShortcutDetector.SystemHotkeyID {
+    var defaultBinding: SmartCaptureShortcutBinding {
+        switch self {
+        case .saveAreaToFile, .copyAreaToClipboard:
+            var modifiers: InputSourceShortcutModifiers = [.command, .shift]
+            if self == .copyAreaToClipboard { modifiers.insert(.control) }
+            return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: modifiers)
+        case .saveScreenToFile, .copyScreenToClipboard:
+            var modifiers: InputSourceShortcutModifiers = [.command, .shift]
+            if self == .copyScreenToClipboard { modifiers.insert(.control) }
+            return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_3), modifiers: modifiers)
+        case .screenshotOptions:
+            return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_5), modifiers: [.command, .shift])
+        }
+    }
+}
+
+private func smartCaptureShortcutEventTapCallback(
+    _ proxy: CGEventTapProxy,
+    _ type: CGEventType,
+    _ event: CGEvent?,
+    _ userInfo: UnsafeMutableRawPointer?
+) -> Unmanaged<CGEvent>? {
+    guard let userInfo else { return event.map(Unmanaged.passUnretained) }
+    let context = Unmanaged<SmartCaptureShortcutEventTapContext>
+        .fromOpaque(userInfo)
+        .takeUnretainedValue()
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        context.resetSuppression()
+        context.reenableEventTap()
+        return event.map(Unmanaged.passUnretained)
+    }
+    guard let event else {
+        return event.map(Unmanaged.passUnretained)
+    }
+    switch type {
+    case .keyDown:
+        let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        if let id = context.matchingID(keyCode: keyCode, flags: event.flags, isRepeat: isRepeat) {
+            context.beginSuppressing(keyCode: keyCode, flags: event.flags)
+            if Thread.isMainThread {
+                MainActor.assumeIsolated {
+                    context.controller?.handleShortcutEvent(id: id)
+                }
+            } else {
+                Task { @MainActor in
+                    context.controller?.handleShortcutEvent(id: id)
+                }
+            }
+            return nil
+        }
+        // A held fallback key can generate repeat key-down events. They must
+        // not leak to the system after the first event was consumed.
+        return context.shouldConsumeKeyDown(keyCode: keyCode)
+            ? nil
+            : Unmanaged.passUnretained(event)
+    case .keyUp:
+        let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+        return context.finishSuppressing(keyCode: keyCode)
+            ? nil
+            : Unmanaged.passUnretained(event)
+    case .flagsChanged:
+        return context.consumeModifierTransition(flags: event.flags)
+            ? nil
+            : Unmanaged.passUnretained(event)
+    default:
+        return Unmanaged.passUnretained(event)
+    }
+}
+
+private func smartCaptureSelectionEventTapCallback(
+    _ proxy: CGEventTapProxy,
+    _ type: CGEventType,
+    _ event: CGEvent?,
+    _ userInfo: UnsafeMutableRawPointer?
+) -> Unmanaged<CGEvent>? {
+    guard let userInfo else { return event.map(Unmanaged.passUnretained) }
+    let context = Unmanaged<SmartCaptureSelectionEventTapContext>
+        .fromOpaque(userInfo)
+        .takeUnretainedValue()
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        context.reenableEventTap()
+        return event.map(Unmanaged.passUnretained)
+    }
+    guard let event else { return nil }
+    let controller = context.controller
+    switch type {
+    case .mouseMoved:
+        let point = event.location
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { controller?.handleSelectionMouseMoved(atQuartzPoint: point) }
+        } else {
+            Task { @MainActor in controller?.handleSelectionMouseMoved(atQuartzPoint: point) }
+        }
+        return nil
+    case .leftMouseDown:
+        let point = event.location
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { controller?.handleSelectionMouseDown(atQuartzPoint: point) }
+        } else {
+            Task { @MainActor in controller?.handleSelectionMouseDown(atQuartzPoint: point) }
+        }
+        return nil
+    case .leftMouseDragged:
+        let point = event.location
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { controller?.handleSelectionMouseDragged(atQuartzPoint: point) }
+        } else {
+            Task { @MainActor in controller?.handleSelectionMouseDragged(atQuartzPoint: point) }
+        }
+        return nil
+    case .leftMouseUp:
+        let point = event.location
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { controller?.handleSelectionMouseUp(atQuartzPoint: point) }
+        } else {
+            Task { @MainActor in controller?.handleSelectionMouseUp(atQuartzPoint: point) }
+        }
+        return nil
+    case .rightMouseDown:
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { controller?.cancelSelection() }
+        } else {
+            Task { @MainActor in controller?.cancelSelection() }
+        }
+        return nil
+    case .keyDown:
+        let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+        if keyCode == UInt16(kVK_Escape) {
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { controller?.cancelSelection() }
+            } else {
+                Task { @MainActor in controller?.cancelSelection() }
+            }
+            return nil
+        }
+        return Unmanaged.passUnretained(event)
+    default:
+        return Unmanaged.passUnretained(event)
+    }
+}
+
 private func smartShortcutCarbonEventHandler(
     _ callRef: EventHandlerCallRef?,
     _ event: EventRef?,
@@ -278,24 +717,7 @@ private func smartShortcutCarbonEventHandler(
           hotKeyID.signature == SmartCaptureCarbonHotKey.signature
     else { return status == noErr ? noErr : status }
 
-    Task { @MainActor in
-        guard let controller = context.controller else { return }
-        if hotKeyID.id == SmartCaptureCarbonHotKey.cancelID {
-            controller.cancelSelection()
-        } else if hotKeyID.id == SmartCaptureCarbonHotKey.captureID {
-            controller.startSelection(mode: .smartElement)
-        } else if hotKeyID.id == SmartCaptureCarbonHotKey.areaID {
-            controller.startSelection(mode: .manualArea)
-        } else if hotKeyID.id == SmartCaptureCarbonHotKey.fullscreenID {
-            controller.captureFullscreen()
-        } else if hotKeyID.id == SmartCaptureCarbonHotKey.activeWindowID {
-            controller.captureActiveWindow()
-        } else if hotKeyID.id == SmartCaptureCarbonHotKey.areaAnnotateID {
-            controller.startSelection(mode: .areaAnnotate)
-        } else if hotKeyID.id == SmartCaptureCarbonHotKey.ocrID {
-            controller.startSelection(mode: .ocr)
-        }
-    }
+    Task { @MainActor in context.controller?.handleShortcutEvent(id: hotKeyID.id) }
     return noErr
 }
 
@@ -333,6 +755,13 @@ final class SmartScreenshotController {
     private var shortcutRegistrationRequested = false
     private var additionalShortcutBindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding]
     nonisolated(unsafe) private var additionalShortcutHotKeys: [ScreenCaptureShortcutKind: EventHotKeyRef] = [:]
+    private var fallbackShortcutBindings: [SmartCaptureShortcutEventBinding] = []
+    nonisolated(unsafe) private var shortcutEventTap: CFMachPort?
+    nonisolated(unsafe) private var shortcutEventTapSource: CFRunLoopSource?
+    nonisolated(unsafe) private var shortcutEventTapContext: SmartCaptureShortcutEventTapContext?
+    nonisolated(unsafe) private var selectionEventTap: CFMachPort?
+    nonisolated(unsafe) private var selectionEventTapSource: CFRunLoopSource?
+    nonisolated(unsafe) private var selectionEventTapContext: SmartCaptureSelectionEventTapContext?
     private var selectionMode: SmartCaptureSelectionMode = .smartElement
 
     init(
@@ -362,7 +791,8 @@ final class SmartScreenshotController {
     func start() {
         guard !shortcutSuspended else { return }
         shortcutRegistrationRequested = true
-        guard shortcutHotKey == nil, shortcutEventHandler == nil else { return }
+        guard shortcutHotKey == nil, shortcutEventHandler == nil, shortcutEventTap == nil else { return }
+        fallbackShortcutBindings.removeAll(keepingCapacity: true)
         if let error = registerShortcut() {
             onError(error)
             return
@@ -372,6 +802,7 @@ final class SmartScreenshotController {
         // points from being registered. The settings editor can then be used
         // to replace the conflicting entry without losing the working one.
         _ = registerAdditionalShortcuts()
+        _ = refreshShortcutEventTap()
     }
 
     /// Temporarily releases the global registration while the shortcut recorder
@@ -420,31 +851,65 @@ final class SmartScreenshotController {
             return .registrationFailed
         }
 
+        let systemConflict = !SmartCaptureSystemShortcutDetector.conflicts(for: shortcutBinding).isEmpty
         var hotKey: EventHotKeyRef?
-        let hotKeyStatus = RegisterEventHotKey(
-            UInt32(shortcutBinding.keyCode),
-            SmartCaptureCarbonHotKey.modifiers(for: shortcutBinding),
-            SmartCaptureCarbonHotKey.identifier(SmartCaptureCarbonHotKey.captureID),
-            GetApplicationEventTarget(),
-            OptionBits(kEventHotKeyNoOptions),
-            &hotKey
-        )
-        guard hotKeyStatus == noErr, let hotKey else {
-            RemoveEventHandler(handler)
-            Self.logger.error("Could not register shortcut \(self.shortcutBinding.displayName, privacy: .public): \(hotKeyStatus, privacy: .public)")
-            return .registrationFailed
-        }
+        let hotKeyStatus: OSStatus = systemConflict
+            ? OSStatus(-9876)
+            : RegisterEventHotKey(
+                UInt32(shortcutBinding.keyCode),
+                SmartCaptureCarbonHotKey.modifiers(for: shortcutBinding),
+                SmartCaptureCarbonHotKey.identifier(SmartCaptureCarbonHotKey.captureID),
+                GetApplicationEventTarget(),
+                OptionBits(kEventHotKeyNoOptions),
+                &hotKey
+            )
         shortcutContext = context
         shortcutEventHandler = handler
         shortcutEventHandlerIsTransient = false
-        shortcutHotKey = hotKey
-        Self.logger.info("Global shortcut registered: \(self.shortcutBinding.displayName, privacy: .public)")
+        if hotKeyStatus == noErr, let hotKey {
+            shortcutHotKey = hotKey
+            Self.logger.info("Global shortcut registered: \(self.shortcutBinding.displayName, privacy: .public)")
+            return nil
+        }
+
+        // Do not use a CGEvent tap to steal a shortcut owned by another app.
+        // The fallback is reserved for macOS screenshot symbolic hotkeys that
+        // Carbon intentionally refuses; the editor warns users that macOS's
+        // own action may still need to be disabled in System Settings.
+        guard AXIsProcessTrusted(),
+              !SmartCaptureSystemShortcutDetector.conflicts(for: shortcutBinding).isEmpty else {
+            if let shortcutEventHandler { RemoveEventHandler(shortcutEventHandler) }
+            shortcutEventHandler = nil
+            shortcutContext = nil
+            Self.logger.error("Could not register shortcut \(self.shortcutBinding.displayName, privacy: .public): \(hotKeyStatus, privacy: .public)")
+            return .registrationFailed
+        }
+
+        // macOS owns ⌘⇧3/4 (and users may have other system shortcuts). Carbon
+        // refuses those combinations; use the tap as a targeted fallback for
+        // our action while the editor guides the user through disabling the
+        // duplicate system shortcut.
+        fallbackShortcutBindings = [SmartCaptureShortcutEventBinding(
+            id: SmartCaptureCarbonHotKey.captureID,
+            binding: shortcutBinding
+        )]
+        guard refreshShortcutEventTap() else {
+            if let shortcutEventHandler { RemoveEventHandler(shortcutEventHandler) }
+            shortcutEventHandler = nil
+            shortcutContext = nil
+            fallbackShortcutBindings.removeAll(keepingCapacity: false)
+            Self.logger.error("Could not register shortcut \(self.shortcutBinding.displayName, privacy: .public): \(hotKeyStatus, privacy: .public)")
+            return .registrationFailed
+        }
+        Self.logger.info("Global shortcut registered through event tap: \(self.shortcutBinding.displayName, privacy: .public)")
         return nil
     }
 
     private func unregisterShortcut() {
         unregisterSelectionCancelShortcut()
         unregisterAdditionalShortcuts()
+        stopShortcutEventTap()
+        fallbackShortcutBindings.removeAll(keepingCapacity: false)
         if let shortcutHotKey {
             UnregisterEventHotKey(shortcutHotKey)
         }
@@ -465,6 +930,7 @@ final class SmartScreenshotController {
         guard shortcutContext != nil, shortcutEventHandler != nil else { return [] }
         var registeredBindings: [SmartCaptureShortcutBinding] = []
         var registeredKinds: Set<ScreenCaptureShortcutKind> = []
+        fallbackShortcutBindings.removeAll { $0.id != SmartCaptureCarbonHotKey.captureID }
         unregisterAdditionalShortcuts()
         for kind in [ScreenCaptureShortcutKind.area, .fullscreen, .activeWindow, .areaAnnotate, .ocr] {
             guard let binding = additionalShortcutBindings[kind], binding.isValid else { continue }
@@ -472,6 +938,9 @@ final class SmartScreenshotController {
                 Self.logger.error("Skipping duplicate screenshot shortcut \(kind.rawValue, privacy: .public)")
                 continue
             }
+            // Track both Carbon and fallback registrations so a malformed
+            // legacy config cannot install the same key sequence twice.
+            registeredBindings.append(binding)
             let id: UInt32
             switch kind {
             case .area: id = SmartCaptureCarbonHotKey.areaID
@@ -481,21 +950,31 @@ final class SmartScreenshotController {
             case .ocr: id = SmartCaptureCarbonHotKey.ocrID
             case .smartElement: continue
             }
+            let systemConflict = !SmartCaptureSystemShortcutDetector.conflicts(for: binding).isEmpty
             var hotKey: EventHotKeyRef?
-            let status = RegisterEventHotKey(
-                UInt32(binding.keyCode),
-                SmartCaptureCarbonHotKey.modifiers(for: binding),
-                SmartCaptureCarbonHotKey.identifier(id),
-                GetApplicationEventTarget(),
-                OptionBits(kEventHotKeyNoOptions),
-                &hotKey
-            )
+            let status: OSStatus = systemConflict
+                ? OSStatus(-9876)
+                : RegisterEventHotKey(
+                    UInt32(binding.keyCode),
+                    SmartCaptureCarbonHotKey.modifiers(for: binding),
+                    SmartCaptureCarbonHotKey.identifier(id),
+                    GetApplicationEventTarget(),
+                    OptionBits(kEventHotKeyNoOptions),
+                    &hotKey
+                )
             guard status == noErr, let hotKey else {
                 Self.logger.error("Could not register \(kind.rawValue) shortcut \(binding.displayName, privacy: .public): \(status, privacy: .public)")
+                if AXIsProcessTrusted(),
+                   !SmartCaptureSystemShortcutDetector.conflicts(for: binding).isEmpty {
+                    fallbackShortcutBindings.append(SmartCaptureShortcutEventBinding(id: id, binding: binding))
+                    // A system screenshot symbolic hotkey is intentionally
+                    // accepted when Accessibility is available; the editor
+                    // warns that macOS's own shortcut may also run.
+                    registeredKinds.insert(kind)
+                }
                 continue
             }
             additionalShortcutHotKeys[kind] = hotKey
-            registeredBindings.append(binding)
             registeredKinds.insert(kind)
         }
         return registeredKinds
@@ -504,6 +983,110 @@ final class SmartScreenshotController {
     private func unregisterAdditionalShortcuts() {
         for hotKey in additionalShortcutHotKeys.values { UnregisterEventHotKey(hotKey) }
         additionalShortcutHotKeys.removeAll(keepingCapacity: false)
+    }
+
+    private func refreshShortcutEventTap() -> Bool {
+        let bindings = fallbackShortcutBindings
+        guard !bindings.isEmpty else {
+            stopShortcutEventTap()
+            return true
+        }
+        guard AXIsProcessTrusted() else {
+            Self.logger.error("Shortcut fallback requires Accessibility permission")
+            stopShortcutEventTap()
+            return false
+        }
+        if let context = shortcutEventTapContext {
+            context.update(bindings: bindings)
+            return true
+        }
+        let context = SmartCaptureShortcutEventTapContext(controller: self, bindings: bindings)
+        guard let eventTap = CGEvent.tapCreate(
+            // Use the HID tap for the earliest possible observation. Some
+            // macOS symbolic hotkeys still run before third-party taps; the UI
+            // therefore offers a direct link to disable the system shortcut.
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: SmartCaptureShortcutRouting.eventMask,
+            callback: smartCaptureShortcutEventTapCallback,
+            userInfo: Unmanaged.passUnretained(context).toOpaque()
+        ), let source = CFMachPortCreateRunLoopSource(nil, eventTap, 0) else {
+            Self.logger.error("Could not create screenshot shortcut fallback event tap")
+            return false
+        }
+        shortcutEventTapContext = context
+        shortcutEventTap = eventTap
+        shortcutEventTapSource = source
+        context.setEventTap(eventTap)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+        return true
+    }
+
+    private func stopShortcutEventTap() {
+        if let source = shortcutEventTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            CFRunLoopSourceInvalidate(source)
+        }
+        if let eventTap = shortcutEventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+        }
+        shortcutEventTapSource = nil
+        shortcutEventTap = nil
+        shortcutEventTapContext = nil
+    }
+
+    private func refreshSelectionEventTap() -> Bool {
+        guard isSelecting else {
+            stopSelectionEventTap()
+            return true
+        }
+        guard AXIsProcessTrusted() else { return false }
+        guard selectionEventTap == nil else { return true }
+        let context = SmartCaptureSelectionEventTapContext(controller: self)
+        var eventMask: CGEventMask = 0
+        for type in [
+            CGEventType.mouseMoved,
+            CGEventType.leftMouseDown,
+            CGEventType.leftMouseDragged,
+            CGEventType.leftMouseUp,
+            CGEventType.rightMouseDown,
+            CGEventType.keyDown
+        ] {
+            eventMask |= CGEventMask(1) << type.rawValue
+        }
+        guard let eventTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: eventMask,
+            callback: smartCaptureSelectionEventTapCallback,
+            userInfo: Unmanaged.passUnretained(context).toOpaque()
+        ), let source = CFMachPortCreateRunLoopSource(nil, eventTap, 0) else {
+            Self.logger.error("Could not create screenshot selection event tap")
+            return false
+        }
+        selectionEventTapContext = context
+        selectionEventTap = eventTap
+        selectionEventTapSource = source
+        context.setEventTap(eventTap)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+        return true
+    }
+
+    private func stopSelectionEventTap() {
+        if let source = selectionEventTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            CFRunLoopSourceInvalidate(source)
+        }
+        if let eventTap = selectionEventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+        }
+        selectionEventTapSource = nil
+        selectionEventTap = nil
+        selectionEventTapContext = nil
     }
 
     @discardableResult
@@ -531,11 +1114,13 @@ final class SmartScreenshotController {
               shortcutEventHandler != nil else { return nil }
         unregisterAdditionalShortcuts()
         let registeredKinds = registerAdditionalShortcuts()
+        let fallbackReady = refreshShortcutEventTap()
         if let requiredKind,
            bindings[requiredKind] != nil,
-           !registeredKinds.contains(requiredKind) {
+           (!registeredKinds.contains(requiredKind) || !fallbackReady) {
             additionalShortcutBindings = previous
             _ = registerAdditionalShortcuts()
+            _ = refreshShortcutEventTap()
             return .registrationFailed
         }
         return nil
@@ -557,7 +1142,11 @@ final class SmartScreenshotController {
             &hotKey
         )
         if let hotKey { UnregisterEventHotKey(hotKey) }
-        return status == noErr
+        if status == noErr { return true }
+        // Carbon deliberately refuses the combinations reserved by macOS's
+        // screenshot service (⌘⇧3/4 by default). They are still safe for our
+        // event-tap fallback when Accessibility is trusted.
+        return AXIsProcessTrusted() && !SmartCaptureSystemShortcutDetector.conflicts(for: binding).isEmpty
     }
 
     private func registerSelectionCancelShortcut() {
@@ -658,6 +1247,7 @@ final class SmartScreenshotController {
         // example). Keep the newly registered primary shortcut usable even
         // when one of those optional registrations cannot be restored.
         _ = registerAdditionalShortcuts()
+        _ = refreshShortcutEventTap()
         if isSelecting {
             registerSelectionCancelShortcut()
         }
@@ -686,6 +1276,8 @@ final class SmartScreenshotController {
     }
 
     deinit {
+        if let selectionEventTap { CGEvent.tapEnable(tap: selectionEventTap, enable: false) }
+        if let shortcutEventTap { CGEvent.tapEnable(tap: shortcutEventTap, enable: false) }
         if let selectionCancelHotKey { UnregisterEventHotKey(selectionCancelHotKey) }
         if let shortcutHotKey { UnregisterEventHotKey(shortcutHotKey) }
         for hotKey in additionalShortcutHotKeys.values { UnregisterEventHotKey(hotKey) }
@@ -715,6 +1307,11 @@ final class SmartScreenshotController {
             panel.overlayView.onCancel = { [weak self] in self?.cancelSelection() }
             panel.orderFrontRegardless()
             return panel
+        }
+        _ = refreshSelectionEventTap()
+        if let activePanel = overlays.first(where: { $0.frame.contains(initialPoint) }) ?? overlays.first {
+            activePanel.makeKeyAndOrderFront(nil)
+            activePanel.makeFirstResponder(activePanel.overlayView)
         }
         NSCursor.crosshair.set()
     }
@@ -748,6 +1345,7 @@ final class SmartScreenshotController {
         latestPointerLocation = nil
         manualSelectionStart = nil
         manualSelectionRect = nil
+        stopSelectionEventTap()
         unregisterSelectionCancelShortcut()
         currentTarget = nil
         let current = overlays
@@ -826,6 +1424,47 @@ final class SmartScreenshotController {
         }
         pendingTargetUpdate = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03, execute: work)
+    }
+
+    func handleShortcutEvent(id: UInt32) {
+        switch id {
+        case SmartCaptureCarbonHotKey.cancelID:
+            cancelSelection()
+        case SmartCaptureCarbonHotKey.captureID:
+            startSelection(mode: .smartElement)
+        case SmartCaptureCarbonHotKey.areaID:
+            startSelection(mode: .manualArea)
+        case SmartCaptureCarbonHotKey.fullscreenID:
+            captureFullscreen()
+        case SmartCaptureCarbonHotKey.activeWindowID:
+            captureActiveWindow()
+        case SmartCaptureCarbonHotKey.areaAnnotateID:
+            startSelection(mode: .areaAnnotate)
+        case SmartCaptureCarbonHotKey.ocrID:
+            startSelection(mode: .ocr)
+        default:
+            break
+        }
+    }
+
+    func handleSelectionMouseMoved(atQuartzPoint point: CGPoint) {
+        guard isSelecting, let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        updateTarget(at: appKitPoint)
+    }
+
+    func handleSelectionMouseDown(atQuartzPoint point: CGPoint) {
+        guard isSelecting, let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        beginManualSelection(at: appKitPoint)
+    }
+
+    func handleSelectionMouseDragged(atQuartzPoint point: CGPoint) {
+        guard isSelecting, let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        updateManualSelection(to: appKitPoint)
+    }
+
+    func handleSelectionMouseUp(atQuartzPoint point: CGPoint) {
+        guard isSelecting, let appKitPoint = SmartAXTargetQuery.appKitPoint(fromQuartzPoint: point) else { return }
+        finishManualSelection(at: appKitPoint)
     }
 
     private func resolveTarget(at appKitPoint: CGPoint) {
@@ -992,9 +1631,10 @@ private enum SmartAXTargetQuery {
 
     static func quartzPoint(fromAppKitPoint point: CGPoint) -> CGPoint? {
         guard let mapping = DisplayMapping.best(forAppKitPoint: point) else { return nil }
-        return CGPoint(
-            x: mapping.quartzFrame.minX + point.x - mapping.appKitFrame.minX,
-            y: mapping.quartzFrame.maxY - (point.y - mapping.appKitFrame.minY)
+        return PiPCoordinateSpace.quartzPoint(
+            fromAppKit: point,
+            quartzScreen: mapping.quartzFrame,
+            appKitScreen: mapping.appKitFrame
         )
     }
 

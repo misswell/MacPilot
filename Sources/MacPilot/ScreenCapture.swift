@@ -1695,6 +1695,23 @@ private struct SmartCaptureShortcutEditor: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+            if let conflict = SmartCaptureSystemShortcutDetector.conflicts(
+                for: SmartCaptureShortcutBinding(
+                    keyCode: recordedKeyCode ?? kind.defaultBinding.keyCode,
+                    modifiers: recordedModifiers
+                )
+            ).first {
+                HStack(spacing: 8) {
+                    Text(AppText.value(conflict.titleKey, language: appModel.language))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Button(AppText.value("scOpenKeyboardSettings", language: appModel.language)) {
+                        SmartCaptureSystemShortcutDetector.openSystemSettings()
+                    }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+                }
+            }
             HStack {
                 Button(AppText.value(
                     "scResetShortcut",
