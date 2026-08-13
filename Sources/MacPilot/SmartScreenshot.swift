@@ -1,6 +1,8 @@
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
+import CoreGraphics
+import Darwin
 import OSLog
 @preconcurrency import ScreenCaptureKit
 import SwiftUI
@@ -2564,46 +2566,75 @@ private enum SmartScreenImageCapture {
     nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
 
     static func capture(appKitRect: CGRect, quartzClickPoint: CGPoint) async throws -> CGImage {
-        guard let quartzRect = SmartAXTargetQuery.quartzRect(fromAppKitRect: appKitRect) else {
-            throw ScreenCaptureError.noDisplayFound
-        }
-        if #unavailable(macOS 15.2), SmartAXTargetQuery.displayCount(intersectingAppKitRect: appKitRect) > 1 {
-            throw ScreenCaptureError.captureFailed(
-                "The selected region spans multiple displays. Multi-display region capture requires macOS 15.2 or later."
-            )
-        }
-        if #available(macOS 15.2, *) {
-            do {
-                return try await captureDisplayAgnosticRect(quartzRect)
-            } catch {
-                Self.logger.error("Display-agnostic region capture failed; trying display enumeration: \(error.localizedDescription, privacy: .public)")
+        // The Quartz conversion is needed by ScreenCaptureKit, but not by the
+        // CoreGraphics full-display fallback. Keep that fallback available if
+        // a display is asleep or the coordinate map is temporarily stale.
+        if let quartzRect = SmartAXTargetQuery.quartzRect(fromAppKitRect: appKitRect) {
+            if #available(macOS 15.2, *) {
+                do {
+                    return try await captureDisplayAgnosticRect(quartzRect)
+                } catch {
+                    Self.logger.error("Display-agnostic region capture failed; trying display enumeration: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+
+            var displays: [SCDisplay] = []
+            for delay in [0, 80, 160, 320] {
+                if delay > 0 { try await Task.sleep(for: .milliseconds(delay)) }
+                do {
+                    let content = try await SCShareableContent.current
+                    displays = content.displays
+                    if !displays.isEmpty { break }
+                } catch {
+                    Self.logger.error("ScreenCaptureKit display enumeration failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+            Self.logger.info("ScreenCaptureKit returned \(displays.count) displays")
+            let intersectingDisplays = displays.filter { display in
+                let intersection = display.frame.intersection(quartzRect)
+                return intersection.width > 0 && intersection.height > 0
+            }
+            if !intersectingDisplays.isEmpty {
+                do {
+                    if intersectingDisplays.count > 1 {
+                        return try await captureCompositeRegion(quartzRect, displays: intersectingDisplays)
+                    }
+                    if let display = intersectingDisplays.max(by: { lhs, rhs in
+                        lhs.frame.intersection(quartzRect).area < rhs.frame.intersection(quartzRect).area
+                    }) {
+                        return try await captureRegionOnDisplay(quartzRect, display: display)
+                    }
+                } catch {
+                    Self.logger.error("Display-enumerated region capture failed; using CoreGraphics snapshots: \(error.localizedDescription, privacy: .public)")
+                }
+            } else {
+                Self.logger.warning("ScreenCaptureKit returned no matching displays; using CoreGraphics display snapshots")
             }
         }
+        return try await captureUsingDisplaySnapshots(appKitRect: appKitRect)
+    }
 
-        var displays: [SCDisplay] = []
-        for delay in [0, 80, 160, 320] {
-            if delay > 0 { try await Task.sleep(for: .milliseconds(delay)) }
-            let content = try await SCShareableContent.current
-            displays = content.displays
-            if !displays.isEmpty { break }
+    private static func captureUsingDisplaySnapshots(appKitRect: CGRect) async throws -> CGImage {
+        let snapshots = await withTaskGroup(of: SmartDisplaySnapshot?.self, returning: [SmartDisplaySnapshot].self) { group in
+            for screen in NSScreen.screens where screen.frame.intersects(appKitRect) {
+                guard let displayID = screen.displayID else { continue }
+                let screenFrame = screen.frame
+                group.addTask {
+                    guard let image = SmartDisplaySnapshotCapture.capture(displayID: displayID) else { return nil }
+                    return SmartDisplaySnapshot(image: image, screenFrame: screenFrame)
+                }
+            }
+            var result: [SmartDisplaySnapshot] = []
+            for await snapshot in group {
+                if let snapshot { result.append(snapshot) }
+            }
+            return result
         }
-        Self.logger.info("ScreenCaptureKit returned \(displays.count) displays")
-        let intersectingDisplays = displays.filter { display in
-            let intersection = display.frame.intersection(quartzRect)
-            return intersection.width > 0 && intersection.height > 0
+        guard !snapshots.isEmpty else { throw ScreenCaptureError.noDisplayFound }
+        guard let image = SmartDisplaySnapshotCrop.composite(snapshots: snapshots, selection: appKitRect) else {
+            throw ScreenCaptureError.captureFailed(AppText.value("scCaptureOutsideDisplay", language: .system))
         }
-        guard !intersectingDisplays.isEmpty else {
-            throw ScreenCaptureError.noDisplayFound
-        }
-        if intersectingDisplays.count > 1 {
-            return try await captureCompositeRegion(quartzRect, displays: intersectingDisplays)
-        }
-        guard let display = intersectingDisplays.max(by: { lhs, rhs in
-            lhs.frame.intersection(quartzRect).area < rhs.frame.intersection(quartzRect).area
-        }) else {
-            throw ScreenCaptureError.noDisplayFound
-        }
-        return try await captureRegionOnDisplay(quartzRect, display: display)
+        return image
     }
 
     private static func captureRegionOnDisplay(_ quartzRect: CGRect, display: SCDisplay) async throws -> CGImage {
@@ -2677,6 +2708,89 @@ private enum SmartScreenImageCapture {
                 }
             }
         }
+    }
+}
+
+struct SmartDisplaySnapshot: @unchecked Sendable {
+    let image: CGImage
+    let screenFrame: CGRect
+}
+
+enum SmartDisplaySnapshotCrop {
+    static func crop(image: CGImage, screenFrame: CGRect, selection: CGRect) -> CGImage? {
+        let rect = pixelCropRect(image: image, screenFrame: screenFrame, selection: selection)
+        guard !rect.isEmpty else { return nil }
+        return image.cropping(to: rect)
+    }
+
+    static func composite(snapshots: [SmartDisplaySnapshot], selection: CGRect) -> CGImage? {
+        let visible = snapshots.compactMap { snapshot -> (SmartDisplaySnapshot, CGRect, CGFloat)? in
+            let intersection = snapshot.screenFrame.intersection(selection)
+            guard !intersection.isNull, intersection.width > 0, intersection.height > 0 else { return nil }
+            let scale = pixelScale(image: snapshot.image, frame: snapshot.screenFrame)
+            return (snapshot, intersection, scale)
+        }
+        guard !visible.isEmpty else { return nil }
+        let outputScale = visible.map(\.2).max() ?? 1
+        let clippedSelection = visible.reduce(CGRect.null) { $0.union($1.1) }
+        let outputWidth = max(1, Int((clippedSelection.width * outputScale).rounded()))
+        let outputHeight = max(1, Int((clippedSelection.height * outputScale).rounded()))
+        guard let context = CGContext(
+            data: nil,
+            width: outputWidth,
+            height: outputHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.clear(CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight))
+        for (snapshot, intersection, _) in visible {
+            guard let cropped = crop(image: snapshot.image, screenFrame: snapshot.screenFrame, selection: intersection) else { continue }
+            let destination = CGRect(
+                x: (intersection.minX - clippedSelection.minX) * outputScale,
+                y: (intersection.minY - clippedSelection.minY) * outputScale,
+                width: intersection.width * outputScale,
+                height: intersection.height * outputScale
+            )
+            context.interpolationQuality = .none
+            context.draw(cropped, in: destination)
+        }
+        return context.makeImage()
+    }
+
+    static func pixelCropRect(image: CGImage, screenFrame: CGRect, selection: CGRect) -> CGRect {
+        let scale = pixelScale(image: image, frame: screenFrame)
+        let relative = selection.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY)
+        let bounds = CGRect(origin: .zero, size: screenFrame.size)
+        let clipped = relative.intersection(bounds)
+        guard !clipped.isNull, clipped.width > 0, clipped.height > 0 else { return .null }
+        let flippedY = screenFrame.height - clipped.minY - clipped.height
+        return CGRect(
+            x: (clipped.minX * scale).rounded(.down),
+            y: (flippedY * scale).rounded(.down),
+            width: max(1, (clipped.width * scale).rounded(.up)),
+            height: max(1, (clipped.height * scale).rounded(.up))
+        ).intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    }
+
+    private static func pixelScale(image: CGImage, frame: CGRect) -> CGFloat {
+        max(1, CGFloat(image.width) / max(frame.width, 1), CGFloat(image.height) / max(frame.height, 1))
+    }
+}
+
+enum SmartDisplaySnapshotCapture {
+    typealias CaptureFunction = @convention(c) (CGDirectDisplayID) -> CGImage?
+    private static let captureFunction: CaptureFunction? = {
+        guard let handle = dlopen(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+            RTLD_LAZY
+        ), let symbol = dlsym(handle, "CGDisplayCreateImage") else { return nil }
+        return unsafeBitCast(symbol, to: CaptureFunction.self)
+    }()
+
+    static func capture(displayID: CGDirectDisplayID) -> CGImage? {
+        captureFunction?(displayID)
     }
 }
 

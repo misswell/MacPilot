@@ -257,6 +257,59 @@ struct ScreenCaptureTests {
         #expect(pasteboard.data(forType: .png) != nil)
     }
 
+    @Test func displaySnapshotCropUsesRetinaScaleAndFlippedCoordinates() throws {
+        let image = try #require(makeTestImage(width: 200, height: 100, color: .systemBlue))
+        let screenFrame = CGRect(x: 0, y: 0, width: 100, height: 50)
+        let selection = CGRect(x: 10, y: 5, width: 20, height: 10)
+
+        #expect(SmartDisplaySnapshotCrop.pixelCropRect(
+            image: image,
+            screenFrame: screenFrame,
+            selection: selection
+        ) == CGRect(x: 20, y: 70, width: 40, height: 20))
+
+        let cropped = try #require(SmartDisplaySnapshotCrop.crop(
+            image: image,
+            screenFrame: screenFrame,
+            selection: selection
+        ))
+        #expect(cropped.width == 40)
+        #expect(cropped.height == 20)
+    }
+
+    @Test func displaySnapshotCropClampsSelectionToDisplayBounds() throws {
+        let image = try #require(makeTestImage(width: 100, height: 50, color: .systemRed))
+        let cropped = try #require(SmartDisplaySnapshotCrop.crop(
+            image: image,
+            screenFrame: CGRect(x: 100, y: 200, width: 100, height: 50),
+            selection: CGRect(x: 180, y: 230, width: 60, height: 40)
+        ))
+
+        #expect(cropped.width == 20)
+        #expect(cropped.height == 20)
+    }
+
+    @Test func displaySnapshotCropComposesAcrossDisplays() throws {
+        let left = try #require(makeTestImage(width: 100, height: 100, color: .systemRed))
+        let right = try #require(makeTestImage(width: 100, height: 100, color: .systemBlue))
+        let snapshots = [
+            SmartDisplaySnapshot(image: left, screenFrame: CGRect(x: 0, y: 0, width: 100, height: 100)),
+            SmartDisplaySnapshot(image: right, screenFrame: CGRect(x: 100, y: 0, width: 100, height: 100))
+        ]
+
+        let composite = try #require(SmartDisplaySnapshotCrop.composite(
+            snapshots: snapshots,
+            selection: CGRect(x: 50, y: 20, width: 100, height: 40)
+        ))
+        #expect(composite.width == 100)
+        #expect(composite.height == 40)
+        let bitmap = NSBitmapImageRep(cgImage: composite)
+        let leftPixel = try #require(bitmap.colorAt(x: 0, y: 20)?.usingColorSpace(.deviceRGB))
+        let rightPixel = try #require(bitmap.colorAt(x: 99, y: 20)?.usingColorSpace(.deviceRGB))
+        #expect(leftPixel.redComponent > 0.8)
+        #expect(rightPixel.blueComponent > 0.8)
+    }
+
     @Test func scrollingStitcherFindsStableVerticalOverlap() throws {
         let first = try #require(makeTestImage(width: 40, height: 80, color: .systemBlue))
         let second = try #require(makeTestImage(width: 40, height: 80, color: .systemBlue))
