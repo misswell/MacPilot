@@ -240,6 +240,13 @@ struct SmartCaptureSelectionState: Equatable, Sendable {
     mutating func pointerDown(at point: CGPoint, target: CGRect?) -> SmartCaptureSelectionAction {
         lastPointer = point
         clickTarget = target?.integral
+        if mode == .applicationWindow {
+            dragStart = nil
+            selectionRect = nil
+            isDragging = true
+            isSpacePressed = false
+            return .selectionChanged(.zero)
+        }
         dragStart = point
         selectionRect = CGRect(origin: point, size: .zero)
         isDragging = true
@@ -252,6 +259,9 @@ struct SmartCaptureSelectionState: Equatable, Sendable {
         guard isDragging else { return .none }
         let previous = lastPointer ?? point
         lastPointer = point
+        if mode == .applicationWindow {
+            return .none
+        }
         if isSpacePressed, let selectionRect, !selectionRect.isEmpty {
             let delta = CGPoint(x: point.x - previous.x, y: point.y - previous.y)
             let moved = selectionRect.offsetBy(dx: delta.x, dy: delta.y)
@@ -272,6 +282,17 @@ struct SmartCaptureSelectionState: Equatable, Sendable {
     mutating func pointerUp(at point: CGPoint) -> SmartCaptureSelectionAction {
         lastPointer = point
         guard isDragging else { return .none }
+        if mode == .applicationWindow {
+            isDragging = false
+            isSpacePressed = false
+            dragStart = nil
+            selectionRect = nil
+            if let clickTarget, SmartCaptureSelectionGeometry.isMeaningful(clickTarget) {
+                self.clickTarget = nil
+                return .commit(clickTarget)
+            }
+            return .none
+        }
         _ = pointerDragged(to: point)
         isDragging = false
         isSpacePressed = false
@@ -1724,6 +1745,11 @@ final class SmartScreenshotController {
     @discardableResult
     func handleSelectionKeyDown(keyCode: UInt16, modifiers: InputSourceShortcutModifiers = []) -> Bool {
         guard isSelecting else { return false }
+        if keyCode == UInt16(kVK_ANSI_A),
+           selectionMode != .manualArea,
+           selectionMode != .applicationWindow {
+            return false
+        }
         let action = selectionInteraction.keyDown(keyCode: keyCode, modifiers: modifiers)
         applySelectionAction(action)
         return action != .none
@@ -2117,7 +2143,11 @@ private final class SmartCaptureOverlayView: NSView {
     }
 
     override func keyUp(with event: NSEvent) {
-        onKeyUp?(event.keyCode)
+        if event.keyCode == UInt16(kVK_Space) {
+            onKeyUp?(event.keyCode)
+        } else {
+            super.keyUp(with: event)
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -2303,6 +2333,7 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     private let onDelete: ((URL?) -> Void)?
     private var panel: NSPanel?
     private var annotationController: SmartAnnotationWindowController?
+    private var dismissTimer: Timer?
 
     init(
         image: CGImage,
@@ -2344,9 +2375,17 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
         panel.center()
         panel.orderFrontRegardless()
         self.panel = panel
+        dismissTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.close()
+            }
+        }
     }
 
     func close() {
+        dismissTimer?.invalidate()
+        dismissTimer = nil
         panel?.close()
         panel = nil
     }
