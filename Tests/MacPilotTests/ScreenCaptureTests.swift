@@ -142,6 +142,42 @@ struct ScreenCaptureTests {
         #expect(decoded.ocrShortcut == settings.ocrShortcut)
     }
 
+    @Test @MainActor func screenCaptureModelAppliesAndPersistsEveryShortcutKind() {
+        let model = ScreenCaptureModel()
+        model.setSmartCaptureEnabled(false)
+        var didPersist = false
+        model.persist = { didPersist = true }
+
+        let bindings: [(ScreenCaptureShortcutKind, SmartCaptureShortcutBinding)] = [
+            (.smartElement, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_F8), modifiers: [])),
+            (.area, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_A), modifiers: [.control, .option])),
+            (.fullscreen, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_B), modifiers: [.command, .shift])),
+            (.activeWindow, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_C), modifiers: [.command, .option])),
+            (.areaAnnotate, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_D), modifiers: [.control, .shift])),
+            (.ocr, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_E), modifiers: [.command, .control]))
+        ]
+
+        for (kind, binding) in bindings {
+            #expect(model.setShortcut(kind, binding: binding))
+            #expect(model.shortcutBinding(for: kind) == binding)
+        }
+        #expect(didPersist)
+    }
+
+    @Test @MainActor func screenCaptureModelRejectsDuplicateAndInvalidShortcuts() {
+        let model = ScreenCaptureModel()
+        model.setSmartCaptureEnabled(false)
+        let originalArea = model.shortcutBinding(for: .area)
+
+        #expect(!model.setShortcut(.area, binding: model.shortcutBinding(for: .smartElement)))
+        #expect(model.shortcutBinding(for: .area) == originalArea)
+        #expect(!model.setShortcut(
+            .fullscreen,
+            binding: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_A), modifiers: [])
+        ))
+        #expect(model.shortcutBinding(for: .fullscreen) == ScreenCaptureShortcutKind.fullscreen.defaultBinding)
+    }
+
     @Test func legacyScreenCaptureSettingsUseSnapzyStyleShortcutDefaults() throws {
         let decoded = try JSONDecoder().decode(ScreenCaptureSettings.self, from: Data("{}".utf8))
         #expect(decoded.areaCaptureShortcut == ScreenCaptureShortcutKind.area.defaultBinding)
