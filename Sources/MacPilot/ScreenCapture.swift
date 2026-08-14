@@ -552,6 +552,12 @@ final class ScreenCaptureModel: ObservableObject {
         captureHistory = SmartCaptureHistoryStore.load()
         Task { await refreshDiskUsage() }
         updateSmartCaptureRuntime()
+        // Snapzy QuickAccess preview: clean orphaned temp captures from earlier
+        // sessions, and route the card's "标注" action to the annotation editor.
+        TempCaptureManager.shared.cleanupOrphanedFiles()
+        AnnotateManager.shared.onOpenAnnotation = { [weak self] item in
+            self?.smartCapture.presentQuickAccessAnnotation(for: item)
+        }
         if settings.isEnabled {
             checkAndStartCapture()
         }
@@ -978,23 +984,22 @@ final class ScreenCaptureModel: ObservableObject {
                 SmartCaptureHistoryStore.save(self.captureHistory)
                 self.errorMessage = nil
                 if self.settings.showQuickAccess {
-                    self.smartCapture.showQuickAccess(
-                        image: image,
-                        savedURL: saved.url,
-                        onSave: { [weak self] image, url in
-                            self?.saveEditedSmartCapture(image: image, at: url, configuration: configuration)
-                        },
-                        onDelete: { [weak self] url in self?.deleteSmartCapture(at: url, size: saved.size) }
-                    )
+                    // Snapzy QuickAccess preview: write a temp copy for the card
+                    // and let the card's save/delete actions manage it.
+                    if let tempURL = TempCaptureManager.shared.saveScreenshot(image) {
+                        await QuickAccessManager.shared.addScreenshot(url: tempURL)
+                    }
                 }
                 if self.settings.pinAfterCapture {
-                    self.smartCapture.pin(image: image)
+                    _ = await QuickAccessManager.shared.pinScreenshot(url: saved.url)
                 }
             } catch {
                 Self.logger.error("Smart capture save failed: \(error.localizedDescription, privacy: .public)")
                 self?.errorMessage = error.localizedDescription
                 if self?.settings.showQuickAccess == true {
-                    self?.smartCapture.showQuickAccess(image: image, savedURL: nil, onSave: nil, onDelete: nil)
+                    if let tempURL = TempCaptureManager.shared.saveScreenshot(image) {
+                        await QuickAccessManager.shared.addScreenshot(url: tempURL)
+                    }
                 }
             }
         }

@@ -40,7 +40,9 @@ enum SelectionMode {
 }
 
 enum DiagnosticLogLevel { case debug, info, warning, error }
-enum DiagnosticLogCategory { case capture }
+enum DiagnosticLogCategory {
+    case capture, ui, action, cloud, history, preferences, fileAccess, clipboard, recording, lifecycle
+}
 
 /// Snapzy's capture sources log through a richer diagnostics service.  MacPilot
 /// keeps that seam intentionally cheap; the app's existing os.Logger handles

@@ -1714,6 +1714,7 @@ final class SmartScreenshotController {
     func cancelSelection() {
         if SnapzyAreaSelectionController.shared.isPresenting {
             SnapzyAreaSelectionController.shared.cancelSelection()
+            QuickAccessManager.shared.resumeAfterCapture()
             return
         }
         guard isSelecting || !overlays.isEmpty else { return }
@@ -1745,6 +1746,9 @@ final class SmartScreenshotController {
             onError(ScreenCaptureError.permissionRequired)
             return
         }
+        // Suspend the QuickAccess panel's hover monitors while the selection
+        // overlay is up so it never competes for the user's pointer.
+        QuickAccessManager.shared.suspendForCapture()
 
         let snapzyMode: SelectionMode =
             (mode == .recordingArea || mode == .recordingApplication) ? .recording : .screenshot
@@ -1796,6 +1800,7 @@ final class SmartScreenshotController {
         requestedMode: SmartCaptureSelectionMode,
         frozenSession: FrozenAreaCaptureSession
     ) {
+        QuickAccessManager.shared.resumeAfterCapture()
         guard let result else { return }
         if requestedMode == .recordingArea || requestedMode == .recordingApplication {
             guard SmartCaptureCoordinateConversion.quartzRect(fromAppKitRect: result.rect) != nil else {
@@ -1856,6 +1861,56 @@ final class SmartScreenshotController {
         )
         inlineAnnotationControllers[id] = controller
         controller.show()
+    }
+
+    /// Presents the annotation editor for a QuickAccess card item (Snapzy flow).
+    /// The card's "标注" action routes here through `AnnotateManager`.
+    func presentQuickAccessAnnotation(for item: QuickAccessItem) {
+        guard let image = Self.loadImage(from: item.url) else {
+            Self.logger.error("QuickAccess annotation failed to load image: \(item.url.lastPathComponent, privacy: .public)")
+            return
+        }
+
+        QuickAccessManager.shared.setWindowOpen(id: item.id, isOpen: true)
+        QuickAccessManager.shared.pauseCountdownForEditingItem(item.id)
+
+        let id = UUID()
+        let controller = SmartAnnotationWindowController(
+            image: image,
+            language: language(),
+            onComplete: { [weak self] annotated in
+                self?.saveQuickAccessAnnotatedImage(annotated, item: item)
+                QuickAccessManager.shared.resumeCountdownForEditingItem(item.id)
+                QuickAccessManager.shared.setWindowOpen(id: item.id, isOpen: false)
+                self?.inlineAnnotationControllers.removeValue(forKey: id)
+            },
+            onClose: { [weak self] in
+                QuickAccessManager.shared.resumeCountdownForEditingItem(item.id)
+                QuickAccessManager.shared.setWindowOpen(id: item.id, isOpen: false)
+                self?.inlineAnnotationControllers.removeValue(forKey: id)
+            }
+        )
+        inlineAnnotationControllers[id] = controller
+        controller.show()
+    }
+
+    private static func loadImage(from url: URL) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            return nil
+        }
+        return image
+    }
+
+    private func saveQuickAccessAnnotatedImage(_ image: CGImage, item: QuickAccessItem) {
+        let rep = NSBitmapImageRep(cgImage: image)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return }
+        try? data.write(to: item.url, options: .atomic)
+        let nsImage = NSImage(
+            cgImage: image,
+            size: NSSize(width: image.width, height: image.height)
+        )
+        QuickAccessManager.shared.updateItemThumbnail(id: item.id, image: nsImage)
     }
 
     func showQuickAccess(

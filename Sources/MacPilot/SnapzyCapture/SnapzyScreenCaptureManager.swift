@@ -258,7 +258,7 @@ final class SnapzyScreenCaptureManager {
     }
 }
 
-private extension NSScreen {
+extension NSScreen {
     var snapzyDisplayID: CGDirectDisplayID? {
         (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
             .map { CGDirectDisplayID($0.uint32Value) }
