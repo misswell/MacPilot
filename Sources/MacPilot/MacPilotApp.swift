@@ -528,8 +528,8 @@ enum AppText {
         "scHistory": "截图历史", "scHistoryEmpty": "还没有截图记录。", "scScrollingStitchFailed": "无法拼接滚动截图。请减少滚动幅度后重试。", "scObjectCutoutNoForeground": "没有检测到前景对象。", "scObjectCutoutMaskFailed": "无法生成前景蒙版。",
         "scOCRNoText": "未识别到文字。", "scOCRCopied": "OCR 文字已复制", "scOK": "好",
         "scAnnotateTitle": "MacPilot 标注", "scAnnotationTool": "工具", "scAnnotationRectangle": "矩形",
-        "scAnnotationArrow": "箭头", "scAnnotationText": "文字", "scUndo": "撤销", "scCancel": "取消",
-        "scDone": "完成", "scAnnotationTextTitle": "标注文字", "scText": "文字", "scAdd": "添加",
+        "scAnnotationArrow": "箭头", "scAnnotationFilledRectangle": "填充矩形", "scAnnotationEllipse": "椭圆", "scAnnotationLine": "直线", "scAnnotationBlur": "模糊", "scAnnotationSpotlight": "聚光灯", "scAnnotationCounter": "计数器", "scAnnotationHighlighter": "荧光笔", "scAnnotationPencil": "铅笔", "scAnnotationWatermark": "水印", "scAnnotationCrop": "裁剪", "scAnnotationText": "文字", "scUndo": "撤销", "scRedo": "重做", "scClearAnnotations": "清除标注", "scCancel": "取消",
+        "scDone": "完成", "scAnnotationTextTitle": "标注文字", "scAnnotationWatermarkTitle": "添加水印", "scText": "文字", "scAdd": "添加",
         "scOutputFolder": "保存文件夹", "scNoFolder": "尚未选择文件夹", "scChooseFolder": "选择文件夹…",
         "scCaptureAllDisplays": "截取所有显示器", "scCaptureAllDisplaysHint": "多显示器时分别保存每块屏幕的画面。",
         "scShowCursor": "包含鼠标光标",
@@ -771,8 +771,8 @@ enum AppText {
             "scHistory": "Screenshot History", "scHistoryEmpty": "No screenshots yet.", "scScrollingStitchFailed": "The scrolling frames could not be stitched. Try smaller scroll steps.",
             "scOCRNoText": "No text was detected.", "scOCRCopied": "OCR copied to clipboard", "scOK": "OK",
             "scAnnotateTitle": "MacPilot Annotate", "scAnnotationTool": "Tool", "scAnnotationRectangle": "Rectangle",
-            "scAnnotationArrow": "Arrow", "scAnnotationText": "Text", "scUndo": "Undo", "scCancel": "Cancel",
-            "scDone": "Done", "scAnnotationTextTitle": "Annotation text", "scText": "Text", "scAdd": "Add",
+            "scAnnotationArrow": "Arrow", "scAnnotationFilledRectangle": "Filled rectangle", "scAnnotationEllipse": "Ellipse", "scAnnotationLine": "Line", "scAnnotationBlur": "Blur", "scAnnotationSpotlight": "Spotlight", "scAnnotationCounter": "Counter", "scAnnotationHighlighter": "Highlighter", "scAnnotationPencil": "Pencil", "scAnnotationWatermark": "Watermark", "scAnnotationCrop": "Crop", "scAnnotationText": "Text", "scUndo": "Undo", "scRedo": "Redo", "scClearAnnotations": "Clear annotations", "scCancel": "Cancel",
+            "scDone": "Done", "scAnnotationTextTitle": "Annotation text", "scAnnotationWatermarkTitle": "Add watermark", "scText": "Text", "scAdd": "Add",
             "scOutputFolder": "Output Folder", "scNoFolder": "No folder selected", "scChooseFolder": "Choose Folder…",
             "scCaptureAllDisplays": "Capture all displays", "scCaptureAllDisplaysHint": "Save each display separately when using multiple monitors.",
             "scShowCursor": "Include mouse cursor",
@@ -911,6 +911,9 @@ final class MacPilotModel: ObservableObject {
     let inputSources = InputSourceModel()
     let windowSwitcher = WindowSwitcherModel()
     @Published var requestedSection: MainSection?
+    /// Set by the menu bar/deep-link shortcut entry so the capture settings
+    /// can present the recorder immediately after the main window is opened.
+    @Published var requestedCaptureShortcutEditor = false
     private var launchTasks: [UUID: Task<Void, Never>] = [:]
     private let launchGate = LaunchGate(minimumStartInterval: 3)
     @Published private(set) var launchStates: [UUID: LaunchRuntimeState] = [:]
@@ -1057,6 +1060,7 @@ final class MacPilotModel: ObservableObject {
             requestedSection = .capture
         case ["show", "shortcuts"], ["open", "shortcuts"]:
             requestedSection = .capture
+            requestedCaptureShortcutEditor = true
         case ["open", "history"], ["history"]:
             requestedSection = .capture
         default:
@@ -1971,7 +1975,14 @@ struct ContentView: View {
                 } else if section == .compression {
                     FileCompressionView(compression: model.fileCompression)
                 } else if section == .capture {
-                    ScreenCaptureView(capture: model.screenCapture, recording: model.screenRecording)
+                    ScreenCaptureView(
+                        capture: model.screenCapture,
+                        recording: model.screenRecording,
+                        openShortcutEditor: Binding(
+                            get: { model.requestedCaptureShortcutEditor },
+                            set: { model.requestedCaptureShortcutEditor = $0 }
+                        )
+                    )
                 } else if section == .pictureInPicture {
                     PictureInPictureView(pictureInPicture: model.pictureInPicture)
                 } else if section == .windowSwitcher {
@@ -3308,6 +3319,7 @@ struct MenuBarView: View {
         }
         Button(model.t("scEditShortcuts")) {
             model.requestedSection = .capture
+            model.requestedCaptureShortcutEditor = true
             showMainWindow()
         }
         Button(model.t("screenCapture")) { model.requestedSection = .capture; showMainWindow() }

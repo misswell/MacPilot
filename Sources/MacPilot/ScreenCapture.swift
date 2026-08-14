@@ -1465,12 +1465,23 @@ struct ScreenCaptureView: View {
     @EnvironmentObject private var appModel: MacPilotModel
     @ObservedObject var capture: ScreenCaptureModel
     @ObservedObject var recording: ScreenRecordingModel
+    @Binding var openShortcutEditor: Bool
     @State private var showingFolderPicker = false
     @State private var showingSmartShortcutEditor = false
     @State private var showingShortcutListEditor = false
     @State private var showingRecordingShortcutEditor = false
     @State private var editingShortcutKind: ScreenCaptureShortcutKind = .smartElement
     @State private var resetFailureMessage: String?
+
+    init(
+        capture: ScreenCaptureModel,
+        recording: ScreenRecordingModel,
+        openShortcutEditor: Binding<Bool> = .constant(false)
+    ) {
+        self.capture = capture
+        self.recording = recording
+        self._openShortcutEditor = openShortcutEditor
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1507,6 +1518,9 @@ struct ScreenCaptureView: View {
             SmartCaptureShortcutEditor(capture: capture, kind: editingShortcutKind)
         }
         .sheet(isPresented: $showingShortcutListEditor) {
+            SmartCaptureShortcutListEditor(capture: capture)
+        }
+        .sheet(isPresented: $openShortcutEditor) {
             SmartCaptureShortcutListEditor(capture: capture)
         }
         .sheet(isPresented: $showingRecordingShortcutEditor) {

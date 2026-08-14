@@ -497,6 +497,51 @@ struct ScreenCaptureTests {
         #expect(redPixels > 300)
     }
 
+    @Test func smartAnnotationRendererSupportsSnapzyToolsAndCrop() throws {
+        let source = try #require(makeTestImage(width: 200, height: 120, color: .white))
+        let rendered = try #require(SmartAnnotationRenderer.render(
+            image: source,
+            annotations: [
+                .ellipse(CGRect(x: 0.05, y: 0.05, width: 0.2, height: 0.2)),
+                .line(CGPoint(x: 0.1, y: 0.3), CGPoint(x: 0.8, y: 0.3)),
+                .filledRectangle(CGRect(x: 0.3, y: 0.05, width: 0.2, height: 0.2)),
+                .blur(CGRect(x: 0.55, y: 0.05, width: 0.2, height: 0.2)),
+                .spotlight(CGRect(x: 0.1, y: 0.45, width: 0.5, height: 0.35)),
+                .counter(3, CGPoint(x: 0.75, y: 0.75)),
+                .highlighter(CGPoint(x: 0.1, y: 0.9), CGPoint(x: 0.8, y: 0.9)),
+                .pencil([
+                    CGPoint(x: 0.1, y: 0.8),
+                    CGPoint(x: 0.2, y: 0.75),
+                    CGPoint(x: 0.3, y: 0.8)
+                ]),
+                .watermark("MacPilot", CGPoint(x: 0.55, y: 0.75))
+            ]
+        ))
+        #expect(rendered.width == source.width)
+        #expect(rendered.height == source.height)
+
+        let cropped = try #require(SmartAnnotationRenderer.render(
+            image: source,
+            annotations: [.crop(CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8))]
+        ))
+        #expect(cropped.width == 160)
+        #expect(cropped.height == 96)
+    }
+
+    @Test func smartAnnotationHistorySupportsUndoAndRedo() {
+        var history = SmartAnnotationHistory()
+        let rectangle = SmartAnnotation.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2))
+        let arrow = SmartAnnotation.arrow(CGPoint(x: 0.2, y: 0.2), CGPoint(x: 0.8, y: 0.8))
+
+        history.append(rectangle)
+        history.append(arrow)
+        #expect(history.annotations == [rectangle, arrow])
+        #expect(history.undo() == arrow)
+        #expect(history.annotations == [rectangle])
+        #expect(history.redo() == arrow)
+        #expect(history.annotations == [rectangle, arrow])
+    }
+
     @Test func screenCaptureResetUsesCurrentBundleIdentifier() {
         let command = ScreenCaptureResetCommand(bundleIdentifier: "com.misswell.macpilot")
 

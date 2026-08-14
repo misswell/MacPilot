@@ -3,6 +3,7 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import CoreGraphics
+import CoreImage
 import Darwin
 import OSLog
 @preconcurrency import ScreenCaptureKit
@@ -3397,31 +3398,147 @@ private enum SmartOCRService {
 
 private enum SmartAnnotationTool: String, CaseIterable, Identifiable {
     case rectangle
+    case filledRectangle
+    case ellipse
     case arrow
+    case line
+    case blur
+    case spotlight
+    case counter
+    case highlighter
+    case pencil
     case text
+    case watermark
+    case crop
 
     var id: String { rawValue }
-    func title(language: AppLanguage) -> String {
+
+    /// SF Symbols used by the annotation tool picker. Keeping the symbol next
+    /// to the tool definition makes it impossible for the picker and the
+    /// renderer to drift apart when another tool is added.
+    var systemImage: String {
         switch self {
-        case .rectangle: AppText.value("scAnnotationRectangle", language: language)
-        case .arrow: AppText.value("scAnnotationArrow", language: language)
-        case .text: AppText.value("scAnnotationText", language: language)
+        case .rectangle: return "rectangle"
+        case .filledRectangle: return "rectangle.fill"
+        case .ellipse: return "oval"
+        case .arrow: return "arrow.up.right"
+        case .line: return "line.diagonal"
+        case .blur: return "eye.slash"
+        case .spotlight: return "circle.dashed.inset.filled"
+        case .counter: return "3.circle"
+        case .highlighter: return "highlighter"
+        case .pencil: return "pencil"
+        case .text: return "textformat"
+        case .watermark: return "text.badge.plus"
+        case .crop: return "crop"
         }
+    }
+
+    var titleKey: String {
+        switch self {
+        case .rectangle: return "scAnnotationRectangle"
+        case .filledRectangle: return "scAnnotationFilledRectangle"
+        case .ellipse: return "scAnnotationEllipse"
+        case .arrow: return "scAnnotationArrow"
+        case .line: return "scAnnotationLine"
+        case .blur: return "scAnnotationBlur"
+        case .spotlight: return "scAnnotationSpotlight"
+        case .counter: return "scAnnotationCounter"
+        case .highlighter: return "scAnnotationHighlighter"
+        case .pencil: return "scAnnotationPencil"
+        case .text: return "scAnnotationText"
+        case .watermark: return "scAnnotationWatermark"
+        case .crop: return "scAnnotationCrop"
+        }
+    }
+
+    func title(language: AppLanguage) -> String {
+        AppText.value(titleKey, language: language)
     }
 }
 
 enum SmartAnnotation: Equatable {
     case rectangle(CGRect)
+    case filledRectangle(CGRect)
+    case ellipse(CGRect)
     case arrow(CGPoint, CGPoint)
+    case line(CGPoint, CGPoint)
+    case blur(CGRect)
+    case spotlight(CGRect)
+    case counter(Int, CGPoint)
+    case highlighter(CGPoint, CGPoint)
+    case pencil([CGPoint])
     case text(String, CGPoint)
+    case watermark(String, CGPoint)
+    case crop(CGRect)
+}
+
+/// A small value-type history seam used by the annotation editor and tests.
+/// New edits invalidate the redo stack, matching standard editor behaviour.
+struct SmartAnnotationHistory: Equatable {
+    private(set) var annotations: [SmartAnnotation] = []
+    private var redoAnnotations: [SmartAnnotation] = []
+
+    mutating func append(_ annotation: SmartAnnotation) {
+        annotations.append(annotation)
+        redoAnnotations.removeAll(keepingCapacity: true)
+    }
+
+    @discardableResult
+    mutating func undo() -> SmartAnnotation? {
+        guard let annotation = annotations.popLast() else { return nil }
+        redoAnnotations.append(annotation)
+        return annotation
+    }
+
+    @discardableResult
+    mutating func redo() -> SmartAnnotation? {
+        guard let annotation = redoAnnotations.popLast() else { return nil }
+        annotations.append(annotation)
+        return annotation
+    }
+
+    mutating func removeAll() {
+        annotations.removeAll(keepingCapacity: true)
+        redoAnnotations.removeAll(keepingCapacity: true)
+    }
 }
 
 @MainActor
 private final class SmartAnnotationModel: ObservableObject {
     @Published var tool: SmartAnnotationTool = .rectangle
-    @Published var annotations: [SmartAnnotation] = []
+    @Published private(set) var annotations: [SmartAnnotation] = []
+    @Published private(set) var canRedo = false
+    private var redoAnnotations: [SmartAnnotation] = []
+    private(set) var nextCounter = 1
 
-    func undo() { if !annotations.isEmpty { annotations.removeLast() } }
+    func append(_ annotation: SmartAnnotation) {
+        annotations.append(annotation)
+        redoAnnotations.removeAll(keepingCapacity: true)
+        canRedo = false
+        if case .counter = annotation { nextCounter += 1 }
+    }
+
+    func undo() {
+        guard let annotation = annotations.popLast() else { return }
+        redoAnnotations.append(annotation)
+        canRedo = true
+        if case .counter = annotation { nextCounter = max(1, nextCounter - 1) }
+    }
+
+    func redo() {
+        guard let annotation = redoAnnotations.popLast() else { return }
+        annotations.append(annotation)
+        canRedo = !redoAnnotations.isEmpty
+        if case .counter = annotation { nextCounter += 1 }
+    }
+
+    func removeAll() {
+        annotations.removeAll(keepingCapacity: true)
+        redoAnnotations.removeAll(keepingCapacity: true)
+        canRedo = false
+        nextCounter = 1
+    }
 }
 
 @MainActor
@@ -3501,19 +3618,37 @@ private struct SmartAnnotationEditor: View {
     let onComplete: () -> Void
     @State private var dragStart: CGPoint?
     @State private var dragCurrent: CGPoint?
+    @State private var dragPoints: [CGPoint] = []
     @State private var showingTextEntry = false
     @State private var pendingText = ""
     @State private var textPoint = CGPoint.zero
+    @State private var pendingTextTool: SmartAnnotationTool = .text
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Picker(AppText.value("scAnnotationTool", language: language), selection: $model.tool) {
-                    ForEach(SmartAnnotationTool.allCases) { Text($0.title(language: language)).tag($0) }
+                Menu {
+                    ForEach(SmartAnnotationTool.allCases) { tool in
+                        Button {
+                            model.tool = tool
+                        } label: {
+                            Label(tool.title(language: language), systemImage: tool.systemImage)
+                        }
+                    }
+                } label: {
+                    Label(model.tool.title(language: language), systemImage: model.tool.systemImage)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 300)
-                Button(AppText.value("scUndo", language: language), action: model.undo).disabled(model.annotations.isEmpty)
+                .menuStyle(.borderedButton)
+                .help(AppText.value("scAnnotationTool", language: language))
+                Button(AppText.value("scUndo", language: language), action: model.undo)
+                    .disabled(model.annotations.isEmpty)
+                Button(AppText.value("scRedo", language: language), action: model.redo)
+                    .disabled(!model.canRedo)
+                if !model.annotations.isEmpty {
+                    Button(AppText.value("scClearAnnotations", language: language)) {
+                        model.removeAll()
+                    }
+                }
                 Spacer()
                 Button(AppText.value("scCancel", language: language), action: onCancel)
                     .keyboardShortcut(.cancelAction)
@@ -3537,8 +3672,12 @@ private struct SmartAnnotationEditor: View {
                     .gesture(DragGesture(minimumDistance: 0)
                         .onChanged { value in
                             guard fitted.contains(value.location) else { return }
-                            if dragStart == nil { dragStart = value.startLocation }
+                            if dragStart == nil {
+                                dragStart = value.startLocation
+                                dragPoints = [value.startLocation]
+                            }
                             dragCurrent = value.location
+                            dragPoints.append(value.location)
                         }
                         .onEnded { value in finishDrag(value.location, fitted: fitted) })
                 }
@@ -3546,12 +3685,20 @@ private struct SmartAnnotationEditor: View {
         }
         .sheet(isPresented: $showingTextEntry) {
             VStack(spacing: 16) {
-                Text(AppText.value("scAnnotationTextTitle", language: language)).font(.headline)
+                Text(AppText.value(
+                    pendingTextTool == .watermark ? "scAnnotationWatermarkTitle" : "scAnnotationTextTitle",
+                    language: language
+                )).font(.headline)
                 TextField(AppText.value("scText", language: language), text: $pendingText).textFieldStyle(.roundedBorder)
                 HStack {
                     Button(AppText.value("scCancel", language: language)) { showingTextEntry = false }
                     Button(AppText.value("scAdd", language: language)) {
-                        if !pendingText.isEmpty { model.annotations.append(.text(pendingText, textPoint)) }
+                        if !pendingText.isEmpty {
+                            let annotation: SmartAnnotation = pendingTextTool == .watermark
+                                ? .watermark(pendingText, textPoint)
+                                : .text(pendingText, textPoint)
+                            model.append(annotation)
+                        }
                         pendingText = ""
                         showingTextEntry = false
                     }.buttonStyle(.borderedProminent)
@@ -3568,22 +3715,59 @@ private struct SmartAnnotationEditor: View {
 
     private func finishDrag(_ end: CGPoint, fitted: CGRect) {
         guard let start = dragStart, fitted.contains(start), fitted.contains(end) else {
-            dragStart = nil; dragCurrent = nil; return
+            resetDrag(); return
         }
+        let rect = CGRect(
+            x: min(start.x, end.x),
+            y: min(start.y, end.y),
+            width: abs(end.x - start.x),
+            height: abs(end.y - start.y)
+        )
         switch model.tool {
         case .rectangle:
-            let rect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
-            if rect.width > 3, rect.height > 3 { model.annotations.append(.rectangle(normalized(rect, in: fitted))) }
-        case .arrow:
+            if rect.width > 3, rect.height > 3 { model.append(.rectangle(normalized(rect, in: fitted))) }
+        case .filledRectangle:
+            if rect.width > 3, rect.height > 3 { model.append(.filledRectangle(normalized(rect, in: fitted))) }
+        case .ellipse:
+            if rect.width > 3, rect.height > 3 { model.append(.ellipse(normalized(rect, in: fitted))) }
+        case .blur:
+            if rect.width > 3, rect.height > 3 { model.append(.blur(normalized(rect, in: fitted))) }
+        case .spotlight:
+            if rect.width > 3, rect.height > 3 { model.append(.spotlight(normalized(rect, in: fitted))) }
+        case .crop:
+            if rect.width > 3, rect.height > 3 { model.append(.crop(normalized(rect, in: fitted))) }
+        case .arrow, .line, .highlighter:
             if hypot(end.x - start.x, end.y - start.y) > 4 {
-                model.annotations.append(.arrow(normalized(start, in: fitted), normalized(end, in: fitted)))
+                let startPoint = normalized(start, in: fitted)
+                let endPoint = normalized(end, in: fitted)
+                switch model.tool {
+                case .arrow: model.append(.arrow(startPoint, endPoint))
+                case .line: model.append(.line(startPoint, endPoint))
+                case .highlighter: model.append(.highlighter(startPoint, endPoint))
+                default: break
+                }
             }
+        case .pencil:
+            let points = (dragPoints + [end]).map { normalized($0, in: fitted) }
+            if points.count > 1 { model.append(.pencil(points)) }
+        case .counter:
+            model.append(.counter(model.nextCounter, normalized(end, in: fitted)))
         case .text:
             textPoint = normalized(end, in: fitted)
+            pendingTextTool = .text
+            showingTextEntry = true
+        case .watermark:
+            textPoint = normalized(end, in: fitted)
+            pendingTextTool = .watermark
             showingTextEntry = true
         }
+        resetDrag()
+    }
+
+    private func resetDrag() {
         dragStart = nil
         dragCurrent = nil
+        dragPoints.removeAll(keepingCapacity: true)
     }
 
     private func normalized(_ point: CGPoint, in rect: CGRect) -> CGPoint {
@@ -3601,24 +3785,100 @@ private struct SmartAnnotationEditor: View {
     private func drawDraft(context: inout GraphicsContext, in rect: CGRect) {
         guard let start = dragStart, let end = dragCurrent else { return }
         switch model.tool {
-        case .rectangle:
+        case .rectangle, .filledRectangle, .ellipse, .blur, .crop:
             let value = CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
+            if model.tool == .ellipse {
+                context.stroke(Path(ellipseIn: value), with: .color(.red), lineWidth: 3)
+            } else {
+                context.stroke(Path(value), with: .color(.red), lineWidth: 3)
+            }
+        case .spotlight:
+            let value = CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
+            var mask = Path()
+            mask.addRect(rect)
+            mask.addRect(value)
+            context.fill(mask, with: .color(.black.opacity(0.35)), style: FillStyle(eoFill: true))
             context.stroke(Path(value), with: .color(.red), lineWidth: 3)
-        case .arrow: drawArrow(from: start, to: end, context: &context)
-        case .text: break
+        case .arrow, .line, .highlighter:
+            drawLineLike(model.tool, from: start, to: end, context: &context)
+        case .pencil:
+            drawPencil(dragPoints + [end], context: &context)
+        case .counter:
+            drawCounter(model.nextCounter, at: end, context: &context)
+        case .text, .watermark:
+            break
         }
     }
 
     private func draw(_ annotation: SmartAnnotation, context: inout GraphicsContext, in rect: CGRect) {
         switch annotation {
         case .rectangle(let value):
-            let denormalized = CGRect(x: rect.minX + value.minX * rect.width, y: rect.minY + value.minY * rect.height, width: value.width * rect.width, height: value.height * rect.height)
+            let denormalized = denormalized(value, in: rect)
             context.stroke(Path(denormalized), with: .color(.red), lineWidth: 3)
+        case .filledRectangle(let value):
+            let denormalized = denormalized(value, in: rect)
+            context.fill(Path(denormalized), with: .color(.red.opacity(0.35)))
+            context.stroke(Path(denormalized), with: .color(.red), lineWidth: 3)
+        case .ellipse(let value):
+            context.stroke(Path(ellipseIn: denormalized(value, in: rect)), with: .color(.red), lineWidth: 3)
         case .arrow(let start, let end):
-            drawArrow(from: CGPoint(x: rect.minX + start.x * rect.width, y: rect.minY + start.y * rect.height), to: CGPoint(x: rect.minX + end.x * rect.width, y: rect.minY + end.y * rect.height), context: &context)
+            drawArrow(from: denormalized(start, in: rect), to: denormalized(end, in: rect), context: &context)
+        case .line(let start, let end):
+            drawLineLike(.line, from: denormalized(start, in: rect), to: denormalized(end, in: rect), context: &context)
+        case .blur(let value):
+            let denormalized = denormalized(value, in: rect)
+            context.fill(Path(denormalized), with: .color(.gray.opacity(0.35)))
+        case .spotlight(let value):
+            var mask = Path()
+            mask.addRect(rect)
+            mask.addRect(denormalized(value, in: rect))
+            context.fill(mask, with: .color(.black.opacity(0.35)), style: FillStyle(eoFill: true))
+        case .counter(let value, let point):
+            drawCounter(value, at: denormalized(point, in: rect), context: &context)
+        case .highlighter(let start, let end):
+            drawLineLike(.highlighter, from: denormalized(start, in: rect), to: denormalized(end, in: rect), context: &context)
+        case .pencil(let points):
+            drawPencil(points.map { denormalized($0, in: rect) }, context: &context)
         case .text(let text, let point):
-            context.draw(Text(text).font(.system(size: 18, weight: .bold)).foregroundColor(.red), at: CGPoint(x: rect.minX + point.x * rect.width, y: rect.minY + point.y * rect.height), anchor: .topLeading)
+            context.draw(Text(text).font(.system(size: 18, weight: .bold)).foregroundColor(.red), at: denormalized(point, in: rect), anchor: .topLeading)
+        case .watermark(let text, let point):
+            context.draw(Text(text).font(.system(size: 16, weight: .medium)).foregroundColor(.white.opacity(0.75)), at: denormalized(point, in: rect), anchor: .topLeading)
+        case .crop:
+            break
         }
+    }
+
+    private func denormalized(_ value: CGRect, in rect: CGRect) -> CGRect {
+        CGRect(x: rect.minX + value.minX * rect.width, y: rect.minY + value.minY * rect.height, width: value.width * rect.width, height: value.height * rect.height)
+    }
+
+    private func denormalized(_ point: CGPoint, in rect: CGRect) -> CGPoint {
+        CGPoint(x: rect.minX + point.x * rect.width, y: rect.minY + point.y * rect.height)
+    }
+
+    private func drawLineLike(_ tool: SmartAnnotationTool, from start: CGPoint, to end: CGPoint, context: inout GraphicsContext) {
+        var path = Path()
+        path.move(to: start)
+        path.addLine(to: end)
+        let color: Color = tool == .highlighter ? .yellow.opacity(0.45) : .red
+        let width: CGFloat = tool == .highlighter ? 14 : 3
+        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: width, lineCap: .round))
+        if tool == .arrow { drawArrow(from: start, to: end, context: &context) }
+    }
+
+    private func drawPencil(_ points: [CGPoint], context: inout GraphicsContext) {
+        guard let first = points.first, points.count > 1 else { return }
+        var path = Path()
+        path.move(to: first)
+        for point in points.dropFirst() { path.addLine(to: point) }
+        context.stroke(path, with: .color(.red), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+    }
+
+    private func drawCounter(_ value: Int, at point: CGPoint, context: inout GraphicsContext) {
+        let radius: CGFloat = 14
+        let circle = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
+        context.fill(Path(ellipseIn: circle), with: .color(.red))
+        context.draw(Text(String(value)).font(.system(size: 13, weight: .bold)).foregroundColor(.white), at: point, anchor: .center)
     }
 
     private func drawArrow(from start: CGPoint, to end: CGPoint, context: inout GraphicsContext) {
@@ -3633,35 +3893,226 @@ private struct SmartAnnotationEditor: View {
 
 enum SmartAnnotationRenderer {
     static func render(image: CGImage, annotations: [SmartAnnotation]) -> CGImage? {
-        let width = image.width, height = image.height
-        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        let bounds = CGRect(x: 0, y: 0, width: width, height: height)
-        context.draw(image, in: bounds)
+        let width = image.width
+        let height = image.height
+        let unitRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+        let crop = annotations.reversed().compactMap { annotation -> CGRect? in
+            guard case .crop(let rect) = annotation else { return nil }
+            return rect.standardized.intersection(unitRect)
+        }.first
+
+        let source: CGImage
+        let normalizedCanvas: CGRect
+        if let crop, crop.width > 0, crop.height > 0,
+           let cropped = image.cropping(to: pixelRect(for: crop, width: width, height: height)) {
+            source = cropped
+            normalizedCanvas = crop
+        } else {
+            source = image
+            normalizedCanvas = unitRect
+        }
+
+        let outputWidth = source.width
+        let outputHeight = source.height
+        let bounds = CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight)
+        guard let context = CGContext(
+            data: nil,
+            width: outputWidth,
+            height: outputHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        context.draw(source, in: bounds)
         context.setStrokeColor(NSColor.systemRed.cgColor)
         context.setFillColor(NSColor.systemRed.cgColor)
-        context.setLineWidth(max(3, CGFloat(width) / 350))
+        context.setLineWidth(max(3, CGFloat(outputWidth) / 350))
         context.setLineCap(.round)
         context.setLineJoin(.round)
+
         for annotation in annotations {
-            switch annotation {
-            case .rectangle(let rect):
-                context.stroke(CGRect(x: rect.minX * bounds.width, y: (1 - rect.maxY) * bounds.height, width: rect.width * bounds.width, height: rect.height * bounds.height))
-            case .arrow(let start, let end):
-                let a = CGPoint(x: start.x * bounds.width, y: (1 - start.y) * bounds.height)
-                let b = CGPoint(x: end.x * bounds.width, y: (1 - end.y) * bounds.height)
-                context.move(to: a); context.addLine(to: b)
-                let angle = atan2(b.y - a.y, b.x - a.x), head = max(14, CGFloat(width) / 45)
-                context.move(to: b); context.addLine(to: CGPoint(x: b.x - head * cos(angle - .pi / 6), y: b.y - head * sin(angle - .pi / 6)))
-                context.move(to: b); context.addLine(to: CGPoint(x: b.x - head * cos(angle + .pi / 6), y: b.y - head * sin(angle + .pi / 6)))
-                context.strokePath()
-            case .text(let text, let point):
-                let graphics = NSGraphicsContext(cgContext: context, flipped: false)
-                NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = graphics
-                let fontSize = max(18, CGFloat(width) / 35)
-                (text as NSString).draw(at: CGPoint(x: point.x * bounds.width, y: (1 - point.y) * bounds.height - fontSize), withAttributes: [.font: NSFont.boldSystemFont(ofSize: fontSize), .foregroundColor: NSColor.systemRed])
-                NSGraphicsContext.restoreGraphicsState()
+            guard case .crop = annotation else {
+                draw(annotation, in: context, bounds: bounds, canvas: normalizedCanvas)
+                continue
             }
         }
         return context.makeImage()
+    }
+
+    private static func pixelRect(for normalized: CGRect, width: Int, height: Int) -> CGRect {
+        let minX = (normalized.minX * CGFloat(width)).rounded()
+        let minY = ((1 - normalized.maxY) * CGFloat(height)).rounded()
+        let maxX = (normalized.maxX * CGFloat(width)).rounded()
+        let maxY = ((1 - normalized.minY) * CGFloat(height)).rounded()
+        return CGRect(
+            x: minX,
+            y: minY,
+            width: max(1, maxX - minX),
+            height: max(1, maxY - minY)
+        )
+    }
+
+    private static func rect(_ normalized: CGRect, in bounds: CGRect, canvas: CGRect) -> CGRect {
+        let value = normalized.standardized
+        let x = (value.minX - canvas.minX) / canvas.width
+        let y = (value.minY - canvas.minY) / canvas.height
+        return CGRect(
+            x: x * bounds.width,
+            y: (1 - y - value.height / canvas.height) * bounds.height,
+            width: value.width / canvas.width * bounds.width,
+            height: value.height / canvas.height * bounds.height
+        )
+    }
+
+    private static func point(_ normalized: CGPoint, in bounds: CGRect, canvas: CGRect) -> CGPoint {
+        let x = (normalized.x - canvas.minX) / canvas.width
+        let y = (normalized.y - canvas.minY) / canvas.height
+        return CGPoint(x: x * bounds.width, y: (1 - y) * bounds.height)
+    }
+
+    private static func points(_ values: [CGPoint], in bounds: CGRect, canvas: CGRect) -> [CGPoint] {
+        values.map { point($0, in: bounds, canvas: canvas) }
+    }
+
+    private static func draw(
+        _ annotation: SmartAnnotation,
+        in context: CGContext,
+        bounds: CGRect,
+        canvas: CGRect
+    ) {
+        switch annotation {
+        case .rectangle(let value):
+            context.stroke(rect(value, in: bounds, canvas: canvas))
+        case .filledRectangle(let value):
+            let target = rect(value, in: bounds, canvas: canvas)
+            context.setFillColor(NSColor.systemRed.withAlphaComponent(0.35).cgColor)
+            context.fill(target)
+            context.setStrokeColor(NSColor.systemRed.cgColor)
+            context.stroke(target)
+        case .ellipse(let value):
+            context.strokeEllipse(in: rect(value, in: bounds, canvas: canvas))
+        case .arrow(let start, let end):
+            drawArrow(from: point(start, in: bounds, canvas: canvas), to: point(end, in: bounds, canvas: canvas), in: context, width: bounds.width)
+        case .line(let start, let end):
+            drawLine(from: point(start, in: bounds, canvas: canvas), to: point(end, in: bounds, canvas: canvas), in: context)
+        case .blur(let value):
+            applyBlur(to: context, rect: rect(value, in: bounds, canvas: canvas), bounds: bounds)
+        case .spotlight(let value):
+            let target = rect(value, in: bounds, canvas: canvas)
+            context.saveGState()
+            context.setFillColor(NSColor.black.withAlphaComponent(0.46).cgColor)
+            context.addRect(bounds)
+            context.addRect(target)
+            context.drawPath(using: .eoFill)
+            context.restoreGState()
+        case .counter(let value, let location):
+            drawCounter(value, at: point(location, in: bounds, canvas: canvas), in: context, width: bounds.width)
+        case .highlighter(let start, let end):
+            context.saveGState()
+            context.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.48).cgColor)
+            context.setLineWidth(max(10, bounds.width / 25))
+            context.setLineCap(.round)
+            context.move(to: point(start, in: bounds, canvas: canvas))
+            context.addLine(to: point(end, in: bounds, canvas: canvas))
+            context.strokePath()
+            context.restoreGState()
+        case .pencil(let values):
+            let values = points(values, in: bounds, canvas: canvas)
+            guard let first = values.first, values.count > 1 else { return }
+            context.saveGState()
+            context.setStrokeColor(NSColor.systemRed.cgColor)
+            context.setLineWidth(max(2, bounds.width / 350))
+            context.setLineCap(.round)
+            context.setLineJoin(.round)
+            context.move(to: first)
+            for value in values.dropFirst() { context.addLine(to: value) }
+            context.strokePath()
+            context.restoreGState()
+        case .text(let text, let location):
+            drawText(text, at: point(location, in: bounds, canvas: canvas), in: context, color: .systemRed, width: bounds.width)
+        case .watermark(let text, let location):
+            drawText(text, at: point(location, in: bounds, canvas: canvas), in: context, color: .white.withAlphaComponent(0.76), width: bounds.width, watermark: true)
+        case .crop:
+            break
+        }
+    }
+
+    private static func drawLine(from start: CGPoint, to end: CGPoint, in context: CGContext) {
+        context.saveGState()
+        context.setStrokeColor(NSColor.systemRed.cgColor)
+        context.setLineWidth(max(3, context.boundingBoxOfClipPath.width / 350))
+        context.setLineCap(.round)
+        context.move(to: start)
+        context.addLine(to: end)
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    private static func drawArrow(from start: CGPoint, to end: CGPoint, in context: CGContext, width: CGFloat) {
+        let angle = atan2(end.y - start.y, end.x - start.x)
+        let head = max(14, width / 45)
+        context.saveGState()
+        context.setStrokeColor(NSColor.systemRed.cgColor)
+        context.setLineWidth(max(3, width / 350))
+        context.setLineCap(.round)
+        context.move(to: start)
+        context.addLine(to: end)
+        context.move(to: end)
+        context.addLine(to: CGPoint(x: end.x - head * cos(angle - .pi / 6), y: end.y - head * sin(angle - .pi / 6)))
+        context.move(to: end)
+        context.addLine(to: CGPoint(x: end.x - head * cos(angle + .pi / 6), y: end.y - head * sin(angle + .pi / 6)))
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    private static func drawCounter(_ value: Int, at point: CGPoint, in context: CGContext, width: CGFloat) {
+        let radius = max(14, width / 55)
+        context.saveGState()
+        context.setFillColor(NSColor.systemRed.cgColor)
+        context.fillEllipse(in: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
+        drawText(String(value), at: point, in: context, color: .white, width: width, counter: true)
+        context.restoreGState()
+    }
+
+    private static func drawText(
+        _ text: String,
+        at point: CGPoint,
+        in context: CGContext,
+        color: NSColor,
+        width: CGFloat,
+        watermark: Bool = false,
+        counter: Bool = false
+    ) {
+        let graphics = NSGraphicsContext(cgContext: context, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphics
+        let fontSize = counter ? max(12, width / 70) : (watermark ? max(16, width / 42) : max(18, width / 35))
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: (counter ? NSFont.boldSystemFont(ofSize: fontSize) : (watermark ? NSFont.systemFont(ofSize: fontSize, weight: .medium) : NSFont.boldSystemFont(ofSize: fontSize))),
+            .foregroundColor: color
+        ]
+        let size = (text as NSString).size(withAttributes: attributes)
+        let originY = counter ? point.y - size.height / 2 : point.y - size.height
+        (text as NSString).draw(at: CGPoint(x: point.x, y: originY), withAttributes: attributes)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private static func applyBlur(to context: CGContext, rect: CGRect, bounds: CGRect) {
+        guard rect.width > 0, rect.height > 0, let current = context.makeImage() else { return }
+        let input = CIImage(cgImage: current)
+        guard let filter = CIFilter(name: "CIGaussianBlur") else { return }
+        filter.setValue(input, forKey: kCIInputImageKey)
+        filter.setValue(max(5, bounds.width / 80), forKey: kCIInputRadiusKey)
+        let ciContext = CIContext(options: [.cacheIntermediates: false])
+        let extent = CGRect(x: 0, y: 0, width: current.width, height: current.height)
+        guard let output = filter.outputImage?.cropped(to: extent),
+              let blurred = ciContext.createCGImage(output, from: extent) else { return }
+        context.saveGState()
+        context.addRect(rect)
+        context.clip()
+        context.draw(blurred, in: bounds)
+        context.restoreGState()
     }
 }
