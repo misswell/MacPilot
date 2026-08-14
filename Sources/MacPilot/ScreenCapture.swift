@@ -410,64 +410,6 @@ private enum ScreenCaptureStorage {
     }
 }
 
-private final class LegacyDisplayCaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    private let context = CIContext(options: [.cacheIntermediates: false])
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<CGImage, Error>?
-    private var stream: SCStream?
-    private var finished = false
-
-    init(continuation: CheckedContinuation<CGImage, Error>) {
-        self.continuation = continuation
-    }
-
-    func attach(stream: SCStream) {
-        lock.lock()
-        self.stream = stream
-        lock.unlock()
-    }
-
-    nonisolated func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
-        guard outputType == .screen, let pixelBuffer = sampleBuffer.imageBuffer else { return }
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cgImage = context.createCGImage(image, from: image.extent) else {
-            finish(.failure(ScreenCaptureError.captureFailed("ScreenCaptureKit returned an invalid frame.")))
-            return
-        }
-        finish(.success(cgImage))
-    }
-
-    nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
-        finish(.failure(error))
-    }
-
-    func fail(_ error: Error) {
-        finish(.failure(error))
-    }
-
-    private func finish(_ result: Result<CGImage, Error>) {
-        lock.lock()
-        guard !finished else {
-            lock.unlock()
-            return
-        }
-        finished = true
-        let continuation = self.continuation
-        self.continuation = nil
-        let stream = self.stream
-        self.stream = nil
-        lock.unlock()
-
-        switch result {
-        case .success(let image): continuation?.resume(returning: image)
-        case .failure(let error): continuation?.resume(throwing: error)
-        }
-        if let stream {
-            Task { try? await stream.stopCapture() }
-        }
-    }
-}
-
 struct ScreenCaptureResetCommand: Sendable {
     let bundleIdentifier: String
 
@@ -1437,29 +1379,10 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     private func captureDisplayWithStream(filter: SCContentFilter, configuration: SCStreamConfiguration) async throws -> CGImage {
-        try await withCheckedThrowingContinuation { continuation in
-            let output = LegacyDisplayCaptureOutput(continuation: continuation)
-            do {
-                let stream = SCStream(filter: filter, configuration: configuration, delegate: output)
-                output.attach(stream: stream)
-                try stream.addStreamOutput(
-                    output,
-                    type: .screen,
-                    sampleHandlerQueue: DispatchQueue(label: "com.misswell.macpilot.screen-capture-fallback")
-                )
-                Task {
-                    do {
-                        try await stream.startCapture()
-                    } catch {
-                        // startCapture can fail before any frame is delivered.
-                        // The output object guarantees the continuation resumes once.
-                        output.fail(error)
-                    }
-                }
-            } catch {
-                output.fail(error)
-            }
-        }
+        try await SnapzySingleFrameCaptureSession.capture(
+            contentFilter: filter,
+            configuration: configuration
+        )
     }
 
     /// Returns pixel dimensions for the given display, honouring the backing scale factor.

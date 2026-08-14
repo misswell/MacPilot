@@ -2,8 +2,8 @@
 
 ## Snapzy
 
-MacPilot's smart-capture area-selection interaction is informed by, and may
-include adapted interaction ideas from, [Snapzy](https://github.com/Kyle-Ye/Snapzy).
+MacPilot's smart-capture implementation includes adapted code and interaction
+ideas from [Snapzy](https://github.com/duongductrong/Snapzy).
 Snapzy is distributed under the BSD 3-Clause License, copyright (c) 2026,
 Trong Duong Duc. The applicable license text follows.
 
