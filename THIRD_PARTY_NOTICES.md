@@ -2,14 +2,18 @@
 
 ## Snapzy
 
-MacPilot's smart-capture implementation includes adapted code and interaction
-ideas from [Snapzy](https://github.com/duongductrong/Snapzy).
+MacPilot's screenshot implementation directly migrates the capture source from
+[Snapzy](https://github.com/duongductrong/Snapzy) (commit `417c8e0`,
+`v1.31.0-beta.18`). The migrated files live under
+`Sources/MacPilot/SnapzyCapture/` and retain the upstream type and pipeline
+structure; MacPilot-specific changes are limited to localization, permission,
+and storage seams.
 Snapzy is distributed under the BSD 3-Clause License, copyright (c) 2026,
 Trong Duong Duc. The applicable license text follows.
 
-This notice does not change MacPilot's license. It records the upstream
-project that inspired the multi-display selection overlay, drag rectangle,
-Escape/right-click cancellation, and post-capture quick-action flow.
+This notice does not change MacPilot's license. It identifies the upstream
+source used for the single-frame ScreenCaptureKit session, frozen display
+snapshots, multi-display crop/composition, and area-selection overlay.
 
 ```text
 BSD 3-Clause License

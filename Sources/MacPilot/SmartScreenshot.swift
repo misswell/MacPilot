@@ -1609,6 +1609,15 @@ final class SmartScreenshotController {
     }
 
     func startSelection(mode: SmartCaptureSelectionMode = .smartElement) {
+        // Manual/application screenshot and recording selection now use the
+        // migrated Snapzy window/overlay source.  The smart-element, OCR,
+        // annotation, scrolling and cutout modes keep their specialized
+        // MacPilot flows because they need a post-capture editor.
+        if mode == .manualArea || mode == .applicationWindow ||
+            mode == .recordingArea || mode == .recordingApplication {
+            startSnapzySelection(mode: mode)
+            return
+        }
         guard !isSelecting else { return }
         guard CGPreflightScreenCaptureAccess() else {
             Self.logger.error("Selection rejected because required permissions are unavailable")
@@ -1703,6 +1712,10 @@ final class SmartScreenshotController {
     }
 
     func cancelSelection() {
+        if SnapzyAreaSelectionController.shared.isPresenting {
+            SnapzyAreaSelectionController.shared.cancelSelection()
+            return
+        }
         guard isSelecting || !overlays.isEmpty else { return }
         isSelecting = false
         pendingTargetUpdate?.cancel()
@@ -1724,6 +1737,97 @@ final class SmartScreenshotController {
             panel.close()
         }
         NSCursor.arrow.set()
+    }
+
+    private func startSnapzySelection(mode: SmartCaptureSelectionMode) {
+        guard !isSelecting, !SnapzyAreaSelectionController.shared.isPresenting else { return }
+        guard CGPreflightScreenCaptureAccess() else {
+            onError(ScreenCaptureError.permissionRequired)
+            return
+        }
+
+        let snapzyMode: SelectionMode =
+            (mode == .recordingArea || mode == .recordingApplication) ? .recording : .screenshot
+        let interactionMode: AreaSelectionInteractionMode =
+            mode == .applicationWindow || mode == .recordingApplication
+                ? .applicationWindow
+                : .manualRegion
+        let applicationConfiguration: AreaSelectionApplicationConfiguration? =
+            interactionMode == .applicationWindow
+                ? AreaSelectionApplicationConfiguration(
+                    prefetchedContentTask: SnapzyScreenCaptureManager.shared.prefetchShareableContent(),
+                    excludeOwnApplication: true
+                )
+                : nil
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let frozenSession = try await FrozenAreaCaptureSession.prepare(
+                    captureManager: SnapzyScreenCaptureManager.shared,
+                    showCursor: false,
+                    excludeDesktopIcons: false,
+                    excludeDesktopWidgets: false,
+                    excludeOwnApplication: true
+                )
+                guard !frozenSession.backdrops.isEmpty else {
+                    throw ScreenCaptureError.noDisplayFound
+                }
+                SnapzyAreaSelectionController.shared.startSelection(
+                    mode: snapzyMode,
+                    backdrops: frozenSession.backdrops,
+                    applicationConfiguration: applicationConfiguration,
+                    initialInteractionMode: interactionMode
+                ) { [weak self, frozenSession] result in
+                    self?.finishSnapzySelection(
+                        result,
+                        requestedMode: mode,
+                        frozenSession: frozenSession
+                    )
+                }
+            } catch {
+                self.onError(error)
+            }
+        }
+    }
+
+    private func finishSnapzySelection(
+        _ result: AreaSelectionResult?,
+        requestedMode: SmartCaptureSelectionMode,
+        frozenSession: FrozenAreaCaptureSession
+    ) {
+        guard let result else { return }
+        if requestedMode == .recordingArea || requestedMode == .recordingApplication {
+            guard SmartCaptureCoordinateConversion.quartzRect(fromAppKitRect: result.rect) != nil else {
+                onError(ScreenCaptureError.captureFailed(
+                    AppText.value("scCaptureCoordinateUnavailable", language: language())
+                ))
+                return
+            }
+            onRecordingSelection(result.rect, requestedMode)
+            return
+        }
+
+        Task { [weak self] in
+            do {
+                let crop: FrozenAreaCropResult
+                if result.spansMultipleDisplays {
+                    crop = try frozenSession.cropCompositeImage(for: result)
+                } else {
+                    crop = try frozenSession.cropImage(for: result)
+                }
+                guard let self else { return }
+                switch requestedMode {
+                case .applicationWindow, .manualArea:
+                    if requestedMode == .manualArea { self.onSelectionRect(result.rect) }
+                    self.onCapture(crop.image)
+                default:
+                    self.onCapture(crop.image)
+                }
+            } catch {
+                self?.onError(error)
+            }
+        }
     }
 
     func pin(image: CGImage) {
@@ -2347,12 +2451,6 @@ private enum SmartAXTargetQuery {
     }
 }
 
-extension NSScreen {
-    var displayID: CGDirectDisplayID? {
-        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
-    }
-}
-
 private final class SmartCaptureOverlayPanel: NSPanel {
     let overlayView: SmartCaptureOverlayView
 
@@ -2677,156 +2775,23 @@ private struct SmartScrollingCaptureView: View {
 
 @MainActor
 private enum SmartScreenImageCapture {
-    nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
-
     static func capture(appKitRect: CGRect, quartzClickPoint: CGPoint) async throws -> CGImage {
-        // The Quartz conversion is needed by ScreenCaptureKit, but not by the
-        // CoreGraphics full-display fallback. Keep that fallback available if
-        // a display is asleep or the coordinate map is temporarily stale.
-        if let quartzRect = SmartAXTargetQuery.quartzRect(fromAppKitRect: appKitRect) {
-            if #available(macOS 15.2, *) {
-                do {
-                    return try await captureDisplayAgnosticRect(quartzRect)
-                } catch {
-                    Self.logger.error("Display-agnostic region capture failed; trying display enumeration: \(error.localizedDescription, privacy: .public)")
-                }
-            }
-
-            var displays: [SCDisplay] = []
-            for delay in [0, 80, 160, 320] {
-                if delay > 0 { try await Task.sleep(for: .milliseconds(delay)) }
-                do {
-                    let content = try await SCShareableContent.current
-                    displays = content.displays
-                    if !displays.isEmpty { break }
-                } catch {
-                    Self.logger.error("ScreenCaptureKit display enumeration failed: \(error.localizedDescription, privacy: .public)")
-                }
-            }
-            Self.logger.info("ScreenCaptureKit returned \(displays.count) displays")
-            let intersectingDisplays = displays.filter { display in
-                let intersection = display.frame.intersection(quartzRect)
-                return intersection.width > 0 && intersection.height > 0
-            }
-            if !intersectingDisplays.isEmpty {
-                do {
-                    if intersectingDisplays.count > 1 {
-                        return try await captureCompositeRegion(quartzRect, displays: intersectingDisplays)
-                    }
-                    if let display = intersectingDisplays.max(by: { lhs, rhs in
-                        lhs.frame.intersection(quartzRect).area < rhs.frame.intersection(quartzRect).area
-                    }) {
-                        return try await captureRegionOnDisplay(quartzRect, display: display)
-                    }
-                } catch {
-                    Self.logger.error("Display-enumerated region capture failed; using CoreGraphics snapshots: \(error.localizedDescription, privacy: .public)")
-                }
-            } else {
-                Self.logger.warning("ScreenCaptureKit returned no matching displays; using CoreGraphics display snapshots")
-            }
-        }
-        return try await captureUsingDisplaySnapshots(appKitRect: appKitRect)
-    }
-
-    private static func captureUsingDisplaySnapshots(appKitRect: CGRect) async throws -> CGImage {
-        let snapshots = await withTaskGroup(of: SmartDisplaySnapshot?.self, returning: [SmartDisplaySnapshot].self) { group in
-            for screen in NSScreen.screens where screen.frame.intersects(appKitRect) {
-                guard let displayID = screen.displayID else { continue }
-                let screenFrame = screen.frame
-                group.addTask {
-                    guard let image = SmartDisplaySnapshotCapture.capture(displayID: displayID) else { return nil }
-                    return SmartDisplaySnapshot(image: image, screenFrame: screenFrame)
-                }
-            }
-            var result: [SmartDisplaySnapshot] = []
-            for await snapshot in group {
-                if let snapshot { result.append(snapshot) }
-            }
-            return result
-        }
-        guard !snapshots.isEmpty else { throw ScreenCaptureError.noDisplayFound }
-        guard let image = SmartDisplaySnapshotCrop.composite(snapshots: snapshots, selection: appKitRect) else {
-            throw ScreenCaptureError.captureFailed(AppText.value("scCaptureOutsideDisplay", language: .system))
-        }
-        return image
-    }
-
-    private static func captureRegionOnDisplay(_ quartzRect: CGRect, display: SCDisplay) async throws -> CGImage {
-        let clippedRect = quartzRect.intersection(display.frame)
-        let sourceRect = clippedRect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
-        guard !sourceRect.isEmpty else {
-            throw ScreenCaptureError.captureFailed(AppText.value("scCaptureOutsideDisplay", language: .system))
-        }
-        let configuration = SCStreamConfiguration()
-        let scaleX = CGFloat(display.width) / max(1, display.frame.width)
-        let scaleY = CGFloat(display.height) / max(1, display.frame.height)
-        configuration.sourceRect = sourceRect
-        configuration.width = max(1, Int((sourceRect.width * scaleX).rounded()))
-        configuration.height = max(1, Int((sourceRect.height * scaleY).rounded()))
-        configuration.scalesToFit = true
-        configuration.showsCursor = false
-        return try await SCScreenshotManager.captureImage(
-            contentFilter: SCContentFilter(display: display, excludingWindows: []),
-            configuration: configuration
-        )
-    }
-
-    private static func captureCompositeRegion(_ quartzRect: CGRect, displays: [SCDisplay]) async throws -> CGImage {
-        let outputScale = displays.reduce(CGFloat(1)) { scale, display in
-            max(scale, CGFloat(display.width) / max(1, display.frame.width), CGFloat(display.height) / max(1, display.frame.height))
-        }
-        let outputWidth = max(1, Int((quartzRect.width * outputScale).rounded()))
-        let outputHeight = max(1, Int((quartzRect.height * outputScale).rounded()))
-        guard let context = CGContext(
-            data: nil,
-            width: outputWidth,
-            height: outputHeight,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        // The previous implementation rebuilt the ScreenCaptureKit and
+        // multi-display crop flow locally.  Route every interactive region
+        // capture through Snapzy's migrated manager instead: it freezes the
+        // displays, then uses the upstream FrozenAreaCaptureSession crop and
+        // composite algorithms.
+        _ = quartzClickPoint
+        guard let image = try await SnapzyScreenCaptureManager.shared.captureAreaAsImage(
+            rect: appKitRect
         ) else {
-            throw ScreenCaptureError.captureFailed(AppText.value("scCaptureMultiDisplayAllocationFailed", language: .system))
-        }
-        context.setFillColor(NSColor.black.cgColor)
-        context.fill(CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight))
-        for display in displays {
-            let clippedRect = quartzRect.intersection(display.frame)
-            guard clippedRect.width > 0, clippedRect.height > 0 else { continue }
-            let image = try await captureRegionOnDisplay(quartzRect, display: display)
-            let destination = CGRect(
-                x: (clippedRect.minX - quartzRect.minX) * outputScale,
-                y: (clippedRect.minY - quartzRect.minY) * outputScale,
-                width: clippedRect.width * outputScale,
-                height: clippedRect.height * outputScale
+            throw ScreenCaptureError.captureFailed(
+                AppText.value("scCaptureOutsideDisplay", language: .system)
             )
-            context.interpolationQuality = .high
-            context.draw(image, in: destination)
-        }
-        guard let image = context.makeImage() else {
-            throw ScreenCaptureError.captureFailed(AppText.value("scCaptureMultiDisplayCompositionFailed", language: .system))
         }
         return image
     }
 
-    @available(macOS 15.2, *)
-    private nonisolated static func captureDisplayAgnosticRect(_ rect: CGRect) async throws -> CGImage {
-        // ScreenCaptureKit invokes this completion on its own queue.  Keep
-        // the continuation bridge nonisolated; inheriting the enum's
-        // @MainActor isolation makes Swift insert a main-actor assertion in
-        // the callback, which aborts the process with SIGTRAP on macOS 26.
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CGImage, Error>) in
-            SCScreenshotManager.captureImage(in: rect) { image, error in
-                if let image {
-                    continuation.resume(returning: image)
-                } else {
-                    continuation.resume(throwing: ScreenCaptureError.captureFailed(
-                        error?.localizedDescription ?? "ScreenCaptureKit returned no image."
-                    ))
-                }
-            }
-        }
-    }
 }
 
 struct SmartDisplaySnapshot: @unchecked Sendable {
