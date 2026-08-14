@@ -206,6 +206,11 @@ enum ScreenCaptureVerticalStitcher {
 }
 
 enum ScreenCaptureObjectCutout {
+    enum Error: Swift.Error, Equatable {
+        case noForegroundObject
+        case maskRenderFailed
+    }
+
     static func removeBackground(from image: CGImage) async throws -> CGImage {
         let sendable = SendableScreenshotImage(value: image)
         return try await Task.detached(priority: .userInitiated) {
@@ -215,7 +220,7 @@ enum ScreenCaptureObjectCutout {
                 try handler.perform([request])
                 guard let observation = request.results?.first,
                       !observation.allInstances.isEmpty else {
-                    throw ScreenCaptureError.captureFailed("No foreground object was detected.")
+                    throw Error.noForegroundObject
                 }
                 let maskBuffer = try observation.generateScaledMaskForImage(
                     forInstances: observation.allInstances,
@@ -232,7 +237,7 @@ enum ScreenCaptureObjectCutout {
                 ])
                 let context = CIContext(options: [.cacheIntermediates: false])
                 guard let output = context.createCGImage(result, from: source.extent) else {
-                    throw ScreenCaptureError.captureFailed("The foreground mask could not be rendered.")
+                    throw Error.maskRenderFailed
                 }
                 return output
             }

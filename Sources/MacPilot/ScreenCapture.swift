@@ -787,10 +787,21 @@ final class ScreenCaptureModel: ObservableObject {
             } catch {
                 await MainActor.run {
                     guard let self else { return }
+                    let detail: String
+                    if let cutoutError = error as? ScreenCaptureObjectCutout.Error {
+                        switch cutoutError {
+                        case .noForegroundObject:
+                            detail = AppText.value("scObjectCutoutNoForeground", language: self.language)
+                        case .maskRenderFailed:
+                            detail = AppText.value("scObjectCutoutMaskFailed", language: self.language)
+                        }
+                    } else {
+                        detail = error.localizedDescription
+                    }
                     self.errorMessage = AppText.value(
                         "scObjectCutoutFailed",
                         language: self.language,
-                        arguments: [error.localizedDescription]
+                        arguments: [detail]
                     )
                 }
             }
@@ -1943,6 +1954,18 @@ private struct SmartCaptureShortcutEditor: View {
                 .font(.caption)
                 .foregroundStyle(.orange)
             }
+            if let duplicateKind {
+                Label(
+                    AppText.value(
+                        "scShortcutDuplicate",
+                        language: appModel.language,
+                        arguments: [AppText.value(duplicateKind.titleKey, language: appModel.language)]
+                    ),
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
             SmartCaptureShortcutRecorder(
                 keyCode: $recordedKeyCode,
                 modifiers: $recordedModifiers,
@@ -1984,7 +2007,12 @@ private struct SmartCaptureShortcutEditor: View {
                 Button(AppText.value("cancel", language: appModel.language), role: .cancel) { dismiss() }
                 Button(AppText.value("save", language: appModel.language)) { save() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(recordedKeyCode == nil || candidateBinding.validationError != nil || !candidateConflicts.isEmpty)
+                    .disabled(
+                        recordedKeyCode == nil
+                            || candidateBinding.validationError != nil
+                            || !candidateConflicts.isEmpty
+                            || duplicateKind != nil
+                    )
             }
         }
         .padding(24)
@@ -2011,6 +2039,12 @@ private struct SmartCaptureShortcutEditor: View {
 
     private var candidateConflicts: [SmartCaptureSystemShortcutConflict] {
         SmartCaptureSystemShortcutDetector.conflicts(for: candidateBinding)
+    }
+
+    private var duplicateKind: ScreenCaptureShortcutKind? {
+        ScreenCaptureShortcutKind.allCases.first { otherKind in
+            otherKind != kind && capture.shortcutBinding(for: otherKind) == candidateBinding
+        }
     }
 }
 
