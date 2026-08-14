@@ -26,7 +26,16 @@ final class SingleFrameStreamCaptureSession: NSObject, @unchecked Sendable {
 
   /// Shared CIContext: immutable and documented thread-safe for concurrent rendering;
   /// avoids per-frame allocation on delivered frames.
-  private static let sharedCIContext = CIContext()
+  ///
+  /// CIContext's Sendable annotation differs between the SDKs used by local
+  /// development and CI. Keep the shared renderer behind one explicit
+  /// unchecked-Sendable boundary; Core Image documents concurrent rendering
+  /// as safe and this instance is never mutated after initialization.
+  private final class ThreadSafeCIContext: @unchecked Sendable {
+    let value = CIContext(options: [.cacheIntermediates: false])
+  }
+
+  private static let sharedCIContext = ThreadSafeCIContext()
 
   private let lock = NSLock()
   private nonisolated(unsafe) var continuation: CheckedContinuation<CGImage, Error>?
@@ -209,7 +218,7 @@ extension SingleFrameStreamCaptureSession: SCStreamOutput {
       height: CVPixelBufferGetHeight(imageBuffer)
     )
 
-    guard let cgImage = Self.sharedCIContext.createCGImage(ciImage, from: rect) else {
+    guard let cgImage = Self.sharedCIContext.value.createCGImage(ciImage, from: rect) else {
       finish(.failure(ScreenCaptureError.captureFailed(AppText.value("scCaptureInvalidFrame", language: .system))))
       return
     }

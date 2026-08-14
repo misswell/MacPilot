@@ -7,7 +7,7 @@
 
 import AppKit
 import Foundation
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 
 struct WindowSelectionCandidate: Equatable, Sendable {
   let target: WindowCaptureTarget
@@ -54,7 +54,7 @@ enum WindowSelectionQueryService {
     excludeOwnApplication: Bool
   ) async -> WindowSelectionSnapshot? {
     do {
-      let content = try await loadShareableContent(prefetchedContentTask: prefetchedContentTask)
+      let content = try await loadShareableContent(prefetchedContentTask: prefetchedContentTask).value
       let shareableWindowsByID = Dictionary(
         uniqueKeysWithValues: content.windows.filter { $0.isOnScreen }.map { ($0.windowID, $0) }
       )
@@ -262,13 +262,13 @@ enum WindowSelectionQueryService {
     prefetchedContentTask: ShareableContentPrefetchTask?
   ) async -> SCWindow? {
     do {
-      let content = try await loadShareableContent(prefetchedContentTask: prefetchedContentTask)
+      let content = try await loadShareableContent(prefetchedContentTask: prefetchedContentTask).value
       if let prefetchedMatch = content.windows.first(where: { $0.windowID == windowID && $0.isOnScreen }) {
         return prefetchedMatch
       }
 
-      let refreshedContent = try await SCShareableContent.current
-      return refreshedContent.windows.first { $0.windowID == windowID && $0.isOnScreen }
+      let refreshedContent = try await loadFreshShareableContent()
+      return refreshedContent.value.windows.first { $0.windowID == windowID && $0.isOnScreen }
     } catch {
       DiagnosticLogger.shared.logError(
         .capture,
@@ -296,12 +296,21 @@ enum WindowSelectionQueryService {
 
   private static func loadShareableContent(
     prefetchedContentTask: ShareableContentPrefetchTask?
-  ) async throws -> SCShareableContent {
+  ) async throws -> ShareableContentBox {
     if let prefetchedContentTask {
       let box = try await prefetchedContentTask.task.value
-      return box.value
+      return box
     }
-    return try await SCShareableContent.current
+    return try await loadFreshShareableContent()
+  }
+
+  /// Queries ScreenCaptureKit outside the main actor and boxes its
+  /// Objective-C reference result before it crosses back to the UI actor.
+  /// Xcode 16.4 correctly diagnoses a raw SCShareableContent return as a
+  /// non-Sendable actor hop, while the immutable box is the intentional
+  /// boundary used by the migrated Snapzy capture flow.
+  private nonisolated static func loadFreshShareableContent() async throws -> ShareableContentBox {
+    ShareableContentBox(value: try await SCShareableContent.current)
   }
 
   private static func displayID(for frame: CGRect) -> CGDirectDisplayID? {
