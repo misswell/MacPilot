@@ -13,7 +13,7 @@ import os.log
 private let logger = Logger(subsystem: "Snapzy", category: "ThumbnailGenerator")
 
 /// Result of thumbnail generation containing optional thumbnail and duration
-struct ThumbnailResult {
+struct ThumbnailResult: @unchecked Sendable {
   let thumbnail: NSImage?
   let duration: TimeInterval?
 }

@@ -18,16 +18,31 @@ enum QuickAccessSound {
   case failed
 
   // MARK: - Pre-cached sounds for instant playback (avoid disk loading on each play)
-  private static let cachedSounds: [String: NSSound] = {
-    var sounds: [String: NSSound] = [:]
-    let soundNames = ["Pop", "Blow", "Funk", "Glass", "Basso"]
-    for name in soundNames {
-      if let sound = NSSound(named: name) {
-        sounds[name] = sound
+  // NSSound's Sendable annotation differs between the SDKs used by local
+  // development and CI. The cache is written once at startup and only ever
+  // read afterwards, so it sits behind one explicit unchecked-Sendable boundary.
+  private final class SoundCache: @unchecked Sendable {
+    let sounds: [String: NSSound]
+
+    init() {
+      var sounds: [String: NSSound] = [:]
+      let soundNames = ["Pop", "Blow", "Funk", "Glass", "Basso"]
+      for name in soundNames {
+        if let sound = NSSound(named: name) {
+          sounds[name] = sound
+        }
       }
+      self.sounds = sounds
     }
-    return sounds
-  }()
+  }
+
+  private static let cachedSounds = SoundCache()
+
+  // MARK: - Playback
+
+  private static func cachedSound(named name: String) -> NSSound? {
+    cachedSounds.sounds[name]
+  }
 
   /// Play the sound effect asynchronously (non-blocking)
   /// - Parameter reduceMotion: When true, sounds are disabled for accessibility
@@ -39,7 +54,7 @@ enum QuickAccessSound {
     let vol = self.volume
     // Fire-and-forget async playback - never blocks UI
     DispatchQueue.global(qos: .userInteractive).async {
-      guard let sound = Self.cachedSounds[soundName]?.copy() as? NSSound else { return }
+      guard let sound = Self.cachedSound(named: soundName)?.copy() as? NSSound else { return }
       sound.volume = vol
       sound.play()
     }
