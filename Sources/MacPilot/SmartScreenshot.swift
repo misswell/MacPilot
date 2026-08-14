@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
@@ -185,6 +186,8 @@ enum SmartCaptureSelectionMode: Equatable, Sendable {
     case smartElement
     case manualArea
     case applicationWindow
+    case recordingArea
+    case recordingApplication
     case areaAnnotate
     case ocr
     case scrolling
@@ -953,6 +956,7 @@ final class SmartScreenshotController {
     private let onCapture: (CGImage) -> Void
     private let onError: (Error) -> Void
     private let onSelectionRect: (CGRect) -> Void
+    private let onRecordingSelection: (CGRect, SmartCaptureSelectionMode) -> Void
     private let onRepeatLastArea: () -> Void
     private let onFullscreenCapture: () -> Void
     private let onActiveWindowCapture: () -> Void
@@ -971,6 +975,7 @@ final class SmartScreenshotController {
     private var manualSelectionRect: CGRect?
     private var pinControllers: [UUID: SmartPinWindowController] = [:]
     private var quickAccessControllers: [UUID: SmartQuickAccessWindowController] = [:]
+    private var mediaQuickAccessControllers: [UUID: SmartMediaQuickAccessWindowController] = [:]
     private var inlineAnnotationControllers: [UUID: SmartAnnotationWindowController] = [:]
     private var scrollingControllers: [UUID: SmartScrollingCaptureWindowController] = [:]
     private var isSelecting = false
@@ -1003,6 +1008,7 @@ final class SmartScreenshotController {
         onCapture: @escaping (CGImage) -> Void,
         onError: @escaping (Error) -> Void,
         onSelectionRect: @escaping (CGRect) -> Void = { _ in },
+        onRecordingSelection: @escaping (CGRect, SmartCaptureSelectionMode) -> Void = { _, _ in },
         onRepeatLastArea: @escaping () -> Void = {},
         shortcutBinding: SmartCaptureShortcutBinding = .default,
         additionalShortcutBindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding] = [:],
@@ -1017,6 +1023,7 @@ final class SmartScreenshotController {
         self.onCapture = onCapture
         self.onError = onError
         self.onSelectionRect = onSelectionRect
+        self.onRecordingSelection = onRecordingSelection
         self.onRepeatLastArea = onRepeatLastArea
         self.shortcutBinding = shortcutBinding
         self.additionalShortcutBindings = additionalShortcutBindings
@@ -1571,6 +1578,9 @@ final class SmartScreenshotController {
         let quickAccessControllers = Array(self.quickAccessControllers.values)
         self.quickAccessControllers.removeAll(keepingCapacity: false)
         for controller in quickAccessControllers { controller.close() }
+        let mediaQuickAccessControllers = Array(self.mediaQuickAccessControllers.values)
+        self.mediaQuickAccessControllers.removeAll(keepingCapacity: false)
+        for controller in mediaQuickAccessControllers { controller.close() }
         let inlineAnnotationControllers = Array(self.inlineAnnotationControllers.values)
         self.inlineAnnotationControllers.removeAll(keepingCapacity: false)
         for controller in inlineAnnotationControllers { controller.close() }
@@ -1605,13 +1615,14 @@ final class SmartScreenshotController {
         }
         isSelecting = true
         selectionMode = mode
-        selectionInteraction.reset(mode: mode == .applicationWindow ? .applicationWindow : .area)
+        let isApplicationMode = mode == .applicationWindow || mode == .recordingApplication
+        selectionInteraction.reset(mode: isApplicationMode ? .applicationWindow : .area)
         manualSelectionCoordinateFailure = false
         lastSelectionCoordinateFailureLogAt = 0
         registerSelectionCancelShortcut()
         let initialPoint = NSEvent.mouseLocation
         currentTarget = mode == .smartElement ? SmartAXTargetQuery.target(at: initialPoint) : nil
-        if mode == .applicationWindow {
+        if isApplicationMode {
             currentTarget = SmartAXTargetQuery.applicationWindowTarget(at: initialPoint)
         }
         Self.logger.info("Selection started; initial target available: \(self.currentTarget != nil)")
@@ -1762,9 +1773,28 @@ final class SmartScreenshotController {
         controller.show()
     }
 
+    func showQuickAccess(mediaURL: URL) {
+        let previousImages = Array(quickAccessControllers.values)
+        quickAccessControllers.removeAll(keepingCapacity: false)
+        for controller in previousImages { controller.close() }
+        let previousMedia = Array(mediaQuickAccessControllers.values)
+        mediaQuickAccessControllers.removeAll(keepingCapacity: false)
+        for controller in previousMedia { controller.close() }
+        let id = UUID()
+        let controller = SmartMediaQuickAccessWindowController(
+            url: mediaURL,
+            language: language(),
+            onClose: { [weak self] in
+                self?.mediaQuickAccessControllers.removeValue(forKey: id)
+            }
+        )
+        mediaQuickAccessControllers[id] = controller
+        controller.show()
+    }
+
     private func updateTarget(at appKitPoint: CGPoint) {
         guard isSelecting,
-              (selectionMode == .smartElement || selectionMode == .applicationWindow),
+              (selectionMode == .smartElement || selectionMode == .applicationWindow || selectionMode == .recordingApplication),
               manualSelectionStart == nil else { return }
         latestPointerLocation = appKitPoint
         guard pendingTargetUpdate == nil else { return }
@@ -1884,6 +1914,10 @@ final class SmartScreenshotController {
     func handleSelectionKeyDown(keyCode: UInt16, modifiers: InputSourceShortcutModifiers = []) -> Bool {
         guard isSelecting else { return false }
         if keyCode == UInt16(kVK_ANSI_A),
+           selectionMode == .recordingArea || selectionMode == .recordingApplication {
+            return false
+        }
+        if keyCode == UInt16(kVK_ANSI_A),
            selectionMode != .manualArea,
            selectionMode != .applicationWindow {
             return false
@@ -1920,7 +1954,7 @@ final class SmartScreenshotController {
         switch selectionMode {
         case .smartElement:
             target = SmartAXTargetQuery.target(at: appKitPoint)
-        case .applicationWindow:
+        case .applicationWindow, .recordingApplication:
             target = SmartAXTargetQuery.applicationWindowTarget(at: appKitPoint)
         default:
             target = nil
@@ -1956,7 +1990,15 @@ final class SmartScreenshotController {
         case .repeatLastArea:
             onRepeatLastArea()
         case .modeChanged(let mode):
-            selectionMode = mode == .applicationWindow ? .applicationWindow : .manualArea
+            switch selectionMode {
+            case .recordingArea, .recordingApplication:
+                // Recording mode is selected in the pre-record controls. Do
+                // not silently turn an area recording into a screenshot when
+                // the user presses the shared `A` overlay key.
+                return
+            default:
+                selectionMode = mode == .applicationWindow ? .applicationWindow : .manualArea
+            }
             currentTarget = nil
             manualSelectionRect = nil
             manualSelectionStart = nil
@@ -1977,7 +2019,7 @@ final class SmartScreenshotController {
     private func commit(at point: CGPoint) {
         let target: CGRect?
         switch selectionMode {
-        case .applicationWindow:
+        case .applicationWindow, .recordingApplication:
             target = currentTarget.flatMap { $0.contains(point) ? $0 : nil }
                 ?? SmartAXTargetQuery.applicationWindowTarget(at: point)
         default:
@@ -2004,6 +2046,10 @@ final class SmartScreenshotController {
         }
         let captureMode = selectionMode
         cancelSelection()
+        if captureMode == .recordingArea || captureMode == .recordingApplication {
+            onRecordingSelection(rect, captureMode)
+            return
+        }
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(80))
             do {
@@ -2060,6 +2106,15 @@ final class SmartScreenshotController {
 
 private extension CGRect {
     var area: CGFloat { isNull || isEmpty ? 0 : width * height }
+}
+
+/// Coordinate conversion seam shared by screenshot and recording selection.
+/// The AX/window resolver remains private; only this geometry helper is
+/// exposed to the recording model.
+enum SmartCaptureCoordinateConversion {
+    static func quartzRect(fromAppKitRect rect: CGRect) -> CGRect? {
+        SmartAXTargetQuery.quartzRect(fromAppKitRect: rect)
+    }
 }
 
 private enum SmartAXTargetQuery {
@@ -3025,6 +3080,151 @@ private struct SmartQuickAccessView: View {
                 .scaledToFit()
                 .background(Color.black.opacity(0.04))
         }
+    }
+}
+
+private struct SendableMediaThumbnail: @unchecked Sendable {
+    let image: CGImage
+}
+
+@MainActor
+private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDelegate {
+    private let url: URL
+    private let language: AppLanguage
+    private let onClose: () -> Void
+    private var panel: NSPanel?
+    private var dismissTimer: Timer?
+
+    init(url: URL, language: AppLanguage, onClose: @escaping () -> Void) {
+        self.url = url
+        self.language = language
+        self.onClose = onClose
+    }
+
+    func show() {
+        let panel = NSPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 460, height: 340),
+            styleMask: [.titled, .closable, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = AppText.value("scRecordingActions", language: language)
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+        panel.delegate = self
+        panel.contentView = NSHostingView(rootView: SmartMediaQuickAccessView(
+            url: url,
+            language: language,
+            onCopy: { [weak self] in self?.copyMedia() },
+            onOpen: { [weak self] in self?.openMedia() },
+            onReveal: { [weak self] in self?.revealMedia() },
+            onClose: { [weak self] in self?.close() }
+        ))
+        panel.center()
+        panel.orderFrontRegardless()
+        self.panel = panel
+        dismissTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.close() }
+        }
+    }
+
+    func close() {
+        dismissTimer?.invalidate()
+        dismissTimer = nil
+        panel?.close()
+        panel = nil
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        dismissTimer?.invalidate()
+        dismissTimer = nil
+        panel?.contentView = nil
+        panel = nil
+        onClose()
+    }
+
+    private func copyMedia() {
+        NSPasteboard.general.clearContents()
+        _ = NSPasteboard.general.writeObjects([url as NSURL])
+    }
+
+    private func openMedia() {
+        NSWorkspace.shared.open(url)
+    }
+
+    private func revealMedia() {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+}
+
+private struct SmartMediaQuickAccessView: View {
+    let url: URL
+    let language: AppLanguage
+    let onCopy: () -> Void
+    let onOpen: () -> Void
+    let onReveal: () -> Void
+    let onClose: () -> Void
+    @State private var thumbnail: NSImage?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Group {
+                if let thumbnail {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: url.pathExtension.lowercased() == "gif" ? "photo.on.rectangle" : "film")
+                            .font(.system(size: 42))
+                            .foregroundStyle(.secondary)
+                        Text(url.lastPathComponent)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .background(Color.black.opacity(0.06))
+
+            HStack(spacing: 8) {
+                Button(action: onCopy) { Label(AppText.value("scCopy", language: language), systemImage: "doc.on.doc") }
+                Button(action: onOpen) { Label(AppText.value("scOpen", language: language), systemImage: "arrow.up.right.square") }
+                Button(action: onReveal) { Label(AppText.value("scReveal", language: language), systemImage: "folder") }
+                Spacer()
+                Button(action: onClose) { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+                    .help(AppText.value("scClose", language: language))
+            }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 10)
+            .frame(height: 42)
+            .background(.ultraThinMaterial)
+        }
+        .task(id: url) {
+            guard let loaded = await Self.loadThumbnail(from: url) else {
+                thumbnail = nil
+                return
+            }
+            thumbnail = NSImage(
+                cgImage: loaded.image,
+                size: NSSize(width: loaded.image.width, height: loaded.image.height)
+            )
+        }
+    }
+
+    private static func loadThumbnail(from url: URL) async -> SendableMediaThumbnail? {
+        await Task.detached(priority: .utility) {
+            let asset = AVURLAsset(url: url)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 900, height: 620)
+            guard let image = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return nil }
+            return SendableMediaThumbnail(image: image)
+        }.value
     }
 }
 

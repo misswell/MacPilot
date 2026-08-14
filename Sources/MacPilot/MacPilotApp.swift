@@ -5,6 +5,10 @@ import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 
+extension Notification.Name {
+    static let macPilotDeepLink = Notification.Name("MacPilot.deepLink")
+}
+
 @main
 struct MacPilotApp: App {
     @StateObject private var model = MacPilotModel()
@@ -65,6 +69,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.hideRegularWindows()
         }
         hideWindowDuringLaunch = false
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            NotificationCenter.default.post(name: .macPilotDeepLink, object: url)
+        }
     }
 
     /// 隐藏所有非面板窗口（菜单栏弹窗等面板不受影响），仅保留菜单栏图标。
@@ -495,16 +505,18 @@ enum AppText {
         "compressionFolderIssue": "%@：%@"
         ,
         "screenCapture": "截屏与贴图", "screenCaptureSubtitle": "使用可自定义快捷键智能识别窗口和界面元素边界，支持贴图、OCR、标注与低资源定时截屏。",
+        "scRecording": "屏幕录制", "scRecordingStart": "开始录制", "scRecordingStop": "停止录制", "scRecordingPause": "暂停录制", "scRecordingResume": "继续录制", "scRecordingCancel": "取消录制", "scRecordingOpenFolder": "打开录制文件夹", "scRecordingFormat": "格式", "scRecordingCaptureMode": "录制范围", "scRecordingArea": "框选区域", "scRecordingFullscreen": "全屏", "scRecordingApplication": "应用窗口", "scRecordingFPS": "帧率", "scRecordingFPSValue": "%d 帧/秒", "scRecordingCursor": "包含鼠标光标", "scRecordingSystemAudio": "录制系统声音", "scRecordingIdle": "未录制", "scRecordingPreparing": "准备中…", "scRecordingActive": "录制中 %@", "scRecordingPaused": "已暂停 %@", "scRecordingStopping": "正在保存…", "scRecordingLastFile": "最近录制：%@", "scRecordingExportGIF": "导出 GIF", "scRecordingConvertingGIF": "正在生成 GIF…", "scRecordingActions": "录制快捷操作", "scOpen": "打开",
+        "scRecordingPermissionRequired": "需要屏幕录制权限才能录制屏幕。", "scRecordingNoDisplay": "没有可录制的显示器。", "scRecordingAlreadyRunning": "屏幕录制已经在进行中。", "scRecordingNotRunning": "当前没有进行中的屏幕录制。", "scRecordingWriterFailed": "无法创建录制文件。", "scRecordingNoVideoFrames": "没有收到可用的视频帧。", "scRecordingStreamFailed": "屏幕录制失败：%@", "scRecordingUnknownError": "屏幕录制失败，请重试。", "scRecordingGIFSourceUnavailable": "无法读取要转换的录制文件。", "scRecordingGIFNoFrames": "录制文件没有可用于 GIF 的画面。", "scRecordingGIFDestinationUnavailable": "无法创建 GIF 输出文件。", "scRecordingGIFFailed": "无法生成 GIF 文件。",
         "scSmartCapture": "智能截图", "scSmartCaptureHint": "移动鼠标自动识别窗口或界面元素，单击截图，Esc 或右键取消。",
         "scSmartCaptureNow": "开始截图", "scAreaCaptureNow": "区域框选截图", "scApplicationWindowCaptureNow": "应用窗口框选截图", "scFullscreenCaptureNow": "全屏截图", "scActiveWindowCaptureNow": "当前窗口截图", "scAreaAnnotateNow": "区域截图并标注", "scOCRCaptureNow": "区域截图并 OCR", "scScrollingCaptureNow": "滚动长截图", "scObjectCutoutNow": "抠图截图", "scEditShortcuts": "修改截图快捷键", "scEnableSmartCapture": "启用全局快捷键", "scChangeShortcut": "修改快捷键",
         "scShortcutModes": "截图快捷入口", "scStartMode": "开始", "scSmartCaptureShortcut": "智能元素截图快捷键", "scAreaCaptureShortcut": "区域框选截图快捷键", "scRepeatAreaShortcut": "重复上次区域快捷键", "scApplicationWindowShortcut": "应用窗口截图快捷键", "scFullscreenCaptureShortcut": "全屏截图快捷键", "scActiveWindowCaptureShortcut": "当前窗口截图快捷键", "scAreaAnnotateShortcut": "区域截图并标注快捷键", "scOCRShortcut": "OCR 截图快捷键", "scScrollingShortcut": "滚动长截图快捷键", "scObjectCutoutShortcut": "抠图截图快捷键",
         "scRepeatArea": "重复上次区域", "scNoLastArea": "还没有可重复的区域截图。",
         "scSmartCaptureAccessibilityRequired": "智能截图需要辅助功能权限。请在设置中明确点击授权后再试。",
-        "scPinAfterSmartCapture": "截图后自动贴图", "scQuickAccessTitle": "截图快捷操作", "scQuickAccessHint": "截图后显示快捷操作，可复制、标注或按需贴图；不会自动贴图。", "scCaptureAreaUnavailable": "上次选择的区域已不可用。", "scCaptureCoordinateUnavailable": "无法定位鼠标所在显示器，请重试。", "scCaptureOutsideDisplay": "所选区域不在显示器范围内。", "scCaptureMultiDisplayAllocationFailed": "无法创建跨显示器截图。", "scCaptureMultiDisplayCompositionFailed": "无法合成跨显示器截图。", "scActiveWindowUnavailable": "没有找到当前应用窗口。",
+        "scPinAfterSmartCapture": "截图后自动贴图", "scCopyAfterCapture": "截图后复制到剪贴板", "scShowQuickAccess": "截图后显示快捷操作", "scQuickAccessTitle": "截图快捷操作", "scQuickAccessHint": "截图后显示快捷操作，可复制、标注或按需贴图；不会自动贴图。", "scCaptureAreaUnavailable": "上次选择的区域已不可用。", "scCaptureCoordinateUnavailable": "无法定位鼠标所在显示器，请重试。", "scCaptureOutsideDisplay": "所选区域不在显示器范围内。", "scCaptureMultiDisplayAllocationFailed": "无法创建跨显示器截图。", "scCaptureMultiDisplayCompositionFailed": "无法合成跨显示器截图。", "scActiveWindowUnavailable": "没有找到当前应用窗口。",
         "scShortcutHint": "裸键仅支持 F1–F20；字母、数字和其他普通键请至少加 Command、Option、Control 或 Shift。Esc 不能作为截图快捷键。",
         "scShortcutReserved": "Esc 保留用于取消框选，不能设为截图快捷键。",
         "scShortcutModifierRequired": "字母、数字和普通键必须带至少一个修饰键。",
-        "scShortcutRegistrationFailed": "快捷键注册失败，可能已被系统或其他应用占用；已保留原快捷键。", "scShortcutDuplicate": "该快捷键已分配给 %@，请换一个组合键。",
+        "scShortcutRegistrationFailed": "快捷键注册失败，可能已被系统或其他应用占用；已保留原快捷键。", "scShortcutDuplicate": "该快捷键已分配给 %@，请换一个组合键。", "scShortcutUsedByScreenshot": "该快捷键已被截图入口使用，请换一个组合键。",
         "scShortcutSystemConflict": "该组合键已被 macOS 截图快捷键占用，请换一个组合键，或在系统设置中关闭冲突项。",
         "scSystemShortcutArea": "与 macOS 的区域截图快捷键冲突",
         "scSystemShortcutFullscreen": "与 macOS 的全屏截图快捷键冲突",
@@ -532,7 +544,7 @@ enum AppText {
         "scRetention": "自动清理", "scRetentionDisabled": "不自动清理", "scRetentionDays": "保留 %d 天",
         "scRetentionHint": "超过设定天数的截屏会自动删除。设为 0 表示永久保留。",
         "scStatus": "状态", "scPermissionRequired": "需要屏幕录制权限才能截屏。",
-        "scGrantPermission": "授权屏幕录制…",
+        "scGrantPermission": "授权屏幕录制…", "scOpenPermissionSettings": "打开屏幕录制设置",
         "scResetPermission": "重置权限并退出", "scResettingPermission": "正在重置…",
         "scPermissionRecoveryHint": "如果系统设置中已经允许但仍无法截屏，请重置旧的屏幕录制授权记录。",
         "scPermissionRestartHint": "授权后请重启 MacPilot；如果仍无法截屏，请重置权限并退出。",
@@ -736,16 +748,18 @@ enum AppText {
             "compressionFolderIssue": "%@: %@"
             ,
             "screenCapture": "Capture & Pin", "screenCaptureSubtitle": "Use a customizable shortcut to detect window and UI element bounds, then pin, OCR, annotate, or run low-resource scheduled captures.",
+            "scRecording": "Screen Recording", "scRecordingStart": "Start Recording", "scRecordingStop": "Stop Recording", "scRecordingPause": "Pause Recording", "scRecordingResume": "Resume Recording", "scRecordingCancel": "Cancel Recording", "scRecordingOpenFolder": "Open Recording Folder", "scRecordingFormat": "Format", "scRecordingCaptureMode": "Capture area", "scRecordingArea": "Selected area", "scRecordingFullscreen": "Full screen", "scRecordingApplication": "Application window", "scRecordingFPS": "Frame rate", "scRecordingFPSValue": "%d fps", "scRecordingCursor": "Show cursor", "scRecordingSystemAudio": "Record system audio", "scRecordingIdle": "Idle", "scRecordingPreparing": "Preparing…", "scRecordingActive": "Recording %@", "scRecordingPaused": "Paused %@", "scRecordingStopping": "Saving…", "scRecordingLastFile": "Last recording: %@", "scRecordingExportGIF": "Export GIF", "scRecordingConvertingGIF": "Converting to GIF…", "scRecordingActions": "Recording Actions", "scOpen": "Open",
+            "scRecordingPermissionRequired": "Screen Recording permission is required to record the screen.", "scRecordingNoDisplay": "No display is available to record.", "scRecordingAlreadyRunning": "A screen recording is already running.", "scRecordingNotRunning": "There is no active screen recording.", "scRecordingWriterFailed": "The recording file could not be created.", "scRecordingNoVideoFrames": "No usable video frames were received.", "scRecordingStreamFailed": "Screen recording failed: %@", "scRecordingUnknownError": "Screen recording failed. Try again.", "scRecordingGIFSourceUnavailable": "The recording file could not be read.", "scRecordingGIFNoFrames": "The recording has no frames that can be used for a GIF.", "scRecordingGIFDestinationUnavailable": "The GIF output file could not be created.", "scRecordingGIFFailed": "The GIF file could not be generated.",
             "scSmartCapture": "Smart Capture", "scSmartCaptureHint": "Move the pointer to detect a window or UI element, click to capture, or press Escape/right-click to cancel.",
             "scSmartCaptureNow": "Start Capture", "scAreaCaptureNow": "Capture Area", "scApplicationWindowCaptureNow": "Capture Application Window", "scFullscreenCaptureNow": "Capture Full Screen", "scActiveWindowCaptureNow": "Capture Current Window", "scAreaAnnotateNow": "Capture and Annotate", "scOCRCaptureNow": "Capture Area and OCR", "scScrollingCaptureNow": "Scrolling Screenshot", "scObjectCutoutNow": "Object Cutout", "scEditShortcuts": "Edit Screenshot Shortcuts", "scEnableSmartCapture": "Enable the global shortcut", "scChangeShortcut": "Change Shortcut",
             "scShortcutModes": "Screenshot shortcuts", "scStartMode": "Start", "scSmartCaptureShortcut": "Smart element shortcut", "scAreaCaptureShortcut": "Area capture shortcut", "scRepeatAreaShortcut": "Repeat last area shortcut", "scApplicationWindowShortcut": "Application window shortcut", "scFullscreenCaptureShortcut": "Fullscreen capture shortcut", "scActiveWindowCaptureShortcut": "Active window shortcut", "scAreaAnnotateShortcut": "Area and annotate shortcut", "scOCRShortcut": "OCR capture shortcut", "scScrollingShortcut": "Scrolling screenshot shortcut", "scObjectCutoutShortcut": "Object cutout shortcut",
             "scRepeatArea": "Repeat Last Area", "scNoLastArea": "There is no previous area to repeat.",
             "scSmartCaptureAccessibilityRequired": "Smart Capture requires Accessibility access. Grant it explicitly in Settings, then try again.",
-            "scPinAfterSmartCapture": "Pin after smart capture", "scQuickAccessTitle": "Screenshot Actions", "scQuickAccessHint": "After capture, choose to copy, annotate, or pin. Pinning is never automatic.", "scCaptureAreaUnavailable": "The last selected area is no longer available.", "scCaptureCoordinateUnavailable": "The pointer could not be mapped to a display. Try again.", "scCaptureOutsideDisplay": "The selected region is outside the display.", "scCaptureMultiDisplayAllocationFailed": "Unable to allocate a multi-display screenshot.", "scCaptureMultiDisplayCompositionFailed": "Unable to compose the multi-display screenshot.", "scActiveWindowUnavailable": "No active application window was found.", "scObjectCutoutNoForeground": "No foreground object was detected.", "scObjectCutoutMaskFailed": "The foreground mask could not be rendered.",
+            "scPinAfterSmartCapture": "Pin after smart capture", "scCopyAfterCapture": "Copy screenshots to the clipboard", "scShowQuickAccess": "Show Quick Access after capture", "scQuickAccessTitle": "Screenshot Actions", "scQuickAccessHint": "After capture, choose to copy, annotate, or pin. Pinning is never automatic.", "scCaptureAreaUnavailable": "The last selected area is no longer available.", "scCaptureCoordinateUnavailable": "The pointer could not be mapped to a display. Try again.", "scCaptureOutsideDisplay": "The selected region is outside the display.", "scCaptureMultiDisplayAllocationFailed": "Unable to allocate a multi-display screenshot.", "scCaptureMultiDisplayCompositionFailed": "Unable to compose the multi-display screenshot.", "scActiveWindowUnavailable": "No active application window was found.", "scObjectCutoutNoForeground": "No foreground object was detected.", "scObjectCutoutMaskFailed": "The foreground mask could not be rendered.",
             "scShortcutHint": "Bare keys are limited to F1–F20; letters, numbers, and other regular keys need Command, Option, Control, or Shift. Escape is reserved for cancel.",
             "scShortcutReserved": "Escape is reserved for cancelling a selection and cannot be used for capture.",
             "scShortcutModifierRequired": "Letters, numbers, and regular keys require at least one modifier.",
-            "scShortcutRegistrationFailed": "The shortcut could not be registered; it may be in use by macOS or another app. The previous shortcut was kept.", "scShortcutDuplicate": "This shortcut is already assigned to %@. Choose another combination.",
+            "scShortcutRegistrationFailed": "The shortcut could not be registered; it may be in use by macOS or another app. The previous shortcut was kept.", "scShortcutDuplicate": "This shortcut is already assigned to %@. Choose another combination.", "scShortcutUsedByScreenshot": "This shortcut is already used by a screenshot entry point. Choose another combination.",
             "scShortcutSystemConflict": "macOS already uses this screenshot shortcut. Choose another combination or disable the conflicting item in System Settings.",
             "scSystemShortcutArea": "Conflicts with macOS area screenshot",
             "scSystemShortcutFullscreen": "Conflicts with macOS full-screen screenshot",
@@ -773,7 +787,7 @@ enum AppText {
             "scRetention": "Auto-cleanup", "scRetentionDisabled": "No auto-cleanup", "scRetentionDays": "Keep %d days",
             "scRetentionHint": "Screenshots older than the set number of days are automatically deleted. Set to 0 to keep forever.",
             "scStatus": "Status", "scPermissionRequired": "Screen Recording permission is required to capture the screen.",
-            "scGrantPermission": "Grant Screen Recording…",
+            "scGrantPermission": "Grant Screen Recording…", "scOpenPermissionSettings": "Open Screen Recording Settings",
             "scResetPermission": "Reset Permission and Quit", "scResettingPermission": "Resetting…",
             "scPermissionRecoveryHint": "If System Settings already allows access but capture still fails, reset the stale Screen Recording permission record.",
             "scPermissionRestartHint": "Grant access, then restart MacPilot. If capture still fails, reset the permission and quit.",
@@ -835,12 +849,13 @@ final class MacPilotModel: ObservableObject {
         var fileCompression: FolderCompressionSettings
 
         var screenCapture: ScreenCaptureSettings
+        var screenRecording: ScreenRecordingSettings
         var pictureInPicture: PictureInPictureSettings
         var inputSources: InputSourceSettings
         var windowSwitcher: WindowSwitcherSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings) {
-            version = 11
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings) {
+            version = 12
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -850,6 +865,7 @@ final class MacPilotModel: ObservableObject {
             self.bleUnlock = bleUnlock
             self.fileCompression = fileCompression
             self.screenCapture = screenCapture
+            self.screenRecording = screenRecording
             self.pictureInPicture = pictureInPicture
             self.inputSources = inputSources
             self.windowSwitcher = windowSwitcher
@@ -867,6 +883,7 @@ final class MacPilotModel: ObservableObject {
             bleUnlock = try container.decodeIfPresent(BLEUnlockSettings.self, forKey: .bleUnlock) ?? BLEUnlockSettings()
             fileCompression = try container.decodeIfPresent(FolderCompressionSettings.self, forKey: .fileCompression) ?? FolderCompressionSettings()
             screenCapture = try container.decodeIfPresent(ScreenCaptureSettings.self, forKey: .screenCapture) ?? ScreenCaptureSettings()
+            screenRecording = try container.decodeIfPresent(ScreenRecordingSettings.self, forKey: .screenRecording) ?? ScreenRecordingSettings()
             pictureInPicture = try container.decodeIfPresent(PictureInPictureSettings.self, forKey: .pictureInPicture) ?? PictureInPictureSettings()
             inputSources = try container.decodeIfPresent(InputSourceSettings.self, forKey: .inputSources) ?? InputSourceSettings()
             windowSwitcher = try container.decodeIfPresent(WindowSwitcherSettings.self, forKey: .windowSwitcher) ?? WindowSwitcherSettings()
@@ -884,11 +901,12 @@ final class MacPilotModel: ObservableObject {
     @Published private(set) var isResettingAccessibility = false
     @Published private(set) var isResettingScreenCapture = false
     @Published private(set) var launchesAtLogin = false
-    @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; windowSwitcher.language = language; saveIfReady() } }
+    @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; screenRecording.language = language; windowSwitcher.language = language; saveIfReady() } }
     let ble = BLEUnlockModel()
     let updater = SoftwareUpdater()
     let fileCompression = FolderCompressionModel()
     let screenCapture = ScreenCaptureModel()
+    let screenRecording = ScreenRecordingModel()
     let pictureInPicture = PictureInPictureModel()
     let inputSources = InputSourceModel()
     let windowSwitcher = WindowSwitcherModel()
@@ -935,12 +953,43 @@ final class MacPilotModel: ObservableObject {
         ) { [weak screenCapture] _ in
             Task { @MainActor in screenCapture?.shutdown() }
         }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak screenRecording] _ in
+            Task { @MainActor in screenRecording?.shutdown() }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .macPilotDeepLink,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let url = notification.object as? URL else { return }
+            Task { @MainActor in self?.handleDeepLink(url) }
+        }
         evaluateRules()
         scheduleLaunchPlanForCurrentBootIfNeeded()
         clearLegacyAccessibilityRecoveryRequest()
         ble.persist = { [weak self] in self?.saveIfReady() }
         fileCompression.persist = { [weak self] in self?.saveIfReady() }
         screenCapture.persist = { [weak self] in self?.saveIfReady() }
+        screenRecording.persist = { [weak self] in self?.saveIfReady() }
+        screenRecording.isShortcutInUse = { [weak screenCapture] binding in
+            guard let screenCapture else { return false }
+            return ScreenCaptureShortcutKind.allCases.contains {
+                screenCapture.shortcutBinding(for: $0) == binding
+            }
+        }
+        screenRecording.onRequestSelection = { [weak self] mode in
+            self?.screenCapture.startRecordingSelection(mode: mode)
+        }
+        screenCapture.onRecordingSelection = { [weak self] rect, _ in
+            self?.screenRecording.start(captureRect: rect)
+        }
+        screenRecording.onCompleted = { [weak self] url in
+            self?.screenCapture.showRecordingQuickAccess(url: url)
+        }
         pictureInPicture.persist = { [weak self] in self?.saveIfReady() }
         inputSources.persist = { [weak self] in self?.scheduleInputSourceSave() }
         windowSwitcher.persist = { [weak self] in self?.saveIfReady() }
@@ -949,6 +998,8 @@ final class MacPilotModel: ObservableObject {
         ble.activateFromConfiguration()
         fileCompression.activateFromConfiguration()
         screenCapture.activateFromConfiguration()
+        screenRecording.language = language
+        screenRecording.activateFromConfiguration()
         pictureInPicture.activateFromConfiguration()
         inputSources.activateFromConfiguration()
         windowSwitcher.activateFromConfiguration()
@@ -963,6 +1014,55 @@ final class MacPilotModel: ObservableObject {
     var enabledLaunchCount: Int { launchRules.filter(\.isEnabled).count }
     var pendingLaunchCount: Int { launchStates.values.reduce(into: 0) { if case .pending = $1 { $0 += 1 } } }
     var configurationFilePath: String { configurationURL.path }
+
+    /// Handles the Snapzy-compatible automation routes used by scripts and
+    /// other tools. Unknown routes are intentionally ignored so opening an
+    /// unrelated URL never changes the app state.
+    func handleDeepLink(_ url: URL) {
+        guard let scheme = url.scheme?.lowercased(), scheme == "snapzy" || scheme == "macpilot" else { return }
+        var route = url.host.map { [$0.lowercased()] } ?? []
+        route.append(contentsOf: url.pathComponents.filter { $0 != "/" }.map { $0.lowercased() })
+        guard !route.isEmpty else { return }
+        switch route {
+        case ["capture", "fullscreen"], ["capture", "full-screen"], ["screenshot", "fullscreen"]:
+            screenCapture.captureFullscreen()
+        case ["capture", "area"], ["screenshot", "area"], ["area"]:
+            screenCapture.startAreaCapture()
+        case ["capture", "repeat-area"], ["screenshot", "repeat-area"], ["repeat-area"]:
+            screenCapture.repeatSmartCapture()
+        case ["capture", "application"], ["capture", "window"], ["screenshot", "application"]:
+            screenCapture.startApplicationWindowCapture()
+        case ["capture", "active-window"], ["capture", "focused-window"], ["screenshot", "active-window"]:
+            screenCapture.captureActiveWindow()
+        case ["capture", "area-annotate"], ["screenshot", "area-annotate"]:
+            screenCapture.startAreaAnnotateCapture()
+        case ["capture", "scrolling"], ["screenshot", "scrolling"]:
+            screenCapture.startScrollingCapture()
+        case ["capture", "ocr"], ["screenshot", "ocr"], ["ocr"]:
+            screenCapture.startOCRCapture()
+        case ["capture", "smart-element"], ["screenshot", "smart-element"]:
+            screenCapture.startSmartCapture()
+        case ["capture", "object-cutout"], ["screenshot", "object-cutout"]:
+            screenCapture.startObjectCutoutCapture()
+        case ["record", "screen"], ["record", "fullscreen"]:
+            screenRecording.start()
+        case ["record", "application"], ["record", "window"]:
+            screenRecording.setCaptureMode(.application)
+            screenRecording.start()
+        case ["record", "stop"]:
+            screenRecording.stop()
+        case ["settings"], ["preferences"]:
+            requestedSection = .settings
+        case ["settings", "capture"], ["settings", "screenshots"]:
+            requestedSection = .capture
+        case ["show", "shortcuts"], ["open", "shortcuts"]:
+            requestedSection = .capture
+        case ["open", "history"], ["history"]:
+            requestedSection = .capture
+        default:
+            break
+        }
+    }
 
     @discardableResult
     func requestWindowControlAccess(presentRecoveryGuidance: Bool = true) -> Bool {
@@ -1572,6 +1672,7 @@ final class MacPilotModel: ObservableObject {
         ble.applyLoadedSettings(configuration.bleUnlock)
         fileCompression.applyLoadedSettings(configuration.fileCompression)
         screenCapture.applyLoadedSettings(configuration.screenCapture)
+        screenRecording.applyLoadedSettings(configuration.screenRecording)
         pictureInPicture.applyLoadedSettings(configuration.pictureInPicture)
         inputSources.applyLoadedSettings(configuration.inputSources)
         windowSwitcher.applyLoadedSettings(configuration.windowSwitcher)
@@ -1603,6 +1704,7 @@ final class MacPilotModel: ObservableObject {
             bleUnlock: ble.settings,
             fileCompression: fileCompression.settings,
             screenCapture: screenCapture.settings,
+            screenRecording: screenRecording.settings,
             pictureInPicture: pictureInPicture.settings,
             inputSources: inputSources.settings,
             windowSwitcher: windowSwitcher.settings
@@ -1869,7 +1971,7 @@ struct ContentView: View {
                 } else if section == .compression {
                     FileCompressionView(compression: model.fileCompression)
                 } else if section == .capture {
-                    ScreenCaptureView(capture: model.screenCapture)
+                    ScreenCaptureView(capture: model.screenCapture, recording: model.screenRecording)
                 } else if section == .pictureInPicture {
                     PictureInPictureView(pictureInPicture: model.pictureInPicture)
                 } else if section == .windowSwitcher {
@@ -3192,6 +3294,18 @@ struct MenuBarView: View {
         Button(model.t("scOCRCaptureNow")) { deferCaptureAction { model.screenCapture.startOCRCapture() } }
         Button(model.t("scScrollingCaptureNow")) { deferCaptureAction { model.screenCapture.startScrollingCapture() } }
         Button(model.t("scObjectCutoutNow")) { deferCaptureAction { model.screenCapture.startObjectCutoutCapture() } }
+        if model.screenRecording.state == .recording || model.screenRecording.state == .paused || model.screenRecording.state == .stopping {
+            if model.screenRecording.state == .recording {
+                Button(model.t("scRecordingPause")) { model.screenRecording.pause() }
+            } else if model.screenRecording.state == .paused {
+                Button(model.t("scRecordingResume")) { model.screenRecording.resume() }
+            }
+            Button(model.t("scRecordingStop")) { model.screenRecording.stop() }
+                .disabled(model.screenRecording.state == .stopping)
+        } else {
+            Button(model.t("scRecordingStart")) { deferCaptureAction { model.screenRecording.start() } }
+                .disabled(model.screenRecording.state == .preparing)
+        }
         Button(model.t("scEditShortcuts")) {
             model.requestedSection = .capture
             showMainWindow()

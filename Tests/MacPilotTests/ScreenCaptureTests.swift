@@ -182,6 +182,26 @@ struct ScreenCaptureTests {
         #expect(decoded.objectCutoutShortcut == settings.objectCutoutShortcut)
     }
 
+    @Test func postCapturePreferencesDefaultToCopyAndQuickAccess() throws {
+        let defaults = ScreenCaptureSettings()
+        #expect(defaults.copyAfterCapture)
+        #expect(defaults.showQuickAccess)
+        #expect(!defaults.pinAfterCapture)
+
+        let customized = ScreenCaptureSettings(
+            copyAfterCapture: false,
+            showQuickAccess: false,
+            pinAfterCapture: true
+        )
+        let decoded = try JSONDecoder().decode(
+            ScreenCaptureSettings.self,
+            from: JSONEncoder().encode(customized)
+        )
+        #expect(decoded.copyAfterCapture == false)
+        #expect(decoded.showQuickAccess == false)
+        #expect(decoded.pinAfterCapture)
+    }
+
     @Test @MainActor func screenCaptureModelAppliesAndPersistsEveryShortcutKind() {
         let model = ScreenCaptureModel()
         model.setSmartCaptureEnabled(false)
