@@ -270,6 +270,36 @@ struct BLEUnlockSettings: Codable {
     var turnOffScreen: Bool = false
 }
 
+/// Controls when CoreBluetooth is allowed to create its central manager.
+///
+/// Constructing `CBCentralManager` is itself a privacy-sensitive operation on
+/// macOS: when Bluetooth access is still undecided it can immediately show a
+/// system authorization prompt.  A persisted "enabled" toggle is not an
+/// explicit user action during startup, so startup must wait until the user
+/// opens BLE settings or starts a scan.  Once access has already been decided,
+/// automatic monitoring may safely restore itself in the background.
+enum BLEUnlockAuthorizationGate {
+    static func shouldInitializeCentralManager(
+        authorization: CBManagerAuthorization,
+        settingsEnabled: Bool,
+        hasMonitoredDevice: Bool,
+        explicitUserAction: Bool
+    ) -> Bool {
+        guard settingsEnabled || explicitUserAction else { return false }
+
+        switch authorization {
+        case .allowedAlways:
+            return true
+        case .notDetermined:
+            return explicitUserAction
+        case .denied, .restricted:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+}
+
 struct BLEWakeRecoveryPlan: Equatable {
     let monitoringRestartDelays: [TimeInterval]
     let unlockRetryDelays: [TimeInterval]
@@ -353,7 +383,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         settings.isEnabled = enabled
         if enabled {
             if let uuid = monitoredUUID {
-                ensureCentralManager()
+                // Toggling the feature is an explicit user action, so this is
+                // the one path allowed to start the first Bluetooth prompt.
+                ensureCentralManager(explicitUserAction: true)
                 if centralMgr?.state == .poweredOn { startMonitor(uuid) }
             }
         } else {
@@ -364,6 +396,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
     func activateFromConfiguration() {
         guard settings.isEnabled else { return }
+        // Do not create CBCentralManager during launch while Bluetooth access
+        // is still undecided.  Creating it here makes every newly installed
+        // or identity-mismatched build prompt before the user asks to use BLE.
         ensureCentralManager()
         if let uuid = monitoredUUID { startMonitor(uuid) }
     }
@@ -393,7 +428,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         settings.monitoredDeviceName = selectedName
         connected = false
         presence = false
-        ensureCentralManager()
+        ensureCentralManager(explicitUserAction: true)
         startMonitor(uuid)
         notifyChange()
     }
@@ -408,13 +443,19 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
     // MARK: Lifecycle
 
-    func ensureCentralManager() {
+    func ensureCentralManager(explicitUserAction: Bool = false) {
         guard centralMgr == nil else { return }
+        guard BLEUnlockAuthorizationGate.shouldInitializeCentralManager(
+            authorization: CBManager.authorization,
+            settingsEnabled: settings.isEnabled,
+            hasMonitoredDevice: monitoredUUID != nil,
+            explicitUserAction: explicitUserAction
+        ) else { return }
         centralMgr = CBCentralManager(delegate: self, queue: nil, options: [CBCentralManagerOptionShowPowerAlertKey: false])
     }
 
     func startScanning() {
-        ensureCentralManager()
+        ensureCentralManager(explicitUserAction: true)
         isScanning = true
         startScanCleanupTimer()
         scanForPeripherals()
