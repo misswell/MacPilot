@@ -2810,8 +2810,12 @@ private enum SmartScreenImageCapture {
     }
 
     @available(macOS 15.2, *)
-    private static func captureDisplayAgnosticRect(_ rect: CGRect) async throws -> CGImage {
-        try await withCheckedThrowingContinuation { continuation in
+    private nonisolated static func captureDisplayAgnosticRect(_ rect: CGRect) async throws -> CGImage {
+        // ScreenCaptureKit invokes this completion on its own queue.  Keep
+        // the continuation bridge nonisolated; inheriting the enum's
+        // @MainActor isolation makes Swift insert a main-actor assertion in
+        // the callback, which aborts the process with SIGTRAP on macOS 26.
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CGImage, Error>) in
             SCScreenshotManager.captureImage(in: rect) { image, error in
                 if let image {
                     continuation.resume(returning: image)
