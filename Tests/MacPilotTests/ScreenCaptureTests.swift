@@ -202,6 +202,27 @@ struct ScreenCaptureTests {
         #expect(decoded.pinAfterCapture)
     }
 
+    @Test func quickAccessStackKeepsTheFiveNewestItemsInOrder() {
+        var stack = SmartQuickAccessStackState()
+        let ids = (0..<6).map { _ in UUID() }
+
+        for id in ids.prefix(5) {
+            #expect(stack.insert(id) == nil)
+        }
+        #expect(stack.ids == Array(ids.prefix(5).reversed()))
+
+        #expect(stack.insert(ids[5]) == ids[0])
+        #expect(stack.ids == Array(ids.dropFirst().reversed()))
+
+        stack.remove(ids[3])
+        #expect(!stack.ids.contains(ids[3]))
+        #expect(stack.ids.count == 4)
+
+        #expect(stack.insert(ids[4]) == nil)
+        #expect(stack.ids.first == ids[4])
+        #expect(stack.ids.count == 4)
+    }
+
     @Test @MainActor func screenCaptureModelAppliesAndPersistsEveryShortcutKind() {
         let model = ScreenCaptureModel()
         model.setSmartCaptureEnabled(false)

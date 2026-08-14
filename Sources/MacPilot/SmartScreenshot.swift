@@ -977,6 +977,7 @@ final class SmartScreenshotController {
     private var pinControllers: [UUID: SmartPinWindowController] = [:]
     private var quickAccessControllers: [UUID: SmartQuickAccessWindowController] = [:]
     private var mediaQuickAccessControllers: [UUID: SmartMediaQuickAccessWindowController] = [:]
+    private var quickAccessStack = SmartQuickAccessStackState()
     private var inlineAnnotationControllers: [UUID: SmartAnnotationWindowController] = [:]
     private var scrollingControllers: [UUID: SmartScrollingCaptureWindowController] = [:]
     private var isSelecting = false
@@ -1582,6 +1583,7 @@ final class SmartScreenshotController {
         let mediaQuickAccessControllers = Array(self.mediaQuickAccessControllers.values)
         self.mediaQuickAccessControllers.removeAll(keepingCapacity: false)
         for controller in mediaQuickAccessControllers { controller.close() }
+        quickAccessStack.removeAll()
         let inlineAnnotationControllers = Array(self.inlineAnnotationControllers.values)
         self.inlineAnnotationControllers.removeAll(keepingCapacity: false)
         for controller in inlineAnnotationControllers { controller.close() }
@@ -1753,11 +1755,6 @@ final class SmartScreenshotController {
         onSave: ((CGImage, URL?) -> Void)? = nil,
         onDelete: ((URL?) -> Void)? = nil
     ) {
-        // Keep only the latest result preview alive. This bounds retained image
-        // memory when the user captures repeatedly without opening the actions.
-        let previous = Array(quickAccessControllers.values)
-        quickAccessControllers.removeAll(keepingCapacity: false)
-        for controller in previous { controller.close() }
         let id = UUID()
         let controller = SmartQuickAccessWindowController(
             image: image,
@@ -1765,32 +1762,66 @@ final class SmartScreenshotController {
             savedURL: savedURL,
             onPin: { [weak self] image in self?.pin(image: image) },
             onClose: { [weak self] in
-                self?.quickAccessControllers.removeValue(forKey: id)
+                self?.removeQuickAccess(id: id)
             },
             onSave: onSave,
             onDelete: onDelete
         )
         quickAccessControllers[id] = controller
+        let evictedID = quickAccessStack.insert(id)
+        if let evictedID { closeQuickAccess(id: evictedID) }
         controller.show()
+        layoutQuickAccessStack()
     }
 
     func showQuickAccess(mediaURL: URL) {
-        let previousImages = Array(quickAccessControllers.values)
-        quickAccessControllers.removeAll(keepingCapacity: false)
-        for controller in previousImages { controller.close() }
-        let previousMedia = Array(mediaQuickAccessControllers.values)
-        mediaQuickAccessControllers.removeAll(keepingCapacity: false)
-        for controller in previousMedia { controller.close() }
         let id = UUID()
         let controller = SmartMediaQuickAccessWindowController(
             url: mediaURL,
             language: language(),
             onClose: { [weak self] in
-                self?.mediaQuickAccessControllers.removeValue(forKey: id)
+                self?.removeQuickAccess(id: id)
             }
         )
         mediaQuickAccessControllers[id] = controller
+        let evictedID = quickAccessStack.insert(id)
+        if let evictedID { closeQuickAccess(id: evictedID) }
         controller.show()
+        layoutQuickAccessStack()
+    }
+
+    private func removeQuickAccess(id: UUID) {
+        quickAccessStack.remove(id)
+        quickAccessControllers.removeValue(forKey: id)
+        mediaQuickAccessControllers.removeValue(forKey: id)
+        layoutQuickAccessStack()
+    }
+
+    private func closeQuickAccess(id: UUID) {
+        if let controller = quickAccessControllers[id] {
+            controller.close()
+        } else if let controller = mediaQuickAccessControllers[id] {
+            controller.close()
+        } else {
+            quickAccessStack.remove(id)
+        }
+    }
+
+    private func layoutQuickAccessStack() {
+        let ids = quickAccessStack.ids
+        for (index, id) in ids.enumerated() {
+            if let controller = quickAccessControllers[id] {
+                controller.updateStackPosition(index: index)
+            } else if let controller = mediaQuickAccessControllers[id] {
+                controller.updateStackPosition(index: index)
+            }
+        }
+        // The newest card is visually on top. Bring older cards forward first
+        // so a later card cannot accidentally cover the newest one.
+        for id in ids.reversed() {
+            quickAccessControllers[id]?.bringToFront()
+            mediaQuickAccessControllers[id]?.bringToFront()
+        }
     }
 
     private func updateTarget(at appKitPoint: CGPoint) {
@@ -2881,8 +2912,37 @@ enum SmartWindowSnapshotCapture {
     }
 }
 
+/// The lightweight state machine behind the Quick Access card stack. Keeping
+/// this separate from AppKit windows makes the eviction/order rules testable
+/// without creating panels or requiring screen-capture permissions.
+struct SmartQuickAccessStackState: Equatable, Sendable {
+    static let maxVisibleItems = 5
+
+    /// IDs are ordered newest-first, matching the z-order of the floating
+    /// cards and the order in which captures appear to the user.
+    private(set) var ids: [UUID] = []
+
+    @discardableResult
+    mutating func insert(_ id: UUID) -> UUID? {
+        ids.removeAll { $0 == id }
+        ids.insert(id, at: 0)
+        guard ids.count > Self.maxVisibleItems else { return nil }
+        return ids.removeLast()
+    }
+
+    mutating func remove(_ id: UUID) {
+        ids.removeAll { $0 == id }
+    }
+
+    mutating func removeAll() {
+        ids.removeAll(keepingCapacity: false)
+    }
+}
+
 @MainActor
-private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate {
+private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate, ObservableObject {
+    private static let autoDismissDelay: TimeInterval = 10
+
     private var image: CGImage
     private let language: AppLanguage
     private let savedURL: URL?
@@ -2892,7 +2952,10 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     private let onDelete: ((URL?) -> Void)?
     private var panel: NSPanel?
     private var annotationController: SmartAnnotationWindowController?
-    private var dismissTimer: Timer?
+    private var countdownTimer: Timer?
+    private var isHovered = false
+    private var countdownPaused = false
+    @Published private(set) var remainingTime = SmartQuickAccessWindowController.autoDismissDelay
 
     init(
         image: CGImage,
@@ -2934,22 +2997,44 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
         panel.center()
         panel.orderFrontRegardless()
         self.panel = panel
-        dismissTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.close()
-            }
-        }
+        startCountdown()
     }
 
     func close() {
-        dismissTimer?.invalidate()
-        dismissTimer = nil
+        countdownTimer?.invalidate()
+        countdownTimer = nil
         panel?.close()
         panel = nil
     }
 
+    func updateStackPosition(index: Int) {
+        guard let panel else { return }
+        let visibleFrame = panel.screen?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
+        let offset = CGFloat(index) * 14
+        let margin: CGFloat = 24
+        let x = visibleFrame.maxX - panel.frame.width - margin - offset
+        let y = visibleFrame.minY + margin + offset
+        panel.setFrameOrigin(NSPoint(x: max(visibleFrame.minX + margin, x), y: max(visibleFrame.minY + margin, y)))
+        panel.alphaValue = max(0.58, 1 - CGFloat(index) * 0.08)
+    }
+
+    func bringToFront() {
+        panel?.orderFrontRegardless()
+    }
+
+    func setHovered(_ hovered: Bool) {
+        isHovered = hovered
+    }
+
+    func setCountdownPaused(_ paused: Bool) {
+        countdownPaused = paused
+    }
+
     func windowWillClose(_ notification: Notification) {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
         annotationController?.close()
         annotationController = nil
         panel?.contentView = nil
@@ -2959,6 +3044,7 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
 
     private func installContent(in panel: NSPanel) {
         panel.contentView = NSHostingView(rootView: SmartQuickAccessView(
+            controller: self,
             image: image,
             language: language,
             onCopy: { [weak self] in self?.copyImage() },
@@ -2969,6 +3055,22 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
             onDelete: { [weak self] in self?.deleteCapture() },
             onClose: { [weak self] in self?.close() }
         ))
+    }
+
+    private func startCountdown() {
+        countdownTimer?.invalidate()
+        remainingTime = Self.autoDismissDelay
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.advanceCountdown()
+            }
+        }
+    }
+
+    private func advanceCountdown() {
+        guard !isHovered, !countdownPaused else { return }
+        remainingTime = max(0, remainingTime - 0.1)
+        if remainingTime <= 0 { close() }
     }
 
     private func copyImage() {
@@ -3022,6 +3124,7 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
 
     private func openAnnotation() {
         annotationController?.close()
+        setCountdownPaused(true)
         panel?.orderOut(nil)
         let controller = SmartAnnotationWindowController(
             image: image,
@@ -3033,6 +3136,7 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
                 if let panel = self.panel { self.installContent(in: panel) }
             },
             onClose: { [weak self] in
+                self?.setCountdownPaused(false)
                 self?.panel?.orderFrontRegardless()
                 self?.annotationController = nil
             }
@@ -3043,6 +3147,7 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
 }
 
 private struct SmartQuickAccessView: View {
+    @ObservedObject var controller: SmartQuickAccessWindowController
     let image: CGImage
     let language: AppLanguage
     let onCopy: () -> Void
@@ -3081,6 +3186,17 @@ private struct SmartQuickAccessView: View {
                 .scaledToFit()
                 .background(Color.black.opacity(0.04))
         }
+        .overlay(alignment: .bottomTrailing) {
+            Text("\(Int(ceil(controller.remainingTime)))s")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding(8)
+        }
+        .onHover { controller.setHovered($0) }
+        .onTapGesture(count: 2, perform: onAnnotate)
     }
 }
 
@@ -3089,12 +3205,17 @@ private struct SendableMediaThumbnail: @unchecked Sendable {
 }
 
 @MainActor
-private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDelegate {
+private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDelegate, ObservableObject {
+    private static let autoDismissDelay: TimeInterval = 10
+
     private let url: URL
     private let language: AppLanguage
     private let onClose: () -> Void
     private var panel: NSPanel?
-    private var dismissTimer: Timer?
+    private var countdownTimer: Timer?
+    private var isHovered = false
+    private var countdownPaused = false
+    @Published private(set) var remainingTime = SmartMediaQuickAccessWindowController.autoDismissDelay
 
     init(url: URL, language: AppLanguage, onClose: @escaping () -> Void) {
         self.url = url
@@ -3115,6 +3236,7 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
         panel.isReleasedWhenClosed = false
         panel.delegate = self
         panel.contentView = NSHostingView(rootView: SmartMediaQuickAccessView(
+            controller: self,
             url: url,
             language: language,
             onCopy: { [weak self] in self?.copyMedia() },
@@ -3125,24 +3247,63 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
         panel.center()
         panel.orderFrontRegardless()
         self.panel = panel
-        dismissTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.close() }
-        }
+        startCountdown()
     }
 
     func close() {
-        dismissTimer?.invalidate()
-        dismissTimer = nil
+        countdownTimer?.invalidate()
+        countdownTimer = nil
         panel?.close()
         panel = nil
     }
 
+    func updateStackPosition(index: Int) {
+        guard let panel else { return }
+        let visibleFrame = panel.screen?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
+        let offset = CGFloat(index) * 14
+        let margin: CGFloat = 24
+        let x = visibleFrame.maxX - panel.frame.width - margin - offset
+        let y = visibleFrame.minY + margin + offset
+        panel.setFrameOrigin(NSPoint(x: max(visibleFrame.minX + margin, x), y: max(visibleFrame.minY + margin, y)))
+        panel.alphaValue = max(0.58, 1 - CGFloat(index) * 0.08)
+    }
+
+    func bringToFront() {
+        panel?.orderFrontRegardless()
+    }
+
+    func setHovered(_ hovered: Bool) {
+        isHovered = hovered
+    }
+
+    func setCountdownPaused(_ paused: Bool) {
+        countdownPaused = paused
+    }
+
     func windowWillClose(_ notification: Notification) {
-        dismissTimer?.invalidate()
-        dismissTimer = nil
+        countdownTimer?.invalidate()
+        countdownTimer = nil
         panel?.contentView = nil
         panel = nil
         onClose()
+    }
+
+    private func startCountdown() {
+        countdownTimer?.invalidate()
+        remainingTime = Self.autoDismissDelay
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.advanceCountdown()
+            }
+        }
+    }
+
+    private func advanceCountdown() {
+        guard !isHovered, !countdownPaused else { return }
+        remainingTime = max(0, remainingTime - 0.1)
+        if remainingTime <= 0 { close() }
     }
 
     private func copyMedia() {
@@ -3160,6 +3321,7 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
 }
 
 private struct SmartMediaQuickAccessView: View {
+    @ObservedObject var controller: SmartMediaQuickAccessWindowController
     let url: URL
     let language: AppLanguage
     let onCopy: () -> Void
@@ -3215,6 +3377,16 @@ private struct SmartMediaQuickAccessView: View {
                 size: NSSize(width: loaded.image.width, height: loaded.image.height)
             )
         }
+        .overlay(alignment: .bottomTrailing) {
+            Text("\(Int(ceil(controller.remainingTime)))s")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding(8)
+        }
+        .onHover { controller.setHovered($0) }
     }
 
     private static func loadThumbnail(from url: URL) async -> SendableMediaThumbnail? {
