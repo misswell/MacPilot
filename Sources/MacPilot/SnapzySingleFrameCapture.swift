@@ -97,6 +97,14 @@ final class SnapzySingleFrameCaptureSession: NSObject, @unchecked Sendable {
                 try await stream.startCapture()
             } catch {
                 self.finish(.failure(error))
+                return
+            }
+
+            // Cancellation may race with startCapture(). The finish path can
+            // only stop a stream that has already started, so verify again
+            // after the await and stop a stream that became stale meanwhile.
+            if !self.canStartCapture {
+                try? await stream.stopCapture()
             }
         }
     }
