@@ -71,10 +71,6 @@ final class SnapzySingleFrameCaptureSession: NSObject, @unchecked Sendable {
         guard arm(continuation: continuation, timeout: timeout) else { return }
 
         let stream = SCStream(filter: contentFilter, configuration: configuration, delegate: self)
-        lock.lock()
-        self.stream = stream
-        lock.unlock()
-
         do {
             try stream.addStreamOutput(
                 self,
@@ -86,13 +82,41 @@ final class SnapzySingleFrameCaptureSession: NSObject, @unchecked Sendable {
             return
         }
 
+        // Register the fully configured stream only after the synchronous
+        // setup succeeds. Cancellation can finish the session at any point;
+        // this check prevents a stream created after cancellation from being
+        // started without a corresponding stopCapture call.
+        guard attach(stream) else {
+            Task { try? await stream.stopCapture() }
+            return
+        }
+
         Task { [weak self] in
+            guard let self, self.canStartCapture else { return }
             do {
                 try await stream.startCapture()
             } catch {
-                self?.finish(.failure(error))
+                self.finish(.failure(error))
             }
         }
+    }
+
+    nonisolated private func attach(_ stream: SCStream) -> Bool {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return false
+        }
+        self.stream = stream
+        lock.unlock()
+        return true
+    }
+
+    nonisolated private var canStartCapture: Bool {
+        lock.lock()
+        let canStart = !finished
+        lock.unlock()
+        return canStart
     }
 
     /// Installs the continuation and arms the timeout.
