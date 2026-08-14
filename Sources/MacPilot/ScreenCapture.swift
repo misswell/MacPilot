@@ -2,6 +2,7 @@
 // Periodic screenshot capture with busy/idle scheduling and high-efficiency HEIC encoding.
 
 import AppKit
+import AVFoundation
 import Carbon.HIToolbox
 import CoreGraphics
 import CoreImage
@@ -238,6 +239,14 @@ private struct ScreenCaptureSavedImage: Sendable {
 private struct ScreenCaptureStorageStatistics: Sendable {
     var bytes: Int64 = 0
     var count = 0
+}
+
+private struct ScreenCaptureMediaMetadata: Sendable {
+    let width: Int
+    let height: Int
+    let duration: TimeInterval?
+    let byteCount: Int64
+    let kind: SmartCaptureHistoryKind
 }
 
 private enum ScreenCaptureStorage {
@@ -918,7 +927,66 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     func showRecordingQuickAccess(url: URL) {
+        recordMediaHistory(url)
         smartCapture.showQuickAccess(mediaURL: url)
+    }
+
+    /// Adds a finished video or GIF to the same persistent history used by
+    /// screenshots. Metadata work runs off-main so recording completion never
+    /// waits on AVFoundation's track inspection.
+    func recordMediaHistory(_ url: URL) {
+        let sourceURL = url
+        Task { [weak self] in
+            let metadata = await Task.detached(priority: .utility) {
+                await Self.mediaMetadata(for: sourceURL)
+            }.value
+            guard let self else { return }
+            let item = SmartCaptureHistoryItem(
+                url: sourceURL,
+                width: metadata.width,
+                height: metadata.height,
+                byteCount: metadata.byteCount,
+                kind: metadata.kind,
+                duration: metadata.duration
+            )
+            self.captureHistory.removeAll { $0.url == sourceURL }
+            self.captureHistory.insert(item, at: 0)
+            self.captureHistory = Array(self.captureHistory.prefix(60))
+            SmartCaptureHistoryStore.save(self.captureHistory)
+        }
+    }
+
+    func editHistoryItem(_ item: SmartCaptureHistoryItem) {
+        guard item.kind.isMedia else {
+            revealHistoryItem(item)
+            return
+        }
+        smartCapture.openMediaEditor(url: item.url)
+    }
+
+    private nonisolated static func mediaMetadata(for url: URL) async -> ScreenCaptureMediaMetadata {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let byteCount = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+        let kind: SmartCaptureHistoryKind = url.pathExtension.lowercased() == "gif" ? .gif : .video
+        guard kind == .video else {
+            let source = CGImageSourceCreateWithURL(url as CFURL, nil)
+            let properties = source.flatMap {
+                CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [CFString: Any]
+            }
+            let width = (properties?[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
+            let height = (properties?[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
+            return ScreenCaptureMediaMetadata(width: width, height: height, duration: nil, byteCount: byteCount, kind: kind)
+        }
+        let asset = AVURLAsset(url: url)
+        let track = (try? await asset.loadTracks(withMediaType: .video))?.first
+        let naturalSize = (try? await track?.load(.naturalSize)) ?? .zero
+        let preferredTransform = (try? await track?.load(.preferredTransform)) ?? .identity
+        let transformedSize = naturalSize.applying(preferredTransform)
+        let width = Int(abs(transformedSize.width).rounded())
+        let height = Int(abs(transformedSize.height).rounded())
+        let seconds = (try? await asset.load(.duration))?.seconds ?? 0
+        let duration = seconds.isFinite && seconds > 0 ? seconds : nil
+        return ScreenCaptureMediaMetadata(width: width, height: height, duration: duration, byteCount: byteCount, kind: kind)
     }
 
     private func handleCapturedImage(
@@ -2103,13 +2171,19 @@ struct ScreenCaptureView: View {
                 LazyVStack(spacing: 8) {
                     ForEach(capture.captureHistory) { item in
                         HStack(spacing: 10) {
-                            SmartCaptureHistoryThumbnail(url: item.url)
+                            SmartCaptureHistoryThumbnail(url: item.url, kind: item.kind)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(item.url.lastPathComponent)
                                     .font(.system(.caption, design: .monospaced))
                                     .lineLimit(1)
                                     .truncationMode(.middle)
-                                Text("\(item.width) × \(item.height) · \(ByteCountFormatter.string(fromByteCount: item.byteCount, countStyle: .file))")
+                                HStack(spacing: 5) {
+                                    Text(historyKindLabel(item.kind))
+                                    if let duration = item.duration, duration > 0 {
+                                        Text("· \(formatMediaDuration(duration))")
+                                    }
+                                    Text("· \(item.width) × \(item.height) · \(ByteCountFormatter.string(fromByteCount: item.byteCount, countStyle: .file))")
+                                }
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                                 Text(item.date.formatted(.dateTime.month().day().hour().minute().locale(appModel.language.locale)))
@@ -2117,8 +2191,13 @@ struct ScreenCaptureView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button(t("scReveal")) { capture.revealHistoryItem(item) }
-                                .buttonStyle(.bordered)
+                            if item.kind.isMedia {
+                                Button(t("scEditMedia")) { capture.editHistoryItem(item) }
+                                    .buttonStyle(.bordered)
+                            } else {
+                                Button(t("scReveal")) { capture.revealHistoryItem(item) }
+                                    .buttonStyle(.bordered)
+                            }
                             Button(role: .destructive) { capture.deleteHistoryItem(item) } label: {
                                 Image(systemName: "trash")
                             }
@@ -2131,6 +2210,19 @@ struct ScreenCaptureView: View {
         }
         .padding(20)
         .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
+    }
+
+    private func historyKindLabel(_ kind: SmartCaptureHistoryKind) -> String {
+        switch kind {
+        case .screenshot: return t("scHistoryScreenshot")
+        case .video: return t("scHistoryVideo")
+        case .gif: return t("scHistoryGIF")
+        }
+    }
+
+    private func formatMediaDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(duration.rounded()))
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 
     private func statusItem(_ label: String, value: String) -> some View {
@@ -2146,6 +2238,7 @@ struct ScreenCaptureView: View {
 
 private struct SmartCaptureHistoryThumbnail: View {
     let url: URL
+    let kind: SmartCaptureHistoryKind
     @State private var image: NSImage?
 
     var body: some View {
@@ -2157,7 +2250,7 @@ private struct SmartCaptureHistoryThumbnail: View {
             } else {
                 ZStack {
                     Color.secondary.opacity(0.12)
-                    Image(systemName: "photo")
+                    Image(systemName: kind == .screenshot ? "photo" : "play.rectangle")
                         .foregroundStyle(.secondary)
                 }
             }

@@ -423,6 +423,59 @@ struct ScreenCaptureTests {
         #expect(SmartCaptureHistoryStore.load(defaults: defaults).isEmpty)
     }
 
+    @Test func legacyHistoryDefaultsMissingKindToScreenshot() throws {
+        let data = Data(#"{"path":"/tmp/legacy-capture.png","width":10,"height":20,"byteCount":3}"#.utf8)
+        let item = try JSONDecoder().decode(SmartCaptureHistoryItem.self, from: data)
+        #expect(item.kind == .screenshot)
+        #expect(item.duration == nil)
+    }
+
+    @Test func mediaHistoryRoundTripsKindAndDuration() throws {
+        let item = SmartCaptureHistoryItem(
+            url: URL(fileURLWithPath: "/tmp/recording.mp4"),
+            date: Date(timeIntervalSince1970: 123),
+            width: 1920,
+            height: 1080,
+            byteCount: 456,
+            kind: .video,
+            duration: 12.5
+        )
+        let data = try JSONEncoder().encode(item)
+        let decoded = try JSONDecoder().decode(SmartCaptureHistoryItem.self, from: data)
+        #expect(decoded == item)
+        #expect(decoded.kind == .video)
+        #expect(decoded.duration == 12.5)
+    }
+
+    @Test func mediaHistoryIsSortedAndCappedAtSixtyItems() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MacPilotMediaHistory-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suiteName = "MacPilotMediaHistoryTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let items = try (0..<61).map { index -> SmartCaptureHistoryItem in
+            let url = directory.appendingPathComponent("recording-\(index).mp4")
+            try Data([UInt8(index & 0xff)]).write(to: url)
+            return SmartCaptureHistoryItem(
+                url: url,
+                date: Date(timeIntervalSince1970: TimeInterval(index)),
+                width: 640,
+                height: 360,
+                byteCount: 1,
+                kind: .video,
+                duration: TimeInterval(index)
+            )
+        }
+        SmartCaptureHistoryStore.save(items, defaults: defaults)
+        let loaded = SmartCaptureHistoryStore.load(defaults: defaults)
+        #expect(loaded.count == 60)
+        #expect(loaded.first?.duration == 60)
+        #expect(loaded.last?.duration == 1)
+        #expect(loaded.allSatisfy { $0.kind == .video })
+    }
+
     private func makeTestImage(width: Int, height: Int, color: NSColor) -> CGImage? {
         guard let context = CGContext(
             data: nil,

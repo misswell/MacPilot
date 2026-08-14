@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import CoreImage
 import Foundation
 import ImageIO
@@ -7,6 +8,16 @@ import Vision
 /// A lightweight history record for captures made through the Snapzy-style
 /// screenshot flow.  The record intentionally stores a path instead of an
 /// image so history never keeps full-resolution bitmaps alive in memory.
+enum SmartCaptureHistoryKind: String, Codable, CaseIterable, Sendable {
+    case screenshot
+    case video
+    case gif
+
+    var isMedia: Bool {
+        self == .video || self == .gif
+    }
+}
+
 struct SmartCaptureHistoryItem: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let path: String
@@ -14,6 +25,8 @@ struct SmartCaptureHistoryItem: Codable, Equatable, Identifiable, Sendable {
     let width: Int
     let height: Int
     let byteCount: Int64
+    let kind: SmartCaptureHistoryKind
+    let duration: TimeInterval?
 
     init(
         id: UUID = UUID(),
@@ -21,7 +34,9 @@ struct SmartCaptureHistoryItem: Codable, Equatable, Identifiable, Sendable {
         date: Date = Date(),
         width: Int,
         height: Int,
-        byteCount: Int64
+        byteCount: Int64,
+        kind: SmartCaptureHistoryKind = .screenshot,
+        duration: TimeInterval? = nil
     ) {
         self.id = id
         self.path = url.path
@@ -29,6 +44,26 @@ struct SmartCaptureHistoryItem: Codable, Equatable, Identifiable, Sendable {
         self.width = width
         self.height = height
         self.byteCount = byteCount
+        self.kind = kind
+        self.duration = duration
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, path, date, width, height, byteCount, kind, duration
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+            url: URL(fileURLWithPath: try container.decode(String.self, forKey: .path)),
+            date: try container.decodeIfPresent(Date.self, forKey: .date) ?? Date(),
+            width: try container.decodeIfPresent(Int.self, forKey: .width) ?? 0,
+            height: try container.decodeIfPresent(Int.self, forKey: .height) ?? 0,
+            byteCount: try container.decodeIfPresent(Int64.self, forKey: .byteCount) ?? 0,
+            kind: try container.decodeIfPresent(SmartCaptureHistoryKind.self, forKey: .kind) ?? .screenshot,
+            duration: try container.decodeIfPresent(TimeInterval.self, forKey: .duration)
+        )
     }
 
     var url: URL { URL(fileURLWithPath: path) }
@@ -68,16 +103,27 @@ enum SmartCaptureHistoryStore {
 enum SmartCaptureThumbnail {
     static func load(url: URL, maximumPixelSize: Int = 320) async -> CGImage? {
         let result: SendableScreenshotImage? = await Task.detached(priority: .utility) {
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  let image = CGImageSourceCreateThumbnailAtIndex(
-                    source,
-                    0,
-                    [
-                        kCGImageSourceCreateThumbnailFromImageAlways: true,
-                        kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
-                        kCGImageSourceCreateThumbnailWithTransform: true
-                    ] as CFDictionary
-            ) else { return nil }
+            if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+               let image = CGImageSourceCreateThumbnailAtIndex(
+                source,
+                0,
+                [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+                    kCGImageSourceCreateThumbnailWithTransform: true
+                ] as CFDictionary
+               ) {
+                return SendableScreenshotImage(value: image)
+            }
+
+            // AVAssetImageGenerator is the same lightweight first-frame path
+            // used by the Quick Access media card. Keeping it here makes the
+            // persistent history useful for videos and GIFs as well as images.
+            let asset = AVURLAsset(url: url)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: maximumPixelSize, height: maximumPixelSize)
+            guard let image = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return nil }
             return SendableScreenshotImage(value: image)
         }.value
         return result?.value

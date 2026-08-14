@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
@@ -978,6 +979,7 @@ final class SmartScreenshotController {
     private var quickAccessControllers: [UUID: SmartQuickAccessWindowController] = [:]
     private var mediaQuickAccessControllers: [UUID: SmartMediaQuickAccessWindowController] = [:]
     private var quickAccessStack = SmartQuickAccessStackState()
+    private var mediaEditorControllers: [UUID: SmartMediaEditorWindowController] = [:]
     private var inlineAnnotationControllers: [UUID: SmartAnnotationWindowController] = [:]
     private var scrollingControllers: [UUID: SmartScrollingCaptureWindowController] = [:]
     private var isSelecting = false
@@ -1584,6 +1586,9 @@ final class SmartScreenshotController {
         self.mediaQuickAccessControllers.removeAll(keepingCapacity: false)
         for controller in mediaQuickAccessControllers { controller.close() }
         quickAccessStack.removeAll()
+        let mediaEditorControllers = Array(self.mediaEditorControllers.values)
+        self.mediaEditorControllers.removeAll(keepingCapacity: false)
+        for controller in mediaEditorControllers { controller.close() }
         let inlineAnnotationControllers = Array(self.inlineAnnotationControllers.values)
         self.inlineAnnotationControllers.removeAll(keepingCapacity: false)
         for controller in inlineAnnotationControllers { controller.close() }
@@ -1779,6 +1784,12 @@ final class SmartScreenshotController {
         let controller = SmartMediaQuickAccessWindowController(
             url: mediaURL,
             language: language(),
+            onEdit: { [weak self] in
+                self?.setQuickAccessCountdownPaused(id: id, paused: true)
+                self?.openMediaEditor(url: mediaURL) {
+                    self?.setQuickAccessCountdownPaused(id: id, paused: false)
+                }
+            },
             onClose: { [weak self] in
                 self?.removeQuickAccess(id: id)
             }
@@ -1790,11 +1801,33 @@ final class SmartScreenshotController {
         layoutQuickAccessStack()
     }
 
+    func openMediaEditor(url: URL, onClose: (() -> Void)? = nil) {
+        let id = UUID()
+        let controller = SmartMediaEditorWindowController(
+            url: url,
+            language: language(),
+            onExport: { [weak self] exportedURL in
+                self?.showQuickAccess(mediaURL: exportedURL)
+            },
+            onClose: { [weak self] in
+                self?.mediaEditorControllers.removeValue(forKey: id)
+                onClose?()
+            }
+        )
+        mediaEditorControllers[id] = controller
+        controller.show()
+    }
+
     private func removeQuickAccess(id: UUID) {
         quickAccessStack.remove(id)
         quickAccessControllers.removeValue(forKey: id)
         mediaQuickAccessControllers.removeValue(forKey: id)
         layoutQuickAccessStack()
+    }
+
+    private func setQuickAccessCountdownPaused(id: UUID, paused: Bool) {
+        quickAccessControllers[id]?.setCountdownPaused(paused)
+        mediaQuickAccessControllers[id]?.setCountdownPaused(paused)
     }
 
     private func closeQuickAccess(id: UUID) {
@@ -3210,6 +3243,7 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
 
     private let url: URL
     private let language: AppLanguage
+    private let onEdit: () -> Void
     private let onClose: () -> Void
     private var panel: NSPanel?
     private var countdownTimer: Timer?
@@ -3217,9 +3251,10 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
     private var countdownPaused = false
     @Published private(set) var remainingTime = SmartMediaQuickAccessWindowController.autoDismissDelay
 
-    init(url: URL, language: AppLanguage, onClose: @escaping () -> Void) {
+    init(url: URL, language: AppLanguage, onEdit: @escaping () -> Void, onClose: @escaping () -> Void) {
         self.url = url
         self.language = language
+        self.onEdit = onEdit
         self.onClose = onClose
     }
 
@@ -3241,6 +3276,7 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
             language: language,
             onCopy: { [weak self] in self?.copyMedia() },
             onOpen: { [weak self] in self?.openMedia() },
+            onEdit: { [weak self] in self?.editMedia() },
             onReveal: { [weak self] in self?.revealMedia() },
             onClose: { [weak self] in self?.close() }
         ))
@@ -3315,6 +3351,11 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
         NSWorkspace.shared.open(url)
     }
 
+    private func editMedia() {
+        setCountdownPaused(true)
+        onEdit()
+    }
+
     private func revealMedia() {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
@@ -3326,6 +3367,7 @@ private struct SmartMediaQuickAccessView: View {
     let language: AppLanguage
     let onCopy: () -> Void
     let onOpen: () -> Void
+    let onEdit: () -> Void
     let onReveal: () -> Void
     let onClose: () -> Void
     @State private var thumbnail: NSImage?
@@ -3356,6 +3398,7 @@ private struct SmartMediaQuickAccessView: View {
             HStack(spacing: 8) {
                 Button(action: onCopy) { Label(AppText.value("scCopy", language: language), systemImage: "doc.on.doc") }
                 Button(action: onOpen) { Label(AppText.value("scOpen", language: language), systemImage: "arrow.up.right.square") }
+                Button(action: onEdit) { Label(AppText.value("scEditMedia", language: language), systemImage: "scissors") }
                 Button(action: onReveal) { Label(AppText.value("scReveal", language: language), systemImage: "folder") }
                 Spacer()
                 Button(action: onClose) { Image(systemName: "xmark") }
@@ -3398,6 +3441,304 @@ private struct SmartMediaQuickAccessView: View {
             guard let image = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return nil }
             return SendableMediaThumbnail(image: image)
         }.value
+    }
+}
+
+private enum SmartMediaEditingError: Error, Equatable {
+    case unsupportedGIF
+    case invalidRange
+    case exporterUnavailable
+    case exportFailed
+
+    var messageKey: String {
+        switch self {
+        case .unsupportedGIF: return "scMediaGIFEditorHint"
+        case .invalidRange: return "scMediaInvalidTrimRange"
+        case .exporterUnavailable: return "scMediaExporterUnavailable"
+        case .exportFailed: return "scMediaExportFailed"
+        }
+    }
+}
+
+/// AVFoundation's exporter is callback-based and is not annotated Sendable.
+/// The export callback is invoked exactly once by AVFoundation, so keeping the
+/// reference in this small unchecked wrapper lets Swift's continuation bridge
+/// remain explicit without leaking the non-Sendable object through a task.
+private final class SmartAssetExporterBox: @unchecked Sendable {
+    let exporter: AVAssetExportSession
+
+    init(_ exporter: AVAssetExportSession) {
+        self.exporter = exporter
+    }
+}
+
+@MainActor
+private enum SmartMediaEditing {
+    static func duration(of url: URL) async -> TimeInterval {
+        let seconds = (try? await AVURLAsset(url: url).load(.duration))?.seconds ?? 0
+        return seconds.isFinite && seconds > 0 ? seconds : 0
+    }
+
+    static func trim(url: URL, start: TimeInterval, end: TimeInterval) async throws -> URL {
+        guard url.pathExtension.lowercased() != "gif" else {
+            throw SmartMediaEditingError.unsupportedGIF
+        }
+        guard end > start, end - start >= 0.25 else {
+            throw SmartMediaEditingError.invalidRange
+        }
+        let asset = AVURLAsset(url: url)
+        let duration = try await asset.load(.duration)
+        guard duration.isValid, duration.seconds > 0 else {
+            throw SmartMediaEditingError.invalidRange
+        }
+        let clampedStart = max(0, min(start, duration.seconds))
+        let clampedEnd = max(clampedStart, min(end, duration.seconds))
+        guard clampedEnd - clampedStart >= 0.25 else {
+            throw SmartMediaEditingError.invalidRange
+        }
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+            throw SmartMediaEditingError.exporterUnavailable
+        }
+        let exporterBox = SmartAssetExporterBox(exporter)
+
+        let fileExtension = url.pathExtension.lowercased() == "mp4" ? "mp4" : "mov"
+        let base = url.deletingPathExtension().appendingPathExtension("trimmed")
+        var outputURL = base.appendingPathExtension(fileExtension)
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: outputURL.path) {
+            outputURL = url.deletingPathExtension()
+                .appendingPathExtension("trimmed-\(suffix)")
+                .appendingPathExtension(fileExtension)
+            suffix += 1
+        }
+
+        exporter.outputURL = outputURL
+        exporter.outputFileType = fileExtension == "mp4" ? .mp4 : .mov
+        exporter.shouldOptimizeForNetworkUse = true
+        exporter.timeRange = CMTimeRange(
+            start: CMTime(seconds: clampedStart, preferredTimescale: 600),
+            duration: CMTime(seconds: clampedEnd - clampedStart, preferredTimescale: 600)
+        )
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            exporterBox.exporter.exportAsynchronously {
+                switch exporterBox.exporter.status {
+                case .completed:
+                    continuation.resume(returning: ())
+                case .failed, .cancelled:
+                    continuation.resume(throwing: SmartMediaEditingError.exportFailed)
+                default:
+                    continuation.resume(throwing: SmartMediaEditingError.exportFailed)
+                }
+            }
+        }
+        return outputURL
+    }
+}
+
+@MainActor
+private final class SmartMediaEditorWindowController: NSObject, NSWindowDelegate {
+    private let url: URL
+    private let language: AppLanguage
+    private let onExport: (URL) -> Void
+    private let onClose: () -> Void
+    private var panel: NSPanel?
+
+    init(
+        url: URL,
+        language: AppLanguage,
+        onExport: @escaping (URL) -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self.url = url
+        self.language = language
+        self.onExport = onExport
+        self.onClose = onClose
+    }
+
+    func show() {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+            styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = AppText.value("scMediaEditor", language: language)
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+        panel.delegate = self
+        panel.contentView = NSHostingView(rootView: SmartMediaEditorView(
+            url: url,
+            language: language,
+            onExport: { [weak self] exportedURL in
+                self?.onExport(exportedURL)
+            },
+            onClose: { [weak self] in self?.close() }
+        ))
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        self.panel = panel
+    }
+
+    func close() {
+        panel?.close()
+        panel = nil
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        panel?.contentView = nil
+        panel = nil
+        onClose()
+    }
+}
+
+private struct SmartMediaEditorView: View {
+    let url: URL
+    let language: AppLanguage
+    let onExport: (URL) -> Void
+    let onClose: () -> Void
+    @State private var startSeconds: Double
+    @State private var endSeconds: Double
+    @State private var mediaDuration: Double = 0
+    @State private var isExporting = false
+    @State private var message: String?
+    @State private var player: AVPlayer
+
+    init(
+        url: URL,
+        language: AppLanguage,
+        onExport: @escaping (URL) -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self.url = url
+        self.language = language
+        self.onExport = onExport
+        self.onClose = onClose
+        _startSeconds = State(initialValue: 0)
+        _endSeconds = State(initialValue: 0)
+        _player = State(initialValue: AVPlayer(url: url))
+    }
+
+    private var isGIF: Bool { url.pathExtension.lowercased() == "gif" }
+    private var duration: Double { max(mediaDuration, 0.25) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(AppText.value("scMediaEditor", language: language))
+                        .font(.title2.bold())
+                    Text(url.lastPathComponent)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Text(url.pathExtension.uppercased())
+                    .font(.system(.caption, design: .monospaced).weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(.quaternary, in: Capsule())
+            }
+
+            if isGIF {
+                VStack(spacing: 10) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 44))
+                        .foregroundStyle(.secondary)
+                    Text(AppText.value("scMediaGIFEditorHint", language: language))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 280)
+                .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+            } else {
+                VideoPlayer(player: player)
+                    .frame(maxWidth: .infinity, minHeight: 280)
+                    .background(Color.black, in: RoundedRectangle(cornerRadius: 10))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(AppText.value("scMediaTrimStart", language: language))
+                        Slider(value: $startSeconds, in: 0...max(0.25, duration), step: 0.05)
+                        Text(formatTime(startSeconds))
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                    HStack {
+                        Text(AppText.value("scMediaTrimEnd", language: language))
+                        Slider(value: $endSeconds, in: 0...max(0.25, duration), step: 0.05)
+                        Text(formatTime(endSeconds))
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                }
+                .onChange(of: startSeconds) { _, value in
+                    if value >= endSeconds { endSeconds = min(duration, value + 0.25) }
+                }
+                .onChange(of: endSeconds) { _, value in
+                    if value <= startSeconds { startSeconds = max(0, value - 0.25) }
+                }
+            }
+
+            if let message {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Button(AppText.value("cancel", language: language), role: .cancel, action: onClose)
+                Spacer()
+                if !isGIF {
+                    Button(
+                        isExporting
+                            ? AppText.value("scMediaExporting", language: language)
+                            : AppText.value("scMediaExportTrim", language: language)
+                    ) {
+                        exportTrim()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isExporting || endSeconds <= startSeconds)
+                }
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 700, minHeight: 500)
+        .onDisappear { player.pause() }
+        .task {
+            guard !isGIF else { return }
+            let loadedDuration = await SmartMediaEditing.duration(of: url)
+            mediaDuration = loadedDuration
+            if endSeconds <= 0 {
+                endSeconds = loadedDuration
+            }
+        }
+    }
+
+    private func exportTrim() {
+        isExporting = true
+        message = nil
+        Task { @MainActor in
+            do {
+                let output = try await SmartMediaEditing.trim(
+                    url: url,
+                    start: startSeconds,
+                    end: endSeconds
+                )
+                isExporting = false
+                message = AppText.value("scMediaExported", language: language, arguments: [output.lastPathComponent])
+                onExport(output)
+                NSWorkspace.shared.open(output)
+            } catch {
+                isExporting = false
+                let key = (error as? SmartMediaEditingError)?.messageKey ?? "scMediaExportFailed"
+                message = AppText.value(key, language: language)
+            }
+        }
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        String(format: "%02d:%05.2f", Int(seconds) / 60, seconds.truncatingRemainder(dividingBy: 60))
     }
 }
 
