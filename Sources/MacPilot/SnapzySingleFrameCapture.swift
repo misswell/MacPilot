@@ -27,7 +27,14 @@ final class SnapzySingleFrameCaptureSession: NSObject, @unchecked Sendable {
     // Reuse Snapzy's thread-safe shared renderer, but disable Core Image's
     // intermediate cache so a fallback capture cannot permanently raise the
     // app's steady-state memory after the frame has been delivered.
-    private static let sharedCIContext = CIContext(options: [.cacheIntermediates: false])
+    // CIContext is documented as safe for concurrent rendering, but its
+    // Sendable annotation differs between macOS SDK releases. Keep the shared
+    // immutable renderer behind one explicit unchecked-Sendable boundary.
+    private final class ThreadSafeCIContext: @unchecked Sendable {
+        let value = CIContext(options: [.cacheIntermediates: false])
+    }
+
+    private static let sharedCIContext = ThreadSafeCIContext()
 
     private static func failureMessage(_ key: String) -> ScreenCaptureError {
         .captureFailed(AppText.value(key, language: .system))
@@ -237,7 +244,7 @@ extension SnapzySingleFrameCaptureSession: SCStreamOutput {
             width: CVPixelBufferGetWidth(imageBuffer),
             height: CVPixelBufferGetHeight(imageBuffer)
         )
-        guard let image = Self.sharedCIContext.createCGImage(ciImage, from: rect) else {
+        guard let image = Self.sharedCIContext.value.createCGImage(ciImage, from: rect) else {
             finish(.failure(Self.failureMessage("scCaptureInvalidFrame")))
             return
         }
