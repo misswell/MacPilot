@@ -4164,19 +4164,7 @@ private struct SmartAnnotationEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Menu {
-                    ForEach(SmartAnnotationTool.allCases) { tool in
-                        Button {
-                            model.tool = tool
-                        } label: {
-                            Label(tool.title(language: language), systemImage: tool.systemImage)
-                        }
-                    }
-                } label: {
-                    Label(model.tool.title(language: language), systemImage: model.tool.systemImage)
-                }
-                .menuStyle(.borderedButton)
-                .help(AppText.value("scAnnotationTool", language: language))
+                annotationToolPalette
                 Button(AppText.value("scUndo", language: language), action: model.undo)
                     .disabled(model.annotations.isEmpty)
                 Button(AppText.value("scRedo", language: language), action: model.redo)
@@ -4242,6 +4230,40 @@ private struct SmartAnnotationEditor: View {
                 }
             }.padding(24).frame(width: 360)
         }
+    }
+
+    private var annotationToolPalette: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                ForEach(SmartAnnotationTool.allCases) { tool in
+                    let isSelected = model.tool == tool
+                    Button {
+                        model.tool = tool
+                    } label: {
+                        Image(systemName: tool.systemImage)
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(width: 30, height: 28)
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                            .background {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(isSelected ? Color.accentColor : Color.clear)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .help(tool.title(language: language))
+                    .accessibilityLabel(tool.title(language: language))
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                }
+            }
+            .padding(3)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        }
+        .help(AppText.value("scAnnotationTool", language: language))
     }
 
     private func fittedRect(imageSize: CGSize, in available: CGSize) -> CGRect {
