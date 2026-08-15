@@ -956,11 +956,12 @@ final class ScreenCaptureModel: ObservableObject {
             let tempURL = TempCaptureManager.shared.makeScreenshotURL()
             let thumbnail = QuickAccessManager.cgImageThumbnail(image)
             if let item = QuickAccessManager.shared.addScreenshot(url: tempURL, thumbnail: thumbnail) {
-                quickAccessPreviewID = item.id
+                let itemID = item.id
+                quickAccessPreviewID = itemID
                 Task.detached(priority: .utility) {
                     let didWrite = TempCaptureManager.writeScreenshot(sendableImage, to: tempURL)
                     if !didWrite {
-                        await QuickAccessManager.shared.removeScreenshot(id: item.id)
+                        await QuickAccessManager.shared.removeScreenshot(id: itemID)
                     }
                 }
             } else {
