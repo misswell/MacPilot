@@ -290,42 +290,29 @@ final class QuickAccessManager: ObservableObject {
 
     let item = QuickAccessItem(url: url, thumbnail: thumbnail)
 
-    // Animate insertion explicitly — no implicit .animation on the stack
-    withAnimation(QuickAccessAnimations.cardInsert) {
-      if items.count >= maxVisibleItems, let oldestId = items.last?.id {
-        cancelDismissTimer(for: oldestId)
-        pinWindowManager.close(id: oldestId)
-        items.removeLast()
-        DiagnosticLogger.shared.log(
-          .debug,
-          .ui,
-          "Quick access trimmed oldest item",
-          context: ["maxVisibleItems": "\(maxVisibleItems)"]
-        )
-      }
-      items.insert(item, at: 0)
-    }
-    DiagnosticLogger.shared.log(
-      .info,
-      .action,
-      "Quick access screenshot added",
-      context: ["fileName": url.lastPathComponent, "itemCount": "\(items.count)"]
-    )
+    insertScreenshotItem(item, retryURL: needsRetry ? url : nil)
 
-    // Ensure the panel window exists — heals any state where items outlived
-    // the panel (e.g. a previously interrupted show/hide transition).
-    showPanelIfNeeded()
+    return item
+  }
 
-    // Start auto-dismiss timer
-    if autoDismissEnabled {
-      startDismissTimer(for: item.id)
+  /// Insert a screenshot with a caller-provided in-memory thumbnail.
+  ///
+  /// Fresh screen captures use this path so the preview can appear before the
+  /// original image and temporary card file finish encoding on disk.
+  @discardableResult
+  func addScreenshot(url: URL, thumbnail: NSImage) -> QuickAccessItem? {
+    guard isEnabled else {
+      DiagnosticLogger.shared.log(
+        .debug,
+        .action,
+        "Quick access screenshot skipped; feature disabled",
+        context: ["fileName": url.lastPathComponent]
+      )
+      return nil
     }
 
-    // Schedule background thumbnail retry if needed
-    if needsRetry {
-      scheduleThumbnailRetry(for: item.id, url: url)
-    }
-
+    let item = QuickAccessItem(url: url, thumbnail: thumbnail)
+    insertScreenshotItem(item)
     return item
   }
 
@@ -915,6 +902,16 @@ final class QuickAccessManager: ObservableObject {
     return NSImage(cgImage: scaledCgImage, size: newSize)
   }
 
+  /// Build a Quick Access thumbnail directly from a captured frame without
+  /// waiting for a temporary file or ImageIO decode.
+  nonisolated static func cgImageThumbnail(_ image: CGImage, maxSize: CGFloat = 200) -> NSImage {
+    let nsImage = NSImage(
+      cgImage: image,
+      size: NSSize(width: CGFloat(image.width), height: CGFloat(image.height))
+    )
+    return cgScaleThumbnail(nsImage, maxSize: maxSize)
+  }
+
   /// Scale image to thumbnail size (synchronous, no file I/O)
   private func scaleThumbnail(_ image: NSImage, maxSize: CGFloat) -> NSImage {
     PerfSignpost.measure("scaleThumbnailInner") {
@@ -1488,6 +1485,43 @@ final class QuickAccessManager: ObservableObject {
     }
 
     if needsRetry {
+      scheduleThumbnailRetry(for: item.id, url: retryURL)
+    }
+  }
+
+  private func insertScreenshotItem(_ item: QuickAccessItem, retryURL: URL? = nil) {
+    // Animate insertion explicitly — no implicit .animation on the stack.
+    withAnimation(QuickAccessAnimations.cardInsert) {
+      if items.count >= maxVisibleItems, let oldestId = items.last?.id {
+        cancelDismissTimer(for: oldestId)
+        pinWindowManager.close(id: oldestId)
+        items.removeLast()
+        DiagnosticLogger.shared.log(
+          .debug,
+          .ui,
+          "Quick access trimmed oldest item",
+          context: ["maxVisibleItems": "\(maxVisibleItems)"]
+        )
+      }
+      items.insert(item, at: 0)
+    }
+
+    DiagnosticLogger.shared.log(
+      .info,
+      .action,
+      "Quick access screenshot added",
+      context: ["fileName": item.url.lastPathComponent, "itemCount": "\(items.count)"]
+    )
+
+    // Ensure the panel window exists — heals any state where items outlived
+    // the panel (e.g. a previously interrupted show/hide transition).
+    showPanelIfNeeded()
+
+    if autoDismissEnabled {
+      startDismissTimer(for: item.id)
+    }
+
+    if let retryURL {
       scheduleThumbnailRetry(for: item.id, url: retryURL)
     }
   }

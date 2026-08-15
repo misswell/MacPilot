@@ -537,18 +537,30 @@ final class TempCaptureManager {
     /// Write a captured image to the temp directory as a PNG file.
     @discardableResult
     func saveScreenshot(_ image: CGImage) -> URL? {
-        let rep = NSBitmapImageRep(cgImage: image)
-        guard let data = rep.representation(using: .png, properties: [:]) else { return nil }
-        let url = CaptureOutputNaming.makeUniqueFileURL(
+        let url = makeScreenshotURL()
+        return Self.writeScreenshot(SendableScreenCaptureImage(value: image), to: url) ? url : nil
+    }
+
+    /// Reserve a temp URL without encoding the image. This lets Quick Access
+    /// publish its in-memory preview while the PNG is written in the background.
+    func makeScreenshotURL() -> URL {
+        CaptureOutputNaming.makeUniqueFileURL(
             in: tempCaptureDirectory,
             baseName: "MacPilotCapture",
             fileExtension: "png"
         )
+    }
+
+    /// Encode and write a temp capture off the main actor.
+    @discardableResult
+    nonisolated static func writeScreenshot(_ image: SendableScreenCaptureImage, to url: URL) -> Bool {
+        let rep = NSBitmapImageRep(cgImage: image.value)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
         do {
             try data.write(to: url, options: .atomic)
-            return url
+            return true
         } catch {
-            return nil
+            return false
         }
     }
 

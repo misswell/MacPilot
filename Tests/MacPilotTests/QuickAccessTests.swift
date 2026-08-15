@@ -54,6 +54,31 @@ struct QuickAccessTests {
         #expect(video.formattedDuration == "00:12s")
     }
 
+    @MainActor
+    @Test func quickAccessInsertsProvidedThumbnailBeforeFileExists() {
+        let manager = QuickAccessManager.shared
+        let previousEnabled = manager.isEnabled
+        let previousAutoDismiss = manager.autoDismissEnabled
+        manager.isEnabled = true
+        manager.autoDismissEnabled = false
+        manager.dismissAll()
+        defer {
+            manager.dismissAll()
+            manager.autoDismissEnabled = previousAutoDismiss
+            manager.isEnabled = previousEnabled
+        }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacPilot-preview-\(UUID().uuidString).png")
+        let thumbnail = NSImage(size: NSSize(width: 120, height: 80))
+        let item = manager.addScreenshot(url: url, thumbnail: thumbnail)
+
+        #expect(item?.url == url)
+        #expect(item?.thumbnail.size == thumbnail.size)
+        #expect(manager.items.first?.id == item?.id)
+        #expect(FileManager.default.fileExists(atPath: url.path) == false)
+    }
+
     @Test func shortcutConfigEncodesAndDecodesCarbonModifiers() throws {
         let original = ShortcutConfig(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(cmdKey))
         let data = try JSONEncoder().encode(original)
