@@ -78,6 +78,26 @@ struct ScreenCaptureTests {
         #expect(!binding.matches(keyCode: 1, flags: [.maskCommand, .maskAlternate], isRepeat: false))
     }
 
+    @Test @MainActor func startupShortcutRegistrationRetriesTransientFailure() async throws {
+        var attempts = 0
+        let controller = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _ in },
+            onError: { _ in },
+            shortcutRegistrationAttempt: {
+                attempts += 1
+                return attempts == 1 ? .registrationFailed : nil
+            }
+        )
+        defer { controller.stop() }
+
+        controller.start()
+        try await Task.sleep(for: .milliseconds(150))
+
+        #expect(attempts >= 2)
+        #expect(controller.testShortcutRegistrationAttemptCount == 2)
+    }
+
     @Test func shortcutEventRoutingFindsTheConfiguredAreaBinding() {
         let bindings = [
             SmartCaptureShortcutEventBinding(

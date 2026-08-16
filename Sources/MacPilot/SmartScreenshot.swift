@@ -947,7 +947,17 @@ private func smartShortcutCarbonEventHandler(
           hotKeyID.signature == SmartCaptureCarbonHotKey.signature
     else { return status == noErr ? noErr : status }
 
-    Task { @MainActor in context.controller?.handleShortcutEvent(id: hotKeyID.id) }
+    // Carbon delivers application hot-key events on the main run loop.  Do
+    // not enqueue the first event behind launch-time MainActor work: that can
+    // make a freshly launched app appear to require a second key press.
+    let id = hotKeyID.id
+    if Thread.isMainThread {
+        MainActor.assumeIsolated {
+            context.controller?.handleShortcutEvent(id: id)
+        }
+    } else {
+        Task { @MainActor in context.controller?.handleShortcutEvent(id: id) }
+    }
     return noErr
 }
 
@@ -968,11 +978,18 @@ final class SmartScreenshotController {
     private let onObjectCutoutCapture: (CGImage) -> Void
     private let screenCaptureAccessProvider: @Sendable () -> Bool
     private let initialTargetResolver: @Sendable (SmartCaptureSelectionMode, CGPoint) -> CGRect?
+    /// Test seam for the launch-registration race. Production uses Carbon;
+    /// tests can model a transient first registration failure without
+    /// requiring a live global hot-key reservation.
+    private let shortcutRegistrationAttemptOverride: (() -> SmartCaptureShortcutError?)?
     private var shortcutContext: SmartShortcutContext?
     nonisolated(unsafe) private var shortcutHotKey: EventHotKeyRef?
     nonisolated(unsafe) private var selectionCancelHotKey: EventHotKeyRef?
     nonisolated(unsafe) private var shortcutEventHandler: EventHandlerRef?
     private var shortcutEventHandlerIsTransient = false
+    private var shortcutRegistrationRetryTask: Task<Void, Never>?
+    private var shortcutRegistrationAttemptCount = 0
+    private var shortcutRegistrationOverrideIsRegistered = false
     private var overlays: [SmartCaptureOverlayPanel] = []
     private var currentTarget: CGRect?
     private var manualSelectionStart: CGPoint?
@@ -1045,7 +1062,8 @@ final class SmartScreenshotController {
             default:
                 nil
             }
-        }
+        },
+        shortcutRegistrationAttempt: (() -> SmartCaptureShortcutError?)? = nil
     ) {
         self.language = language
         self.onCapture = onCapture
@@ -1063,26 +1081,85 @@ final class SmartScreenshotController {
         self.onObjectCutoutCapture = onObjectCutoutCapture
         self.screenCaptureAccessProvider = screenCaptureAccessProvider
         self.initialTargetResolver = initialTargetResolver
+        self.shortcutRegistrationAttemptOverride = shortcutRegistrationAttempt
     }
 
     #if DEBUG
     var testOverlayCount: Int { overlays.count }
+    var testShortcutRegistrationAttemptCount: Int { shortcutRegistrationAttemptCount }
     #endif
 
     func start() {
         guard !shortcutSuspended else { return }
         shortcutRegistrationRequested = true
-        guard shortcutHotKey == nil, shortcutEventHandler == nil, shortcutEventTap == nil else { return }
+        guard !isPrimaryShortcutRegistered, shortcutEventTap == nil,
+              shortcutRegistrationRetryTask == nil else { return }
         fallbackShortcutBindings.removeAll(keepingCapacity: true)
+        attemptPrimaryShortcutRegistration()
+    }
+
+    private static let shortcutRegistrationRetryDelays: [Duration] = [
+        .milliseconds(20), .milliseconds(80), .milliseconds(240), .milliseconds(600)
+    ]
+
+    private var isPrimaryShortcutRegistered: Bool {
+        shortcutHotKey != nil || shortcutRegistrationOverrideIsRegistered
+    }
+
+    private func attemptPrimaryShortcutRegistration() {
+        guard shortcutRegistrationRequested,
+              !shortcutSuspended,
+              !isPrimaryShortcutRegistered else { return }
         if let error = registerShortcut() {
-            onError(error)
+            guard error == .registrationFailed else {
+                onError(error)
+                return
+            }
+            scheduleShortcutRegistrationRetry()
             return
         }
+        finishPrimaryShortcutRegistration()
+    }
+
+    private func finishPrimaryShortcutRegistration() {
+        shortcutRegistrationRetryTask = nil
         // Optional entry points may be disabled by a system conflict; the
         // settings editor marks those bindings and lets the user replace them
         // without affecting the working primary shortcut.
         _ = registerAdditionalShortcuts()
         _ = refreshShortcutEventTap()
+    }
+
+    private func scheduleShortcutRegistrationRetry() {
+        guard shortcutRegistrationRetryTask == nil else { return }
+        shortcutRegistrationRetryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for delay in Self.shortcutRegistrationRetryDelays {
+                do {
+                    try await Task.sleep(for: delay)
+                } catch {
+                    return
+                }
+                guard self.shortcutRegistrationRequested,
+                      !self.shortcutSuspended,
+                      !self.isPrimaryShortcutRegistered else { return }
+                if let error = self.registerShortcut() {
+                    guard error == .registrationFailed else {
+                        self.shortcutRegistrationRetryTask = nil
+                        self.onError(error)
+                        return
+                    }
+                    continue
+                }
+                self.finishPrimaryShortcutRegistration()
+                return
+            }
+            guard self.shortcutRegistrationRequested,
+                  !self.shortcutSuspended,
+                  !self.isPrimaryShortcutRegistered else { return }
+            self.shortcutRegistrationRetryTask = nil
+            self.onError(SmartCaptureShortcutError.registrationFailed)
+        }
     }
 
     /// Temporarily releases the global registration while the shortcut recorder
@@ -1105,6 +1182,12 @@ final class SmartScreenshotController {
     }
 
     private func registerShortcut() -> SmartCaptureShortcutError? {
+        if let shortcutRegistrationAttemptOverride {
+            shortcutRegistrationAttemptCount += 1
+            let error = shortcutRegistrationAttemptOverride()
+            shortcutRegistrationOverrideIsRegistered = error == nil
+            return error
+        }
         guard let validationError = shortcutBinding.validationError else {
             return registerValidatedShortcut()
         }
@@ -1167,6 +1250,8 @@ final class SmartScreenshotController {
     }
 
     private func unregisterShortcut() {
+        shortcutRegistrationRetryTask?.cancel()
+        shortcutRegistrationRetryTask = nil
         unregisterSelectionCancelShortcut()
         unregisterAdditionalShortcuts()
         stopShortcutEventTap()
@@ -1180,6 +1265,7 @@ final class SmartScreenshotController {
         shortcutHotKey = nil
         shortcutEventHandler = nil
         shortcutContext = nil
+        shortcutRegistrationOverrideIsRegistered = false
     }
 
     func updateAdditionalShortcutBindings(_ bindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding]) {
@@ -1553,7 +1639,7 @@ final class SmartScreenshotController {
         }
         guard binding != shortcutBinding else { return nil }
         let previousBinding = shortcutBinding
-        let wasRegistered = shortcutHotKey != nil || shortcutEventHandler != nil
+        let wasRegistered = isPrimaryShortcutRegistered || shortcutEventHandler != nil
         if shortcutSuspended {
             guard shortcutRegistrationRequested else {
                 shortcutBinding = binding
@@ -1635,6 +1721,7 @@ final class SmartScreenshotController {
     }
 
     deinit {
+        shortcutRegistrationRetryTask?.cancel()
         if let selectionEventTap { CGEvent.tapEnable(tap: selectionEventTap, enable: false) }
         if let shortcutEventTap { CGEvent.tapEnable(tap: shortcutEventTap, enable: false) }
         if let selectionLocalMonitor { NSEvent.removeMonitor(selectionLocalMonitor) }
