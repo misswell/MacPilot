@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import AppKit
 import Testing
 @testable import MacPilot
 
@@ -68,5 +69,42 @@ struct SnapzyCaptureTests {
         #expect(result.image.width == 100)
         #expect(result.image.height == 20)
         #expect(result.screenRect == CGRect(x: 50, y: 10, width: 100, height: 20))
+    }
+
+    @Test @MainActor func areaSelectionWindowIsPresentedBeforeFrozenBackdropCompletes() async throws {
+        _ = NSApplication.shared
+        guard !NSScreen.screens.isEmpty else { return }
+
+        let controller = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _ in },
+            onError: { _ in },
+            screenCaptureAccessProvider: { true }
+        )
+        let delayedImage = image(width: 1, height: 1)
+        let delayedPreparation: @MainActor () async throws -> FrozenAreaCaptureSession = {
+            try await Task.sleep(for: .milliseconds(150))
+            return FrozenAreaCaptureSession.fromSnapshot(
+                FrozenDisplaySnapshot(
+                    displayID: NSScreen.main?.displayID ?? 1,
+                    screenFrame: NSScreen.main?.frame ?? .zero,
+                    scaleFactor: 1,
+                    colorSpaceName: nil,
+                    image: delayedImage
+                )
+            )
+        }
+
+        defer {
+            controller.cancelSelection()
+            controller.stop()
+        }
+
+        let startedAt = Date()
+        controller.startSnapzySelection(mode: .manualArea, preparation: delayedPreparation)
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        #expect(elapsed < 0.1)
+        #expect(SnapzyAreaSelectionController.shared.isPresenting)
     }
 }

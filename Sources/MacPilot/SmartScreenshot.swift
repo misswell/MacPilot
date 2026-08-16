@@ -966,6 +966,8 @@ final class SmartScreenshotController {
     private let onOCRCapture: (CGImage) -> Void
     private let onScrollingCapture: (CGImage) -> Void
     private let onObjectCutoutCapture: (CGImage) -> Void
+    private let screenCaptureAccessProvider: @Sendable () -> Bool
+    private let initialTargetResolver: @Sendable (SmartCaptureSelectionMode, CGPoint) -> CGRect?
     private var shortcutContext: SmartShortcutContext?
     nonisolated(unsafe) private var shortcutHotKey: EventHotKeyRef?
     nonisolated(unsafe) private var selectionCancelHotKey: EventHotKeyRef?
@@ -1006,6 +1008,15 @@ final class SmartScreenshotController {
     nonisolated(unsafe) private var selectionGlobalMonitor: Any?
     private var selectionMode: SmartCaptureSelectionMode = .smartElement
     private var selectionInteraction = SmartCaptureSelectionState()
+    private var initialTargetUpdateTask: Task<Void, Never>?
+    private var snapzyPreparationTask: Task<Void, Never>?
+    private var snapzySessionID: UUID?
+    private var snapzyFrozenSession: FrozenAreaCaptureSession?
+    private var pendingSnapzyResult: (
+        result: AreaSelectionResult,
+        requestedMode: SmartCaptureSelectionMode,
+        sessionID: UUID
+    )?
 
     init(
         language: @escaping () -> AppLanguage,
@@ -1021,7 +1032,20 @@ final class SmartScreenshotController {
         onAreaAnnotateCapture: @escaping (CGImage) -> Void = { _ in },
         onOCRCapture: @escaping (CGImage) -> Void = { _ in },
         onScrollingCapture: @escaping (CGImage) -> Void = { _ in },
-        onObjectCutoutCapture: @escaping (CGImage) -> Void = { _ in }
+        onObjectCutoutCapture: @escaping (CGImage) -> Void = { _ in },
+        screenCaptureAccessProvider: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
+        initialTargetResolver: @escaping @Sendable (SmartCaptureSelectionMode, CGPoint) -> CGRect? = {
+            mode,
+            point in
+            switch mode {
+            case .smartElement:
+                SmartAXTargetQuery.target(at: point)
+            case .applicationWindow, .recordingApplication:
+                SmartAXTargetQuery.applicationWindowTarget(at: point)
+            default:
+                nil
+            }
+        }
     ) {
         self.language = language
         self.onCapture = onCapture
@@ -1037,7 +1061,13 @@ final class SmartScreenshotController {
         self.onOCRCapture = onOCRCapture
         self.onScrollingCapture = onScrollingCapture
         self.onObjectCutoutCapture = onObjectCutoutCapture
+        self.screenCaptureAccessProvider = screenCaptureAccessProvider
+        self.initialTargetResolver = initialTargetResolver
     }
+
+    #if DEBUG
+    var testOverlayCount: Int { overlays.count }
+    #endif
 
     func start() {
         guard !shortcutSuspended else { return }
@@ -1569,6 +1599,13 @@ final class SmartScreenshotController {
     func stop() {
         shortcutRegistrationRequested = false
         cancelSelection()
+        initialTargetUpdateTask?.cancel()
+        initialTargetUpdateTask = nil
+        snapzyPreparationTask?.cancel()
+        snapzyPreparationTask = nil
+        snapzySessionID = nil
+        snapzyFrozenSession = nil
+        pendingSnapzyResult = nil
         pendingTargetUpdate?.cancel()
         pendingTargetUpdate = nil
         latestPointerLocation = nil
@@ -1619,7 +1656,7 @@ final class SmartScreenshotController {
             return
         }
         guard !isSelecting else { return }
-        guard CGPreflightScreenCaptureAccess() else {
+        guard screenCaptureAccessProvider() else {
             Self.logger.error("Selection rejected because required permissions are unavailable")
             onError(ScreenCaptureError.permissionRequired)
             return
@@ -1638,11 +1675,8 @@ final class SmartScreenshotController {
         lastSelectionCoordinateFailureLogAt = 0
         registerSelectionCancelShortcut()
         let initialPoint = NSEvent.mouseLocation
-        currentTarget = mode == .smartElement ? SmartAXTargetQuery.target(at: initialPoint) : nil
-        if isApplicationMode {
-            currentTarget = SmartAXTargetQuery.applicationWindowTarget(at: initialPoint)
-        }
-        Self.logger.info("Selection started; initial target available: \(self.currentTarget != nil)")
+        currentTarget = nil
+        Self.logger.info("Selection started; resolving initial target asynchronously")
         overlays = screens.map { screen in
             let panel = SmartCaptureOverlayPanel(screenFrame: screen.frame)
             panel.overlayView.targetFrame = currentTarget
@@ -1685,6 +1719,29 @@ final class SmartScreenshotController {
             }
         }
         NSCursor.crosshair.set()
+        scheduleInitialTargetResolution(mode: mode, at: initialPoint)
+    }
+
+    private func scheduleInitialTargetResolution(
+        mode: SmartCaptureSelectionMode,
+        at point: CGPoint
+    ) {
+        initialTargetUpdateTask?.cancel()
+        let resolver = initialTargetResolver
+        initialTargetUpdateTask = Task { [weak self] in
+            let target = await Task.detached(priority: .userInitiated) {
+                resolver(mode, point)
+            }.value
+            guard !Task.isCancelled, let self,
+                  self.isSelecting,
+                  self.selectionMode == mode else { return }
+            self.initialTargetUpdateTask = nil
+            self.currentTarget = target
+            for overlay in self.overlays {
+                overlay.overlayView.targetFrame = target
+            }
+            Self.logger.info("Initial target resolution completed; target available: \(target != nil)")
+        }
     }
 
     func captureStoredRect(_ rect: CGRect) {
@@ -1712,13 +1769,16 @@ final class SmartScreenshotController {
     }
 
     func cancelSelection() {
-        if SnapzyAreaSelectionController.shared.isPresenting {
+        if SnapzyAreaSelectionController.shared.isPresenting || snapzySessionID != nil {
             SnapzyAreaSelectionController.shared.cancelSelection()
+            resetSnapzyPreparationState()
             QuickAccessManager.shared.resumeAfterCapture()
             return
         }
         guard isSelecting || !overlays.isEmpty else { return }
         isSelecting = false
+        initialTargetUpdateTask?.cancel()
+        initialTargetUpdateTask = nil
         pendingTargetUpdate?.cancel()
         pendingTargetUpdate = nil
         latestPointerLocation = nil
@@ -1742,16 +1802,11 @@ final class SmartScreenshotController {
 
     private func startSnapzySelection(mode: SmartCaptureSelectionMode) {
         guard !isSelecting, !SnapzyAreaSelectionController.shared.isPresenting else { return }
-        guard CGPreflightScreenCaptureAccess() else {
+        guard screenCaptureAccessProvider() else {
             onError(ScreenCaptureError.permissionRequired)
             return
         }
-        // Suspend the QuickAccess panel's hover monitors while the selection
-        // overlay is up so it never competes for the user's pointer.
-        QuickAccessManager.shared.suspendForCapture()
 
-        let snapzyMode: SelectionMode =
-            (mode == .recordingArea || mode == .recordingApplication) ? .recording : .screenshot
         let interactionMode: AreaSelectionInteractionMode =
             mode == .applicationWindow || mode == .recordingApplication
                 ? .applicationWindow
@@ -1764,35 +1819,137 @@ final class SmartScreenshotController {
                 )
                 : nil
 
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let frozenSession = try await FrozenAreaCaptureSession.prepare(
-                    captureManager: SnapzyScreenCaptureManager.shared,
-                    showCursor: false,
-                    excludeDesktopIcons: false,
-                    excludeDesktopWidgets: false,
+        _ = startSnapzySelection(
+            mode: mode,
+            applicationConfiguration: applicationConfiguration
+        ) {
+            try await FrozenAreaCaptureSession.prepare(
+                captureManager: SnapzyScreenCaptureManager.shared,
+                showCursor: false,
+                excludeDesktopIcons: false,
+                excludeDesktopWidgets: false,
+                excludeOwnApplication: true,
+                prefetchedContentTask: applicationConfiguration?.prefetchedContentTask
+            )
+        }
+    }
+
+    /// Presents Snapzy's selection window before the expensive frozen-display
+    /// capture finishes. The preparation closure is injectable so the ordering
+    /// can be regression-tested without requiring a live ScreenCaptureKit
+    /// permission or waiting for a real display snapshot.
+    @discardableResult
+    func startSnapzySelection(
+        mode: SmartCaptureSelectionMode,
+        applicationConfiguration providedApplicationConfiguration: AreaSelectionApplicationConfiguration? = nil,
+        preparation: @escaping @MainActor () async throws -> FrozenAreaCaptureSession
+    ) -> UUID? {
+        guard !isSelecting, !SnapzyAreaSelectionController.shared.isPresenting else { return nil }
+        resetSnapzyPreparationState()
+
+        // Suspend the QuickAccess panel's hover monitors while the selection
+        // overlay is up so it never competes for the user's pointer.
+        QuickAccessManager.shared.suspendForCapture()
+
+        let snapzyMode: SelectionMode =
+            (mode == .recordingArea || mode == .recordingApplication) ? .recording : .screenshot
+        let interactionMode: AreaSelectionInteractionMode =
+            mode == .applicationWindow || mode == .recordingApplication
+                ? .applicationWindow
+                : .manualRegion
+        let applicationConfiguration: AreaSelectionApplicationConfiguration? =
+            providedApplicationConfiguration
+            ?? (interactionMode == .applicationWindow
+                ? AreaSelectionApplicationConfiguration(
+                    prefetchedContentTask: SnapzyScreenCaptureManager.shared.prefetchShareableContent(),
                     excludeOwnApplication: true
                 )
+                : nil)
+
+        let sessionID = UUID()
+        SnapzyAreaSelectionController.shared.startSelection(
+            mode: snapzyMode,
+            backdrops: [:],
+            applicationConfiguration: applicationConfiguration,
+            initialInteractionMode: interactionMode,
+            sessionID: sessionID
+        ) { [weak self] result in
+            self?.handleSnapzySelectionResult(
+                result,
+                requestedMode: mode,
+                sessionID: sessionID
+            )
+        }
+        snapzySessionID = sessionID
+
+        snapzyPreparationTask = Task { [weak self] in
+            do {
+                let frozenSession = try await preparation()
                 guard !frozenSession.backdrops.isEmpty else {
                     throw ScreenCaptureError.noDisplayFound
                 }
-                SnapzyAreaSelectionController.shared.startSelection(
-                    mode: snapzyMode,
-                    backdrops: frozenSession.backdrops,
-                    applicationConfiguration: applicationConfiguration,
-                    initialInteractionMode: interactionMode
-                ) { [weak self, frozenSession] result in
-                    self?.finishSnapzySelection(
-                        result,
-                        requestedMode: mode,
+                guard !Task.isCancelled,
+                      let self,
+                      self.snapzySessionID == sessionID
+                else { return }
+
+                self.snapzyFrozenSession = frozenSession
+                self.snapzyPreparationTask = nil
+                SnapzyAreaSelectionController.shared.updateBackdrops(
+                    frozenSession.backdrops,
+                    for: sessionID
+                )
+                if let pending = self.pendingSnapzyResult {
+                    self.pendingSnapzyResult = nil
+                    self.resetSnapzyPreparationState()
+                    self.finishSnapzySelection(
+                        pending.result,
+                        requestedMode: pending.requestedMode,
                         frozenSession: frozenSession
                     )
                 }
+            } catch is CancellationError {
+                return
             } catch {
+                guard let self, self.snapzySessionID == sessionID else { return }
+                self.resetSnapzyPreparationState()
+                SnapzyAreaSelectionController.shared.cancelSelection()
+                QuickAccessManager.shared.resumeAfterCapture()
                 self.onError(error)
             }
         }
+        return sessionID
+    }
+
+    private func handleSnapzySelectionResult(
+        _ result: AreaSelectionResult?,
+        requestedMode: SmartCaptureSelectionMode,
+        sessionID: UUID
+    ) {
+        guard snapzySessionID == sessionID else { return }
+        guard let result else {
+            resetSnapzyPreparationState()
+            QuickAccessManager.shared.resumeAfterCapture()
+            return
+        }
+        guard let frozenSession = snapzyFrozenSession else {
+            pendingSnapzyResult = (result, requestedMode, sessionID)
+            return
+        }
+        resetSnapzyPreparationState()
+        finishSnapzySelection(
+            result,
+            requestedMode: requestedMode,
+            frozenSession: frozenSession
+        )
+    }
+
+    private func resetSnapzyPreparationState() {
+        snapzyPreparationTask?.cancel()
+        snapzyPreparationTask = nil
+        snapzySessionID = nil
+        snapzyFrozenSession = nil
+        pendingSnapzyResult = nil
     }
 
     private func finishSnapzySelection(

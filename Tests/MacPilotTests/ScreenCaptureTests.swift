@@ -7,6 +7,33 @@ import Testing
 
 struct ScreenCaptureTests {
 
+    @Test @MainActor func smartSelectionPresentsOverlayBeforeInitialAXQueryCompletes() async throws {
+        _ = NSApplication.shared
+        guard !NSScreen.screens.isEmpty else { return }
+
+        let controller = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _ in },
+            onError: { _ in },
+            screenCaptureAccessProvider: { true },
+            initialTargetResolver: { _, _ in
+                Thread.sleep(forTimeInterval: 0.15)
+                return nil
+            }
+        )
+        defer {
+            controller.cancelSelection()
+            controller.stop()
+        }
+
+        let startedAt = Date()
+        controller.startSelection(mode: .smartElement)
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        #expect(elapsed < 0.1)
+        #expect(controller.testOverlayCount == NSScreen.screens.count)
+    }
+
     @Test func smartCapturePrefersTheSmallestMeaningfulElement() {
         let window = CGRect(x: 100, y: 100, width: 900, height: 700)
         let chain = [

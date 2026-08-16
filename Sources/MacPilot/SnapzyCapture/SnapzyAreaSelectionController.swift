@@ -28,13 +28,15 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
 
     var isPresenting: Bool { !windows.isEmpty }
 
+    @discardableResult
     func startSelection(
         mode: SelectionMode = .screenshot,
         backdrops: [CGDirectDisplayID: AreaSelectionBackdrop] = [:],
         applicationConfiguration: AreaSelectionApplicationConfiguration? = nil,
         initialInteractionMode: AreaSelectionInteractionMode = .manualRegion,
+        sessionID requestedSessionID: UUID? = nil,
         completion: @escaping AreaSelectionResultCompletion
-    ) {
+    ) -> UUID {
         cancelSelection()
 
         selectionMode = mode
@@ -42,7 +44,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         self.completion = completion
         manualStart = nil
         manualRect = nil
-        sessionID = UUID()
+        sessionID = requestedSessionID ?? UUID()
 
         let sessionID = self.sessionID
         let screens = NSScreen.screens
@@ -82,6 +84,23 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         activeWindow?.makeKeyAndOrderFront(nil)
         activeWindow?.activateKeyboardInputIfNeeded()
         NSCursor.crosshair.set()
+        return sessionID
+    }
+
+    func isPresenting(sessionID: UUID) -> Bool {
+        self.sessionID == sessionID && !windows.isEmpty
+    }
+
+    func updateBackdrops(
+        _ backdrops: [CGDirectDisplayID: AreaSelectionBackdrop],
+        for sessionID: UUID
+    ) {
+        guard self.sessionID == sessionID, !windows.isEmpty else { return }
+        for window in windows {
+            guard let displayID = window.displayID,
+                  let backdrop = backdrops[displayID] else { continue }
+            window.overlayView.applyBackdrop(backdrop)
+        }
     }
 
     func cancelSelection() {
