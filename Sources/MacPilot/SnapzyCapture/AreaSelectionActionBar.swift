@@ -100,7 +100,8 @@ final class AreaSelectionActionBar: NSView {
   override var intrinsicContentSize: NSSize {
     // The grip plus fifteen 40pt cells, separators, and stack spacing. Keeping
     // this stable makes the bar placement around a moving selection cheap.
-    NSSize(width: 18 + 15 * 38 + 17 * 2 + 2 * 1 + 20, height: 58)
+    let width: CGFloat = 644
+    return NSSize(width: width, height: 58)
   }
 
   private func makeButton(_ definition: ButtonDefinition) -> NSButton {
