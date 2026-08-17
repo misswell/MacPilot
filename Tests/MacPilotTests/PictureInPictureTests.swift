@@ -39,14 +39,11 @@ struct PictureInPictureTests {
 
     @Test @MainActor func menuBarViewsObserveTheLivePictureInPictureModel() {
         let pictureInPicture = PictureInPictureModel()
-        let dedicatedMenu = PictureInPictureMenuBarView(pictureInPicture: pictureInPicture)
         let appMenu = MenuBarView(pictureInPicture: pictureInPicture)
 
-        #expect(dedicatedMenu.pictureInPicture === pictureInPicture)
         #expect(appMenu.pictureInPicture === pictureInPicture)
 
         pictureInPicture.setEnabled(false)
-        #expect(!dedicatedMenu.pictureInPicture.settings.isEnabled)
         #expect(!appMenu.pictureInPicture.settings.isEnabled)
     }
 

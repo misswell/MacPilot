@@ -303,7 +303,7 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
         isEnabled: Bool = true,
         triggerKey: String = "p",
         triggerModifier: PiPShortcutModifier = .commandOption,
-        showMenuBarIcon: Bool = true,
+        showMenuBarIcon: Bool = false,
         launchAtLogin: Bool = false,
         position: PiPPanelPosition = .bottomRight,
         autoHideOnHover: Bool = false,
@@ -394,7 +394,7 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
             isEnabled: try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true,
             triggerKey: try c.decodeIfPresent(String.self, forKey: .triggerKey) ?? "p",
             triggerModifier: try c.decodeIfPresent(PiPShortcutModifier.self, forKey: .triggerModifier) ?? .commandOption,
-            showMenuBarIcon: try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true,
+            showMenuBarIcon: try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? false,
             launchAtLogin: try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false,
             position: try c.decodeIfPresent(PiPPanelPosition.self, forKey: .position) ?? .bottomRight,
             autoHideOnHover: try c.decodeIfPresent(Bool.self, forKey: .autoHideOnHover) ?? false,
@@ -3108,10 +3108,6 @@ struct PictureInPictureView: View {
                         if appModel.launchesAtLogin != value { appModel.setLaunchAtLogin(value) }
                         pictureInPicture.setLaunchAtLogin(appModel.launchesAtLogin)
                     }
-                ))
-                Toggle(t("pipShowMenuBarIcon"), isOn: Binding(
-                    get: { pictureInPicture.settings.showMenuBarIcon },
-                    set: { pictureInPicture.setShowMenuBarIcon($0) }
                 ))
             }
 

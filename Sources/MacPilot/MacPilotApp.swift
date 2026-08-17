@@ -31,16 +31,6 @@ struct MacPilotApp: App {
             Image(systemName: model.isEnforcing ? "timer" : "pause.circle")
         }
         .menuBarExtraStyle(.menu)
-
-        MenuBarExtra(isInserted: Binding(
-            get: { model.pictureInPicture.settings.showMenuBarIcon },
-            set: { model.pictureInPicture.setShowMenuBarIcon($0) }
-        )) {
-            PictureInPictureMenuBarView(pictureInPicture: model.pictureInPicture).environmentObject(model)
-        } label: {
-            Image(systemName: "pip.enter")
-        }
-        .menuBarExtraStyle(.menu)
     }
 }
 
@@ -3213,35 +3203,6 @@ struct BLEUnlockView: View {
     }
 }
 
-struct PictureInPictureMenuBarView: View {
-    @EnvironmentObject private var model: MacPilotModel
-    @Environment(\.openWindow) private var openWindow
-    @ObservedObject var pictureInPicture: PictureInPictureModel
-
-    var body: some View {
-        Toggle(pictureInPicture.settings.isEnabled ? model.t("pipEnabledStatus") : model.t("pipDisabledStatus"),
-               isOn: Binding(
-                   get: { pictureInPicture.settings.isEnabled },
-                   set: { pictureInPicture.setEnabled($0) }
-               ))
-        Button(model.t("pipCaptureFocused")) { pictureInPicture.captureFocusedWindowNow() }
-            .disabled(!pictureInPicture.settings.isEnabled)
-        Button(model.t("pipCloseAll")) { pictureInPicture.closeAll() }
-            .disabled(pictureInPicture.summaries.isEmpty)
-        Divider()
-        Button(model.t("pictureInPicture")) {
-            model.requestedSection = .pictureInPicture
-            if let window = NSApp.windows.first(where: { !$0.isKind(of: NSPanel.self) }) {
-                NSApp.activate(ignoringOtherApps: true)
-                window.makeKeyAndOrderFront(nil)
-            } else {
-                openWindow(id: "main")
-                NSApp.activate(ignoringOtherApps: true)
-            }
-        }
-    }
-}
-
 struct MenuBarView: View {
     @EnvironmentObject private var model: MacPilotModel
     @Environment(\.openWindow) private var openWindow
@@ -3325,16 +3286,6 @@ struct MenuBarView: View {
             showMainWindow()
         }
         Button(model.t("screenCapture")) { model.requestedSection = .capture; showMainWindow() }
-        if pictureInPicture.settings.showMenuBarIcon {
-            Divider()
-            Toggle(pictureInPicture.settings.isEnabled ? model.t("pipEnabledStatus") : model.t("pipDisabledStatus"),
-                   isOn: Binding(get: { pictureInPicture.settings.isEnabled }, set: { pictureInPicture.setEnabled($0) }))
-            Button(model.t("pipCaptureFocused")) { pictureInPicture.captureFocusedWindowNow() }
-                .disabled(!pictureInPicture.settings.isEnabled)
-            Button(model.t("pictureInPicture")) { model.requestedSection = .pictureInPicture; showMainWindow() }
-            Button(model.t("pipCloseAll")) { pictureInPicture.closeAll() }
-                .disabled(pictureInPicture.summaries.isEmpty)
-        }
         Divider()
         UpdateMenuItems(updater: model.updater) {
             model.requestedSection = .settings
