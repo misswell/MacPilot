@@ -220,6 +220,9 @@ final class SmoothScrollRuntime: @unchecked Sendable {
             state.pendingEnd = false
             state.pendingStopPhase = nil
         }
+        if displayLink == nil {
+            start()
+        }
         return true
     }
 
