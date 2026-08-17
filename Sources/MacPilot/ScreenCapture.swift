@@ -46,6 +46,7 @@ enum ScreenCaptureImageFormat: String, CaseIterable, Codable, Identifiable, Send
 
 struct ScreenCaptureSettings: Codable, Equatable, Sendable {
     var isEnabled: Bool
+    var screenshotEnabled: Bool
     var outputFolder: String
     var busyStartHour: Int
     var busyEndHour: Int
@@ -73,6 +74,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
 
     init(
         isEnabled: Bool = false,
+        screenshotEnabled: Bool = true,
         outputFolder: String = "",
         busyStartHour: Int = 9,
         busyEndHour: Int = 18,
@@ -100,6 +102,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         migrateLegacyScreenshotShortcuts: Bool = false
     ) {
         self.isEnabled = isEnabled
+        self.screenshotEnabled = screenshotEnabled
         self.outputFolder = outputFolder
         self.busyStartHour = max(0, min(23, busyStartHour))
         self.busyEndHour = max(0, min(23, busyEndHour))
@@ -140,6 +143,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         case busyIntervalMinutes, idleIntervalMinutes, imageFormat, quality
         case maxRetentionDays, captureAllDisplays, showsCursor, smartCaptureEnabled
         case smartCaptureShortcut, areaCaptureShortcut, repeatAreaCaptureShortcut, applicationWindowCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut
+        case screenshotEnabled
         case copyAfterCapture, showQuickAccess, pinAfterCapture
     }
 
@@ -147,6 +151,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             isEnabled: try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false,
+            screenshotEnabled: try c.decodeIfPresent(Bool.self, forKey: .screenshotEnabled) ?? true,
             outputFolder: try c.decodeIfPresent(String.self, forKey: .outputFolder) ?? "",
             busyStartHour: try c.decodeIfPresent(Int.self, forKey: .busyStartHour) ?? 9,
             busyEndHour: try c.decodeIfPresent(Int.self, forKey: .busyEndHour) ?? 18,
@@ -461,7 +466,10 @@ final class ScreenCaptureModel: ObservableObject {
     private var permissionPollTask: Task<Void, Never>?
     private var diskUsageRevision = 0
     private let lastAreaDefaultsKey = "MacPilot.smartCapture.lastArea"
-    private lazy var smartCapture = SmartScreenshotController(
+    private var smartCapture: SmartScreenshotController?
+
+    private func makeSmartCaptureController() -> SmartScreenshotController {
+        SmartScreenshotController(
         language: { [weak self] in self?.language ?? .system },
         onCapture: { [weak self] image in self?.handleSmartCapture(image) },
         onError: { [weak self] error in
@@ -510,7 +518,26 @@ final class ScreenCaptureModel: ObservableObject {
         onOCRCapture: { [weak self] image in self?.handleOCRCapture(image) },
         onScrollingCapture: { [weak self] image in self?.handleSmartCapture(image) },
         onObjectCutoutCapture: { [weak self] image in self?.handleObjectCutout(image) }
-    )
+        )
+    }
+
+    private func ensureSmartCapture() -> SmartScreenshotController {
+        if let smartCapture {
+            return smartCapture
+        }
+        let controller = makeSmartCaptureController()
+        smartCapture = controller
+        return controller
+    }
+
+    private func releaseSmartCaptureIfIdle() {
+        guard let controller = smartCapture,
+              !settings.screenshotEnabled || !settings.smartCaptureEnabled else {
+            return
+        }
+        controller.stop()
+        smartCapture = nil
+    }
 
     deinit {
         captureTask?.cancel()
@@ -522,7 +549,8 @@ final class ScreenCaptureModel: ObservableObject {
         captureTask = nil
         permissionPollTask?.cancel()
         permissionPollTask = nil
-        smartCapture.stop()
+        smartCapture?.stop()
+        smartCapture = nil
     }
 
     // MARK: - Configuration lifecycle
@@ -530,18 +558,22 @@ final class ScreenCaptureModel: ObservableObject {
     func applyLoadedSettings(_ newSettings: ScreenCaptureSettings) {
         isLoading = true
         settings = newSettings
-        smartCapture.updateShortcutBinding(newSettings.smartCaptureShortcut)
-        smartCapture.updateAdditionalShortcutBindings([
-            .area: newSettings.areaCaptureShortcut,
-            .repeatArea: newSettings.repeatAreaCaptureShortcut,
-            .applicationWindow: newSettings.applicationWindowCaptureShortcut,
-            .fullscreen: newSettings.fullscreenCaptureShortcut,
-            .activeWindow: newSettings.activeWindowCaptureShortcut,
-            .areaAnnotate: newSettings.areaAnnotateShortcut,
-            .ocr: newSettings.ocrShortcut,
-            .scrolling: newSettings.scrollingCaptureShortcut,
-            .objectCutout: newSettings.objectCutoutShortcut
-        ])
+        if let smartCapture {
+            smartCapture.updateShortcutBinding(newSettings.smartCaptureShortcut)
+            smartCapture.updateAdditionalShortcutBindings([
+                .area: newSettings.areaCaptureShortcut,
+                .repeatArea: newSettings.repeatAreaCaptureShortcut,
+                .applicationWindow: newSettings.applicationWindowCaptureShortcut,
+                .fullscreen: newSettings.fullscreenCaptureShortcut,
+                .activeWindow: newSettings.activeWindowCaptureShortcut,
+                .areaAnnotate: newSettings.areaAnnotateShortcut,
+                .ocr: newSettings.ocrShortcut,
+                .scrolling: newSettings.scrollingCaptureShortcut,
+                .objectCutout: newSettings.objectCutoutShortcut
+            ])
+        } else if !newSettings.screenshotEnabled {
+            smartCapture = nil
+        }
         diskUsageRevision += 1
         hasScreenPermission = CGPreflightScreenCaptureAccess()
         isPermissionError = false
@@ -556,9 +588,9 @@ final class ScreenCaptureModel: ObservableObject {
         // sessions, and route the card's "标注" action to the annotation editor.
         TempCaptureManager.shared.cleanupOrphanedFiles()
         AnnotateManager.shared.onOpenAnnotation = { [weak self] item in
-            self?.smartCapture.presentQuickAccessAnnotation(for: item)
+            self?.smartCapture?.presentQuickAccessAnnotation(for: item)
         }
-        if settings.isEnabled {
+        if settings.screenshotEnabled && settings.isEnabled {
             checkAndStartCapture()
         }
     }
@@ -641,6 +673,21 @@ final class ScreenCaptureModel: ObservableObject {
         updateSmartCaptureRuntime()
     }
 
+    func setScreenshotEnabled(_ value: Bool) {
+        guard settings.screenshotEnabled != value else { return }
+        updateSettings { $0.screenshotEnabled = value }
+        if value {
+            updateSmartCaptureRuntime()
+            if settings.isEnabled {
+                checkAndStartCapture()
+            }
+        } else {
+            stopCaptureLoop()
+            smartCapture?.stop()
+            smartCapture = nil
+        }
+    }
+
     @discardableResult
     func setShortcut(_ kind: ScreenCaptureShortcutKind, binding: SmartCaptureShortcutBinding) -> Bool {
         var updated = settings
@@ -685,9 +732,11 @@ final class ScreenCaptureModel: ObservableObject {
         if kind == .smartElement {
             guard setSmartCaptureShortcut(binding) else { return false }
         } else {
-            if let error = smartCapture.updateAdditionalShortcutBindingsReturningError(bindings, requiredKind: kind) {
-                errorMessage = AppText.value(error.messageKey, language: language)
-                return false
+            if let smartCapture {
+                if let error = smartCapture.updateAdditionalShortcutBindingsReturningError(bindings, requiredKind: kind) {
+                    errorMessage = AppText.value(error.messageKey, language: language)
+                    return false
+                }
             }
             updateSettings {
                 $0.areaCaptureShortcut = updated.areaCaptureShortcut
@@ -726,7 +775,22 @@ final class ScreenCaptureModel: ObservableObject {
             errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
             return false
         }
-        guard let error = smartCapture.updateShortcutBindingReturningError(binding) else {
+        if let smartCapture {
+            guard let error = smartCapture.updateShortcutBindingReturningError(binding) else {
+                updateSettings { $0.smartCaptureShortcut = binding }
+                errorMessage = nil
+                return true
+            }
+            errorMessage = AppText.value(error.messageKey, language: language)
+            return false
+        }
+        if !settings.screenshotEnabled || !settings.smartCaptureEnabled {
+            updateSettings { $0.smartCaptureShortcut = binding }
+            errorMessage = nil
+            return true
+        }
+        let capture = ensureSmartCapture()
+        guard let error = capture.updateShortcutBindingReturningError(binding) else {
             updateSettings { $0.smartCaptureShortcut = binding }
             errorMessage = nil
             return true
@@ -736,11 +800,11 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     func suspendSmartCaptureShortcut() {
-        smartCapture.suspendShortcut()
+        smartCapture?.suspendShortcut()
     }
 
     func resumeSmartCaptureShortcut() {
-        smartCapture.resumeShortcut(register: settings.smartCaptureEnabled)
+        smartCapture?.resumeShortcut(register: settings.smartCaptureEnabled)
     }
 
     func startSmartCapture() {
@@ -761,11 +825,19 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     func captureFullscreen() {
+        guard settings.screenshotEnabled else {
+            errorMessage = AppText.value("scScreenshotDisabled", language: language)
+            return
+        }
         guard ensureCapturePermissions() else { return }
         Task { await captureFullscreenAndHandleResult() }
     }
 
     func captureActiveWindow() {
+        guard settings.screenshotEnabled else {
+            errorMessage = AppText.value("scScreenshotDisabled", language: language)
+            return
+        }
         guard ensureCapturePermissions() else { return }
         Task { await captureActiveWindowAndHandleResult() }
     }
@@ -820,6 +892,10 @@ final class ScreenCaptureModel: ObservableObject {
     /// the explicit permission request to the settings-page grant button.
     /// Global shortcuts must never trigger a fresh TCC prompt implicitly.
     private func startSelection(mode: SmartCaptureSelectionMode) {
+        guard settings.screenshotEnabled else {
+            errorMessage = AppText.value("scScreenshotDisabled", language: language)
+            return
+        }
         guard ensureCapturePermissions() else {
             // This path is used by explicit menu/deep-link actions. Opening
             // the exact System Settings pane makes the missing permission
@@ -827,19 +903,24 @@ final class ScreenCaptureModel: ObservableObject {
             openScreenCaptureSettings()
             return
         }
-        smartCapture.startSelection(mode: mode)
+        ensureSmartCapture().startSelection(mode: mode)
     }
 
     private func presentAreaAnnotation(_ image: CGImage) {
+        guard let smartCapture else { return }
         smartCapture.presentInlineAnnotation(for: image)
     }
 
     func repeatSmartCapture() {
+        guard settings.screenshotEnabled else {
+            errorMessage = AppText.value("scScreenshotDisabled", language: language)
+            return
+        }
         guard ensureCapturePermissions(), let stored = loadLastSmartCaptureArea(), stored.isValid else {
             errorMessage = AppText.value("scNoLastArea", language: language)
             return
         }
-        smartCapture.captureStoredRect(stored.rect)
+        ensureSmartCapture().captureStoredRect(stored.rect)
     }
 
     private func storeLastSmartCaptureArea(_ rect: CGRect) {
@@ -853,10 +934,11 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     private func updateSmartCaptureRuntime() {
-        if settings.smartCaptureEnabled {
-            smartCapture.start()
+        if settings.screenshotEnabled && settings.smartCaptureEnabled {
+            ensureSmartCapture().start()
         } else {
-            smartCapture.stop()
+            smartCapture?.stop()
+            smartCapture = nil
         }
     }
 
@@ -876,7 +958,7 @@ final class ScreenCaptureModel: ObservableObject {
 
     func showRecordingQuickAccess(url: URL) {
         recordMediaHistory(url)
-        smartCapture.showQuickAccess(mediaURL: url)
+        ensureSmartCapture().showQuickAccess(mediaURL: url)
     }
 
     /// Adds a finished video or GIF to the same persistent history used by
@@ -909,6 +991,7 @@ final class ScreenCaptureModel: ObservableObject {
             revealHistoryItem(item)
             return
         }
+        guard let smartCapture else { return }
         smartCapture.openMediaEditor(url: item.url)
     }
 
@@ -1241,6 +1324,7 @@ final class ScreenCaptureModel: ObservableObject {
 
     func checkAndStartCapture() {
         guard settings.isEnabled else { stopCaptureLoop(); return }
+        guard settings.screenshotEnabled else { stopCaptureLoop(); return }
         guard settings.isOutputFolderValid else {
             errorMessage = ScreenCaptureError.noOutputFolder.errorDescription
             return
@@ -1544,6 +1628,15 @@ struct ScreenCaptureView: View {
 
     private var smartCaptureCard: some View {
         VStack(alignment: .leading, spacing: 14) {
+            Toggle(t("scScreenshotEnabled"), isOn: Binding(
+                get: { capture.settings.screenshotEnabled },
+                set: { capture.setScreenshotEnabled($0) }
+            ))
+            .font(.body.weight(.medium))
+            Text(t("scScreenshotDisabledHint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Divider()
             HStack(spacing: 14) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 13).fill(Color.blue.opacity(0.13))

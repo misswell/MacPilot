@@ -743,6 +743,7 @@ struct ScreenCaptureTests {
     @Test func defaultsAreSensible() {
         let settings = ScreenCaptureSettings()
         #expect(settings.isEnabled == false)
+        #expect(settings.screenshotEnabled == true)
         #expect(settings.outputFolder == "")
         #expect(settings.busyIntervalMinutes == 10)
         #expect(settings.idleIntervalMinutes == 30)
@@ -817,6 +818,7 @@ struct ScreenCaptureTests {
         let json = "{}".data(using: .utf8)!
         let decoded = try JSONDecoder().decode(ScreenCaptureSettings.self, from: json)
         #expect(decoded.isEnabled == false)
+        #expect(decoded.screenshotEnabled == true)
         #expect(decoded.busyIntervalMinutes == 10)
         #expect(decoded.imageFormat == .heic)
         #expect(decoded.quality == 0.7)
@@ -825,10 +827,11 @@ struct ScreenCaptureTests {
     }
 
     @Test func smartCaptureSettingsRoundTripWhenDisabled() throws {
-        let original = ScreenCaptureSettings(smartCaptureEnabled: false)
+        let original = ScreenCaptureSettings(screenshotEnabled: false, smartCaptureEnabled: false)
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(ScreenCaptureSettings.self, from: data)
 
+        #expect(decoded.screenshotEnabled == false)
         #expect(decoded.smartCaptureEnabled == false)
     }
 

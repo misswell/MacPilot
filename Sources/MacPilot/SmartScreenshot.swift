@@ -990,6 +990,7 @@ final class SmartScreenshotController {
     private var shortcutRegistrationRetryTask: Task<Void, Never>?
     private var shortcutRegistrationAttemptCount = 0
     private var shortcutRegistrationOverrideIsRegistered = false
+    private var lastPrimaryShortcutHandledAt: CFAbsoluteTime = -.greatestFiniteMagnitude
     private var overlays: [SmartCaptureOverlayPanel] = []
     private var currentTarget: CGRect?
     private var manualSelectionStart: CGPoint?
@@ -1331,7 +1332,20 @@ final class SmartScreenshotController {
     }
 
     private func refreshShortcutEventTap() -> Bool {
-        let bindings = fallbackShortcutBindings
+        var bindings = fallbackShortcutBindings
+        if shortcutRegistrationRequested,
+           shortcutBinding.isValid,
+           SmartCaptureSystemShortcutDetector.conflicts(for: shortcutBinding).isEmpty,
+           !bindings.contains(where: { $0.id == SmartCaptureCarbonHotKey.captureID }) {
+            // The primary shortcut also gets a HID-tap fallback. Carbon is
+            // registered normally, but a freshly launched app can miss its
+            // first event if the Carbon run-loop target is not fully ready.
+            // The debounce in handleShortcutEvent prevents double-triggering.
+            bindings.append(SmartCaptureShortcutEventBinding(
+                id: SmartCaptureCarbonHotKey.captureID,
+                binding: shortcutBinding
+            ))
+        }
         guard !bindings.isEmpty else {
             stopShortcutEventTap()
             return true
@@ -2276,6 +2290,14 @@ final class SmartScreenshotController {
     }
 
     func handleShortcutEvent(id: UInt32) {
+        if id == SmartCaptureCarbonHotKey.captureID {
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastPrimaryShortcutHandledAt < 0.2 {
+                lastPrimaryShortcutHandledAt = now
+                return
+            }
+            lastPrimaryShortcutHandledAt = now
+        }
         switch id {
         case SmartCaptureCarbonHotKey.cancelID:
             cancelSelection()
