@@ -73,6 +73,21 @@ The **Picture-in-Picture** sidebar uses ScreenCaptureKit to capture an individua
 
 The first capture requires Screen Recording access in **System Settings → Privacy & Security → Screen Recording**. To intercept the global shortcut while another app is active, also grant MacPilot **Accessibility** access; without it, the in-app fallback can observe the shortcut but cannot suppress the original keystroke. Custom-compositor patching never runs silently: the target app must be quit, the user must confirm the modification, and its original bundle remains restorable from MacPilot's Application Support directory.
 
+## Smooth Scrolling
+
+The **Smooth Scrolling** sidebar makes mouse-wheel scrolling feel more like a
+trackpad by rewriting wheel events into interpolated, continuous scroll frames.
+It is derived from the scrolling pipeline of
+[Mos](https://github.com/Caldis/Mos) under its CC BY-NC 4.0 license.
+
+- Enable smooth vertical/horizontal scrolling independently, or pass one axis
+  through untouched while the other is smoothed.
+- Reverse vertical/horizontal wheel direction independently.
+- Adjust the minimum wheel step, speed gain, glide duration, and dead zone.
+- Optionally simulate trackpad scroll/momentum phases for apps that rely on them.
+- Settings are persisted with the rest of `config.json`; Accessibility access is
+  required because MacPilot must read and rewrite wheel events in other apps.
+
 ## Build the app
 
 ```sh

@@ -45,3 +45,21 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
+
+## Mos (Smooth Scrolling)
+
+MacPilot's *Smooth Scrolling* feature is a non-commercial adaptation of the
+scrolling pipeline from [Mos](https://github.com/Caldis/Mos) (commit
+`5f93f4704fc86734198ccf907b1a607fc38706df`, master). The migrated ideas and
+derived code live under `Sources/MacPilot/SmoothScrolling/`:
+
+- wheel-event parsing and direction/smoothing decisions (`SmoothScrollCore.swift`),
+- minimum-step normalization, speed gain and duration curve,
+- frame filter and scroll phase state machine,
+- CGEvent tap + CVDisplayLink interpolation + `CGEventPostToPid` delivery.
+
+Mos is copyright (c) 2017-2026 Caldis, licensed under
+[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/). Changes made
+by MacPilot are limited to the global settings surface, AppKit/SwiftUI
+integration, configuration storage, and dropping Mos' buttons/Logi/update
+modules. Use of this Mos-derived portion must stay non-commercial.

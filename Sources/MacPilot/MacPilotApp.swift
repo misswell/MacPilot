@@ -25,7 +25,8 @@ struct MacPilotApp: App {
             MenuBarView(
                 pictureInPicture: model.pictureInPicture,
                 inputSources: model.inputSources,
-                windowSwitcher: model.windowSwitcher
+                windowSwitcher: model.windowSwitcher,
+                smoothScrolling: model.smoothScrolling
             ).environmentObject(model)
         } label: {
             Image(systemName: model.isEnforcing ? "timer" : "pause.circle")
@@ -576,7 +577,17 @@ enum AppText {
         "windowSwitcherAccessibilityRequired": "窗口切换需要辅助功能权限，才能读取和聚焦其他应用的窗口。",
         "windowSwitcherGrantAccessibility": "授权辅助功能…", "windowSwitcherAccessibilityReady": "辅助功能权限已就绪",
         "windowSwitcherTestNow": "立即显示窗口切换器", "windowSwitcherNoWindows": "当前没有可切换的窗口。",
-        "windowSwitcherEnabledStatus": "窗口切换：已启用", "windowSwitcherDisabledStatus": "窗口切换：已停用"
+        "windowSwitcherEnabledStatus": "窗口切换：已启用", "windowSwitcherDisabledStatus": "窗口切换：已停用",
+        "smoothScrolling": "平滑滚动", "smoothScrollingSubtitle": "把鼠标滚轮转换成类似触控板的连续平滑滚动，保留必要的精准控制。",
+        "smoothScrollingEnable": "启用平滑滚动", "smoothScrollingEnabledStatus": "平滑滚动：已启用", "smoothScrollingDisabledStatus": "平滑滚动：已停用",
+        "smoothScrollingVertical": "垂直平滑", "smoothScrollingHorizontal": "水平平滑", "smoothScrollingReverse": "反转方向",
+        "smoothScrollingReverseVertical": "反转垂直方向", "smoothScrollingReverseHorizontal": "反转水平方向",
+        "smoothScrollingStep": "最短步长", "smoothScrollingSpeed": "速度增益", "smoothScrollingDuration": "持续时长",
+        "smoothScrollingDeadZone": "死区", "smoothScrollingSimulatePhases": "模拟触控板相位",
+        "smoothScrollingAccessibilityRequired": "平滑滚动需要辅助功能权限来读取并改写其他应用中的滚轮事件。",
+        "smoothScrollingGrantAccessibility": "授权辅助功能…", "smoothScrollingOpenAccessibility": "打开辅助功能设置",
+        "smoothScrollingAccessibilityReady": "辅助功能权限已就绪",
+        "smoothScrollingNotConfiguredHint": "未启用时鼠标滚轮会按系统默认行为传递。"
     ]
 
     static func value(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
@@ -820,7 +831,17 @@ enum AppText {
             "windowSwitcherAccessibilityRequired": "Accessibility access is required to read and focus windows from other applications.",
             "windowSwitcherGrantAccessibility": "Grant Accessibility…", "windowSwitcherAccessibilityReady": "Accessibility access is ready",
             "windowSwitcherTestNow": "Show Window Switcher Now", "windowSwitcherNoWindows": "There are no switchable windows right now.",
-            "windowSwitcherEnabledStatus": "Window Switcher: On", "windowSwitcherDisabledStatus": "Window Switcher: Off"
+            "windowSwitcherEnabledStatus": "Window Switcher: On", "windowSwitcherDisabledStatus": "Window Switcher: Off",
+            "smoothScrolling": "Smooth Scrolling", "smoothScrollingSubtitle": "Turn mouse-wheel deltas into continuous, trackpad-like scrolling while keeping precise control.",
+            "smoothScrollingEnable": "Enable smooth scrolling", "smoothScrollingEnabledStatus": "Smooth Scrolling: On", "smoothScrollingDisabledStatus": "Smooth Scrolling: Off",
+            "smoothScrollingVertical": "Smooth vertical", "smoothScrollingHorizontal": "Smooth horizontal", "smoothScrollingReverse": "Reverse direction",
+            "smoothScrollingReverseVertical": "Reverse vertical", "smoothScrollingReverseHorizontal": "Reverse horizontal",
+            "smoothScrollingStep": "Minimum step", "smoothScrollingSpeed": "Speed gain", "smoothScrollingDuration": "Glide duration",
+            "smoothScrollingDeadZone": "Dead zone", "smoothScrollingSimulatePhases": "Simulate trackpad phases",
+            "smoothScrollingAccessibilityRequired": "Smooth scrolling needs Accessibility access to read and rewrite wheel events in other apps.",
+            "smoothScrollingGrantAccessibility": "Grant Accessibility…", "smoothScrollingOpenAccessibility": "Open Accessibility Settings",
+            "smoothScrollingAccessibilityReady": "Accessibility access is ready",
+            "smoothScrollingNotConfiguredHint": "When disabled, mouse-wheel events pass through using the system default behavior."
         ]
 }
 
@@ -845,9 +866,10 @@ final class MacPilotModel: ObservableObject {
         var pictureInPicture: PictureInPictureSettings
         var inputSources: InputSourceSettings
         var windowSwitcher: WindowSwitcherSettings
+        var smoothScrolling: SmoothScrollSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings) {
-            version = 12
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings) {
+            version = 13
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -861,6 +883,7 @@ final class MacPilotModel: ObservableObject {
             self.pictureInPicture = pictureInPicture
             self.inputSources = inputSources
             self.windowSwitcher = windowSwitcher
+            self.smoothScrolling = smoothScrolling
         }
 
         init(from decoder: Decoder) throws {
@@ -879,6 +902,7 @@ final class MacPilotModel: ObservableObject {
             pictureInPicture = try container.decodeIfPresent(PictureInPictureSettings.self, forKey: .pictureInPicture) ?? PictureInPictureSettings()
             inputSources = try container.decodeIfPresent(InputSourceSettings.self, forKey: .inputSources) ?? InputSourceSettings()
             windowSwitcher = try container.decodeIfPresent(WindowSwitcherSettings.self, forKey: .windowSwitcher) ?? WindowSwitcherSettings()
+            smoothScrolling = try container.decodeIfPresent(SmoothScrollSettings.self, forKey: .smoothScrolling) ?? SmoothScrollSettings()
         }
     }
 
@@ -902,6 +926,7 @@ final class MacPilotModel: ObservableObject {
     let pictureInPicture = PictureInPictureModel()
     let inputSources = InputSourceModel()
     let windowSwitcher = WindowSwitcherModel()
+    let smoothScrolling = SmoothScrollModel()
     @Published var requestedSection: MainSection?
     /// Set by the menu bar/deep-link shortcut entry so the capture settings
     /// can present the recorder immediately after the main window is opened.
@@ -956,6 +981,13 @@ final class MacPilotModel: ObservableObject {
             Task { @MainActor in screenRecording?.shutdown() }
         }
         NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak smoothScrolling] _ in
+            Task { @MainActor in smoothScrolling?.shutdown() }
+        }
+        NotificationCenter.default.addObserver(
             forName: .macPilotDeepLink,
             object: nil,
             queue: .main
@@ -988,6 +1020,7 @@ final class MacPilotModel: ObservableObject {
         pictureInPicture.persist = { [weak self] in self?.saveIfReady() }
         inputSources.persist = { [weak self] in self?.scheduleInputSourceSave() }
         windowSwitcher.persist = { [weak self] in self?.saveIfReady() }
+        smoothScrolling.persist = { [weak self] in self?.saveIfReady() }
         windowSwitcher.language = language
         ble.startObservingSystemState()
         ble.activateFromConfiguration()
@@ -998,6 +1031,7 @@ final class MacPilotModel: ObservableObject {
         pictureInPicture.activateFromConfiguration()
         inputSources.activateFromConfiguration()
         windowSwitcher.activateFromConfiguration()
+        smoothScrolling.activateFromConfiguration()
         Task { [weak updater] in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
@@ -1672,6 +1706,7 @@ final class MacPilotModel: ObservableObject {
         pictureInPicture.applyLoadedSettings(configuration.pictureInPicture)
         inputSources.applyLoadedSettings(configuration.inputSources)
         windowSwitcher.applyLoadedSettings(configuration.windowSwitcher)
+        smoothScrolling.applyLoadedSettings(configuration.smoothScrolling)
     }
 
     private func scheduleInputSourceSave() {
@@ -1703,7 +1738,8 @@ final class MacPilotModel: ObservableObject {
             screenRecording: screenRecording.settings,
             pictureInPicture: pictureInPicture.settings,
             inputSources: inputSources.settings,
-            windowSwitcher: windowSwitcher.settings
+            windowSwitcher: windowSwitcher.settings,
+            smoothScrolling: smoothScrolling.settings
         )
         let data: Data
         do {
@@ -1938,7 +1974,7 @@ final class MacPilotModel: ObservableObject {
     var timeString: String { lastChecked.formatted(.dateTime.hour().minute().locale(language.locale)) }
 }
 
-enum MainSection { case exit, launch, ble, inputSources, compression, capture, pictureInPicture, windowSwitcher, settings }
+enum MainSection { case exit, launch, ble, inputSources, compression, capture, pictureInPicture, windowSwitcher, smoothScrolling, settings }
 
 struct ContentView: View {
     @EnvironmentObject private var model: MacPilotModel
@@ -1980,6 +2016,8 @@ struct ContentView: View {
                 } else if section == .windowSwitcher {
                     WindowSwitcherSettingsView(windowSwitcher: model.windowSwitcher)
                         .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
+                } else if section == .smoothScrolling {
+                    SmoothScrollSettingsView(smoothScrolling: model.smoothScrolling)
                 } else {
                     SettingsView()
                 }
@@ -2190,6 +2228,16 @@ struct Sidebar: View {
             }
             .buttonStyle(.plain)
             .background(section == .windowSwitcher ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            Button { section = .smoothScrolling } label: {
+                Label(model.t("smoothScrolling"), systemImage: "scroll")
+                    .labelStyle(SidebarLabelStyle())
+                    .padding(.vertical, 9).padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(section == .smoothScrolling ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             Button { section = .settings } label: {
                 Label(model.t("settings"), systemImage: "gearshape")
@@ -3209,15 +3257,18 @@ struct MenuBarView: View {
     @ObservedObject var pictureInPicture: PictureInPictureModel
     @ObservedObject var inputSources: InputSourceModel
     @ObservedObject var windowSwitcher: WindowSwitcherModel
+    @ObservedObject var smoothScrolling: SmoothScrollModel
 
     init(
         pictureInPicture: PictureInPictureModel,
         inputSources: InputSourceModel = InputSourceModel(),
-        windowSwitcher: WindowSwitcherModel = WindowSwitcherModel()
+        windowSwitcher: WindowSwitcherModel = WindowSwitcherModel(),
+        smoothScrolling: SmoothScrollModel = SmoothScrollModel()
     ) {
         self._pictureInPicture = ObservedObject(wrappedValue: pictureInPicture)
         self._inputSources = ObservedObject(wrappedValue: inputSources)
         self._windowSwitcher = ObservedObject(wrappedValue: windowSwitcher)
+        self._smoothScrolling = ObservedObject(wrappedValue: smoothScrolling)
     }
 
     var body: some View {
@@ -3259,6 +3310,12 @@ struct MenuBarView: View {
             Button(model.t("windowSwitcherTestNow")) { windowSwitcher.showSwitcherNow() }
                 .disabled(!windowSwitcher.hasAccessibilityPermission)
             Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
+        }
+        if smoothScrolling.settings.isEnabled {
+            Divider()
+            Toggle(model.t("smoothScrollingEnabledStatus"),
+                   isOn: Binding(get: { smoothScrolling.settings.isEnabled }, set: { smoothScrolling.setEnabled($0) }))
+            Button(model.t("smoothScrolling")) { model.requestedSection = .smoothScrolling; showMainWindow() }
         }
         if model.screenCapture.settings.screenshotEnabled {
             Divider()

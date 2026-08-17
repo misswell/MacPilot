@@ -1,0 +1,123 @@
+import ApplicationServices
+import Foundation
+import SwiftUI
+
+@MainActor
+final class SmoothScrollModel: ObservableObject {
+    @Published private(set) var settings = SmoothScrollSettings()
+    @Published private(set) var hasAccessibilityPermission = false
+
+    let controller = SmoothScrollController()
+    var persist: (() -> Void)?
+
+    private var isActive = false
+
+    init() {
+        refreshPermissionStatus()
+    }
+
+    func applyLoadedSettings(_ loaded: SmoothScrollSettings) {
+        settings = loaded
+        refreshPermissionStatus()
+        if isActive {
+            controller.activate(settings: settings)
+        }
+    }
+
+    func activateFromConfiguration() {
+        guard !isActive else { return }
+        isActive = true
+        refreshPermissionStatus()
+        controller.activate(settings: settings)
+    }
+
+    func shutdown() {
+        controller.shutdown()
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        guard settings.isEnabled != enabled else { return }
+        settings.isEnabled = enabled
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func setSmoothVertical(_ enabled: Bool) {
+        settings.smoothVertical = enabled
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func setSmoothHorizontal(_ enabled: Bool) {
+        settings.smoothHorizontal = enabled
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func setReverseVertical(_ enabled: Bool) {
+        settings.reverseVertical = enabled
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func setReverseHorizontal(_ enabled: Bool) {
+        settings.reverseHorizontal = enabled
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func setMinimumStep(_ value: Double) {
+        settings.minimumStep = value.clamped(to: SmoothScrollSettings.stepRange)
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func setSpeed(_ value: Double) {
+        settings.speed = value.clamped(to: SmoothScrollSettings.speedRange)
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func setDuration(_ value: Double) {
+        settings.duration = value.clamped(to: SmoothScrollSettings.durationRange)
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func setDeadZone(_ value: Double) {
+        settings.deadZone = value.clamped(to: SmoothScrollSettings.deadZoneRange)
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func setSimulatesTrackpadPhases(_ enabled: Bool) {
+        settings.simulatesTrackpadPhases = enabled
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func requestAccessibility() {
+        hasAccessibilityPermission = AXIsProcessTrustedWithOptions(
+            ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        )
+        controller.activate(settings: settings)
+    }
+
+    func refreshPermissionStatus() {
+        hasAccessibilityPermission = AXIsProcessTrusted()
+        controller.activate(settings: settings)
+    }
+
+    func openAccessibilitySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+}
+
+private extension Double {
+    func clamped(to range: ClosedRange<Double>) -> Double {
+        Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
+    }
+}
