@@ -36,7 +36,7 @@ final class AreaSelectionActionBar: NSView {
     stackView.orientation = .horizontal
     stackView.alignment = .centerY
     stackView.spacing = 2
-    stackView.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
+    stackView.edgeInsets = NSEdgeInsets(top: 5, left: 8, bottom: 5, right: 8)
     stackView.translatesAutoresizingMaskIntoConstraints = false
     addSubview(stackView)
     NSLayoutConstraint.activate([
@@ -58,8 +58,8 @@ final class AreaSelectionActionBar: NSView {
     grip.setAccessibilityLabel("拖动工具栏")
     grip.translatesAutoresizingMaskIntoConstraints = false
     stackView.addArrangedSubview(grip)
-    grip.widthAnchor.constraint(equalToConstant: 18).isActive = true
-    grip.heightAnchor.constraint(equalToConstant: 30).isActive = true
+    grip.widthAnchor.constraint(equalToConstant: 12).isActive = true
+    grip.heightAnchor.constraint(equalToConstant: 18).isActive = true
 
     let definitions: [ButtonDefinition] = [
       .init(imageName: "square", tooltip: "调整选区", action: .adjustSelection, separatorAfter: false),
@@ -87,7 +87,7 @@ final class AreaSelectionActionBar: NSView {
         separator.translatesAutoresizingMaskIntoConstraints = false
         stackView.addArrangedSubview(separator)
         separator.widthAnchor.constraint(equalToConstant: 1).isActive = true
-        separator.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        separator.heightAnchor.constraint(equalToConstant: 20).isActive = true
       }
     }
   }
@@ -98,29 +98,29 @@ final class AreaSelectionActionBar: NSView {
   }
 
   override var intrinsicContentSize: NSSize {
-    // The grip plus fifteen 40pt cells, separators, and stack spacing. Keeping
-    // this stable makes the bar placement around a moving selection cheap.
-    let width: CGFloat = 644
-    return NSSize(width: width, height: 58)
+    // Compact PixPin-style bar: 12pt grip + fifteen 28pt cells, two
+    // separators, and stack spacing. Keeping this stable makes the bar
+    // placement around a moving selection cheap.
+    let width: CGFloat = 484
+    return NSSize(width: width, height: 38)
   }
 
   private func makeButton(_ definition: ButtonDefinition) -> NSButton {
-    let image = NSImage(
-      systemSymbolName: definition.imageName,
-      accessibilityDescription: definition.tooltip
-    ) ?? NSImage(named: NSImage.actionTemplateName)!
+    let symbol = NSImage(systemSymbolName: definition.imageName, accessibilityDescription: definition.tooltip)?
+      .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 17, weight: .regular))
+    let image = symbol ?? NSImage(named: NSImage.actionTemplateName)!
     let button = NSButton(image: image, target: self, action: #selector(buttonPressed(_:)))
     button.tag = actionTag(definition.action)
     button.bezelStyle = .recessed
     button.isBordered = false
     button.imagePosition = .imageOnly
-    button.imageScaling = .scaleProportionallyUpOrDown
+    button.imageScaling = .scaleProportionallyDown
     button.contentTintColor = .white
     button.toolTip = definition.tooltip
     button.setAccessibilityLabel(definition.tooltip)
     button.translatesAutoresizingMaskIntoConstraints = false
-    button.widthAnchor.constraint(equalToConstant: 38).isActive = true
-    button.heightAnchor.constraint(equalToConstant: 42).isActive = true
+    button.widthAnchor.constraint(equalToConstant: 28).isActive = true
+    button.heightAnchor.constraint(equalToConstant: 28).isActive = true
     return button
   }
 
@@ -172,7 +172,7 @@ final class AreaSelectionSideActionBar: NSView {
 
     stackView.orientation = .vertical
     stackView.alignment = .centerX
-    stackView.spacing = 10
+    stackView.spacing = 8
     stackView.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
     stackView.translatesAutoresizingMaskIntoConstraints = false
     addSubview(stackView)
@@ -195,31 +195,32 @@ final class AreaSelectionSideActionBar: NSView {
   }
 
   override var intrinsicContentSize: NSSize {
-    NSSize(width: 60, height: 4 * 58 + 3 * 10)
+    NSSize(width: 44, height: 4 * 40 + 3 * 8)
   }
 
   private func addButton(_ name: String, tooltip: String, action: AreaSelectionAction) {
-    let image = NSImage(systemSymbolName: name, accessibilityDescription: tooltip)
-      ?? NSImage(named: NSImage.actionTemplateName)!
+    let symbol = NSImage(systemSymbolName: name, accessibilityDescription: tooltip)?
+      .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 18, weight: .regular))
+    let image = symbol ?? NSImage(named: NSImage.actionTemplateName)!
     let button = NSButton(image: image, target: self, action: #selector(buttonPressed(_:)))
     button.tag = actionTag(action)
     button.isBordered = false
     button.bezelStyle = .recessed
     button.imagePosition = .imageOnly
-    button.imageScaling = .scaleProportionallyUpOrDown
+    button.imageScaling = .scaleProportionallyDown
     button.contentTintColor = .white
     button.toolTip = tooltip
     button.setAccessibilityLabel(tooltip)
     button.wantsLayer = true
     button.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.84).cgColor
-    button.layer?.cornerRadius = 29
+    button.layer?.cornerRadius = 20
     button.layer?.shadowColor = NSColor.black.cgColor
     button.layer?.shadowOpacity = 0.35
     button.layer?.shadowRadius = 8
     button.layer?.shadowOffset = .zero
     button.translatesAutoresizingMaskIntoConstraints = false
-    button.widthAnchor.constraint(equalToConstant: 60).isActive = true
-    button.heightAnchor.constraint(equalToConstant: 58).isActive = true
+    button.widthAnchor.constraint(equalToConstant: 40).isActive = true
+    button.heightAnchor.constraint(equalToConstant: 40).isActive = true
     stackView.addArrangedSubview(button)
   }
 

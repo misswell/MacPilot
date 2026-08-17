@@ -284,6 +284,10 @@ final class AreaSelectionOverlayView: NSView {
   private var smartElementDragStart: CGPoint?
   private var smartElementDragActive = false
   private var smartElementDidDrag = false
+  /// Exposed for tests: the last screen-space rect rendered on screen during a
+  /// manual/smart drag (`renderManualSelection`). `nil` when the latest
+  /// render carried no visible frame.
+  private(set) var lastRenderedManualSelectionRect: CGRect?
   private static let smartElementDragThreshold: CGFloat = 3
   private var retainedMenuBarPopoverCaptures: [CGWindowID: ImmediateMenuBarPopoverCapture] = [:]
   private var retainedMenuBarPopoverWindowIDsStillOnScreen = Set<CGWindowID>()
@@ -1890,7 +1894,15 @@ final class AreaSelectionOverlayView: NSView {
   }
 
   func renderManualSelection(screenRect: CGRect?, currentScreenPoint: CGPoint?) {
-    guard interactionMode == .manualRegion else { return }
+    // Smart-element drags pin to the hovered element until they cross the
+    // movement threshold; afterwards they are routed through the exact same
+    // manual-selection callbacks as `.manualRegion` (see the smartElement
+    // branch of `handlePrimaryMouseDragged`), so the live frame box must be
+    // rendered here too. The controller only reaches this renderer once
+    // `smartElementDidDrag` is set, which keeps the hover-only phase using
+    // the AX element preview border instead.
+    guard interactionMode == .manualRegion
+      || (interactionMode == .smartElement && smartElementDidDrag) else { return }
 
     let localCurrentPoint: CGPoint?
     if let currentScreenPoint, let window {
@@ -1912,6 +1924,7 @@ final class AreaSelectionOverlayView: NSView {
     guard let screenRect, !screenRect.isEmpty else {
       CATransaction.begin()
       CATransaction.setDisableActions(true)
+      lastRenderedManualSelectionRect = nil
       hasVisibleSelectionRect = false
       selectionBorderLayer.isHidden = true
       dimLayer.mask = nil
@@ -1935,6 +1948,7 @@ final class AreaSelectionOverlayView: NSView {
 
     CATransaction.begin()
     CATransaction.setDisableActions(true)
+    lastRenderedManualSelectionRect = localRect.isEmpty ? nil : screenRect
     hasVisibleSelectionRect = !localRect.isEmpty
     horizontalCrosshairLayer.isHidden = true
     verticalCrosshairLayer.isHidden = true

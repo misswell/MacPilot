@@ -282,4 +282,52 @@ struct SnapzyCaptureTests {
 
         #expect(recorder.result == true)
     }
+
+    @Test @MainActor func smartElementDragRendersLiveSelectionFrame() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+
+        let recorder = OverlaySelectionRecorder()
+        window.overlayView.delegate = recorder
+        window.overlayView.setElementTargetResolver { _ in nil }
+        window.overlayView.setInteractionMode(.smartElement)
+        window.overlayView.setLivePassthroughInputEnabled(true)
+
+        let start = CGPoint(
+            x: screen.frame.minX + 100,
+            y: screen.frame.minY + 100
+        )
+        let end = CGPoint(
+            x: screen.frame.minX + 220,
+            y: screen.frame.minY + 180
+        )
+
+        // Drive the F1 smart-element drag far enough that the view promotes
+        // it to a manual frame drag (the same threshold the app uses).
+        window.overlayView.handleLivePassthroughMouseDown(atScreenPoint: start)
+        window.overlayView.handleLivePassthroughMouseDragged(atScreenPoint: end)
+        #expect(recorder.manualBegan == [start])
+
+        // Reproduce the controller's render step for manual-selection drag
+        // updates (`SnapzyAreaSelectionController.manualSelectionChangedTo`).
+        let expectedRect = CGRect(
+            x: min(start.x, end.x),
+            y: min(start.y, end.y),
+            width: abs(end.x - start.x),
+            height: abs(end.y - start.y)
+        )
+        window.overlayView.renderManualSelection(
+            screenRect: expectedRect,
+            currentScreenPoint: end
+        )
+
+        // The live frame box must be on screen during an F1 drag, matching
+        // PixPin's drag preview (previously smartElement was excluded here).
+        #expect(window.overlayView.lastRenderedManualSelectionRect == expectedRect)
+
+        window.overlayView.handleLivePassthroughMouseUp(atScreenPoint: end)
+    }
 }
