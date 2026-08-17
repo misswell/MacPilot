@@ -1842,10 +1842,16 @@ final class SmartScreenshotController {
     ) {
         initialTargetUpdateTask?.cancel()
         let resolver = initialTargetResolver
-        initialTargetUpdateTask = Task { [weak self] in
-            let target = await Task.detached(priority: .userInitiated) {
-                resolver(mode, point)
-            }.value
+        // AXUIElementCopyElementAtPosition can synchronously call an app's
+        // accessibility provider.  Running it from a detached task lets
+        // AppKit ask our SwiftUI hosting view for accessibility data on a
+        // background executor, which violates MainActor isolation and traps
+        // in Swift concurrency.  Keep the query asynchronous so the overlay
+        // can be shown first, but perform the AX call on the main actor.
+        initialTargetUpdateTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            let target = resolver(mode, point)
             guard !Task.isCancelled, let self,
                   self.isSelecting,
                   self.selectionMode == mode else { return }

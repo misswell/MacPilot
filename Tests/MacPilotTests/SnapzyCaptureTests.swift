@@ -6,6 +6,23 @@ import Testing
 
 /// Geometry coverage for the source-migrated Snapzy frozen-display pipeline.
 struct SnapzyCaptureTests {
+    private final class InitialTargetResolverRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var observedMainThread: Bool?
+
+        func record() {
+            lock.lock()
+            observedMainThread = Thread.isMainThread
+            lock.unlock()
+        }
+
+        var result: Bool? {
+            lock.lock()
+            defer { lock.unlock() }
+            return observedMainThread
+        }
+    }
+
     private func image(width: Int, height: Int, color: CGColor = CGColor(gray: 0.5, alpha: 1)) -> CGImage {
         let context = CGContext(
             data: nil,
@@ -106,5 +123,34 @@ struct SnapzyCaptureTests {
 
         #expect(elapsed < 0.1)
         #expect(SnapzyAreaSelectionController.shared.isPresenting)
+    }
+
+    @Test @MainActor func initialSmartTargetResolutionRunsOnMainActor() async throws {
+        _ = NSApplication.shared
+        guard !NSScreen.screens.isEmpty else { return }
+
+        let recorder = InitialTargetResolverRecorder()
+        let controller = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _ in },
+            onError: { _ in },
+            screenCaptureAccessProvider: { true },
+            initialTargetResolver: { _, _ in
+                recorder.record()
+                return nil
+            }
+        )
+
+        defer {
+            controller.stop()
+        }
+
+        controller.startSelection(mode: .smartElement)
+        for _ in 0..<50 {
+            if recorder.result != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(recorder.result == true)
     }
 }
