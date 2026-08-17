@@ -46,6 +46,41 @@ struct SnapzyCaptureTests {
         return NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
     }
 
+    private final class OverlaySelectionRecorder: AreaSelectionOverlayViewDelegate {
+        var manualBegan: [CGPoint] = []
+        var manualChanged: [CGPoint] = []
+        var manualEnded: [CGPoint] = []
+
+        func overlayView(
+            _ view: AreaSelectionOverlayView,
+            manualSelectionBeganAt point: CGPoint
+        ) {
+            manualBegan.append(point)
+        }
+
+        func overlayView(
+            _ view: AreaSelectionOverlayView,
+            manualSelectionChangedTo point: CGPoint
+        ) {
+            manualChanged.append(point)
+        }
+
+        func overlayView(
+            _ view: AreaSelectionOverlayView,
+            manualSelectionEndedAt point: CGPoint
+        ) {
+            manualEnded.append(point)
+        }
+
+        func overlayView(_ view: AreaSelectionOverlayView, didSelectRect rect: CGRect) {}
+        func overlayView(_ view: AreaSelectionOverlayView, didSelectWindow target: WindowCaptureTarget) {}
+        func overlayView(_ view: AreaSelectionOverlayView, didRequestAction action: AreaSelectionAction) {}
+        func overlayView(_ view: AreaSelectionOverlayView, didChangeSelectionRect rect: CGRect) {}
+        func overlayViewDidCancel(_ view: AreaSelectionOverlayView) {}
+        func overlayViewDidRequestDisplayActivation(_ view: AreaSelectionOverlayView) {}
+        func overlayViewDidRequestImmediateManualSelection(_ view: AreaSelectionOverlayView) {}
+    }
+
     @Test func frozenSnapshotCropUsesNativePixelScaleAndScreenCoordinates() throws {
         let snapshot = FrozenDisplaySnapshot(
             displayID: 1,
@@ -186,6 +221,37 @@ struct SnapzyCaptureTests {
         let observed = try #require(observedCursor)
         #expect(pngData(from: observed.image) == pngData(from: expected.image))
         #expect(observed.hotSpot == expected.hotSpot)
+    }
+
+    @Test @MainActor func smartElementDragCommitsARectangularSelection() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+
+        let recorder = OverlaySelectionRecorder()
+        window.overlayView.delegate = recorder
+        window.overlayView.setElementTargetResolver { _ in nil }
+        window.overlayView.setInteractionMode(.smartElement)
+        window.overlayView.setLivePassthroughInputEnabled(true)
+
+        let start = CGPoint(
+            x: screen.frame.minX + 100,
+            y: screen.frame.minY + 100
+        )
+        let end = CGPoint(
+            x: screen.frame.minX + 220,
+            y: screen.frame.minY + 180
+        )
+
+        window.overlayView.handleLivePassthroughMouseDown(atScreenPoint: start)
+        window.overlayView.handleLivePassthroughMouseDragged(atScreenPoint: end)
+        window.overlayView.handleLivePassthroughMouseUp(atScreenPoint: end)
+
+        #expect(recorder.manualBegan == [start])
+        #expect(recorder.manualEnded == [end])
+        #expect(recorder.manualChanged.first == end)
     }
 
     @Test @MainActor func initialSmartTargetResolutionRunsOnMainActor() async throws {

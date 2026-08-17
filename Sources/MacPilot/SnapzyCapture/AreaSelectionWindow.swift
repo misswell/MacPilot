@@ -277,6 +277,14 @@ final class AreaSelectionOverlayView: NSView {
   private var lastElementHoverPoint: CGPoint?
   private var pendingElementHoverWork: DispatchWorkItem?
   private var elementHoverFollowUpDepth = 0
+  /// Smart-element mode keeps the AX hover preview, but once the pointer
+  /// moves far enough it must behave like a normal frame drag so F1 can still
+  /// draw an arbitrary rectangle.  A small movement threshold keeps a pure
+  /// click on the hovered element as a smart-element commit.
+  private var smartElementDragStart: CGPoint?
+  private var smartElementDragActive = false
+  private var smartElementDidDrag = false
+  private static let smartElementDragThreshold: CGFloat = 3
   private var retainedMenuBarPopoverCaptures: [CGWindowID: ImmediateMenuBarPopoverCapture] = [:]
   private var retainedMenuBarPopoverWindowIDsStillOnScreen = Set<CGWindowID>()
 
@@ -684,6 +692,9 @@ final class AreaSelectionOverlayView: NSView {
     pendingElementHoverWork = nil
     lastElementHoverPoint = nil
     elementHoverFollowUpDepth = 0
+    smartElementDragStart = nil
+    smartElementDragActive = false
+    smartElementDidDrag = false
     removeSelectionActionBars()
 
     // Initialize crosshair at current mouse position immediately
@@ -2344,6 +2355,10 @@ final class AreaSelectionOverlayView: NSView {
         case .manualRegion:
           delegate?.overlayView(self, manualSelectionBeganAt: point)
         case .smartElement:
+          isSelecting = true
+          smartElementDragStart = point
+          smartElementDragActive = true
+          smartElementDidDrag = false
           updateElementHover(at: point)
         case .applicationWindow:
           updateWindowHover(at: point)
@@ -2369,6 +2384,9 @@ final class AreaSelectionOverlayView: NSView {
       delegate?.overlayView(self, manualSelectionBeganAt: point)
     case .smartElement:
       isSelecting = true
+      smartElementDragStart = point
+      smartElementDragActive = true
+      smartElementDidDrag = false
       updateElementHover(at: point)
     case .applicationWindow:
       updateWindowHover(at: point)
@@ -2410,8 +2428,20 @@ final class AreaSelectionOverlayView: NSView {
       delegate?.overlayView(self, manualSelectionChangedTo: point)
       updateMagnifier(at: point)
     case .smartElement:
-      guard isSelecting else { return }
-      updateElementHover(at: point)
+      guard isSelecting, smartElementDragActive, let dragStart = smartElementDragStart else { return }
+      if !smartElementDidDrag {
+        let dx = point.x - dragStart.x
+        let dy = point.y - dragStart.y
+        if hypot(dx, dy) >= Self.smartElementDragThreshold {
+          smartElementDidDrag = true
+          delegate?.overlayView(self, manualSelectionBeganAt: dragStart)
+        }
+      }
+      if smartElementDidDrag {
+        delegate?.overlayView(self, manualSelectionChangedTo: point)
+      } else {
+        updateElementHover(at: point)
+      }
     case .applicationWindow:
       updateWindowHover(at: point)
     }
@@ -2436,11 +2466,19 @@ final class AreaSelectionOverlayView: NSView {
 
       delegate?.overlayView(self, manualSelectionEndedAt: point)
     case .smartElement:
-      guard isSelecting else { return }
+      guard isSelecting, smartElementDragActive else { return }
       isSelecting = false
-      updateElementHover(at: point, immediately: true)
-      if let hoveredElementRect {
-        delegate?.overlayView(self, didSelectRect: hoveredElementRect)
+      let didDrag = smartElementDidDrag
+      smartElementDragStart = nil
+      smartElementDragActive = false
+      smartElementDidDrag = false
+      if didDrag {
+        delegate?.overlayView(self, manualSelectionEndedAt: point)
+      } else {
+        updateElementHover(at: point, immediately: true)
+        if let hoveredElementRect {
+          delegate?.overlayView(self, didSelectRect: hoveredElementRect)
+        }
       }
     case .applicationWindow:
       updateWindowHover(at: point)
