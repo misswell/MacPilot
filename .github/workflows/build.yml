@@ -46,6 +46,8 @@ jobs:
         run: swift build -c release
 
       - name: Package app bundle
+        env:
+          MACPILOT_ALLOW_UNSTABLE_SIGNING: "1"
         run: ./Scripts/build-app.sh
 
       - name: Verify app signature
