@@ -6,6 +6,7 @@
 //
 import AppKit
 import Foundation
+import _Concurrency
 
 protocol RCBase: Hashable, Identifiable, Codable {
     var id: String { get }
