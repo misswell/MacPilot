@@ -35,8 +35,24 @@ enum AppLocalization {
         "Home": "个人文件夹",
     ]
 
+    private static var usesChinese: Bool {
+        let identifiers = [
+            Locale.current.identifier,
+            Locale.autoupdatingCurrent.identifier,
+        ] + Locale.preferredLanguages
+
+        return identifiers.contains { identifier in
+            identifier.lowercased().replacingOccurrences(of: "_", with: "-").hasPrefix("zh")
+        }
+    }
+
     static func localized(_ key: String) -> String {
-        if Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true,
+        let bundledValue = Bundle.main.localizedString(forKey: key, value: nil, table: tableName)
+        if bundledValue != key {
+            return bundledValue
+        }
+
+        if usesChinese,
            let translation = simplifiedChinese[key] {
             return translation
         }

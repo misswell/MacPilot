@@ -45,6 +45,9 @@ cp "$UPDATER_BIN" "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
 cp "$OCCLUSION_PATCH_BIN" "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+if [[ -d "$ROOT/Resources/zh-Hans.lproj" ]]; then
+    cp -R "$ROOT/Resources/zh-Hans.lproj" "$APP/Contents/Resources/"
+fi
 mkdir -p "$APP/Contents/PlugIns"
 cp -R "$REXT_PRODUCT" "$APP/Contents/PlugIns/FinderSync.appex"
 REXT_APPEX="$APP/Contents/PlugIns/FinderSync.appex"

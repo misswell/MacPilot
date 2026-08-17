@@ -12,6 +12,11 @@
 	<string>com.misswell.macpilot.finder-sync</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>zh-Hans</string>
+	</array>
 	<key>CFBundleName</key>
 	<string>MacPilotFinderSync</string>
 	<key>CFBundlePackageType</key>

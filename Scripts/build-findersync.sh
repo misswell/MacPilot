@@ -78,6 +78,9 @@ xcrun swiftc \
     "$OBJ_DIR"/*.o
 
 cp "$RES_DIR/Info.plist" "$PRODUCT/Contents/Info.plist"
+if [[ -d "$RES_DIR/zh-Hans.lproj" ]]; then
+    cp -R "$RES_DIR/zh-Hans.lproj" "$PRODUCT/Contents/Resources/"
+fi
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $EXT_BUNDLE_ID" "$PRODUCT/Contents/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $EXT_NAME" "$PRODUCT/Contents/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${MACPILOT_VERSION:-1.0.0}" "$PRODUCT/Contents/Info.plist" 2>/dev/null || true
