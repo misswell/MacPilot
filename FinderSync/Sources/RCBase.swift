@@ -12,7 +12,7 @@ protocol RCBase: Hashable, Identifiable, Codable {
     var id: String { get }
 }
 
-struct OpenWithApp: @MainActor RCBase {
+struct OpenWithApp: RCBase {
     var id: String
 
     init(id: String = UUID().uuidString, appURL url: URL) {
@@ -154,7 +154,7 @@ nonisolated func iconForDirectory(url: URL) -> String {
 }
 
 // 常用目录
-struct CommonDir: @MainActor RCBase {
+struct CommonDir: RCBase {
     var id: String
     var name: String
     var url: URL
@@ -178,7 +178,7 @@ struct CommonDir: @MainActor RCBase {
     }
 }
 
-struct RCAction: @MainActor RCBase {
+struct RCAction: RCBase {
     static func == (lhs: RCAction, rhs: RCAction) -> Bool {
         lhs.id == rhs.id
     }
@@ -212,7 +212,7 @@ extension RCAction {
 }
 
 // New File Type
-struct NewFile: @MainActor RCBase {
+struct NewFile: RCBase {
     static func == (lhs: NewFile, rhs: NewFile) -> Bool {
         lhs.id == rhs.id
     }
