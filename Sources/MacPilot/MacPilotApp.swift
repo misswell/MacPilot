@@ -3258,9 +3258,11 @@ struct MenuBarView: View {
         Button(model.t("windowSwitcherTestNow")) { windowSwitcher.showSwitcherNow() }
             .disabled(!windowSwitcher.settings.isEnabled || !windowSwitcher.hasAccessibilityPermission)
         Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
-        Divider()
-        Button(model.t("scSmartCaptureNow")) { deferCaptureAction { model.screenCapture.startSmartCapture() } }
-        Divider()
+        if model.screenCapture.settings.screenshotEnabled {
+            Divider()
+            Button(model.t("scSmartCaptureNow")) { deferCaptureAction { model.screenCapture.startSmartCapture() } }
+            Divider()
+        }
         UpdateMenuItems(updater: model.updater) {
             model.requestedSection = .settings
             showMainWindow()
