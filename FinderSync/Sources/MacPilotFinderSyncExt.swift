@@ -260,7 +260,11 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
                 let actionsTitle = AppLocalization.localized("Actions")
                 let actionsSubMenu = NSMenu(title: actionsTitle)
                 for action in config.actions {
-                    let item = NSMenuItem(title: action.name, action: #selector(handleActionClick(_:)), keyEquivalent: "")
+                    let item = NSMenuItem(
+                        title: AppLocalization.localizedActionName(id: action.id, fallback: action.name),
+                        action: #selector(handleActionClick(_:)),
+                        keyEquivalent: ""
+                    )
                     item.tag = hashForAction(action)
                     item.target = self
                     if let icon = templateSymbol(action.icon) {
@@ -275,7 +279,11 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
             } else {
                 // 不折叠：直接显示菜单项
                 for action in config.actions {
-                    let item = NSMenuItem(title: action.name, action: #selector(handleActionClick(_:)), keyEquivalent: "")
+                    let item = NSMenuItem(
+                        title: AppLocalization.localizedActionName(id: action.id, fallback: action.name),
+                        action: #selector(handleActionClick(_:)),
+                        keyEquivalent: ""
+                    )
                     item.tag = hashForAction(action)
                     item.target = self
                     if let icon = templateSymbol(action.icon) {
@@ -408,9 +416,8 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
         logger.debug("Action clicked: \(action.name) (id: \(action.id))")
 
         // 获取选中的文件/目录
-        let selectedItems = FIFinderSyncController.default().selectedItemURLs() ?? []
-        let itemPaths = selectedItems.map { $0.path }
-        logger.info("[Action] selectedItemURLs 返回 \(selectedItems.count) 个文件: \(itemPaths)")
+        let itemPaths = actionTargetPaths()
+        logger.info("[Action] action target paths: \(itemPaths)")
 
         // 发送点击事件到主程序
         let event = ClickEventPayload(
@@ -510,6 +517,21 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
             return [targetURL.path]
         }
 
+        let selectedItems = FIFinderSyncController.default().selectedItemURLs() ?? []
+        if !selectedItems.isEmpty {
+            return selectedItems.map { $0.path }
+        }
+
+        if let targetURL = FIFinderSyncController.default().targetedURL() {
+            return [targetURL.path]
+        }
+
+        return []
+    }
+
+    /// Context-menu actions need the targeted folder when the user clicks the
+    /// blank area of a Finder window (there are no selected item URLs then).
+    private func actionTargetPaths() -> [String] {
         let selectedItems = FIFinderSyncController.default().selectedItemURLs() ?? []
         if !selectedItems.isEmpty {
             return selectedItems.map { $0.path }

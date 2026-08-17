@@ -358,6 +358,12 @@ public final class RightClickMenuCoordinator {
         switch rcitem.id {
         case "copy-path":
             copyPath(target)
+        case "copy-file-path":
+            copyFilePath(target)
+        case "copy-folder-path":
+            copyFolderPath(target)
+        case "open-terminal":
+            openTerminal(target)
         case "delete-direct":
             await deleteFoldorFile(target, trigger)
         case "unhide":
@@ -553,10 +559,99 @@ public final class RightClickMenuCoordinator {
     }
 
     func copyPath(_ target: [String]) {
-        if let dirPath = target.first {
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.setString(dirPath.removingPercentEncoding ?? dirPath, forType: .string)
+        copyPaths(target, kind: .all)
+    }
+
+    func copyFilePath(_ target: [String]) {
+        copyPaths(target, kind: .files)
+    }
+
+    func copyFolderPath(_ target: [String]) {
+        copyPaths(target, kind: .folders)
+    }
+
+    private enum PathCopyKind: Equatable {
+        case all
+        case files
+        case folders
+    }
+
+    private func copyPaths(_ target: [String], kind: PathCopyKind) {
+        let paths = target.compactMap { rawPath -> String? in
+            let path = rawPath.removingPercentEncoding ?? rawPath
+            guard !path.isEmpty else { return nil }
+
+            guard kind != .all else { return path }
+
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
+                return nil
+            }
+
+            switch kind {
+            case .all:
+                return path
+            case .files:
+                return isDirectory.boolValue ? nil : path
+            case .folders:
+                return isDirectory.boolValue ? path : nil
+            }
+        }
+
+        guard !paths.isEmpty else {
+            logger.warning("No matching paths to copy for requested kind")
+            return
+        }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(paths.joined(separator: "\n"), forType: .string)
+        logger.debug("Copied \(paths.count) path(s) to the pasteboard")
+    }
+
+    func openTerminal(_ target: [String]) {
+        let directories = target.compactMap { rawPath -> URL? in
+            let path = rawPath.removingPercentEncoding ?? rawPath
+            guard !path.isEmpty else { return nil }
+
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
+                return nil
+            }
+
+            let url = URL(fileURLWithPath: path)
+            return isDirectory.boolValue ? url : url.deletingLastPathComponent()
+        }
+        .reduce(into: [URL]()) { result, url in
+            if !result.contains(url) {
+                result.append(url)
+            }
+        }
+
+        guard !directories.isEmpty else {
+            logger.warning("No valid directory found to open in Terminal")
+            return
+        }
+
+        guard let terminalURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else {
+            logger.error("Terminal.app is not installed")
+            return
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        let logger = self.logger
+        for directory in directories {
+            NSWorkspace.shared.open(
+                [directory],
+                withApplicationAt: terminalURL,
+                configuration: configuration
+            ) { [logger] _, error in
+                if let error {
+                    logger.error("Failed to open Terminal at \(directory.path): \(error.localizedDescription)")
+                } else {
+                    logger.debug("Opened Terminal at \(directory.path)")
+                }
+            }
         }
     }
 

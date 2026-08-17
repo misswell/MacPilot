@@ -203,12 +203,18 @@ struct RCAction: RCBase {
 extension RCAction {
 
     static let copyPath = RCAction(id: "copy-path", name: "Copy Path", enabled: true, idx: 0, icon: "doc.on.doc")
-    static let deleteDirect = RCAction(id: "delete-direct", name: "Delete Direct", enabled: true, idx: 1, icon: "trash")
-    static let hideFileDir = RCAction(id: "hide", name: "Hide", enabled: false, idx: 2, icon: "eye.slash")
-    static let unhideFileDir = RCAction(id: "unhide", name: "Unhide", enabled: false, idx: 3, icon: "eye")
-    static let airdrop = RCAction(id: "airdrop", name: "AirDrop", enabled: false, idx: 4, icon: "paperplane")
+    static let copyFilePath = RCAction(id: "copy-file-path", name: "Copy File Path", enabled: true, idx: 1, icon: "doc.on.doc")
+    static let copyFolderPath = RCAction(id: "copy-folder-path", name: "Copy Folder Path", enabled: true, idx: 2, icon: "folder")
+    static let openTerminal = RCAction(id: "open-terminal", name: "Open Terminal", enabled: true, idx: 3, icon: "terminal")
+    static let deleteDirect = RCAction(id: "delete-direct", name: "Delete Direct", enabled: true, idx: 4, icon: "trash")
+    static let hideFileDir = RCAction(id: "hide", name: "Hide", enabled: false, idx: 5, icon: "eye.slash")
+    static let unhideFileDir = RCAction(id: "unhide", name: "Unhide", enabled: false, idx: 6, icon: "eye")
+    static let airdrop = RCAction(id: "airdrop", name: "AirDrop", enabled: false, idx: 7, icon: "paperplane")
 
-    static let all: [RCAction] = [.copyPath, .deleteDirect, .airdrop, .hideFileDir, .unhideFileDir]
+    static let all: [RCAction] = [
+        .copyPath, .copyFilePath, .copyFolderPath, .openTerminal,
+        .deleteDirect, .hideFileDir, .unhideFileDir, .airdrop,
+    ]
 }
 
 // New File Type
@@ -323,14 +329,7 @@ struct CommonDirMenuItem: Codable {
 extension RCAction {
     /// 本地化显示名称
     var displayName: String {
-        switch id {
-        case "copy-path": return AppLocalization.localized("Copy Path")
-        case "delete-direct": return AppLocalization.localized("Delete Direct")
-        case "hide": return AppLocalization.localized("Hide")
-        case "unhide": return AppLocalization.localized("Unhide")
-        case "airdrop": return AppLocalization.localized("AirDrop")
-        default: return name
-        }
+        AppLocalization.localizedActionName(id: id, fallback: name)
     }
 
     /// Convert RCAction to ActionMenuItem for the extension

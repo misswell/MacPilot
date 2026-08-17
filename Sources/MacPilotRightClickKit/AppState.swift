@@ -236,15 +236,32 @@ class AppState: ObservableObject {
 
         // 加载 Actions
         let actionDescriptor = FetchDescriptor<ActionEntity>(sortBy: [SortDescriptor(\.sortOrder)])
-        actions = (try? context.fetch(actionDescriptor))?.map { entity in
-            RCAction(
-                id: entity.id,
-                name: entity.name,
-                enabled: entity.isEnabled,
-                idx: entity.sortOrder,
-                icon: entity.icon
-            )
-        } ?? []
+        var needSaveActions = false
+        if let actionEntities = try? context.fetch(actionDescriptor) {
+            actions = actionEntities.map { entity in
+                RCAction(
+                    id: entity.id,
+                    name: entity.name,
+                    enabled: entity.isEnabled,
+                    idx: entity.sortOrder,
+                    icon: entity.icon
+                )
+            }
+
+            // Add actions introduced by newer releases without resetting the
+            // user's enabled state or custom order for existing actions.
+            let existingIDs = Set(actions.map(\.id))
+            var nextSortOrder = (actions.map(\.idx).max() ?? -1) + 1
+            for defaultAction in RCAction.all where !existingIDs.contains(defaultAction.id) {
+                var action = defaultAction
+                action.idx = nextSortOrder
+                actions.append(action)
+                nextSortOrder += 1
+                needSaveActions = true
+            }
+        } else {
+            actions = []
+        }
 
         // 加载 NewFiles
         let newFileDescriptor = FetchDescriptor<NewFileTypeEntity>(sortBy: [SortDescriptor(\.sortOrder)])
@@ -281,6 +298,10 @@ class AppState: ObservableObject {
         } ?? []
         if needSaveCommonDirs {
             try? context.save()
+        }
+
+        if needSaveActions {
+            try? save()
         }
 
         logger.debug("Load from SwiftData: \(self.apps.count) apps, \(self.actions.count) actions, \(self.newFiles.count) newFiles, \(self.cdirs.count) commonDirs")
