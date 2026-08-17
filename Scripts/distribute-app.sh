@@ -48,6 +48,20 @@ OUTPUT_DIR="${MACPILOT_OUTPUT_DIR:-$ROOT}"
 APP="$OUTPUT_DIR/$APP_BUNDLE_NAME"
 ZIP="$OUTPUT_DIR/$ARCHIVE_PREFIX-$VERSION-macos.zip"
 
+cleanup_historical_archives() {
+    local archive
+
+    while IFS= read -r archive; do
+        [[ "${archive:A}" == "${ZIP:A}" ]] && continue
+        rm -f "$archive"
+        echo "Removed historical archive: $archive"
+    done < <(
+        find "$OUTPUT_DIR" -maxdepth 1 -type f \
+            \( -name 'MacPilot-*-macos.zip' -o -name 'OctoPilot-*.zip' \) \
+            -print
+    )
+}
+
 echo "==> Building and signing with Developer ID"
 MACPILOT_BRIDGE="$BRIDGE_MODE" \
 MACPILOT_DEVELOPER_ID="$DEVELOPER_ID" \
@@ -72,6 +86,9 @@ ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 echo "==> Verifying"
 codesign --verify --deep --strict "$APP"
 spctl --assess --type execute --verbose "$APP"
+
+echo "==> Cleaning historical archives"
+cleanup_historical_archives
 
 echo "Done. Distributable artifacts:"
 echo "  $APP"

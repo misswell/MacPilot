@@ -132,7 +132,7 @@ export MACPILOT_TEAM_ID="TEAMID"
 ./Scripts/distribute-app.sh
 ```
 
-脚本会构建、用 Developer ID + Hardened Runtime 签名、提交 Apple 公证、装订票据，产出 `MacPilot.app` 与 `MacPilot-<版本>-macos.zip`，双击即可打开，无 Gatekeeper 拦截。
+脚本会构建、用 Developer ID + Hardened Runtime 签名、提交 Apple 公证、装订票据，产出 `MacPilot.app` 与 `MacPilot-<版本>-macos.zip`，双击即可打开，无 Gatekeeper 拦截。每次分发成功后，脚本还会清理所选输出目录中的历史 `MacPilot-*-macos.zip` 和 `OctoPilot-*.zip`，只保留本次生成的最新归档。
 
 ### 改名桥接版
 

@@ -123,7 +123,7 @@ export MACPILOT_TEAM_ID="TEAMID"
 ./Scripts/distribute-app.sh
 ```
 
-This builds, signs with Developer ID + Hardened Runtime, submits to Apple for notarization, staples the ticket, and produces `MacPilot.app` + `MacPilot-<version>-macos.zip` that open without Gatekeeper warnings.
+This builds, signs with Developer ID + Hardened Runtime, submits to Apple for notarization, staples the ticket, and produces `MacPilot.app` + `MacPilot-<version>-macos.zip` that open without Gatekeeper warnings. After a successful distribution, older `MacPilot-*-macos.zip` and `OctoPilot-*.zip` archives in the selected output directory are removed, leaving only the newly created archive.
 
 ### Bridge release for the rename
 
