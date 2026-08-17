@@ -63,3 +63,18 @@ Mos is copyright (c) 2017-2026 Caldis, licensed under
 by MacPilot are limited to the global settings surface, AppKit/SwiftUI
 integration, configuration storage, and dropping Mos' buttons/Logi/update
 modules. Use of this Mos-derived portion must stay non-commercial.
+
+## RClick Finder context menu (GPLv3)
+
+MacPilot incorporates and adapts source code from
+[wflixu/RClick](https://github.com/wflixu/RClick), upstream commit
+`cd9a7efc5b886ec9e2fcb62f53b440665455dadf`. The integrated source is located
+under `Sources/MacPilotRightClickKit/` and `FinderSync/`; the FinderSync
+extension is built from the corresponding-source script at
+`Scripts/build-findersync.sh`.
+
+RClick is copyright its original authors and is licensed under the GNU General
+Public License, version 3. The upstream license text is available at
+<https://github.com/wflixu/RClick/blob/cd9a7efc5b886ec9e2fcb62f53b440665455dadf/LICENSE>.
+Changes in this integration include the MacPilot bundle identifiers, App Group,
+IPC names, FinderSync packaging, and the MacPilot settings surface.

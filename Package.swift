@@ -10,8 +10,21 @@ let package = Package(
         .library(name: "MacPilotOcclusionPatch", type: .dynamic, targets: ["MacPilotOcclusionPatch"])
     ],
     targets: [
-        .executableTarget(name: "MacPilot"),
+        .executableTarget(
+            name: "MacPilot",
+            dependencies: ["MacPilotRightClickKit"]
+        ),
         .executableTarget(name: "MacPilotUpdater"),
+        .target(
+            name: "MacPilotRightClickKit",
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("FinderSync"),
+                .linkedFramework("ServiceManagement"),
+                .linkedFramework("ApplicationServices"),
+                .linkedFramework("CryptoKit"),
+            ]
+        ),
         .target(
             name: "MacPilotOcclusionPatch",
             linkerSettings: [.linkedFramework("AppKit")]

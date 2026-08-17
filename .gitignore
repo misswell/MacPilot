@@ -1,5 +1,6 @@
 .DS_Store
 .build/
+build/
 OctoQuit.app/
 OctoPilot.app/
 MacPilot.app/

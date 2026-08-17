@@ -588,7 +588,12 @@ enum AppText {
         "smoothScrollingAccessibilityRequired": "平滑滚动需要辅助功能权限来读取并改写其他应用中的滚轮事件。",
         "smoothScrollingGrantAccessibility": "授权辅助功能…", "smoothScrollingOpenAccessibility": "打开辅助功能设置",
         "smoothScrollingAccessibilityReady": "辅助功能权限已就绪",
-        "smoothScrollingNotConfiguredHint": "未启用时鼠标滚轮会按系统默认行为传递。"
+        "smoothScrollingNotConfiguredHint": "未启用时鼠标滚轮会按系统默认行为传递。",
+        "rightClickMenu": "访达右键菜单",
+        "rightClickMenuSubtitle": "在访达中使用复制路径、删除、隐藏、新建文件、打开应用和常用目录等快捷操作。",
+        "rightClickOpenSettings": "打开右键菜单设置",
+        "rightClickMenuHint": "首次使用前，请在系统设置中启用 MacPilot 的 FinderSync 扩展。",
+        "rightClickBack": "返回简介"
     ]
 
     static func value(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
@@ -843,7 +848,12 @@ enum AppText {
             "smoothScrollingAccessibilityRequired": "Smooth scrolling needs Accessibility access to read and rewrite wheel events in other apps.",
             "smoothScrollingGrantAccessibility": "Grant Accessibility…", "smoothScrollingOpenAccessibility": "Open Accessibility Settings",
             "smoothScrollingAccessibilityReady": "Accessibility access is ready",
-            "smoothScrollingNotConfiguredHint": "When disabled, mouse-wheel events pass through using the system default behavior."
+            "smoothScrollingNotConfiguredHint": "When disabled, mouse-wheel events pass through using the system default behavior.",
+            "rightClickMenu": "Finder Context Menu",
+            "rightClickMenuSubtitle": "Use shortcuts in Finder for copying paths, deleting, hiding, creating files, opening apps, and browsing common folders.",
+            "rightClickOpenSettings": "Open Context Menu Settings",
+            "rightClickMenuHint": "Before using it for the first time, enable MacPilot's FinderSync extension in System Settings.",
+            "rightClickBack": "Back to overview"
         ]
 }
 
@@ -1034,6 +1044,8 @@ final class MacPilotModel: ObservableObject {
         inputSources.activateFromConfiguration()
         windowSwitcher.activateFromConfiguration()
         smoothScrolling.activateFromConfiguration()
+        // Finder 右键菜单（融合 RClick FinderSync 扩展）。
+        startRightClickMenu()
         Task { [weak updater] in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
@@ -1082,6 +1094,8 @@ final class MacPilotModel: ObservableObject {
             screenRecording.start()
         case ["record", "stop"]:
             screenRecording.stop()
+        case ["right-click"], ["rightclick"], ["finder", "menu"]:
+            requestedSection = .rightClick
         case ["settings"], ["preferences"]:
             requestedSection = .settings
         case ["settings", "capture"], ["settings", "screenshots"]:
@@ -1976,7 +1990,7 @@ final class MacPilotModel: ObservableObject {
     var timeString: String { lastChecked.formatted(.dateTime.hour().minute().locale(language.locale)) }
 }
 
-enum MainSection { case exit, launch, ble, inputSources, compression, capture, pictureInPicture, windowSwitcher, smoothScrolling, settings }
+enum MainSection { case exit, launch, ble, inputSources, compression, capture, pictureInPicture, windowSwitcher, smoothScrolling, rightClick, settings }
 
 struct ContentView: View {
     @EnvironmentObject private var model: MacPilotModel
@@ -2020,6 +2034,8 @@ struct ContentView: View {
                         .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
                 } else if section == .smoothScrolling {
                     SmoothScrollSettingsView(smoothScrolling: model.smoothScrolling)
+                } else if section == .rightClick {
+                    RightClickMenuSettingsView()
                 } else {
                     SettingsView()
                 }
@@ -2240,6 +2256,16 @@ struct Sidebar: View {
             }
             .buttonStyle(.plain)
             .background(section == .smoothScrolling ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            Button { section = .rightClick } label: {
+                Label(model.t("rightClickMenu"), systemImage: "contextualmenu.and.cursorarrow")
+                    .labelStyle(SidebarLabelStyle())
+                    .padding(.vertical, 9).padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(section == .rightClick ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             Button { section = .settings } label: {
                 Label(model.t("settings"), systemImage: "gearshape")

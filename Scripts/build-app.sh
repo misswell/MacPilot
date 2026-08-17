@@ -6,6 +6,10 @@ cd "$ROOT"
 
 swift build -c release
 BIN_DIR="$(swift build -c release --show-bin-path)"
+
+# Build the FinderSync right-click extension (derived from RClick, GPLv3).
+"$ROOT/Scripts/build-findersync.sh"
+REXT_PRODUCT="$ROOT/build/FinderSync"
 BIN="$BIN_DIR/MacPilot"
 UPDATER_BIN="$BIN_DIR/MacPilotUpdater"
 OCCLUSION_PATCH_BIN="$BIN_DIR/libMacPilotOcclusionPatch.dylib"
@@ -41,12 +45,17 @@ cp "$UPDATER_BIN" "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
 cp "$OCCLUSION_PATCH_BIN" "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+mkdir -p "$APP/Contents/PlugIns"
+cp -R "$REXT_PRODUCT" "$APP/Contents/PlugIns/FinderSync.appex"
+REXT_APPEX="$APP/Contents/PlugIns/FinderSync.appex"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName MacPilot" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName MacPilot" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP_EXECUTABLE_NAME" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_IDENTIFIER" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$REXT_APPEX/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$REXT_APPEX/Contents/Info.plist"
 ENTITLEMENTS="$ROOT/Resources/MacPilot.entitlements"
 DEVELOPER_ID="${MACPILOT_DEVELOPER_ID:-${OCTOPILOT_DEVELOPER_ID:-}}"
 EXPECTED_DEVELOPER_ID="Developer ID Application: Guofeng Liu (U8U443D7ZL)"
@@ -88,7 +97,7 @@ else
         echo "WARNING: Developer ID identity unavailable; using local development identity: $LOCAL_DEVELOPMENT_ID"
         echo "macOS may treat this build as a different app for privacy permissions."
     elif [[ "${MACPILOT_ALLOW_UNSTABLE_SIGNING:-0}" == "1" ]]; then
-        codesign --force --deep --sign - "$APP"
+        SIGNING_IDENTITY="-"
         echo "WARNING: Signed ad-hoc because no stable signing identity was found."
         echo "Screen Recording and Accessibility permissions may need to be granted again after every rebuild."
     else
@@ -107,12 +116,25 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
     # Sign nested code independently. Passing the main app's custom
     # requirement through --deep would incorrectly give MacPilotUpdater the
     # MacPilot bundle identifier and invalidate the nested signature.
-    codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
-        "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
-    codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
-        "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
-    codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
-        --requirements "=$SHARED_REQUIREMENT" --sign "$SIGNING_IDENTITY" "$APP"
+    REXT_ENTITLEMENTS="$ROOT/FinderSync/Resources/FinderSync.entitlements"
+    if [[ "$SIGNING_IDENTITY" == "-" ]]; then
+        codesign --force --entitlements "$REXT_ENTITLEMENTS" \
+            --sign - "$REXT_APPEX"
+        codesign --force --sign - "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
+        codesign --force --sign - \
+            "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
+        codesign --force --entitlements "$ENTITLEMENTS" \
+            --sign - "$APP"
+    else
+        codesign --force --options runtime --entitlements "$REXT_ENTITLEMENTS" \
+            --sign "$SIGNING_IDENTITY" "$REXT_APPEX"
+        codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
+            "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
+        codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
+            "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
+        codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
+            --requirements "=$SHARED_REQUIREMENT" --sign "$SIGNING_IDENTITY" "$APP"
+    fi
     echo "Shared designated requirement: $SHARED_REQUIREMENT"
 fi
 echo "Built $APP (version $VERSION, build $BUILD_NUMBER, bundle id $BUNDLE_IDENTIFIER)"
