@@ -1005,6 +1005,7 @@ final class SmartScreenshotController {
     private var isSelecting = false
     private var pendingTargetUpdate: DispatchWorkItem?
     private var latestPointerLocation: CGPoint?
+    private static let elementTargetRefreshDelay: TimeInterval = 0.18
     private var lastSelectionCoordinateFailureLogAt: CFAbsoluteTime = 0
     private var manualSelectionCoordinateFailure = false
     private var shortcutBinding: SmartCaptureShortcutBinding
@@ -2286,7 +2287,10 @@ final class SmartScreenshotController {
             self.resolveTarget(at: point)
         }
         pendingTargetUpdate = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03, execute: work)
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.elementTargetRefreshDelay,
+            execute: work
+        )
     }
 
     func handleShortcutEvent(id: UInt32) {
@@ -2343,12 +2347,22 @@ final class SmartScreenshotController {
             return
         }
         manualSelectionCoordinateFailure = false
+        if selectionMode == .smartElement || selectionMode == .applicationWindow {
+            pendingTargetUpdate?.cancel()
+            pendingTargetUpdate = nil
+            resolveTarget(at: appKitPoint)
+        }
         let target = selectionMode == .smartElement || selectionMode == .applicationWindow ? currentTarget : nil
         applySelectionAction(selectionInteraction.pointerDown(at: appKitPoint, target: target))
     }
 
     private func handleSelectionMouseDown(atAppKitPoint point: CGPoint) {
         guard isSelecting, !selectionInteraction.isDragging else { return }
+        if selectionMode == .smartElement || selectionMode == .applicationWindow {
+            pendingTargetUpdate?.cancel()
+            pendingTargetUpdate = nil
+            resolveTarget(at: point)
+        }
         let target = selectionMode == .smartElement || selectionMode == .applicationWindow ? currentTarget : nil
         applySelectionAction(selectionInteraction.pointerDown(at: point, target: target))
     }
