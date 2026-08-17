@@ -1005,6 +1005,9 @@ final class SmartScreenshotController {
     private var isSelecting = false
     private var pendingTargetUpdate: DispatchWorkItem?
     private var latestPointerLocation: CGPoint?
+    private var lastTargetMoveAt: CFAbsoluteTime = 0
+    private var pendingTargetFollowUp: DispatchWorkItem?
+    private var targetFollowUpDepth = 0
     private static let elementTargetRefreshDelay: TimeInterval = 0.18
     private var lastSelectionCoordinateFailureLogAt: CFAbsoluteTime = 0
     private var manualSelectionCoordinateFailure = false
@@ -1709,6 +1712,8 @@ final class SmartScreenshotController {
         pendingSnapzyResult = nil
         pendingTargetUpdate?.cancel()
         pendingTargetUpdate = nil
+        pendingTargetFollowUp?.cancel()
+        pendingTargetFollowUp = nil
         latestPointerLocation = nil
         manualSelectionStart = nil
         manualSelectionRect = nil
@@ -1883,6 +1888,8 @@ final class SmartScreenshotController {
         initialTargetUpdateTask = nil
         pendingTargetUpdate?.cancel()
         pendingTargetUpdate = nil
+        pendingTargetFollowUp?.cancel()
+        pendingTargetFollowUp = nil
         latestPointerLocation = nil
         manualSelectionStart = nil
         manualSelectionRect = nil
@@ -2280,6 +2287,10 @@ final class SmartScreenshotController {
               (selectionMode == .smartElement || selectionMode == .applicationWindow || selectionMode == .recordingApplication),
               manualSelectionStart == nil else { return }
         latestPointerLocation = appKitPoint
+        lastTargetMoveAt = CFAbsoluteTimeGetCurrent()
+        targetFollowUpDepth = 0
+        pendingTargetFollowUp?.cancel()
+        pendingTargetFollowUp = nil
         guard pendingTargetUpdate == nil else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isSelecting, let point = self.latestPointerLocation else { return }
@@ -2350,6 +2361,8 @@ final class SmartScreenshotController {
         if selectionMode == .smartElement || selectionMode == .applicationWindow {
             pendingTargetUpdate?.cancel()
             pendingTargetUpdate = nil
+            pendingTargetFollowUp?.cancel()
+            pendingTargetFollowUp = nil
             resolveTarget(at: appKitPoint)
         }
         let target = selectionMode == .smartElement || selectionMode == .applicationWindow ? currentTarget : nil
@@ -2361,6 +2374,8 @@ final class SmartScreenshotController {
         if selectionMode == .smartElement || selectionMode == .applicationWindow {
             pendingTargetUpdate?.cancel()
             pendingTargetUpdate = nil
+            pendingTargetFollowUp?.cancel()
+            pendingTargetFollowUp = nil
             resolveTarget(at: point)
         }
         let target = selectionMode == .smartElement || selectionMode == .applicationWindow ? currentTarget : nil
@@ -2454,6 +2469,8 @@ final class SmartScreenshotController {
     }
 
     private func resolveTarget(at appKitPoint: CGPoint) {
+        pendingTargetFollowUp?.cancel()
+        pendingTargetFollowUp = nil
         let target: CGRect?
         switch selectionMode {
         case .smartElement:
@@ -2463,9 +2480,26 @@ final class SmartScreenshotController {
         default:
             target = nil
         }
-        guard target != currentTarget else { return }
-        currentTarget = target
-        for overlay in overlays { overlay.overlayView.targetFrame = target }
+        if target != currentTarget {
+            targetFollowUpDepth = 0
+            currentTarget = target
+            for overlay in overlays { overlay.overlayView.targetFrame = target }
+            return
+        }
+        // AX can initially return the outer container when the pointer moves
+        // onto a new interior element. Re-query twice after a short pause so
+        // lazy AX trees have a chance to surface the inner element, instead of
+        // requiring the user to nudge the mouse again.
+        guard let target, !target.isNull, targetFollowUpDepth < 2 else { return }
+        let point = appKitPoint
+        targetFollowUpDepth += 1
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isSelecting else { return }
+            self.pendingTargetFollowUp = nil
+            self.resolveTarget(at: point)
+        }
+        pendingTargetFollowUp = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
     }
 
     private func applySelectionAction(_ action: SmartCaptureSelectionAction) {
