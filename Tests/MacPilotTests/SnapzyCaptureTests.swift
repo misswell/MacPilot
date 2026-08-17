@@ -38,6 +38,14 @@ struct SnapzyCaptureTests {
         return context.makeImage()!
     }
 
+    private func pngData(from image: NSImage) -> Data? {
+        var rect = CGRect(origin: .zero, size: image.size)
+        guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else {
+            return nil
+        }
+        return NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
+    }
+
     @Test func frozenSnapshotCropUsesNativePixelScaleAndScreenCoordinates() throws {
         let snapshot = FrozenDisplaySnapshot(
             displayID: 1,
@@ -155,6 +163,29 @@ struct SnapzyCaptureTests {
         )
         #expect(toolbar.frame.midX == localSelection.midX)
         #expect(toolbar.frame.maxY < localSelection.minY || toolbar.frame.minY > localSelection.maxY)
+    }
+
+    @Test @MainActor func smartElementSelectionKeepsTheCrosshairCursor() throws {
+        let overlay = AreaSelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        var observedCursor: NSCursor?
+        overlay.cursorSetEffect = { observedCursor = $0 }
+        let key = PreferencesKeys.screenshotShowSelectionAreaOverlay
+        let originalPreference = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        defer {
+            if let originalPreference {
+                UserDefaults.standard.set(originalPreference, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+
+        overlay.setInteractionMode(.smartElement)
+
+        let expected = NSCursor.vectorScreenshotCrosshairLight
+        let observed = try #require(observedCursor)
+        #expect(pngData(from: observed.image) == pngData(from: expected.image))
+        #expect(observed.hotSpot == expected.hotSpot)
     }
 
     @Test @MainActor func initialSmartTargetResolutionRunsOnMainActor() async throws {

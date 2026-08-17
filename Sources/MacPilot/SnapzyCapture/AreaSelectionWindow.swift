@@ -2479,15 +2479,20 @@ final class AreaSelectionOverlayView: NSView {
     switch interactionMode {
     case .manualRegion:
       guard selectionEnabled else { return .arrow }
-      return showSelectionAreaOverlay ? NSCursor.vectorScreenshotCrosshairLight : NSCursor
-        .vectorScreenshotCrosshairHighContrast
+      return selectionCrosshairCursor
     case .smartElement:
       guard selectionEnabled else { return .arrow }
-      return NSCursor.applicationWindowCursor
+      return selectionCrosshairCursor
     case .applicationWindow:
       guard selectionEnabled else { return .arrow }
       return NSCursor.applicationWindowCursor
     }
+  }
+
+  private var selectionCrosshairCursor: NSCursor {
+    showSelectionAreaOverlay
+      ? NSCursor.vectorScreenshotCrosshairLight
+      : NSCursor.vectorScreenshotCrosshairHighContrast
   }
 
   var isManualSelectionInProgress: Bool {
