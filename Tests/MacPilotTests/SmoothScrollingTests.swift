@@ -70,7 +70,17 @@ struct SmoothScrollingTests {
         let transition = machine.manualInputDetected(isSeparated: true)
 
         #expect(transition.queue == [.momentumEnd, .trackingBegin])
-        #expect(transition.target == .trackingOngoing)
+        #expect(transition.target == nil)
+    }
+
+    @Test func phaseMachineEmitsTrackingBeginFromIdle() {
+        var machine = SmoothScrollPhaseMachine()
+
+        let transition = machine.manualInputDetected(isSeparated: true)
+
+        #expect(transition.queue == [.trackingBegin])
+        #expect(transition.target == nil)
+        #expect(machine.phase == .idle)
     }
 
     @Test func wheelEventParserPrefersPrecisePointDeltas() throws {
@@ -96,5 +106,26 @@ struct SmoothScrollingTests {
         #expect(AppText.value("smoothScrolling", language: .english) == "Smooth Scrolling")
         #expect(AppText.value("smoothScrollingEnable", language: .simplifiedChinese) == "启用平滑滚动")
         #expect(AppText.value("smoothScrollingEnable", language: .english) == "Enable smooth scrolling")
+    }
+
+    @Test func adaptiveSpeedBoostIncreasesForFasterWheelCadence() {
+        let fast = SmoothScrollVelocityBoost.factor(interval: 0.01, enabled: true, maximum: 3)
+        let slow = SmoothScrollVelocityBoost.factor(interval: 0.4, enabled: true, maximum: 3)
+        let disabled = SmoothScrollVelocityBoost.factor(interval: 0.01, enabled: false, maximum: 3)
+
+        #expect(fast > slow)
+        #expect(fast > 2)
+        #expect(disabled == 1)
+    }
+
+    @Test func adaptiveSpeedSettingsDefaultOffAndClampLimit() throws {
+        let defaultSettings = SmoothScrollSettings()
+        #expect(!defaultSettings.adaptiveSpeedEnabled)
+        #expect(defaultSettings.adaptiveSpeedMaximum == 3)
+
+        let data = Data(#"{"adaptiveSpeedEnabled":true,"adaptiveSpeedMaximum":99}"#.utf8)
+        let decoded = try JSONDecoder().decode(SmoothScrollSettings.self, from: data)
+        #expect(decoded.adaptiveSpeedEnabled)
+        #expect(decoded.adaptiveSpeedMaximum == 8)
     }
 }

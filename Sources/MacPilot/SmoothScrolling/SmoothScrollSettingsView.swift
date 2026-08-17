@@ -34,6 +34,19 @@ struct SmoothScrollSettingsView: View {
                 }
                 Divider()
                 controlGroup {
+                    Toggle(model.t("smoothScrollingAdaptiveSpeed"), isOn: Binding(
+                        get: { smoothScrolling.settings.adaptiveSpeedEnabled },
+                        set: { smoothScrolling.setAdaptiveSpeedEnabled($0) }
+                    ))
+                    if smoothScrolling.settings.adaptiveSpeedEnabled {
+                        sliderRow(model.t("smoothScrollingAdaptiveSpeedMaximum"), value: Binding(
+                            get: { smoothScrolling.settings.adaptiveSpeedMaximum },
+                            set: { smoothScrolling.setAdaptiveSpeedMaximum($0) }
+                        ), range: SmoothScrollSettings.adaptiveSpeedRange, step: 0.1, display: { String(format: "%.1f×", $0) })
+                    }
+                }
+                Divider()
+                controlGroup {
                     Toggle(model.t("smoothScrollingReverseVertical"), isOn: Binding(
                         get: { smoothScrolling.settings.reverseVertical },
                         set: { smoothScrolling.setReverseVertical($0) }

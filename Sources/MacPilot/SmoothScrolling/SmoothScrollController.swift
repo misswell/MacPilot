@@ -16,6 +16,7 @@ final class SmoothScrollController {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var displayLink: CVDisplayLink?
+    private var lastPhysicalWheelTime: CFTimeInterval = 0
     private(set) var isActive = false
 
     private let eventMask: CGEventMask = CGEventMask(1 << CGEventType.scrollWheel.rawValue)
@@ -102,9 +103,22 @@ final class SmoothScrollController {
         }
 
         let settings = activeSettings
+        let now = CFAbsoluteTimeGetCurrent()
+        let velocityInterval = lastPhysicalWheelTime == 0 ? SmoothScrollVelocityBoost.slowInterval : now - lastPhysicalWheelTime
+        let velocityBoost = SmoothScrollVelocityBoost.factor(
+            interval: velocityInterval,
+            enabled: settings.adaptiveSpeedEnabled,
+            maximum: settings.adaptiveSpeedMaximum
+        )
         let vertical = SmoothScrollWheelEventParser.axis(.vertical, in: event)
         let horizontal = SmoothScrollWheelEventParser.axis(.horizontal, in: event)
         let plan = SmoothScrollPlanner.plan(vertical: vertical, horizontal: horizontal, settings: settings)
+        var boostedPlan = plan
+        if plan.consumesAnyAxis {
+            boostedPlan.verticalTarget *= velocityBoost
+            boostedPlan.horizontalTarget *= velocityBoost
+        }
+        defer { lastPhysicalWheelTime = now }
 
         guard plan.consumesAnyAxis else { return Unmanaged.passUnretained(event) }
 
@@ -115,8 +129,8 @@ final class SmoothScrollController {
 
         let accepted = runtime.update(
             event: event,
-            verticalTarget: plan.verticalTarget,
-            horizontalTarget: plan.horizontalTarget,
+            verticalTarget: boostedPlan.verticalTarget,
+            horizontalTarget: boostedPlan.horizontalTarget,
             settings: settings
         )
 
@@ -124,8 +138,8 @@ final class SmoothScrollController {
         // apps still receive real (non-synthetic) horizontal scrolling while the
         // vertical axis is being smoothed.
         if plan.passThroughVertical || plan.passThroughHorizontal {
-            if plan.verticalTarget != 0 { SmoothScrollWheelEventParser.clear(.vertical, in: event) }
-            if plan.horizontalTarget != 0 { SmoothScrollWheelEventParser.clear(.horizontal, in: event) }
+            if boostedPlan.verticalTarget != 0 { SmoothScrollWheelEventParser.clear(.vertical, in: event) }
+            if boostedPlan.horizontalTarget != 0 { SmoothScrollWheelEventParser.clear(.horizontal, in: event) }
             return Unmanaged.passUnretained(event)
         }
         return accepted ? nil : Unmanaged.passUnretained(event)
@@ -142,6 +156,7 @@ final class SmoothScrollController {
 /// main thread; the CVDisplayLink callback only performs lock-protected work.
 final class SmoothScrollRuntime: @unchecked Sendable {
     static let syntheticEventMarker: Int64 = 0x4D4F53534D4F4F54
+    private static let manualContinuationThreshold: CFTimeInterval = 0.18
 
     private struct State: @unchecked Sendable {
         var eventTemplate: CGEvent?
@@ -154,12 +169,13 @@ final class SmoothScrollRuntime: @unchecked Sendable {
         var deadZone = 1.0
         var simulatesPhases = false
         var manualInputEnded = true
+        var lastManualEventTime: CFTimeInterval = 0
         var momentumActive = false
         var pendingEnd = false
         var pendingStopPhase: SmoothScrollPhase?
         var filter = SmoothScrollFilter()
         var phaseMachine = SmoothScrollPhaseMachine()
-        var pendingPhaseFrames: [SmoothScrollPhase] = []
+        var pendingPhaseFrames: [(phase: SmoothScrollPhase, autoAdvance: SmoothScrollPhase?)] = []
         var postedSyntheticFrame = false
     }
 
@@ -212,9 +228,12 @@ final class SmoothScrollRuntime: @unchecked Sendable {
 
             let phaseTransition = state.phaseMachine.manualInputDetected(isSeparated: state.manualInputEnded)
             state.manualInputEnded = false
-            state.pendingPhaseFrames.append(contentsOf: phaseTransition.queue)
+            state.lastManualEventTime = CFAbsoluteTimeGetCurrent()
+            for phase in phaseTransition.queue {
+                state.pendingPhaseFrames.append((phase, phase.autoAdvanceAfterEmission))
+            }
             if let target = phaseTransition.target {
-                state.phaseMachine.apply(target)
+                state.phaseMachine.apply(target, autoAdvance: phaseTransition.targetAutoAdvance)
             }
             state.momentumActive = false
             state.pendingEnd = false
@@ -249,7 +268,11 @@ final class SmoothScrollRuntime: @unchecked Sendable {
         guard displayLink != nil else { return }
         let frame = lock.withLock { state -> (output: (vertical: Double, horizontal: Double), phases: [SmoothScrollPhase])? in
             guard state.eventTemplate != nil else { return nil }
-            var phasesToPost = state.pendingPhaseFrames
+            var phasesToPost: [SmoothScrollPhase] = []
+            for pending in state.pendingPhaseFrames {
+                state.phaseMachine.apply(pending.phase, autoAdvance: pending.autoAdvance)
+                phasesToPost.append(pending.phase)
+            }
             state.pendingPhaseFrames.removeAll()
 
             let interpolated = (
@@ -272,30 +295,38 @@ final class SmoothScrollRuntime: @unchecked Sendable {
                 abs(state.buffer.vertical - state.current.vertical),
                 abs(state.buffer.horizontal - state.current.horizontal)
             )
-            if !state.manualInputEnded {
+            let inputPause = CFAbsoluteTimeGetCurrent() - state.lastManualEventTime
+            if !state.manualInputEnded, inputPause > SmoothScrollRuntime.manualContinuationThreshold {
                 let transition = state.phaseMachine.manualInputEnded()
-                state.pendingPhaseFrames.append(contentsOf: transition.queue)
+                for phase in transition.queue {
+                    state.pendingPhaseFrames.append((phase, phase.autoAdvanceAfterEmission))
+                }
                 if let target = transition.target {
-                    state.phaseMachine.apply(target)
+                    state.phaseMachine.apply(target, autoAdvance: transition.targetAutoAdvance)
+                    phasesToPost.append(target)
                     state.pendingStopPhase = .trackingEnd
                 }
                 state.manualInputEnded = true
             }
             if state.momentumActive {
                 if state.pendingEnd {
+                    state.phaseMachine.apply(.momentumEnd, autoAdvance: .idle)
                     phasesToPost.append(.momentumEnd)
                     state.pendingStopPhase = .momentumEnd
                     state.momentumActive = false
                 } else if residual <= state.deadZone {
                     state.pendingEnd = true
                 } else {
+                    state.phaseMachine.apply(.momentumOngoing)
                     phasesToPost.append(.momentumOngoing)
                 }
             } else if residual > state.deadZone {
                 let transition = state.phaseMachine.momentumStart()
-                state.pendingPhaseFrames.append(contentsOf: transition.queue)
+                for phase in transition.queue {
+                    state.pendingPhaseFrames.append((phase, phase.autoAdvanceAfterEmission))
+                }
                 if let target = transition.target {
-                    state.phaseMachine.apply(target)
+                    state.phaseMachine.apply(target, autoAdvance: transition.targetAutoAdvance)
                     state.momentumActive = true
                     phasesToPost.append(target)
                 }
@@ -303,6 +334,7 @@ final class SmoothScrollRuntime: @unchecked Sendable {
                 state.pendingStopPhase = nil
             }
             if let stopPhase = state.pendingStopPhase, residual <= state.deadZone, state.momentumActive == false {
+                state.phaseMachine.apply(stopPhase, autoAdvance: .idle)
                 phasesToPost.append(stopPhase)
                 state.pendingStopPhase = nil
             }
@@ -372,6 +404,7 @@ final class SmoothScrollRuntime: @unchecked Sendable {
         state.buffer = (0, 0)
         state.previousDirection = (0, 0)
         state.manualInputEnded = true
+        state.lastManualEventTime = 0
         state.momentumActive = false
         state.pendingEnd = false
         state.pendingStopPhase = nil

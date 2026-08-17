@@ -11,6 +11,7 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
     static let speedRange: ClosedRange<Double> = 0.1...10
     static let durationRange: ClosedRange<Double> = 0...5
     static let deadZoneRange: ClosedRange<Double> = 0...10
+    static let adaptiveSpeedRange: ClosedRange<Double> = 1...8
 
     var isEnabled = false
     var smoothVertical = true
@@ -22,6 +23,8 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
     var duration = 4.35
     var deadZone = 1.0
     var simulatesTrackpadPhases = false
+    var adaptiveSpeedEnabled = false
+    var adaptiveSpeedMaximum = 3.0
 
     var interpolationFactor: Double {
         Self.interpolationFactor(forDuration: duration)
@@ -41,6 +44,7 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
         value.speed = speed.clamped(to: Self.speedRange)
         value.duration = duration.clamped(to: Self.durationRange)
         value.deadZone = deadZone.clamped(to: Self.deadZoneRange)
+        value.adaptiveSpeedMaximum = adaptiveSpeedMaximum.clamped(to: Self.adaptiveSpeedRange)
         return value
     }
 
@@ -58,6 +62,8 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
         duration = try container.decodeIfPresent(Double.self, forKey: .duration) ?? 4.35
         deadZone = try container.decodeIfPresent(Double.self, forKey: .deadZone) ?? 1.0
         simulatesTrackpadPhases = try container.decodeIfPresent(Bool.self, forKey: .simulatesTrackpadPhases) ?? false
+        adaptiveSpeedEnabled = try container.decodeIfPresent(Bool.self, forKey: .adaptiveSpeedEnabled) ?? false
+        adaptiveSpeedMaximum = try container.decodeIfPresent(Double.self, forKey: .adaptiveSpeedMaximum) ?? 3.0
         self = clamped()
     }
 }
@@ -202,6 +208,28 @@ enum SmoothScrollPlanner {
     }
 }
 
+/// Converts the physical wheel cadence into an optional speed boost.
+/// Events arriving faster than `fastInterval` get the full configured boost;
+/// slower events diminish toward the base speed.
+enum SmoothScrollVelocityBoost {
+    static let fastInterval: CFTimeInterval = 0.08
+    static let slowInterval: CFTimeInterval = 0.35
+
+    static func factor(
+        interval: CFTimeInterval,
+        enabled: Bool,
+        maximum: Double
+    ) -> Double {
+        guard enabled, interval.isFinite else { return 1 }
+        let clampedMaximum = Swift.min(Swift.max(maximum, 1), 8)
+        guard clampedMaximum > 1 else { return 1 }
+        let clampedInterval = Swift.min(Swift.max(interval, fastInterval), slowInterval)
+        let normalizedSpeed = (slowInterval - clampedInterval) / (slowInterval - fastInterval)
+        let boosted = 1 + (clampedMaximum - 1) * normalizedSpeed
+        return (boosted * 100).rounded() / 100
+    }
+}
+
 /// Linear interpolation used by Mos' display-link frame generator.
 enum SmoothScrollInterpolator {
     static func lerp(current: Double, target: Double, factor: Double) -> Double {
@@ -264,6 +292,14 @@ enum SmoothScrollPhase: Equatable, Sendable {
         default: 0
         }
     }
+
+    var autoAdvanceAfterEmission: SmoothScrollPhase? {
+        switch self {
+        case .trackingBegin: .trackingOngoing
+        case .momentumEnd: .idle
+        default: nil
+        }
+    }
 }
 
 /// Pure form of Mos' scroll phase machine. It is only emitted when trackpad
@@ -276,10 +312,16 @@ struct SmoothScrollPhaseMachine: Equatable, Sendable {
     struct Transition: Equatable, Sendable {
         var queue: [SmoothScrollPhase]
         var target: SmoothScrollPhase?
+        var targetAutoAdvance: SmoothScrollPhase?
 
-        init(queue: [SmoothScrollPhase] = [], target: SmoothScrollPhase? = nil) {
+        init(
+            queue: [SmoothScrollPhase] = [],
+            target: SmoothScrollPhase? = nil,
+            targetAutoAdvance: SmoothScrollPhase? = nil
+        ) {
             self.queue = queue
             self.target = target
+            self.targetAutoAdvance = targetAutoAdvance
         }
     }
 
@@ -291,13 +333,17 @@ struct SmoothScrollPhaseMachine: Equatable, Sendable {
     mutating func manualInputDetected(isSeparated: Bool) -> Transition {
         if phase == .momentumBegin || phase == .momentumOngoing {
             if isSeparated {
-                return Transition(queue: [.momentumEnd, .trackingBegin], target: .trackingOngoing)
+                return Transition(queue: [.momentumEnd, .trackingBegin])
             }
-            return Transition(queue: [.momentumEnd], target: .trackingBegin)
+            return Transition(
+                queue: [.momentumEnd],
+                target: .trackingBegin,
+                targetAutoAdvance: .trackingOngoing
+            )
         }
-        if isSeparated { return Transition(queue: [], target: .trackingBegin) }
+        if isSeparated { return Transition(queue: [.trackingBegin]) }
         if phase == .trackingBegin || phase == .trackingOngoing { return Transition(target: .trackingOngoing) }
-        return Transition(target: .trackingBegin)
+        return Transition(target: .trackingBegin, targetAutoAdvance: .trackingOngoing)
     }
 
     mutating func manualInputEnded() -> Transition {
@@ -312,7 +358,7 @@ struct SmoothScrollPhaseMachine: Equatable, Sendable {
     mutating func momentumStart() -> Transition {
         switch phase {
         case .trackingEnd, .momentumEnd:
-            return Transition(target: .momentumBegin)
+            return Transition(target: .momentumBegin, targetAutoAdvance: .momentumOngoing)
         case .momentumBegin:
             return Transition(target: .momentumOngoing)
         default:
@@ -323,9 +369,9 @@ struct SmoothScrollPhaseMachine: Equatable, Sendable {
     mutating func momentumFinish() -> Transition {
         switch phase {
         case .momentumBegin, .momentumOngoing:
-            return Transition(target: .momentumEnd)
+            return Transition(target: .momentumEnd, targetAutoAdvance: .idle)
         case .trackingBegin, .trackingOngoing, .trackingEnd:
-            return Transition(target: .trackingEnd)
+            return Transition(target: .trackingEnd, targetAutoAdvance: .idle)
         default:
             return Transition()
         }

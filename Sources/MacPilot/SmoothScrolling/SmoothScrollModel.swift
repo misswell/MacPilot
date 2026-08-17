@@ -90,6 +90,18 @@ final class SmoothScrollModel: ObservableObject {
         persist?()
     }
 
+    func setAdaptiveSpeedEnabled(_ enabled: Bool) {
+        settings.adaptiveSpeedEnabled = enabled
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func setAdaptiveSpeedMaximum(_ value: Double) {
+        settings.adaptiveSpeedMaximum = value.clamped(to: SmoothScrollSettings.adaptiveSpeedRange)
+        controller.activate(settings: settings)
+        persist?()
+    }
+
     func setSimulatesTrackpadPhases(_ enabled: Bool) {
         settings.simulatesTrackpadPhases = enabled
         controller.activate(settings: settings)

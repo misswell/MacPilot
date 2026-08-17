@@ -84,6 +84,8 @@ It is derived from the scrolling pipeline of
   through untouched while the other is smoothed.
 - Reverse vertical/horizontal wheel direction independently.
 - Adjust the minimum wheel step, speed gain, glide duration, and dead zone.
+- Optionally accelerate more the faster the wheel is rotated, with a
+  configurable acceleration limit.
 - Optionally simulate trackpad scroll/momentum phases for apps that rely on them.
 - Settings are persisted with the rest of `config.json`; Accessibility access is
   required because MacPilot must read and rewrite wheel events in other apps.
