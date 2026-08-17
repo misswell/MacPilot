@@ -41,6 +41,17 @@ The **Input Sources** sidebar brings the core Input Source Pro workflow into Mac
 
 This feature is an independent implementation using macOS Carbon, Accessibility, Core Graphics, and IOKit APIs; it does not bundle Input Source Pro source code or third-party dependencies.
 
+## Screenshot Capture
+
+The **Screenshot** sidebar adds Snapzy-style capture and quick actions to MacPilot:
+
+- Press the global shortcut (default `F1`) to enter smart-element capture. The selector highlights the element under the pointer after a short debounce, and keeps the highlight stable while moving between elements.
+- Area, application window, fullscreen, current window, area + annotate, OCR, scrolling screenshot, and object-cutout entry points are also available from the Screenshot settings page.
+- After capture, MacPilot can copy the image to the clipboard, show a quick-access preview card, pin it on screen, run OCR, open the annotation editor, or reveal the file in Finder.
+- Screenshot shortcuts are configurable in Settings and can be edited per entry point.
+
+Any feature can be toggled on or off from its Settings page. Disabled features do not register global shortcuts, do not start background monitoring or scheduled work, and disappear from the menu-bar menu. For example, turning off **Enable screenshot capture** removes the screenshot entry from the top menu entirely and stops all screenshot-related idle resources.
+
 ## Storage Compression
 
 The **Storage Compression** sidebar scans a folder for stable text-based files and uses macOS filesystem compression to reduce their physical disk usage without changing their logical contents. Choose extensions, a minimum file size, a stability period, and a minimum savings threshold; then scan and compress manually or enable a five-minute periodic scan.
@@ -122,7 +133,9 @@ Pushing a tag like `v1.1.0` runs the `dist` job, which signs and notarizes autom
 
 ## GitHub Actions
 
-The macOS workflow builds, packages, verifies, and uploads the app on pushes to `main` and pull requests. Each commit after the latest version tag automatically increments the patch version: commits after `v1.0.0` build as `1.0.1`, `1.0.2`, and so on. A new tag becomes the next version baseline. Pushing a version tag such as `v1.1.0` also creates a GitHub Release with a zipped `MacPilot.app` archive.
+The macOS workflow builds, packages, verifies, and uploads the app on pushes to `main` and pull requests. Each commit after the latest version tag automatically increments the patch version: commits after `v1.0.0` build as `1.0.1`, `1.0.2`, and so on. A new tag becomes the next version baseline.
+
+Branch builds use `MACPILOT_ALLOW_UNSTABLE_SIGNING=1` so ordinary pushes can complete without requiring release certificates. Pushing a version tag such as `v1.1.0` runs the `dist` job, which imports the Developer ID certificate, signs with Hardened Runtime, notarizes with Apple, staples the ticket, verifies the signature, and creates a GitHub Release with a zipped `MacPilot.app` archive.
 
 ## Renaming and migration
 
