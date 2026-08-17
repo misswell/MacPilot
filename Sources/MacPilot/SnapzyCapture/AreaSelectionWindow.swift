@@ -254,6 +254,7 @@ final class AreaSelectionOverlayView: NSView {
 
   private var interactionMode: AreaSelectionInteractionMode = .manualRegion
   private var allowsApplicationWindowSelection = false
+  private var elementTargetResolver: ((CGPoint) -> CGRect?)?
 
   // MARK: - Selection State
 
@@ -272,6 +273,10 @@ final class AreaSelectionOverlayView: NSView {
   private var isShowingSelectionActions = false
   private var windowSelectionSnapshot: WindowSelectionSnapshot?
   private var hoveredWindowCandidate: WindowSelectionCandidate?
+  private var hoveredElementRect: CGRect?
+  private var lastElementHoverPoint: CGPoint?
+  private var pendingElementHoverWork: DispatchWorkItem?
+  private var elementHoverFollowUpDepth = 0
   private var retainedMenuBarPopoverCaptures: [CGWindowID: ImmediateMenuBarPopoverCapture] = [:]
   private var retainedMenuBarPopoverWindowIDsStillOnScreen = Set<CGWindowID>()
 
@@ -586,9 +591,16 @@ final class AreaSelectionOverlayView: NSView {
     let point = convert(event.locationInWindow, from: nil)
     currentMousePosition = point
     updateCoordinateIndicator(at: point)
-    if selectionEnabled, interactionMode == .manualRegion, !isSelecting {
-      updateCrosshairLayers()
-      updateMagnifier(at: point)
+    if selectionEnabled, !isSelecting {
+      switch interactionMode {
+      case .manualRegion:
+        updateCrosshairLayers()
+        updateMagnifier(at: point)
+      case .smartElement:
+        updateElementHover(at: point)
+      case .applicationWindow:
+        updateWindowHover(at: point)
+      }
     }
   }
 
@@ -667,6 +679,11 @@ final class AreaSelectionOverlayView: NSView {
     finalizedSelectionDrag = nil
     isShowingSelectionActions = false
     hoveredWindowCandidate = nil
+    hoveredElementRect = nil
+    pendingElementHoverWork?.cancel()
+    pendingElementHoverWork = nil
+    lastElementHoverPoint = nil
+    elementHoverFollowUpDepth = 0
     removeSelectionActionBars()
 
     // Initialize crosshair at current mouse position immediately
@@ -783,6 +800,8 @@ final class AreaSelectionOverlayView: NSView {
     if showsActions {
       let actionBar = AreaSelectionActionBar(onAction: actionHandler)
       let sideBar = AreaSelectionSideActionBar(onAction: actionHandler)
+      actionBar.layer?.zPosition = 100
+      sideBar.layer?.zPosition = 100
       selectionActionBar = actionBar
       selectionSideActionBar = sideBar
       addSubview(actionBar)
@@ -1803,7 +1822,7 @@ final class AreaSelectionOverlayView: NSView {
       return
     }
 
-    let hint = interactionMode == .manualRegion
+    let hint = interactionMode == .manualRegion || interactionMode == .smartElement
       ? L10n.ScreenCapture.applicationModeHint(shortcut.displayString)
       : L10n.ScreenCapture.manualModeHint(shortcut.displayString)
     let attributes = overlayTextAttributes
@@ -1832,6 +1851,17 @@ final class AreaSelectionOverlayView: NSView {
   func setAllowsApplicationWindowSelection(_ allowsApplicationWindowSelection: Bool) {
     self.allowsApplicationWindowSelection = allowsApplicationWindowSelection
     updateModeHint()
+  }
+
+  /// Supplies the accessibility hit-test used by the F1 smart capture entry
+  /// point.  The resolver is called on the main actor, matching AppKit's AX
+  /// contract, and the resulting frame is rendered by the same selection
+  /// layers used by the window-selection mode.
+  func setElementTargetResolver(_ resolver: ((CGPoint) -> CGRect?)?) {
+    elementTargetResolver = resolver
+    if interactionMode == .smartElement {
+      refreshInteractionState()
+    }
   }
 
   func setInteractionMode(
@@ -1987,12 +2017,21 @@ final class AreaSelectionOverlayView: NSView {
     switch interactionMode {
     case .manualRegion:
       hoveredWindowCandidate = nil
+      hoveredElementRect = nil
       dimLayer.mask = nil
       if !isSelecting {
         selectionBorderLayer.isHidden = true
         updateCrosshairLayers()
       }
+    case .smartElement:
+      hoveredWindowCandidate = nil
+      if !isSelecting {
+        refreshElementHover()
+      } else {
+        updateElementSelectionLayers()
+      }
     case .applicationWindow:
+      hoveredElementRect = nil
       refreshWindowHover()
     }
   }
@@ -2013,6 +2052,22 @@ final class AreaSelectionOverlayView: NSView {
     updateWindowHover(at: localPoint)
   }
 
+  private func refreshElementHover() {
+    guard selectionEnabled, interactionMode == .smartElement else {
+      hoveredElementRect = nil
+      updateElementSelectionLayers()
+      return
+    }
+    let localPoint: CGPoint
+    if let window {
+      let mouseLocationInWindow = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+      localPoint = convert(mouseLocationInWindow, from: nil)
+    } else {
+      localPoint = currentMousePosition
+    }
+    updateElementHover(at: localPoint)
+  }
+
   private func updateWindowHover(at point: CGPoint) {
     currentMousePosition = point
     guard window != nil else {
@@ -2026,6 +2081,72 @@ final class AreaSelectionOverlayView: NSView {
     hoveredWindowCandidate = windowSelectionSnapshot?.hitTest(at: screenPoint)
     if interactionMode == .applicationWindow {
       updateApplicationSelectionLayers()
+    }
+  }
+
+  private func updateElementHover(at point: CGPoint, immediately: Bool = false) {
+    currentMousePosition = point
+    guard interactionMode == .smartElement,
+          let elementTargetResolver else {
+      hoveredElementRect = nil
+      updateElementSelectionLayers()
+      return
+    }
+
+    let screenPoint: CGPoint
+    if let window {
+      screenPoint = CGPoint(
+        x: window.frame.minX + point.x,
+        y: window.frame.minY + point.y
+      )
+    } else {
+      screenPoint = point
+    }
+    guard immediately || isSelecting else {
+      guard lastElementHoverPoint != screenPoint else { return }
+      lastElementHoverPoint = screenPoint
+      pendingElementHoverWork?.cancel()
+      let work = DispatchWorkItem { [weak self] in
+        guard let self else { return }
+        self.pendingElementHoverWork = nil
+        self.resolveElementHover(at: screenPoint, using: elementTargetResolver)
+      }
+      pendingElementHoverWork = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
+      return
+    }
+    pendingElementHoverWork?.cancel()
+    pendingElementHoverWork = nil
+    resolveElementHover(at: screenPoint, using: elementTargetResolver)
+  }
+
+  private func resolveElementHover(
+    at screenPoint: CGPoint,
+    using resolver: @escaping (CGPoint) -> CGRect?
+  ) {
+    let previous = hoveredElementRect
+    let resolved = resolver(screenPoint)?.standardized
+    hoveredElementRect = resolved.flatMap { $0.isEmpty ? nil : $0 }
+    lastElementHoverPoint = screenPoint
+    updateElementSelectionLayers()
+
+    // AX providers can initially expose the containing group while the inner
+    // element is being materialized. Re-query the same point twice after a
+    // short delay so the user does not have to nudge the pointer.
+    if let resolved,
+       resolved == previous,
+       elementHoverFollowUpDepth < 2 {
+      elementHoverFollowUpDepth += 1
+      let work = DispatchWorkItem { [weak self] in
+        guard let self, self.interactionMode == .smartElement, self.selectionEnabled else { return }
+        self.pendingElementHoverWork = nil
+        self.resolveElementHover(at: screenPoint, using: resolver)
+      }
+      pendingElementHoverWork?.cancel()
+      pendingElementHoverWork = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
+    } else if resolved != previous {
+      elementHoverFollowUpDepth = 0
     }
   }
 
@@ -2067,6 +2188,47 @@ final class AreaSelectionOverlayView: NSView {
     updateModeHint()
   }
 
+  private func updateElementSelectionLayers() {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+
+    crosshairIndicatorLayer.isHidden = true
+    horizontalCrosshairLayer.isHidden = true
+    verticalCrosshairLayer.isHidden = true
+    hideSizeIndicator()
+
+    guard let hoveredElementRect else {
+      selectionBorderLayer.isHidden = true
+      dimLayer.mask = nil
+      insideSelectionOverlayLayer.isHidden = true
+      CATransaction.commit()
+      return
+    }
+
+    let localRect = convertToLocalRect(hoveredElementRect).intersection(bounds)
+    if localRect.isEmpty {
+      selectionBorderLayer.isHidden = true
+      dimLayer.mask = nil
+      insideSelectionOverlayLayer.isHidden = true
+    } else {
+      selectionBorderLayer.isHidden = false
+      selectionBorderLayer.path = CGPath(roundedRect: localRect.insetBy(dx: -1, dy: -1), cornerWidth: 5, cornerHeight: 5, transform: nil)
+      selectionBorderLayer.strokeColor = NSColor.systemBlue.cgColor
+      selectionBorderLayer.lineWidth = 3
+      if showSelectionAreaOverlay {
+        updateDimLayerMask(for: localRect)
+        insideSelectionOverlayLayer.isHidden = true
+      } else {
+        dimLayer.mask = nil
+        insideSelectionOverlayLayer.path = CGPath(rect: localRect, transform: nil)
+        updateInsideOverlayAppearance(for: localRect)
+        insideSelectionOverlayLayer.isHidden = false
+      }
+    }
+    CATransaction.commit()
+    updateModeHint()
+  }
+
   private func convertToLocalRect(_ screenRect: CGRect) -> CGRect {
     guard let window else { return screenRect }
     return CGRect(
@@ -2081,7 +2243,10 @@ final class AreaSelectionOverlayView: NSView {
 
   override func mouseDown(with event: NSEvent) {
     guard !isLivePassthroughInput else { return }
-    handlePrimaryMouseDown(at: convert(event.locationInWindow, from: nil))
+    handlePrimaryMouseDown(
+      at: convert(event.locationInWindow, from: nil),
+      clickCount: event.clickCount
+    )
   }
 
   override func mouseDragged(with event: NSEvent) {
@@ -2140,7 +2305,7 @@ final class AreaSelectionOverlayView: NSView {
 
   // MARK: - Shared Mouse Handling
 
-  private func handlePrimaryMouseDown(at point: CGPoint) {
+  private func handlePrimaryMouseDown(at point: CGPoint, clickCount: Int = 1) {
     currentMousePosition = point
     if let areaWindow = window as? AreaSelectionWindow {
       DiagnosticLogger.shared.log(
@@ -2157,6 +2322,10 @@ final class AreaSelectionOverlayView: NSView {
     }
     delegate?.overlayViewDidRequestDisplayActivation(self)
     if isShowingSelectionActions {
+      if clickCount >= 2 {
+        delegate?.overlayView(self, didRequestAction: .copy)
+        return
+      }
       if let handle = hitTestSelectionHandle(at: point), let finalizedSelectionRect {
         finalizedSelectionDrag = .resize(
           handle: handle,
@@ -2171,7 +2340,14 @@ final class AreaSelectionOverlayView: NSView {
         hideSelectionResult()
         isSelecting = true
         selectionEnabled = true
-        delegate?.overlayView(self, manualSelectionBeganAt: point)
+        switch interactionMode {
+        case .manualRegion:
+          delegate?.overlayView(self, manualSelectionBeganAt: point)
+        case .smartElement:
+          updateElementHover(at: point)
+        case .applicationWindow:
+          updateWindowHover(at: point)
+        }
       }
       return
     }
@@ -2191,6 +2367,9 @@ final class AreaSelectionOverlayView: NSView {
     case .manualRegion:
       isSelecting = true
       delegate?.overlayView(self, manualSelectionBeganAt: point)
+    case .smartElement:
+      isSelecting = true
+      updateElementHover(at: point)
     case .applicationWindow:
       updateWindowHover(at: point)
     }
@@ -2230,6 +2409,9 @@ final class AreaSelectionOverlayView: NSView {
       guard isSelecting else { return }
       delegate?.overlayView(self, manualSelectionChangedTo: point)
       updateMagnifier(at: point)
+    case .smartElement:
+      guard isSelecting else { return }
+      updateElementHover(at: point)
     case .applicationWindow:
       updateWindowHover(at: point)
     }
@@ -2253,6 +2435,13 @@ final class AreaSelectionOverlayView: NSView {
       isSelecting = false
 
       delegate?.overlayView(self, manualSelectionEndedAt: point)
+    case .smartElement:
+      guard isSelecting else { return }
+      isSelecting = false
+      updateElementHover(at: point, immediately: true)
+      if let hoveredElementRect {
+        delegate?.overlayView(self, didSelectRect: hoveredElementRect)
+      }
     case .applicationWindow:
       updateWindowHover(at: point)
       if let hoveredWindowCandidate {
@@ -2277,6 +2466,10 @@ final class AreaSelectionOverlayView: NSView {
         updateCrosshairLayers()
         updateMagnifier(at: point)
       }
+    case .smartElement:
+      if !isSelecting {
+        updateElementHover(at: point)
+      }
     case .applicationWindow:
       updateWindowHover(at: point)
     }
@@ -2288,6 +2481,9 @@ final class AreaSelectionOverlayView: NSView {
       guard selectionEnabled else { return .arrow }
       return showSelectionAreaOverlay ? NSCursor.vectorScreenshotCrosshairLight : NSCursor
         .vectorScreenshotCrosshairHighContrast
+    case .smartElement:
+      guard selectionEnabled else { return .arrow }
+      return NSCursor.applicationWindowCursor
     case .applicationWindow:
       guard selectionEnabled else { return .arrow }
       return NSCursor.applicationWindowCursor

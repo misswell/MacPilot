@@ -39,6 +39,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         backdrops: [CGDirectDisplayID: AreaSelectionBackdrop] = [:],
         applicationConfiguration: AreaSelectionApplicationConfiguration? = nil,
         initialInteractionMode: AreaSelectionInteractionMode = .manualRegion,
+        elementTargetResolver: ((CGPoint) -> CGRect?)? = nil,
         sessionID requestedSessionID: UUID? = nil,
         selectionPreview: ((AreaSelectionResult) -> Void)? = nil,
         actionHandler: ((AreaSelectionResult, AreaSelectionAction) -> Void)? = nil,
@@ -65,6 +66,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             window.updateSelectionMode(mode)
             window.setReceivesKeyboardInput(true)
             window.overlayView.setAllowsApplicationWindowSelection(applicationConfiguration != nil)
+            window.overlayView.setElementTargetResolver(elementTargetResolver)
             window.overlayView.setInteractionMode(initialInteractionMode)
             if let displayID = screen.displayID,
                let backdrop = backdrops[displayID] {
@@ -250,6 +252,24 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             complete(nil)
             return
         }
+        if action == .newSelection {
+            // PixPin keeps the same frozen-display session alive while the
+            // user starts another drag. Do not send this through the capture
+            // pipeline or dismiss the overlay.
+            self.selectedResult = nil
+            self.selectedWindow = nil
+            for candidate in windows {
+                candidate.overlayView.hideSelectionResult()
+            }
+            return
+        }
+        if action == .adjustSelection || action == .more {
+            // Adjustment is performed directly by dragging the frame/handles;
+            // the More button is intentionally a non-terminal affordance until
+            // its menu is implemented. Both actions must leave the selection
+            // and toolbar visible.
+            return
+        }
         guard let actionHandler else {
             complete(selectedResult)
             return
@@ -285,18 +305,49 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             complete(nil)
             return true
         }
-        guard selectedResult != nil else { return false }
+        guard let selectedResult else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        if event.keyCode == 8, modifiers == [.command] {
+        if event.keyCode == 8, modifiers == [.command] || modifiers == [.control] {
             areaSelectionWindow(window, didRequestAction: .copy)
             return true
         }
-        if event.keyCode == 1, modifiers == [.command] {
+        if event.keyCode == 1, modifiers == [.command] || modifiers == [.control] {
             areaSelectionWindow(window, didRequestAction: .save)
             return true
         }
+        if [123, 124, 125, 126].contains(event.keyCode) {
+            let delta: CGFloat = 1
+            var rect = selectedResult.rect
+            let isShrinking = modifiers.contains(.shift)
+            let isExpanding = modifiers.contains(.control)
+            if isShrinking || isExpanding {
+                let amount = isShrinking ? -delta : delta
+                switch event.keyCode {
+                case 123: rect.size.width += amount
+                case 124:
+                    rect.origin.x -= amount
+                    rect.size.width += amount
+                case 125: rect.size.height += amount
+                case 126:
+                    rect.origin.y -= amount
+                    rect.size.height += amount
+                default: break
+                }
+            } else {
+                switch event.keyCode {
+                case 123: rect.origin.x -= delta
+                case 124: rect.origin.x += delta
+                case 125: rect.origin.y -= delta
+                case 126: rect.origin.y += delta
+                default: break
+                }
+            }
+            guard rect.width >= 4, rect.height >= 4 else { return true }
+            areaSelectionWindow(window, didChangeSelectionRect: rect)
+            return true
+        }
         if event.keyCode == 36, modifiers.isEmpty {
-            areaSelectionWindow(window, didRequestAction: .capture)
+            areaSelectionWindow(window, didRequestAction: .copy)
             return true
         }
         return false

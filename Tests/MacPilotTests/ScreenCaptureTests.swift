@@ -7,7 +7,7 @@ import Testing
 
 struct ScreenCaptureTests {
 
-    @Test @MainActor func smartSelectionPresentsOverlayBeforeInitialAXQueryCompletes() async throws {
+    @Test @MainActor func smartSelectionPresentsSnapzyOverlayBeforeInitialAXQueryCompletes() async throws {
         _ = NSApplication.shared
         guard !NSScreen.screens.isEmpty else { return }
 
@@ -31,7 +31,8 @@ struct ScreenCaptureTests {
         let elapsed = Date().timeIntervalSince(startedAt)
 
         #expect(elapsed < 0.1)
-        #expect(controller.testOverlayCount == NSScreen.screens.count)
+        #expect(controller.testOverlayCount == 0)
+        #expect(SnapzyAreaSelectionController.shared.isPresenting)
     }
 
     @Test func smartCapturePrefersTheSmallestMeaningfulElement() {

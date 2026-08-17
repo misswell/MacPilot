@@ -1760,11 +1760,11 @@ final class SmartScreenshotController {
     }
 
     func startSelection(mode: SmartCaptureSelectionMode = .smartElement) {
-        // Manual/application screenshot and recording selection now use the
-        // migrated Snapzy window/overlay source.  The smart-element, OCR,
-        // annotation, scrolling and cutout modes keep their specialized
-        // MacPilot flows because they need a post-capture editor.
-        if mode == .manualArea || mode == .applicationWindow ||
+        // Smart-element, manual/application screenshot and recording
+        // selection all use the migrated Snapzy overlay. The remaining modes
+        // keep their specialized MacPilot flows because they need a
+        // post-capture editor.
+        if mode == .smartElement || mode == .manualArea || mode == .applicationWindow ||
             mode == .recordingArea || mode == .recordingApplication {
             startSnapzySelection(mode: mode)
             return
@@ -1922,17 +1922,22 @@ final class SmartScreenshotController {
         NSCursor.arrow.set()
     }
 
-    private func startSnapzySelection(mode: SmartCaptureSelectionMode) {
-        guard !isSelecting, !SnapzyAreaSelectionController.shared.isPresenting else { return }
+    @discardableResult
+    private func startSnapzySelection(mode: SmartCaptureSelectionMode) -> UUID? {
+        guard !isSelecting, !SnapzyAreaSelectionController.shared.isPresenting else { return nil }
         guard screenCaptureAccessProvider() else {
             onError(ScreenCaptureError.permissionRequired)
-            return
+            return nil
         }
 
-        let interactionMode: AreaSelectionInteractionMode =
-            mode == .applicationWindow || mode == .recordingApplication
-                ? .applicationWindow
-                : .manualRegion
+        let interactionMode: AreaSelectionInteractionMode = switch mode {
+        case .smartElement:
+            .smartElement
+        case .applicationWindow, .recordingApplication:
+            .applicationWindow
+        default:
+            .manualRegion
+        }
         let applicationConfiguration: AreaSelectionApplicationConfiguration? =
             interactionMode == .applicationWindow
                 ? AreaSelectionApplicationConfiguration(
@@ -1941,7 +1946,7 @@ final class SmartScreenshotController {
                 )
                 : nil
 
-        _ = startSnapzySelection(
+        let sessionID = startSnapzySelection(
             mode: mode,
             applicationConfiguration: applicationConfiguration
         ) {
@@ -1954,6 +1959,19 @@ final class SmartScreenshotController {
                 prefetchedContentTask: applicationConfiguration?.prefetchedContentTask
             )
         }
+        if mode == .smartElement, let sessionID {
+            initialTargetUpdateTask?.cancel()
+            let resolver = initialTargetResolver
+            initialTargetUpdateTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                _ = resolver(mode, NSEvent.mouseLocation)
+                guard let self,
+                      self.snapzySessionID == sessionID else { return }
+                self.initialTargetUpdateTask = nil
+            }
+        }
+        return sessionID
     }
 
     /// Presents Snapzy's selection window before the expensive frozen-display
@@ -1975,10 +1993,14 @@ final class SmartScreenshotController {
 
         let snapzyMode: SelectionMode =
             (mode == .recordingArea || mode == .recordingApplication) ? .recording : .screenshot
-        let interactionMode: AreaSelectionInteractionMode =
-            mode == .applicationWindow || mode == .recordingApplication
-                ? .applicationWindow
-                : .manualRegion
+        let interactionMode: AreaSelectionInteractionMode = switch mode {
+        case .smartElement:
+            .smartElement
+        case .applicationWindow, .recordingApplication:
+            .applicationWindow
+        default:
+            .manualRegion
+        }
         let applicationConfiguration: AreaSelectionApplicationConfiguration? =
             providedApplicationConfiguration
             ?? (interactionMode == .applicationWindow
@@ -1995,6 +2017,9 @@ final class SmartScreenshotController {
             backdrops: [:],
             applicationConfiguration: applicationConfiguration,
             initialInteractionMode: interactionMode,
+            elementTargetResolver: interactionMode == .smartElement
+                ? { point in SmartAXTargetQuery.target(at: point) }
+                : nil,
             sessionID: sessionID,
             selectionPreview: presentsPostSelectionActions
                 ? { [weak self] result in
@@ -2169,6 +2194,8 @@ final class SmartScreenshotController {
                     self.onCapture(crop.image)
                 case .copy:
                     SmartCaptureClipboard.copy(image: crop.image)
+                case .newSelection, .adjustSelection, .more:
+                    break
                 case .annotate:
                     self.onAreaAnnotateCapture(crop.image)
                 case .ocr:

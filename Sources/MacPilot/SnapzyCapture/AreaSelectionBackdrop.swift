@@ -18,6 +18,9 @@ nonisolated enum AreaSelectionAction: Equatable, Sendable {
   case capture
   case copy
   case save
+  case newSelection
+  case adjustSelection
+  case more
   case annotate
   case ocr
   case pin
@@ -26,6 +29,9 @@ nonisolated enum AreaSelectionAction: Equatable, Sendable {
 
 nonisolated enum AreaSelectionInteractionMode {
   case manualRegion
+  /// Select the accessibility element under the pointer, then keep the
+  /// selected frame on screen until a PixPin action is chosen.
+  case smartElement
   case applicationWindow
 }
 

@@ -125,6 +125,38 @@ struct SnapzyCaptureTests {
         #expect(SnapzyAreaSelectionController.shared.isPresenting)
     }
 
+    @Test @MainActor func postSelectionToolbarStaysAnchoredToTheSelectedFrame() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+
+        let selectionRect = CGRect(
+            x: screen.frame.minX + screen.frame.width * 0.28,
+            y: screen.frame.minY + screen.frame.height * 0.42,
+            width: screen.frame.width * 0.32,
+            height: screen.frame.height * 0.18
+        )
+        window.overlayView.showSelectionResult(
+            screenRect: selectionRect,
+            showsActions: true,
+            actionHandler: { _ in }
+        )
+
+        let toolbar = try #require(
+            window.overlayView.subviews.first(where: { $0 is AreaSelectionActionBar })
+        )
+        let localSelection = CGRect(
+            x: selectionRect.minX - screen.frame.minX,
+            y: selectionRect.minY - screen.frame.minY,
+            width: selectionRect.width,
+            height: selectionRect.height
+        )
+        #expect(toolbar.frame.midX == localSelection.midX)
+        #expect(toolbar.frame.maxY < localSelection.minY || toolbar.frame.minY > localSelection.maxY)
+    }
+
     @Test @MainActor func initialSmartTargetResolutionRunsOnMainActor() async throws {
         _ = NSApplication.shared
         guard !NSScreen.screens.isEmpty else { return }

@@ -46,8 +46,23 @@ final class AreaSelectionActionBar: NSView {
       stackView.bottomAnchor.constraint(equalTo: bottomAnchor),
     ])
 
+    let grip = NSImageView(
+      image: NSImage(
+        systemSymbolName: "line.3.horizontal",
+        accessibilityDescription: "拖动工具栏"
+      ) ?? NSImage()
+    )
+    grip.contentTintColor = NSColor.white.withAlphaComponent(0.28)
+    grip.imageScaling = .scaleProportionallyDown
+    grip.toolTip = "拖动工具栏"
+    grip.setAccessibilityLabel("拖动工具栏")
+    grip.translatesAutoresizingMaskIntoConstraints = false
+    stackView.addArrangedSubview(grip)
+    grip.widthAnchor.constraint(equalToConstant: 18).isActive = true
+    grip.heightAnchor.constraint(equalToConstant: 30).isActive = true
+
     let definitions: [ButtonDefinition] = [
-      .init(imageName: "square", tooltip: "选择区域", action: .capture, separatorAfter: false),
+      .init(imageName: "square", tooltip: "调整选区", action: .adjustSelection, separatorAfter: false),
       .init(imageName: "pencil", tooltip: "标注", action: .annotate, separatorAfter: false),
       .init(imageName: "arrow.up.right", tooltip: "箭头标注", action: .annotate, separatorAfter: false),
       .init(imageName: "textformat", tooltip: "文字标注", action: .annotate, separatorAfter: false),
@@ -61,7 +76,7 @@ final class AreaSelectionActionBar: NSView {
       .init(imageName: "square.and.arrow.down", tooltip: "保存截图", action: .save, separatorAfter: false),
       .init(imageName: "square.on.square", tooltip: "复制图片", action: .copy, separatorAfter: false),
       .init(imageName: "xmark", tooltip: "关闭", action: .cancel, separatorAfter: false),
-      .init(imageName: "ellipsis", tooltip: "更多操作", action: .capture, separatorAfter: false),
+      .init(imageName: "ellipsis", tooltip: "更多操作", action: .more, separatorAfter: false),
     ]
 
     for definition in definitions {
@@ -83,9 +98,9 @@ final class AreaSelectionActionBar: NSView {
   }
 
   override var intrinsicContentSize: NSSize {
-    // Fifteen 40pt cells plus the separators and horizontal insets.  Keeping
+    // The grip plus fifteen 40pt cells, separators, and stack spacing. Keeping
     // this stable makes the bar placement around a moving selection cheap.
-    NSSize(width: 15 * 40 + 4 * 3 + 20, height: 58)
+    NSSize(width: 18 + 15 * 38 + 17 * 2 + 2 * 1 + 20, height: 58)
   }
 
   private func makeButton(_ definition: ButtonDefinition) -> NSButton {
@@ -117,10 +132,13 @@ final class AreaSelectionActionBar: NSView {
     case .capture: return 1
     case .copy: return 2
     case .save: return 3
-    case .annotate: return 4
-    case .ocr: return 5
-    case .pin: return 6
-    case .cancel: return 7
+    case .newSelection: return 4
+    case .adjustSelection: return 5
+    case .more: return 6
+    case .annotate: return 7
+    case .ocr: return 8
+    case .pin: return 9
+    case .cancel: return 10
     }
   }
 
@@ -128,10 +146,13 @@ final class AreaSelectionActionBar: NSView {
     switch tag {
     case 2: return .copy
     case 3: return .save
-    case 4: return .annotate
-    case 5: return .ocr
-    case 6: return .pin
-    case 7: return .cancel
+    case 4: return .newSelection
+    case 5: return .adjustSelection
+    case 6: return .more
+    case 7: return .annotate
+    case 8: return .ocr
+    case 9: return .pin
+    case 10: return .cancel
     default: return .capture
     }
   }
@@ -146,16 +167,12 @@ final class AreaSelectionSideActionBar: NSView {
     self.onAction = onAction
     super.init(frame: .zero)
     wantsLayer = true
-    layer?.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor
-    layer?.cornerRadius = 26
-    layer?.shadowColor = NSColor.black.cgColor
-    layer?.shadowOpacity = 0.3
-    layer?.shadowRadius = 8
+    layer?.backgroundColor = NSColor.clear.cgColor
 
     stackView.orientation = .vertical
     stackView.alignment = .centerX
-    stackView.spacing = 5
-    stackView.edgeInsets = NSEdgeInsets(top: 6, left: 5, bottom: 6, right: 5)
+    stackView.spacing = 10
+    stackView.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
     stackView.translatesAutoresizingMaskIntoConstraints = false
     addSubview(stackView)
     NSLayoutConstraint.activate([
@@ -165,8 +182,8 @@ final class AreaSelectionSideActionBar: NSView {
       stackView.bottomAnchor.constraint(equalTo: bottomAnchor),
     ])
 
-    addButton("rectangle.dashed", tooltip: "重新选择", action: .capture)
-    addButton("arrow.up.left.and.arrow.down.right", tooltip: "调整选区", action: .capture)
+    addButton("rectangle.dashed", tooltip: "重新选择", action: .newSelection)
+    addButton("arrow.up.left.and.arrow.down.right", tooltip: "调整选区", action: .adjustSelection)
     addButton("text.viewfinder", tooltip: "识别文字", action: .ocr)
     addButton("arrow.clockwise", tooltip: "保存截图", action: .save)
   }
@@ -177,7 +194,7 @@ final class AreaSelectionSideActionBar: NSView {
   }
 
   override var intrinsicContentSize: NSSize {
-    NSSize(width: 58, height: 4 * 38 + 3 * 5 + 12)
+    NSSize(width: 60, height: 4 * 58 + 3 * 10)
   }
 
   private func addButton(_ name: String, tooltip: String, action: AreaSelectionAction) {
@@ -192,9 +209,16 @@ final class AreaSelectionSideActionBar: NSView {
     button.contentTintColor = .white
     button.toolTip = tooltip
     button.setAccessibilityLabel(tooltip)
+    button.wantsLayer = true
+    button.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.84).cgColor
+    button.layer?.cornerRadius = 29
+    button.layer?.shadowColor = NSColor.black.cgColor
+    button.layer?.shadowOpacity = 0.35
+    button.layer?.shadowRadius = 8
+    button.layer?.shadowOffset = .zero
     button.translatesAutoresizingMaskIntoConstraints = false
-    button.widthAnchor.constraint(equalToConstant: 40).isActive = true
-    button.heightAnchor.constraint(equalToConstant: 36).isActive = true
+    button.widthAnchor.constraint(equalToConstant: 60).isActive = true
+    button.heightAnchor.constraint(equalToConstant: 58).isActive = true
     stackView.addArrangedSubview(button)
   }
 
@@ -207,10 +231,13 @@ final class AreaSelectionSideActionBar: NSView {
     case .capture: return 1
     case .copy: return 2
     case .save: return 3
-    case .annotate: return 4
-    case .ocr: return 5
-    case .pin: return 6
-    case .cancel: return 7
+    case .newSelection: return 4
+    case .adjustSelection: return 5
+    case .more: return 6
+    case .annotate: return 7
+    case .ocr: return 8
+    case .pin: return 9
+    case .cancel: return 10
     }
   }
 
@@ -218,10 +245,13 @@ final class AreaSelectionSideActionBar: NSView {
     switch tag {
     case 2: return .copy
     case 3: return .save
-    case 4: return .annotate
-    case 5: return .ocr
-    case 6: return .pin
-    case 7: return .cancel
+    case 4: return .newSelection
+    case 5: return .adjustSelection
+    case 6: return .more
+    case 7: return .annotate
+    case 8: return .ocr
+    case 9: return .pin
+    case 10: return .cancel
     default: return .capture
     }
   }
