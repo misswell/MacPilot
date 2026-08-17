@@ -10,6 +10,20 @@ import Foundation
 
 typealias AreaSelectionResultCompletion = (AreaSelectionResult?) -> Void
 
+/// Actions exposed by the post-selection HUD.  PixPin keeps the selected area
+/// on screen until the user chooses one of these actions; keeping the action
+/// as a value type lets the capture coordinator route copy/annotate/OCR/pin
+/// without coupling the Snapzy overlay to MacPilot's output pipeline.
+nonisolated enum AreaSelectionAction: Equatable, Sendable {
+  case capture
+  case copy
+  case save
+  case annotate
+  case ocr
+  case pin
+  case cancel
+}
+
 nonisolated enum AreaSelectionInteractionMode {
   case manualRegion
   case applicationWindow

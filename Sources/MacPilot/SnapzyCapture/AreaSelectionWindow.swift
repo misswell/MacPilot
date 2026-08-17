@@ -9,6 +9,8 @@ import QuartzCore
 protocol AreaSelectionWindowDelegate: AnyObject {
   func areaSelectionWindow(_ window: AreaSelectionWindow, didSelectRect rect: CGRect)
   func areaSelectionWindow(_ window: AreaSelectionWindow, didSelectWindow target: WindowCaptureTarget)
+  func areaSelectionWindow(_ window: AreaSelectionWindow, didRequestAction action: AreaSelectionAction)
+  func areaSelectionWindow(_ window: AreaSelectionWindow, didChangeSelectionRect rect: CGRect)
   func areaSelectionWindowDidCancel(_ window: AreaSelectionWindow)
   func areaSelectionWindowDidBecomeActive(_ window: AreaSelectionWindow)
   func areaSelectionWindow(_ window: AreaSelectionWindow, didReceiveKeyEvent event: NSEvent) -> Bool
@@ -164,6 +166,14 @@ extension AreaSelectionWindow: AreaSelectionOverlayViewDelegate {
     selectionDelegate?.areaSelectionWindow(self, didSelectWindow: target)
   }
 
+  func overlayView(_: AreaSelectionOverlayView, didRequestAction action: AreaSelectionAction) {
+    selectionDelegate?.areaSelectionWindow(self, didRequestAction: action)
+  }
+
+  func overlayView(_: AreaSelectionOverlayView, didChangeSelectionRect rect: CGRect) {
+    selectionDelegate?.areaSelectionWindow(self, didChangeSelectionRect: convertToScreenCoordinates(rect))
+  }
+
   func overlayViewDidCancel(_: AreaSelectionOverlayView) {
     selectionDelegate?.areaSelectionWindowDidCancel(self)
   }
@@ -215,6 +225,8 @@ extension AreaSelectionWindow: AreaSelectionOverlayViewDelegate {
 protocol AreaSelectionOverlayViewDelegate: AnyObject {
   func overlayView(_ view: AreaSelectionOverlayView, didSelectRect rect: CGRect)
   func overlayView(_ view: AreaSelectionOverlayView, didSelectWindow target: WindowCaptureTarget)
+  func overlayView(_ view: AreaSelectionOverlayView, didRequestAction action: AreaSelectionAction)
+  func overlayView(_ view: AreaSelectionOverlayView, didChangeSelectionRect rect: CGRect)
   func overlayViewDidCancel(_ view: AreaSelectionOverlayView)
   func overlayViewDidRequestDisplayActivation(_ view: AreaSelectionOverlayView)
   /// Signals that the user pressed inside the overlay before the per-display backdrop snapshot
@@ -252,6 +264,12 @@ final class AreaSelectionOverlayView: NSView {
   private var hasVisibleSelectionRect = false
   private var pendingSelectionStartPoint: CGPoint?
   private var currentMousePosition: CGPoint = .zero
+  /// Set after the drag is released.  PixPin keeps this state alive until an
+  /// explicit toolbar action is chosen, instead of immediately tearing down
+  /// the capture overlay.
+  private var finalizedSelectionRect: CGRect?
+  private var finalizedSelectionDrag: FinalizedSelectionDrag?
+  private var isShowingSelectionActions = false
   private var windowSelectionSnapshot: WindowSelectionSnapshot?
   private var hoveredWindowCandidate: WindowSelectionCandidate?
   private var retainedMenuBarPopoverCaptures: [CGWindowID: ImmediateMenuBarPopoverCapture] = [:]
@@ -287,6 +305,7 @@ final class AreaSelectionOverlayView: NSView {
   private var horizontalCrosshairLayer: CAShapeLayer!
   private var verticalCrosshairLayer: CAShapeLayer!
   private var selectionBorderLayer: CAShapeLayer!
+  private var selectionHandleLayers: [CAShapeLayer] = []
   private var crosshairIndicatorLayer: CAShapeLayer!
   /// Drawn replacement for the system cursor in live-passthrough sessions (the legacy
   /// cursor image is drawn at the pointer — pixel-parity with the window-event path's
@@ -304,6 +323,26 @@ final class AreaSelectionOverlayView: NSView {
   private var lastSizeIndicatorTextSize: CGSize = .zero
   private var modeHintBackgroundLayer: CALayer!
   private var modeHintTextLayer: CATextLayer!
+  private var selectionDimensionBackgroundLayer: CALayer!
+  private var selectionDimensionTextLayer: CATextLayer!
+  private var selectionActionBar: AreaSelectionActionBar?
+  private var selectionSideActionBar: AreaSelectionSideActionBar?
+
+  private enum SelectionHandle: CaseIterable {
+    case topLeft
+    case top
+    case topRight
+    case right
+    case bottomRight
+    case bottom
+    case bottomLeft
+    case left
+  }
+
+  private enum FinalizedSelectionDrag {
+    case move(startPoint: CGPoint, originalRect: CGRect)
+    case resize(handle: SelectionHandle, startPoint: CGPoint, originalRect: CGRect)
+  }
 
   // Appearance constants
   private let dimColor = NSColor.black.withAlphaComponent(0.4)
@@ -425,6 +464,21 @@ final class AreaSelectionOverlayView: NSView {
     selectionBorderLayer.actions = disabledActions
     rootLayer.addSublayer(selectionBorderLayer)
 
+    // Eight blue resize handles match the post-selection state used by
+    // PixPin.  They are layer-backed so moving the selection never causes a
+    // full-screen view redraw.
+    selectionHandleLayers = SelectionHandle.allCases.map { _ in
+      let handle = CAShapeLayer()
+      handle.fillColor = NSColor.systemBlue.cgColor
+      handle.strokeColor = NSColor.white.cgColor
+      handle.lineWidth = 2
+      handle.isHidden = true
+      handle.actions = disabledActions
+      handle.zPosition = 20
+      rootLayer.addSublayer(handle)
+      return handle
+    }
+
     // Crosshair indicator at mouse position (like CleanShot X)
     crosshairIndicatorLayer = CAShapeLayer()
     crosshairIndicatorLayer.strokeColor = NSColor.white.cgColor
@@ -486,6 +540,22 @@ final class AreaSelectionOverlayView: NSView {
     modeHintTextLayer = CATextLayer()
     configureOverlayTextLayer(modeHintTextLayer)
     rootLayer.addSublayer(modeHintTextLayer)
+
+    selectionDimensionBackgroundLayer = CALayer()
+    selectionDimensionBackgroundLayer.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor
+    selectionDimensionBackgroundLayer.cornerRadius = 16
+    selectionDimensionBackgroundLayer.actions = disabledActions
+    selectionDimensionBackgroundLayer.isHidden = true
+    selectionDimensionBackgroundLayer.zPosition = 21
+    rootLayer.addSublayer(selectionDimensionBackgroundLayer)
+
+    selectionDimensionTextLayer = CATextLayer()
+    configureOverlayTextLayer(selectionDimensionTextLayer)
+    selectionDimensionTextLayer.font = NSFont.systemFont(ofSize: 15, weight: .semibold) as CTFont
+    selectionDimensionTextLayer.fontSize = 15
+    selectionDimensionTextLayer.alignmentMode = .center
+    selectionDimensionTextLayer.zPosition = 22
+    rootLayer.addSublayer(selectionDimensionTextLayer)
 
     CATransaction.commit()
   }
@@ -589,10 +659,15 @@ final class AreaSelectionOverlayView: NSView {
 
   /// Reset selection state for window pool reuse
   func resetSelection() {
+    selectionEnabled = true
     isSelecting = false
     hasVisibleSelectionRect = false
     pendingSelectionStartPoint = nil
+    finalizedSelectionRect = nil
+    finalizedSelectionDrag = nil
+    isShowingSelectionActions = false
     hoveredWindowCandidate = nil
+    removeSelectionActionBars()
 
     // Initialize crosshair at current mouse position immediately
     if selectionEnabled {
@@ -611,6 +686,12 @@ final class AreaSelectionOverlayView: NSView {
     horizontalCrosshairLayer.isHidden = true
     verticalCrosshairLayer.isHidden = true
     selectionBorderLayer.isHidden = true
+    selectionBorderLayer.strokeColor = selectionBorderColor.cgColor
+    for handle in selectionHandleLayers {
+      handle.isHidden = true
+    }
+    selectionDimensionBackgroundLayer.isHidden = true
+    selectionDimensionTextLayer.isHidden = true
     crosshairIndicatorLayer.isHidden = true
     cursorProxyLayer.isHidden = true
     updateCoordinateIndicator(at: currentMousePosition)
@@ -676,6 +757,196 @@ final class AreaSelectionOverlayView: NSView {
       CATransaction.commit()
     }
     refreshActiveCursor()
+  }
+
+  /// Switches the overlay from the drag state to PixPin's post-selection
+  /// state.  The backdrop and dim mask stay in place, while the crosshair and
+  /// magnifier are replaced by a blue border, resize handles and action bars.
+  func showSelectionResult(
+    screenRect: CGRect,
+    showsActions: Bool,
+    actionHandler: @escaping (AreaSelectionAction) -> Void
+  ) {
+    isSelecting = false
+    selectionEnabled = false
+    isShowingSelectionActions = true
+    finalizedSelectionDrag = nil
+    finalizedSelectionRect = convertToLocalRect(screenRect).intersection(bounds)
+    pendingSelectionStartPoint = nil
+    hideMagnifier()
+    hideSizeIndicator()
+    crosshairIndicatorLayer.isHidden = true
+    horizontalCrosshairLayer.isHidden = true
+    verticalCrosshairLayer.isHidden = true
+    updateFinalizedSelectionVisuals()
+
+    if showsActions {
+      let actionBar = AreaSelectionActionBar(onAction: actionHandler)
+      let sideBar = AreaSelectionSideActionBar(onAction: actionHandler)
+      selectionActionBar = actionBar
+      selectionSideActionBar = sideBar
+      addSubview(actionBar)
+      addSubview(sideBar)
+      positionSelectionActionBars()
+    } else {
+      removeSelectionActionBars()
+    }
+    refreshActiveCursor()
+  }
+
+  /// Updates the selected frame while it is being moved/resized.  This is
+  /// intentionally separate from `showSelectionResult` so the active drag is
+  /// not reset when the coordinator broadcasts the new rect to every display.
+  func updateSelectionResult(screenRect: CGRect) {
+    guard isShowingSelectionActions else { return }
+    finalizedSelectionRect = convertToLocalRect(screenRect).intersection(bounds)
+    updateFinalizedSelectionVisuals()
+    positionSelectionActionBars()
+  }
+
+  func hideSelectionResult() {
+    guard isShowingSelectionActions || finalizedSelectionRect != nil else { return }
+    isShowingSelectionActions = false
+    selectionEnabled = true
+    finalizedSelectionRect = nil
+    finalizedSelectionDrag = nil
+    removeSelectionActionBars()
+    for handle in selectionHandleLayers {
+      handle.isHidden = true
+    }
+    selectionDimensionBackgroundLayer.isHidden = true
+    selectionDimensionTextLayer.isHidden = true
+    selectionBorderLayer.strokeColor = selectionBorderColor.cgColor
+    selectionBorderLayer.isHidden = true
+    dimLayer.mask = nil
+    insideSelectionOverlayLayer.isHidden = true
+    refreshInteractionState()
+    refreshActiveCursor()
+  }
+
+  private func removeSelectionActionBars() {
+    selectionActionBar?.removeFromSuperview()
+    selectionSideActionBar?.removeFromSuperview()
+    selectionActionBar = nil
+    selectionSideActionBar = nil
+  }
+
+  private func updateFinalizedSelectionVisuals() {
+    guard let localRect = finalizedSelectionRect, !localRect.isEmpty else {
+      selectionBorderLayer.isHidden = true
+      for handle in selectionHandleLayers { handle.isHidden = true }
+      selectionDimensionBackgroundLayer.isHidden = true
+      selectionDimensionTextLayer.isHidden = true
+      return
+    }
+
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    hasVisibleSelectionRect = true
+    selectionBorderLayer.strokeColor = NSColor.systemBlue.cgColor
+    selectionBorderLayer.lineWidth = 3
+    selectionBorderLayer.path = CGPath(rect: localRect, transform: nil)
+    selectionBorderLayer.isHidden = false
+    if showSelectionAreaOverlay {
+      updateDimLayerMask(for: localRect)
+      insideSelectionOverlayLayer.isHidden = true
+    } else {
+      dimLayer.mask = nil
+      insideSelectionOverlayLayer.path = CGPath(rect: localRect, transform: nil)
+      updateInsideOverlayAppearance(for: localRect)
+      insideSelectionOverlayLayer.isHidden = false
+    }
+
+    let handleRadius: CGFloat = 10
+    for (index, handleLayer) in selectionHandleLayers.enumerated() {
+      let handle = SelectionHandle.allCases[index]
+      let center = selectionHandleCenter(handle, in: localRect)
+      handleLayer.path = CGPath(
+        ellipseIn: CGRect(
+          x: center.x - handleRadius,
+          y: center.y - handleRadius,
+          width: handleRadius * 2,
+          height: handleRadius * 2
+        ),
+        transform: nil
+      )
+      handleLayer.isHidden = false
+    }
+
+    let text = "\(Int(localRect.width.rounded())) × \(Int(localRect.height.rounded())) px"
+    let attributes: [NSAttributedString.Key: Any] = [
+      .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
+      .foregroundColor: NSColor.white,
+    ]
+    let measured = text.size(withAttributes: attributes)
+    let labelRect = CGRect(
+      x: localRect.midX - (measured.width + 24) / 2,
+      y: localRect.maxY + 12,
+      width: measured.width + 24,
+      height: measured.height + 10
+    )
+    let clampedLabelRect = CGRect(
+      x: max(6, min(bounds.width - labelRect.width - 6, labelRect.minX)),
+      y: min(bounds.height - labelRect.height - 6, max(6, labelRect.minY)),
+      width: labelRect.width,
+      height: labelRect.height
+    )
+    selectionDimensionBackgroundLayer.frame = clampedLabelRect
+    updateTextLayerScales()
+    selectionDimensionTextLayer.frame = clampedLabelRect.insetBy(dx: 12, dy: 5)
+    selectionDimensionTextLayer.string = text
+    selectionDimensionBackgroundLayer.isHidden = false
+    selectionDimensionTextLayer.isHidden = false
+    CATransaction.commit()
+  }
+
+  private func selectionHandleCenter(_ handle: SelectionHandle, in rect: CGRect) -> CGPoint {
+    switch handle {
+    case .topLeft: return CGPoint(x: rect.minX, y: rect.maxY)
+    case .top: return CGPoint(x: rect.midX, y: rect.maxY)
+    case .topRight: return CGPoint(x: rect.maxX, y: rect.maxY)
+    case .right: return CGPoint(x: rect.maxX, y: rect.midY)
+    case .bottomRight: return CGPoint(x: rect.maxX, y: rect.minY)
+    case .bottom: return CGPoint(x: rect.midX, y: rect.minY)
+    case .bottomLeft: return CGPoint(x: rect.minX, y: rect.minY)
+    case .left: return CGPoint(x: rect.minX, y: rect.midY)
+    }
+  }
+
+  private func hitTestSelectionHandle(at point: CGPoint) -> SelectionHandle? {
+    guard let rect = finalizedSelectionRect else { return nil }
+    let radius: CGFloat = 16
+    return SelectionHandle.allCases.first { handle in
+      hypot(
+        point.x - selectionHandleCenter(handle, in: rect).x,
+        point.y - selectionHandleCenter(handle, in: rect).y
+      ) <= radius
+    }
+  }
+
+  private func positionSelectionActionBars() {
+    guard let rect = finalizedSelectionRect else { return }
+    let actionSize = selectionActionBar?.intrinsicContentSize ?? .zero
+    if let selectionActionBar {
+      let gap: CGFloat = 18
+      var y = rect.minY - actionSize.height - gap
+      if y < 8 { y = rect.maxY + gap }
+      let x = max(8, min(bounds.width - actionSize.width - 8, rect.midX - actionSize.width / 2))
+      selectionActionBar.frame = CGRect(x: x, y: y, width: actionSize.width, height: actionSize.height)
+    }
+
+    if let selectionSideActionBar {
+      let sideSize = selectionSideActionBar.intrinsicContentSize
+      let gap: CGFloat = 20
+      let x: CGFloat
+      if rect.maxX + gap + sideSize.width <= bounds.maxX - 8 {
+        x = rect.maxX + gap
+      } else {
+        x = max(8, rect.minX - gap - sideSize.width)
+      }
+      let y = max(8, min(bounds.height - sideSize.height - 8, rect.midY - sideSize.height / 2))
+      selectionSideActionBar.frame = CGRect(x: x, y: y, width: sideSize.width, height: sideSize.height)
+    }
   }
 
   func activatePendingSelectionIfNeeded() {
@@ -1157,6 +1428,10 @@ final class AreaSelectionOverlayView: NSView {
     updateRetainedMenuBarPopoverLayers()
     dimLayer.frame = bounds
     refreshCoordinateIndicatorAfterPassiveUpdate()
+    if isShowingSelectionActions {
+      updateFinalizedSelectionVisuals()
+      positionSelectionActionBars()
+    }
     CATransaction.commit()
 
     // Rebuild tracking areas for new bounds
@@ -1214,6 +1489,10 @@ final class AreaSelectionOverlayView: NSView {
     dimLayer.frame = bounds
     insideSelectionOverlayLayer.frame = bounds
     refreshCoordinateIndicatorAfterPassiveUpdate()
+    if isShowingSelectionActions {
+      updateFinalizedSelectionVisuals()
+      positionSelectionActionBars()
+    }
     CATransaction.commit()
     updateModeHint()
   }
@@ -1315,6 +1594,7 @@ final class AreaSelectionOverlayView: NSView {
     let scale = screenScaleFactor
     sizeIndicatorTextLayer.contentsScale = scale
     modeHintTextLayer.contentsScale = scale
+    selectionDimensionTextLayer.contentsScale = scale
   }
 
   func hideSizeIndicator() {
@@ -1876,6 +2156,25 @@ final class AreaSelectionOverlayView: NSView {
       )
     }
     delegate?.overlayViewDidRequestDisplayActivation(self)
+    if isShowingSelectionActions {
+      if let handle = hitTestSelectionHandle(at: point), let finalizedSelectionRect {
+        finalizedSelectionDrag = .resize(
+          handle: handle,
+          startPoint: point,
+          originalRect: finalizedSelectionRect
+        )
+      } else if let finalizedSelectionRect, finalizedSelectionRect.contains(point) {
+        finalizedSelectionDrag = .move(startPoint: point, originalRect: finalizedSelectionRect)
+      } else {
+        // A drag that starts outside the current frame begins a fresh area
+        // selection, matching PixPin's quick reselect gesture.
+        hideSelectionResult()
+        isSelecting = true
+        selectionEnabled = true
+        delegate?.overlayView(self, manualSelectionBeganAt: point)
+      }
+      return
+    }
     guard selectionEnabled else {
       if interactionMode == .manualRegion {
         pendingSelectionStartPoint = point
@@ -1900,6 +2199,25 @@ final class AreaSelectionOverlayView: NSView {
   private func handlePrimaryMouseDragged(at point: CGPoint) {
     currentMousePosition = point
     delegate?.overlayViewDidRequestDisplayActivation(self)
+    if isShowingSelectionActions {
+      guard let drag = finalizedSelectionDrag else { return }
+      let updatedRect: CGRect
+      switch drag {
+      case .move(let startPoint, let originalRect):
+        updatedRect = originalRect.offsetBy(
+          dx: point.x - startPoint.x,
+          dy: point.y - startPoint.y
+        )
+      case .resize(let handle, let startPoint, let originalRect):
+        updatedRect = resizedSelectionRect(
+          handle: handle,
+          originalRect: originalRect,
+          delta: CGPoint(x: point.x - startPoint.x, y: point.y - startPoint.y)
+        )
+      }
+      delegate?.overlayView(self, didChangeSelectionRect: updatedRect)
+      return
+    }
     guard selectionEnabled else {
       if pendingSelectionStartPoint != nil {
         currentMousePosition = point
@@ -1920,6 +2238,10 @@ final class AreaSelectionOverlayView: NSView {
   private func handlePrimaryMouseUp(at point: CGPoint) {
     currentMousePosition = point
     delegate?.overlayViewDidRequestDisplayActivation(self)
+    if isShowingSelectionActions {
+      finalizedSelectionDrag = nil
+      return
+    }
     guard selectionEnabled else {
       pendingSelectionStartPoint = nil
       return
@@ -1943,6 +2265,9 @@ final class AreaSelectionOverlayView: NSView {
     currentMousePosition = point
     delegate?.overlayViewDidRequestDisplayActivation(self)
     applyActiveCursor()
+    if isShowingSelectionActions {
+      return
+    }
     updateCoordinateIndicator(at: point)
     updateCursorProxy()
     guard selectionEnabled else { return }
@@ -1960,6 +2285,7 @@ final class AreaSelectionOverlayView: NSView {
   private var activeCursor: NSCursor {
     switch interactionMode {
     case .manualRegion:
+      guard selectionEnabled else { return .arrow }
       return showSelectionAreaOverlay ? NSCursor.vectorScreenshotCrosshairLight : NSCursor
         .vectorScreenshotCrosshairHighContrast
     case .applicationWindow:
@@ -1970,6 +2296,55 @@ final class AreaSelectionOverlayView: NSView {
 
   var isManualSelectionInProgress: Bool {
     interactionMode == .manualRegion && isSelecting
+  }
+
+  private func resizedSelectionRect(
+    handle: SelectionHandle,
+    originalRect: CGRect,
+    delta: CGPoint
+  ) -> CGRect {
+    var minX = originalRect.minX
+    var maxX = originalRect.maxX
+    var minY = originalRect.minY
+    var maxY = originalRect.maxY
+
+    switch handle {
+    case .topLeft:
+      minX += delta.x
+      maxY += delta.y
+    case .top:
+      maxY += delta.y
+    case .topRight:
+      maxX += delta.x
+      maxY += delta.y
+    case .right:
+      maxX += delta.x
+    case .bottomRight:
+      maxX += delta.x
+      minY += delta.y
+    case .bottom:
+      minY += delta.y
+    case .bottomLeft:
+      minX += delta.x
+      minY += delta.y
+    case .left:
+      minX += delta.x
+    }
+
+    let minimumSize: CGFloat = 4
+    switch handle {
+    case .topLeft, .bottomLeft, .left:
+      minX = min(minX, maxX - minimumSize)
+    default:
+      maxX = max(maxX, minX + minimumSize)
+    }
+    switch handle {
+    case .bottomLeft, .bottom, .bottomRight:
+      minY = min(minY, maxY - minimumSize)
+    default:
+      maxY = max(maxY, minY + minimumSize)
+    }
+    return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY).standardized
   }
 }
 

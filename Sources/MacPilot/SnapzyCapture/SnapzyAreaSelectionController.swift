@@ -3,8 +3,9 @@
 //  MacPilot adapter for Snapzy's AreaSelectionWindow/AreaSelectionOverlayView.
 //
 //  The window and overlay implementation is migrated from Snapzy unchanged;
-//  this small coordinator only connects its delegate callbacks to MacPilot's
-//  screenshot completion closure.
+//  this small coordinator connects selection callbacks to MacPilot's capture
+//  pipeline and keeps the PixPin-style post-selection HUD alive until an
+//  explicit action is chosen.
 //
 
 import AppKit
@@ -16,6 +17,10 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
 
     private var windows: [AreaSelectionWindow] = []
     private var completion: AreaSelectionResultCompletion?
+    private var selectionPreview: ((AreaSelectionResult) -> Void)?
+    private var actionHandler: ((AreaSelectionResult, AreaSelectionAction) -> Void)?
+    private var selectedResult: AreaSelectionResult?
+    private weak var selectedWindow: AreaSelectionWindow?
     private var selectionMode: SelectionMode = .screenshot
     private var interactionMode: AreaSelectionInteractionMode = .manualRegion
     private var manualStart: CGPoint?
@@ -35,6 +40,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         applicationConfiguration: AreaSelectionApplicationConfiguration? = nil,
         initialInteractionMode: AreaSelectionInteractionMode = .manualRegion,
         sessionID requestedSessionID: UUID? = nil,
+        selectionPreview: ((AreaSelectionResult) -> Void)? = nil,
+        actionHandler: ((AreaSelectionResult, AreaSelectionAction) -> Void)? = nil,
         completion: @escaping AreaSelectionResultCompletion
     ) -> UUID {
         cancelSelection()
@@ -42,6 +49,10 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         selectionMode = mode
         interactionMode = initialInteractionMode
         self.completion = completion
+        self.selectionPreview = selectionPreview
+        self.actionHandler = actionHandler
+        selectedResult = nil
+        selectedWindow = nil
         manualStart = nil
         manualRect = nil
         sessionID = requestedSessionID ?? UUID()
@@ -108,10 +119,39 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         let oldWindows = windows
         windows.removeAll(keepingCapacity: false)
         completion = nil
+        selectionPreview = nil
+        actionHandler = nil
+        selectedResult = nil
+        selectedWindow = nil
         manualStart = nil
         manualRect = nil
         sessionID = UUID()
         for window in oldWindows {
+            window.overlayView.clearBackdrop()
+            window.contentView = nil
+            window.orderOut(nil)
+            window.close()
+        }
+        NSCursor.arrow.set()
+    }
+
+    /// Closes a post-selection HUD after an action has been handed to the
+    /// capture coordinator.  Unlike `cancelSelection`, this does not invoke
+    /// the completion callback a second time.
+    func dismissSelection() {
+        guard !windows.isEmpty else { return }
+        let oldWindows = windows
+        windows.removeAll(keepingCapacity: false)
+        completion = nil
+        selectionPreview = nil
+        actionHandler = nil
+        selectedResult = nil
+        selectedWindow = nil
+        manualStart = nil
+        manualRect = nil
+        sessionID = UUID()
+        for window in oldWindows {
+            window.overlayView.hideSelectionResult()
             window.overlayView.clearBackdrop()
             window.contentView = nil
             window.orderOut(nil)
@@ -127,6 +167,10 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         }
         let currentWindows = windows
         self.completion = nil
+        selectionPreview = nil
+        actionHandler = nil
+        selectedResult = nil
+        selectedWindow = nil
         windows.removeAll(keepingCapacity: false)
         manualStart = nil
         manualRect = nil
@@ -158,14 +202,70 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         )
     }
 
+    private func presentSelection(_ result: AreaSelectionResult, in window: AreaSelectionWindow) {
+        guard let selectionPreview else {
+            complete(result)
+            return
+        }
+
+        selectedResult = result
+        selectedWindow = window
+        for candidate in windows {
+            candidate.overlayView.showSelectionResult(
+                screenRect: result.rect,
+                showsActions: candidate === window,
+                actionHandler: { [weak self, weak candidate] action in
+                    guard let self, let candidate else { return }
+                    self.areaSelectionWindow(candidate, didRequestAction: action)
+                }
+            )
+        }
+        selectionPreview(result)
+    }
+
     // MARK: - AreaSelectionWindowDelegate
 
     func areaSelectionWindow(_ window: AreaSelectionWindow, didSelectRect rect: CGRect) {
-        complete(result(for: .rect(rect), in: window))
+        guard let result = result(for: .rect(rect), in: window) else {
+            complete(nil)
+            return
+        }
+        presentSelection(result, in: window)
     }
 
     func areaSelectionWindow(_ window: AreaSelectionWindow, didSelectWindow target: WindowCaptureTarget) {
-        complete(result(for: .window(target), in: window))
+        guard let result = result(for: .window(target), in: window) else {
+            complete(nil)
+            return
+        }
+        presentSelection(result, in: window)
+    }
+
+    func areaSelectionWindow(_ window: AreaSelectionWindow, didRequestAction action: AreaSelectionAction) {
+        guard let selectedResult else {
+            if action == .cancel { complete(nil) }
+            return
+        }
+        if action == .cancel {
+            complete(nil)
+            return
+        }
+        guard let actionHandler else {
+            complete(selectedResult)
+            return
+        }
+        actionHandler(selectedResult, action)
+    }
+
+    func areaSelectionWindow(_ window: AreaSelectionWindow, didChangeSelectionRect rect: CGRect) {
+        guard selectedWindow === window,
+              selectedResult?.target.windowTarget == nil,
+              let updated = result(for: .rect(rect), in: window) else { return }
+        selectedResult = updated
+        for candidate in windows {
+            candidate.overlayView.updateSelectionResult(screenRect: updated.rect)
+        }
+        selectionPreview?(updated)
     }
 
     func areaSelectionWindowDidCancel(_: AreaSelectionWindow) {
@@ -178,7 +278,25 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
 
     func areaSelectionWindow(_ window: AreaSelectionWindow, didReceiveKeyEvent event: NSEvent) -> Bool {
         if event.keyCode == 53 {
-            cancelSelection()
+            // Notify the capture coordinator so it can resume Quick Access
+            // and release the frozen display session.  `cancelSelection()`
+            // is intentionally silent because it is also used while starting
+            // a replacement session.
+            complete(nil)
+            return true
+        }
+        guard selectedResult != nil else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if event.keyCode == 8, modifiers == [.command] {
+            areaSelectionWindow(window, didRequestAction: .copy)
+            return true
+        }
+        if event.keyCode == 1, modifiers == [.command] {
+            areaSelectionWindow(window, didRequestAction: .save)
+            return true
+        }
+        if event.keyCode == 36, modifiers.isEmpty {
+            areaSelectionWindow(window, didRequestAction: .capture)
             return true
         }
         return false
@@ -223,6 +341,10 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             complete(nil)
             return
         }
-        complete(result(for: .rect(rect), in: window))
+        guard let result = result(for: .rect(rect), in: window) else {
+            complete(nil)
+            return
+        }
+        presentSelection(result, in: window)
     }
 }

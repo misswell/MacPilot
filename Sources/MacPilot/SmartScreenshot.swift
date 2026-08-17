@@ -1039,6 +1039,12 @@ final class SmartScreenshotController {
         requestedMode: SmartCaptureSelectionMode,
         sessionID: UUID
     )?
+    private var pendingSnapzyAction: (
+        result: AreaSelectionResult,
+        action: AreaSelectionAction,
+        requestedMode: SmartCaptureSelectionMode,
+        sessionID: UUID
+    )?
 
     init(
         language: @escaping () -> AppLanguage,
@@ -1710,6 +1716,7 @@ final class SmartScreenshotController {
         snapzySessionID = nil
         snapzyFrozenSession = nil
         pendingSnapzyResult = nil
+        pendingSnapzyAction = nil
         pendingTargetUpdate?.cancel()
         pendingTargetUpdate = nil
         pendingTargetFollowUp?.cancel()
@@ -1976,12 +1983,32 @@ final class SmartScreenshotController {
                 : nil)
 
         let sessionID = UUID()
+        let presentsPostSelectionActions = mode != .recordingArea && mode != .recordingApplication
         SnapzyAreaSelectionController.shared.startSelection(
             mode: snapzyMode,
             backdrops: [:],
             applicationConfiguration: applicationConfiguration,
             initialInteractionMode: interactionMode,
-            sessionID: sessionID
+            sessionID: sessionID,
+            selectionPreview: presentsPostSelectionActions
+                ? { [weak self] result in
+                    self?.handleSnapzySelectionPreview(
+                        result,
+                        requestedMode: mode,
+                        sessionID: sessionID
+                    )
+                }
+                : nil,
+            actionHandler: presentsPostSelectionActions
+                ? { [weak self] result, action in
+                    self?.handleSnapzySelectionAction(
+                        result,
+                        action: action,
+                        requestedMode: mode,
+                        sessionID: sessionID
+                    )
+                }
+                : nil
         ) { [weak self] result in
             self?.handleSnapzySelectionResult(
                 result,
@@ -2008,12 +2035,14 @@ final class SmartScreenshotController {
                     frozenSession.backdrops,
                     for: sessionID
                 )
-                if let pending = self.pendingSnapzyResult {
+                if let pendingAction = self.pendingSnapzyAction {
+                    self.pendingSnapzyAction = nil
                     self.pendingSnapzyResult = nil
-                    self.resetSnapzyPreparationState()
-                    self.finishSnapzySelection(
-                        pending.result,
-                        requestedMode: pending.requestedMode,
+                    self.finishSnapzySelectionAction(
+                        pendingAction.result,
+                        action: pendingAction.action,
+                        requestedMode: pendingAction.requestedMode,
+                        sessionID: pendingAction.sessionID,
                         frozenSession: frozenSession
                     )
                 }
@@ -2053,12 +2082,100 @@ final class SmartScreenshotController {
         )
     }
 
+    private func handleSnapzySelectionPreview(
+        _ result: AreaSelectionResult,
+        requestedMode: SmartCaptureSelectionMode,
+        sessionID: UUID
+    ) {
+        guard snapzySessionID == sessionID else { return }
+        pendingSnapzyResult = (result, requestedMode, sessionID)
+        // If the user resized the selection while an action was waiting for
+        // the frozen backdrop, always use the latest frame.
+        if let pendingAction = pendingSnapzyAction {
+            self.pendingSnapzyAction = (
+                result,
+                pendingAction.action,
+                requestedMode,
+                sessionID
+            )
+        }
+    }
+
+    private func handleSnapzySelectionAction(
+        _ result: AreaSelectionResult,
+        action: AreaSelectionAction,
+        requestedMode: SmartCaptureSelectionMode,
+        sessionID: UUID
+    ) {
+        guard snapzySessionID == sessionID else { return }
+        guard action != .cancel else {
+            SnapzyAreaSelectionController.shared.cancelSelection()
+            return
+        }
+        guard let frozenSession = snapzyFrozenSession else {
+            pendingSnapzyAction = (result, action, requestedMode, sessionID)
+            return
+        }
+        finishSnapzySelectionAction(
+            result,
+            action: action,
+            requestedMode: requestedMode,
+            sessionID: sessionID,
+            frozenSession: frozenSession
+        )
+    }
+
     private func resetSnapzyPreparationState() {
         snapzyPreparationTask?.cancel()
         snapzyPreparationTask = nil
         snapzySessionID = nil
         snapzyFrozenSession = nil
         pendingSnapzyResult = nil
+        pendingSnapzyAction = nil
+    }
+
+    private func finishSnapzySelectionAction(
+        _ result: AreaSelectionResult,
+        action: AreaSelectionAction,
+        requestedMode: SmartCaptureSelectionMode,
+        sessionID: UUID,
+        frozenSession: FrozenAreaCaptureSession
+    ) {
+        guard snapzySessionID == sessionID else { return }
+        SnapzyAreaSelectionController.shared.dismissSelection()
+        resetSnapzyPreparationState()
+        QuickAccessManager.shared.resumeAfterCapture()
+
+        Task { [weak self] in
+            do {
+                let crop: FrozenAreaCropResult
+                if result.spansMultipleDisplays {
+                    crop = try frozenSession.cropCompositeImage(for: result)
+                } else {
+                    crop = try frozenSession.cropImage(for: result)
+                }
+                guard let self else { return }
+                if requestedMode == .manualArea {
+                    self.onSelectionRect(result.rect)
+                }
+                switch action {
+                case .capture, .save:
+                    self.onCapture(crop.image)
+                case .copy:
+                    SmartCaptureClipboard.copy(image: crop.image)
+                case .annotate:
+                    self.onAreaAnnotateCapture(crop.image)
+                case .ocr:
+                    self.onOCRCapture(crop.image)
+                case .pin:
+                    self.pin(image: crop.image)
+                case .cancel:
+                    break
+                }
+            } catch {
+                self?.onError(error)
+            }
+        }
     }
 
     private func finishSnapzySelection(

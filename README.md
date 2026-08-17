@@ -47,6 +47,7 @@ The **Screenshot** sidebar adds Snapzy-style capture and quick actions to MacPil
 
 - Press the global shortcut (default `F1`) to enter smart-element capture. The selector highlights the element under the pointer after a short debounce, and keeps the highlight stable while moving between elements.
 - Area, application window, fullscreen, current window, area + annotate, OCR, scrolling screenshot, and object-cutout entry points are also available from the Screenshot settings page.
+- Area and application-window selections remain in a PixPin-style editing state with eight resize handles, a size badge, and a floating toolbar; move or resize the selection before copying, saving, annotating, running OCR, pinning, or cancelling.
 - After capture, MacPilot can copy the image to the clipboard, show a quick-access preview card, pin it on screen, run OCR, open the annotation editor, or reveal the file in Finder.
 - Screenshot shortcuts are configurable in Settings and can be edited per entry point.
 
