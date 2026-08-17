@@ -3260,32 +3260,6 @@ struct MenuBarView: View {
         Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
         Divider()
         Button(model.t("scSmartCaptureNow")) { deferCaptureAction { model.screenCapture.startSmartCapture() } }
-        Button(model.t("scAreaCaptureNow")) { deferCaptureAction { model.screenCapture.startAreaCapture() } }
-        Button(model.t("scApplicationWindowCaptureNow")) { deferCaptureAction { model.screenCapture.startApplicationWindowCapture() } }
-        Button(model.t("scFullscreenCaptureNow")) { deferCaptureAction { model.screenCapture.captureFullscreen() } }
-        Button(model.t("scActiveWindowCaptureNow")) { deferCaptureAction { model.screenCapture.captureActiveWindow() } }
-        Button(model.t("scAreaAnnotateNow")) { deferCaptureAction { model.screenCapture.startAreaAnnotateCapture() } }
-        Button(model.t("scOCRCaptureNow")) { deferCaptureAction { model.screenCapture.startOCRCapture() } }
-        Button(model.t("scScrollingCaptureNow")) { deferCaptureAction { model.screenCapture.startScrollingCapture() } }
-        Button(model.t("scObjectCutoutNow")) { deferCaptureAction { model.screenCapture.startObjectCutoutCapture() } }
-        if model.screenRecording.state == .recording || model.screenRecording.state == .paused || model.screenRecording.state == .stopping {
-            if model.screenRecording.state == .recording {
-                Button(model.t("scRecordingPause")) { model.screenRecording.pause() }
-            } else if model.screenRecording.state == .paused {
-                Button(model.t("scRecordingResume")) { model.screenRecording.resume() }
-            }
-            Button(model.t("scRecordingStop")) { model.screenRecording.stop() }
-                .disabled(model.screenRecording.state == .stopping)
-        } else {
-            Button(model.t("scRecordingStart")) { deferCaptureAction { model.screenRecording.start() } }
-                .disabled(model.screenRecording.state == .preparing)
-        }
-        Button(model.t("scEditShortcuts")) {
-            model.requestedSection = .capture
-            model.requestedCaptureShortcutEditor = true
-            showMainWindow()
-        }
-        Button(model.t("screenCapture")) { model.requestedSection = .capture; showMainWindow() }
         Divider()
         UpdateMenuItems(updater: model.updater) {
             model.requestedSection = .settings
