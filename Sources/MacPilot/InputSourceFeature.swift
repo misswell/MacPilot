@@ -775,6 +775,7 @@ final class InputSourceModel: ObservableObject {
     func activateFromConfiguration() {
         guard !isActive else { return }
         isActive = true
+        guard settings.isEnabled else { return }
         indicatorController = MacPilotInputSourceIndicatorController()
         originalFunctionKeyMode = MacPilotFunctionKeyManager.currentMode()
         refreshSources()
@@ -793,18 +794,28 @@ final class InputSourceModel: ObservableObject {
         guard settings.isEnabled != enabled else { return }
         settings.isEnabled = enabled
         if enabled {
+            if indicatorController == nil {
+                indicatorController = MacPilotInputSourceIndicatorController()
+            }
+            if originalFunctionKeyMode == nil {
+                originalFunctionKeyMode = MacPilotFunctionKeyManager.currentMode()
+            }
+            installObservers()
             refreshSources()
             refreshEventTap()
             refreshBrowserPolling()
             evaluateCurrentApplication()
         } else {
+            removeObservers()
             stopBrowserPolling()
             removeEventTap()
             indicatorController?.hide()
+            indicatorController = nil
             activeApplicationName = nil
             activeRuleIdentifier = nil
             activeBrowserRuleIdentifier = nil
             restoreOriginalFunctionKeyMode()
+            originalFunctionKeyMode = nil
         }
         persist?()
     }
@@ -1023,6 +1034,14 @@ final class InputSourceModel: ObservableObject {
         observers.append(DistributedNotificationCenter.default().addObserver(forName: inputSourceNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.handleSelectedInputSourceChanged() }
         })
+    }
+
+    private func removeObservers() {
+        for observer in observers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            DistributedNotificationCenter.default().removeObserver(observer)
+        }
+        observers.removeAll(keepingCapacity: false)
     }
 
     private func refreshBrowserPolling() {

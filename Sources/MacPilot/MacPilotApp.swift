@@ -3233,31 +3233,33 @@ struct MenuBarView: View {
         Divider()
         Toggle(model.t("startAtLogin"), isOn: Binding(get: { model.launchesAtLogin }, set: { model.setLaunchAtLogin($0) }))
         Button(model.t("showApp"), action: showMainWindow)
-        Divider()
-        Toggle(model.ble.settings.isEnabled ? model.t("bleEnabledStatus") : model.t("bleDisabledStatus"),
-               isOn: Binding(get: { model.ble.settings.isEnabled }, set: { enabled in
-                   if enabled { model.requestWindowControlAccess(presentRecoveryGuidance: false) }
-                   model.ble.setEnabled(enabled)
-               }))
-        Button(model.t("bleLockNow")) { model.ble.lockNow() }
-            .disabled(!model.ble.settings.isEnabled)
-        if let name = model.ble.settings.monitoredDeviceName, !name.isEmpty {
-            Button(name) { model.requestedSection = .ble; showMainWindow() }
-        } else {
-            Button(model.t("bleSelectDevice")) { model.requestedSection = .ble; showMainWindow() }
+        if model.ble.settings.isEnabled {
+            Divider()
+            Toggle(model.t("bleEnabledStatus"),
+                   isOn: Binding(get: { model.ble.settings.isEnabled }, set: { model.ble.setEnabled($0) }))
+            Button(model.t("bleLockNow")) { model.ble.lockNow() }
+            if let name = model.ble.settings.monitoredDeviceName, !name.isEmpty {
+                Button(name) { model.requestedSection = .ble; showMainWindow() }
+            } else {
+                Button(model.t("bleSelectDevice")) { model.requestedSection = .ble; showMainWindow() }
+            }
         }
-        Divider()
-        Toggle(inputSources.settings.isEnabled ? model.t("inputSourcesEnabledStatus") : model.t("inputSourcesDisabledStatus"),
-               isOn: Binding(get: { inputSources.settings.isEnabled }, set: { inputSources.setEnabled($0) }))
-        Button(model.t("inputSourcesCycleNow")) { inputSources.cycleInputSource() }
-            .disabled(!inputSources.settings.isEnabled || inputSources.availableSources.count < 2)
-        Button(model.t("inputSources")) { model.requestedSection = .inputSources; showMainWindow() }
-        Divider()
-        Toggle(windowSwitcher.settings.isEnabled ? model.t("windowSwitcherEnabledStatus") : model.t("windowSwitcherDisabledStatus"),
-               isOn: Binding(get: { windowSwitcher.settings.isEnabled }, set: { windowSwitcher.setEnabled($0) }))
-        Button(model.t("windowSwitcherTestNow")) { windowSwitcher.showSwitcherNow() }
-            .disabled(!windowSwitcher.settings.isEnabled || !windowSwitcher.hasAccessibilityPermission)
-        Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
+        if inputSources.settings.isEnabled {
+            Divider()
+            Toggle(model.t("inputSourcesEnabledStatus"),
+                   isOn: Binding(get: { inputSources.settings.isEnabled }, set: { inputSources.setEnabled($0) }))
+            Button(model.t("inputSourcesCycleNow")) { inputSources.cycleInputSource() }
+                .disabled(inputSources.availableSources.count < 2)
+            Button(model.t("inputSources")) { model.requestedSection = .inputSources; showMainWindow() }
+        }
+        if windowSwitcher.settings.isEnabled {
+            Divider()
+            Toggle(model.t("windowSwitcherEnabledStatus"),
+                   isOn: Binding(get: { windowSwitcher.settings.isEnabled }, set: { windowSwitcher.setEnabled($0) }))
+            Button(model.t("windowSwitcherTestNow")) { windowSwitcher.showSwitcherNow() }
+                .disabled(!windowSwitcher.hasAccessibilityPermission)
+            Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
+        }
         if model.screenCapture.settings.screenshotEnabled {
             Divider()
             Button(model.t("scSmartCaptureNow")) { deferCaptureAction { model.screenCapture.startSmartCapture() } }
