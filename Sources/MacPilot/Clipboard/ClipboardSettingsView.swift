@@ -32,63 +32,60 @@ struct ClipboardSettingsView: View {
                         Label(model.t("clipboardNotConfiguredHint"), systemImage: "info.circle")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
-
                     if clipboard.settings.isEnabled {
                         permissionStatus
                     }
-                }
 
-                if clipboard.settings.isEnabled {
-                    SettingsCard {
-                        Text(model.t("clipboardHotkey"))
-                            .font(.headline)
-                        ClipboardHotkeyRecorder(
-                            binding: Binding(
-                                get: { clipboard.settings.hotkey },
-                                set: { clipboard.setHotkey($0) }
-                            )
+                    Divider()
+
+                    Text(model.t("clipboardHotkey"))
+                        .font(.headline)
+                    ClipboardHotkeyRecorder(
+                        binding: Binding(
+                            get: { clipboard.settings.hotkey },
+                            set: { clipboard.setHotkey($0) }
                         )
+                    )
 
-                        Divider()
+                    Divider()
 
-                        Picker(model.t("clipboardStorageLimit"), selection: Binding(
-                            get: { clipboard.settings.storageLimit },
-                            set: { clipboard.setStorageLimit($0) }
-                        )) {
-                            ForEach(ClipboardSettings.storageLimitOptions, id: \.self) { value in
-                                Text("\(value)").tag(value)
-                            }
+                    Picker(model.t("clipboardStorageLimit"), selection: Binding(
+                        get: { clipboard.settings.storageLimit },
+                        set: { clipboard.setStorageLimit($0) }
+                    )) {
+                        ForEach(ClipboardSettings.storageLimitOptions, id: \.self) { value in
+                            Text("\(value)").tag(value)
                         }
-                        .pickerStyle(.segmented)
+                    }
+                    .pickerStyle(.segmented)
 
-                        Divider()
+                    Divider()
 
-                        Toggle(model.t("clipboardPasteByDefault"), isOn: Binding(
-                            get: { clipboard.settings.pasteByDefault },
-                            set: { clipboard.setPasteByDefault($0) }
-                        ))
-                        Toggle(model.t("clipboardShowSearch"), isOn: Binding(
-                            get: { clipboard.settings.showSearch },
-                            set: { clipboard.setShowSearch($0) }
-                        ))
-                        Toggle(model.t("clipboardClearSystemClipboard"), isOn: Binding(
-                            get: { clipboard.settings.clearSystemClipboardOnClear },
-                            set: { clipboard.setClearSystemClipboardOnClear($0) }
-                        ))
-                        Toggle(model.t("clipboardPinsAtTop"), isOn: Binding(
-                            get: { clipboard.settings.pinsAtTop },
-                            set: { clipboard.setPinsAtTop($0) }
-                        ))
+                    Toggle(model.t("clipboardPasteByDefault"), isOn: Binding(
+                        get: { clipboard.settings.pasteByDefault },
+                        set: { clipboard.setPasteByDefault($0) }
+                    ))
+                    Toggle(model.t("clipboardShowSearch"), isOn: Binding(
+                        get: { clipboard.settings.showSearch },
+                        set: { clipboard.setShowSearch($0) }
+                    ))
+                    Toggle(model.t("clipboardClearSystemClipboard"), isOn: Binding(
+                        get: { clipboard.settings.clearSystemClipboardOnClear },
+                        set: { clipboard.setClearSystemClipboardOnClear($0) }
+                    ))
+                    Toggle(model.t("clipboardPinsAtTop"), isOn: Binding(
+                        get: { clipboard.settings.pinsAtTop },
+                        set: { clipboard.setPinsAtTop($0) }
+                    ))
 
-                        Divider()
+                    Divider()
 
-                        HStack {
-                            Button(model.t("clipboardClearHistory")) {
-                                clipboard.clearHistory()
-                            }
-                            Button(model.t("clipboardClearAllHistory"), role: .destructive) {
-                                showClearAllConfirmation = true
-                            }
+                    HStack {
+                        Button(model.t("clipboardClearHistory")) {
+                            clipboard.clearHistory()
+                        }
+                        Button(model.t("clipboardClearAllHistory"), role: .destructive) {
+                            showClearAllConfirmation = true
                         }
                     }
                 }
