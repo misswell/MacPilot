@@ -6,6 +6,18 @@ import Testing
 @testable import MacPilot
 
 struct ScreenCaptureTests {
+    @MainActor
+    private func waitUntil(
+        timeout: TimeInterval = 2.0,
+        _ condition: () -> Bool
+    ) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
 
     @Test @MainActor func smartSelectionPresentsSnapzyOverlayBeforeInitialAXQueryCompletes() async throws {
         _ = NSApplication.shared
@@ -93,7 +105,9 @@ struct ScreenCaptureTests {
         defer { controller.stop() }
 
         controller.start()
-        try await Task.sleep(for: .milliseconds(150))
+        await waitUntil {
+            attempts >= 2 && controller.testShortcutRegistrationAttemptCount == 2
+        }
 
         #expect(attempts >= 2)
         #expect(controller.testShortcutRegistrationAttemptCount == 2)

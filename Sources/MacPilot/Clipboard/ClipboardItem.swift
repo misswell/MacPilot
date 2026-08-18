@@ -13,7 +13,7 @@ import AppKit
 import Foundation
 
 /// 剪贴板历史条目中的一段内容（一种 pasteboard type 及其原始数据）。
-struct ClipboardContent: Codable, Hashable {
+struct ClipboardContent: Codable, Hashable, Sendable {
     var type: String
     var value: Data?
 
@@ -24,7 +24,7 @@ struct ClipboardContent: Codable, Hashable {
 }
 
 /// 一条剪贴板历史记录。使用值语义，便于 SwiftUI 观察与 Codable 持久化。
-struct ClipboardItem: Codable, Hashable, Identifiable {
+struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
     let id: UUID
     var application: String?
     var firstCopiedAt: Date

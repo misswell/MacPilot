@@ -23,6 +23,7 @@ final class ClipboardPanel: NSPanel {
     var isSearchFocused = false
 
     private var keyMonitor: Any?
+    private var pendingResignClose: DispatchWorkItem?
     private let contentHostingView: NSHostingView<ClipboardPanelContent>
 
     init(
@@ -53,17 +54,22 @@ final class ClipboardPanel: NSPanel {
     }
 
     func open() {
+        pendingResignClose?.cancel()
+        pendingResignClose = nil
+        isPresented = true
         positionOnScreen()
         orderFrontRegardless()
         makeKey()
-        isPresented = true
         installKeyMonitor()
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isPresented else { return }
             self.makeFirstResponder(self.contentHostingView)
         }
     }
 
     override func close() {
+        pendingResignClose?.cancel()
+        pendingResignClose = nil
         removeKeyMonitor()
         isPresented = false
         super.close()
@@ -72,7 +78,18 @@ final class ClipboardPanel: NSPanel {
 
     override func resignKey() {
         super.resignKey()
-        close()
+        guard isPresented else { return }
+
+        // Ending an NSMenu tracking loop can briefly make the panel resign
+        // before AppKit finishes promoting it to the key window. Closing
+        // synchronously here makes the menu action appear to do nothing.
+        pendingResignClose?.cancel()
+        let closeWorkItem = DispatchWorkItem { [weak self] in
+            guard let self, self.isPresented, !self.isKeyWindow else { return }
+            self.close()
+        }
+        pendingResignClose = closeWorkItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: closeWorkItem)
     }
 
     override var canBecomeKey: Bool { true }

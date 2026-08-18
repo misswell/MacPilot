@@ -3410,7 +3410,9 @@ struct MenuBarView: View {
             Divider()
             Toggle(model.t("clipboardEnabledStatus"),
                    isOn: Binding(get: { clipboard.settings.isEnabled }, set: { clipboard.setEnabled($0) }))
-            Button(model.t("clipboardOpenNow")) { clipboard.openPanel() }
+            Button(model.t("clipboardOpenNow")) {
+                deferCaptureAction { clipboard.openPanel() }
+            }
             Button(model.t("clipboard")) { model.requestedSection = .clipboard; showMainWindow() }
         }
         if model.screenCapture.settings.screenshotEnabled {

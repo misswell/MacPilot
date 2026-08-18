@@ -76,7 +76,7 @@ final class ClipboardHistory: ObservableObject {
         saveTask?.cancel()
         let itemsToSave = allItems
         let url = storageURL
-        saveTask = Task { [weak self] in
+        saveTask = Task.detached(priority: .utility) {
             do {
                 try await Task.sleep(for: .milliseconds(300))
             } catch {
@@ -89,13 +89,9 @@ final class ClipboardHistory: ObservableObject {
                 let data = try encoder.encode(itemsToSave)
                 try data.write(to: url, options: .atomic)
             } catch {
-                self?.logSaveError(error)
+                NSLog("MacPilot clipboard: failed to save history: \(error.localizedDescription)")
             }
         }
-    }
-
-    private func logSaveError(_ error: Error) {
-        NSLog("MacPilot clipboard: failed to save history: \(error.localizedDescription)")
     }
 
     // MARK: - Mutations

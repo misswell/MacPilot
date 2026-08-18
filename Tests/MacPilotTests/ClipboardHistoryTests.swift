@@ -5,6 +5,17 @@ import Testing
 
 @MainActor
 struct ClipboardHistoryTests {
+    private func waitUntil(
+        timeout: TimeInterval = 2.0,
+        _ condition: () -> Bool
+    ) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
     private func makeItem(_ text: String, date: Date = Date()) -> ClipboardItem {
         var item = ClipboardItem(contents: [
             ClipboardContent(type: NSPasteboard.PasteboardType.string.rawValue, value: Data(text.utf8))
@@ -113,8 +124,10 @@ struct ClipboardHistoryTests {
         let history = makeHistory(url: url)
         history.add(makeItem("persisted"))
 
-        // 等待去抖保存完成。
-        try await Task.sleep(for: .milliseconds(600))
+        await waitUntil {
+            let reloaded = makeHistory(url: url)
+            return reloaded.allItems.first?.title == "persisted"
+        }
 
         let reloaded = makeHistory(url: url)
         #expect(reloaded.allItems.count == 1)
