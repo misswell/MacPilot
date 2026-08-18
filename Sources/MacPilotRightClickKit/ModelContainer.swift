@@ -20,51 +20,60 @@ class SharedDataManager {
     )
 
     static var sharedModelContainer: ModelContainer = {
-        do {
-            // 获取 App Group 共享目录
-            let storeURL: URL
+        // 候选数据库路径：
+        // 1. App Group 共享目录 —— 只有沙盒进程（如 Finder 扩展）可写；
+        //    非沙盒主 App 访问会被 TCC 拒绝（errno 1），必须跳过。
+        // 2. 本地 Application Support —— 非沙盒主 App 使用。
+        let fallbackDirectory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0].appendingPathComponent("MacPilot/RightClick", isDirectory: true)
 
-            if let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) {
-                storeURL = containerURL.appendingPathComponent("RClickDatabase.sqlite")
-            } else {
-                // SwiftPM debug runs do not carry the packaged app's
-                // entitlements. Keep that workflow usable with a local
-                // fallback; the signed app and FinderSync extension use the
-                // shared App Group path above.
-                let fallbackDirectory = FileManager.default.urls(
-                    for: .applicationSupportDirectory,
-                    in: .userDomainMask
-                )[0].appendingPathComponent("MacPilot/RightClick", isDirectory: true)
-                try? FileManager.default.createDirectory(
-                    at: fallbackDirectory,
+        var candidates: [(url: URL, label: String)] = []
+        if let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: appGroupIdentifier
+        ), FileManager.default.isWritableFile(atPath: containerURL.path) {
+            candidates.append((containerURL.appendingPathComponent("RClickDatabase.sqlite"), "App Group"))
+        }
+        candidates.append((fallbackDirectory.appendingPathComponent("RClickDatabase.sqlite"), "Application Support"))
+
+        var lastError: Error?
+        for candidate in candidates {
+            do {
+                try FileManager.default.createDirectory(
+                    at: candidate.url.deletingLastPathComponent(),
                     withIntermediateDirectories: true
                 )
-                logger.warning("App Group unavailable; using local right-click database fallback")
-                storeURL = fallbackDirectory.appendingPathComponent("RClickDatabase.sqlite")
+
+                // 创建 ModelConfiguration 使用候选路径
+                let configuration = ModelConfiguration(
+                    url: candidate.url,
+                    allowsSave: true,
+                    cloudKitDatabase: .none
+                )
+
+                // 创建 ModelContainer，注册所有模型
+                let container = try ModelContainer(
+                    for: AppEntity.self,
+                         ActionEntity.self,
+                         NewFileTypeEntity.self,
+                         CommonDirEntity.self,
+                         BookmarkEntity.self,
+                         DataVersion.self,
+                    configurations: configuration
+                )
+
+                if candidate.label == "Application Support" {
+                    logger.warning("App Group 不可写；使用本地 right-click 数据库: \(candidate.url.path)")
+                }
+                return container
+            } catch {
+                lastError = error
+                logger.error("ModelContainer 初始化失败（\(candidate.label)）: \(error.localizedDescription)")
             }
-
-            // 创建 ModelConfiguration 使用共享路径
-            let configuration = ModelConfiguration(
-                url: storeURL,
-                allowsSave: true,
-                cloudKitDatabase: .none
-            )
-
-            // 创建 ModelContainer，注册所有模型
-            let container = try ModelContainer(
-                for: AppEntity.self,
-                     ActionEntity.self,
-                     NewFileTypeEntity.self,
-                     CommonDirEntity.self,
-                     BookmarkEntity.self,
-                     DataVersion.self,
-                configurations: configuration
-            )
-
-            return container
-        } catch {
-            fatalError("创建共享 ModelContainer 失败: \(error)")
         }
+
+        fatalError("创建共享 ModelContainer 失败: \(lastError.map(String.init(describing:)) ?? "未知错误")")
     }()
 
     /// 初始化默认数据
