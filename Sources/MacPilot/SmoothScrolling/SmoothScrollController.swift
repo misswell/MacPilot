@@ -17,9 +17,12 @@ final class SmoothScrollController {
     private var runLoopSource: CFRunLoopSource?
     private var displayLink: CVDisplayLink?
     private var lastPhysicalWheelTime: CFTimeInterval = 0
+    private var commandHeld = false
     private(set) var isActive = false
 
-    private let eventMask: CGEventMask = CGEventMask(1 << CGEventType.scrollWheel.rawValue)
+    private let eventMask: CGEventMask = CGEventMask(
+        (1 << CGEventType.scrollWheel.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
+    )
 
     func activate(settings: SmoothScrollSettings) {
         activeSettings = settings
@@ -93,6 +96,12 @@ final class SmoothScrollController {
             if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
+        if type == .flagsChanged {
+            let held = event.flags.contains(.maskCommand)
+            if held { runtime.stop() }
+            commandHeld = held
+            return Unmanaged.passUnretained(event)
+        }
         guard type == .scrollWheel else { return Unmanaged.passUnretained(event) }
         guard event.getIntegerValueField(.eventSourceUserData) != SmoothScrollRuntime.syntheticEventMarker else {
             return Unmanaged.passUnretained(event)
@@ -103,6 +112,10 @@ final class SmoothScrollController {
         }
 
         let settings = activeSettings
+        if settings.blockSmoothWhileCommandHeld, commandHeld {
+            runtime.stop()
+            return Unmanaged.passUnretained(event)
+        }
         let now = CFAbsoluteTimeGetCurrent()
         let velocityInterval = lastPhysicalWheelTime == 0 ? SmoothScrollVelocityBoost.slowInterval : now - lastPhysicalWheelTime
         let velocityBoost = SmoothScrollVelocityBoost.factor(

@@ -102,6 +102,12 @@ final class SmoothScrollModel: ObservableObject {
         persist?()
     }
 
+    func setBlockSmoothWhileCommandHeld(_ enabled: Bool) {
+        settings.blockSmoothWhileCommandHeld = enabled
+        controller.activate(settings: settings)
+        persist?()
+    }
+
     func setSimulatesTrackpadPhases(_ enabled: Bool) {
         settings.simulatesTrackpadPhases = enabled
         controller.activate(settings: settings)

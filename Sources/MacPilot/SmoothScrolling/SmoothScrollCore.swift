@@ -25,6 +25,7 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
     var simulatesTrackpadPhases = false
     var adaptiveSpeedEnabled = false
     var adaptiveSpeedMaximum = 3.0
+    var blockSmoothWhileCommandHeld = true
 
     var interpolationFactor: Double {
         Self.interpolationFactor(forDuration: duration)
@@ -64,6 +65,7 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
         simulatesTrackpadPhases = try container.decodeIfPresent(Bool.self, forKey: .simulatesTrackpadPhases) ?? false
         adaptiveSpeedEnabled = try container.decodeIfPresent(Bool.self, forKey: .adaptiveSpeedEnabled) ?? false
         adaptiveSpeedMaximum = try container.decodeIfPresent(Double.self, forKey: .adaptiveSpeedMaximum) ?? 3.0
+        blockSmoothWhileCommandHeld = try container.decodeIfPresent(Bool.self, forKey: .blockSmoothWhileCommandHeld) ?? true
         self = clamped()
     }
 }
