@@ -43,7 +43,7 @@ jobs:
           echo "Building MacPilot $version ($build_number)"
 
       - name: Build release binary
-        run: swift build -c release
+        run: swift build -c release --arch arm64 --arch x86_64
 
       - name: Package app bundle
         env:

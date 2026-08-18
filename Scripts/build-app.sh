@@ -4,11 +4,22 @@ set -euo pipefail
 ROOT="${0:A:h:h}"
 cd "$ROOT"
 
-swift build -c release
-BIN_DIR="$(swift build -c release --show-bin-path)"
+# Architectures to build for. Default is a universal binary (arm64 + x86_64) so
+# the packaged app runs on both Apple Silicon and Intel Macs. Override with
+# MACPILOT_ARCHS (e.g. "arm64" for a single-arch local build).
+ARCHS=(${=MACPILOT_ARCHS:-arm64 x86_64})
+ARCH_ARGS=()
+for arch in "${ARCHS[@]}"; do
+    ARCH_ARGS+=(--arch "$arch")
+done
+
+swift build -c release "${ARCH_ARGS[@]}"
+BIN_DIR="$(swift build -c release "${ARCH_ARGS[@]}" --show-bin-path)"
 
 # Build the FinderSync right-click extension (derived from RClick, GPLv3).
-"$ROOT/Scripts/build-findersync.sh"
+# Build it for the same architectures as the app so the context menu keeps
+# working on every supported CPU.
+MACPILOT_EXT_ARCHS="${ARCHS[*]}" "$ROOT/Scripts/build-findersync.sh"
 REXT_PRODUCT="$ROOT/build/FinderSync"
 BIN="$BIN_DIR/MacPilot"
 UPDATER_BIN="$BIN_DIR/MacPilotUpdater"

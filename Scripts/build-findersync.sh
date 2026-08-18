@@ -6,6 +6,10 @@ set -euo pipefail
 # Mirrors RClick's FinderSyncExt (GPLv3, https://github.com/wflixu/RClick).
 # Uses plain swiftc so the SwiftPM-based MacPilot repo stays untouched.
 #
+# Supports one or more architectures: set MACPILOT_EXT_ARCHS to a space-separated
+# list (default: the host architecture). Multi-arch builds are lipo'd into a
+# universal executable so the extension works on both Apple Silicon and Intel.
+#
 # Output:  $PRODUCT/FinderSync.appex   (a complete .appex bundle)
 
 ROOT="${0:A:h:h}"
@@ -15,7 +19,7 @@ SRC_DIR="$ROOT/FinderSync/Sources"
 RES_DIR="$ROOT/FinderSync/Resources"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
-ARCH="${MACPILOT_EXT_ARCH:-$(uname -m)}"
+ARCHS=(${=MACPILOT_EXT_ARCHS:-$(uname -m)})
 PRODUCT="${MACPILOT_EXT_PRODUCT_DIR:-$ROOT/build/FinderSync}"
 EXT_BUNDLE_ID="com.misswell.macpilot.finder-sync"
 EXT_NAME="MacPilotFinderSync"
@@ -24,7 +28,7 @@ FW_PATHS=(
     "-F" "$SDK/System/Library/Frameworks"
 )
 
-echo "==> Compiling FinderSync extension (arch=$ARCH, min=$DEPLOYMENT_TARGET)"
+echo "==> Building FinderSync extension (archs=${ARCHS[*]}, min=$DEPLOYMENT_TARGET)"
 rm -rf "$PRODUCT"
 mkdir -p "$PRODUCT/Contents/MacOS" "$PRODUCT/Contents/Resources"
 
@@ -40,18 +44,17 @@ for src in "$SRC_DIR"/*.swift; do
     EXT_SOURCES+=("$src")
 done
 
-# Compile all sources in one invocation so cross-file types resolve.
-OBJ_DIR="$ROOT/build/FinderSyncObjects"
-rm -rf "$OBJ_DIR"
-mkdir -p "$OBJ_DIR"
-xcrun swiftc \
-    -swift-version 6 \
-    -target "$ARCH-apple-macosx$DEPLOYMENT_TARGET" \
-    -sdk "$SDK" \
-    "${FW_PATHS[@]}" \
-    -emit-object \
-    -module-name "$EXT_NAME" \
-    -output-file-map <(python3 - "$OBJ_DIR" "$SRC_DIR" <<'PYEOF'
+PER_ARCH_EXES=()
+for ARCH in "${ARCHS[@]}"; do
+    echo "==> Compiling FinderSync extension (arch=$ARCH)"
+    # Compile all sources in one invocation so cross-file types resolve.
+    OBJ_DIR="$ROOT/build/FinderSyncObjects/$ARCH"
+    rm -rf "$OBJ_DIR"
+    mkdir -p "$OBJ_DIR"
+    # Materialize the output-file map to a real file (avoids /dev/fd process
+    # substitution which is not always readable by the compiler).
+    OUTPUT_FILE_MAP="$OBJ_DIR/filemap.json"
+    python3 - "$OBJ_DIR" "$SRC_DIR" > "$OUTPUT_FILE_MAP" <<'PYEOF'
 import glob, json, os, sys
 obj_dir, src_dir = sys.argv[1], sys.argv[2]
 excluded = set()
@@ -64,18 +67,36 @@ def out(s, ext):
     return {'object': os.path.join(obj_dir, base + ext), 'swiftmodule': os.path.join(obj_dir, base + '.swiftmodule')}
 print(json.dumps({s: {k: v for k, v in out(s, '.o').items()} for s in sources}))
 PYEOF
-) \
-    "${EXT_SOURCES[@]}"
+    xcrun swiftc \
+        -swift-version 6 \
+        -target "$ARCH-apple-macosx$DEPLOYMENT_TARGET" \
+        -sdk "$SDK" \
+        "${FW_PATHS[@]}" \
+        -emit-object \
+        -module-name "$EXT_NAME" \
+        -output-file-map "$OUTPUT_FILE_MAP" \
+        "${EXT_SOURCES[@]}"
 
-# Link with the extension entry point (same as Xcode's appex product type).
-xcrun swiftc \
-    -target "$ARCH-apple-macosx$DEPLOYMENT_TARGET" \
-    -sdk "$SDK" \
-    "${FW_PATHS[@]}" \
-    -Xlinker -rpath -Xlinker /usr/lib/swift \
-    -Xlinker -e -Xlinker _NSExtensionMain \
-    -o "$PRODUCT/Contents/MacOS/$EXT_NAME" \
-    "$OBJ_DIR"/*.o
+    # Link with the extension entry point (same as Xcode's appex product type).
+    EXE="$ROOT/build/FinderSyncBinaries/$ARCH/$EXT_NAME"
+    mkdir -p "$(dirname "$EXE")"
+    xcrun swiftc \
+        -target "$ARCH-apple-macosx$DEPLOYMENT_TARGET" \
+        -sdk "$SDK" \
+        "${FW_PATHS[@]}" \
+        -Xlinker -rpath -Xlinker /usr/lib/swift \
+        -Xlinker -e -Xlinker _NSExtensionMain \
+        -o "$EXE" \
+        "$OBJ_DIR"/*.o
+    PER_ARCH_EXES+=("$EXE")
+done
+
+if (( ${#PER_ARCH_EXES[@]} > 1 )); then
+    echo "==> Combining universal FinderSync executable (${ARCHS[*]})"
+    xcrun lipo -create "${PER_ARCH_EXES[@]}" -output "$PRODUCT/Contents/MacOS/$EXT_NAME"
+else
+    cp "${PER_ARCH_EXES[1]}" "$PRODUCT/Contents/MacOS/$EXT_NAME"
+fi
 
 cp "$RES_DIR/Info.plist" "$PRODUCT/Contents/Info.plist"
 if [[ -d "$RES_DIR/zh-Hans.lproj" ]]; then
