@@ -19,74 +19,77 @@ struct AppsSettingsTabView: View {
     let messager = Messager.shared
 
     var body: some View {
-        Form {
-            Section {
-                Toggle(isOn: $appState.foldAppsMenu) {
-                    Text(appLocalized: "Collapse apps menu")
-                }
-                    .onChange(of: appState.foldAppsMenu) {
-                        NotificationCenter.default.post(name: .menuConfigShouldUpdate, object: nil)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                RightClickSettingsCard {
+                    Toggle(isOn: $appState.foldAppsMenu) {
+                        Text(appLocalized: "Collapse apps menu")
                     }
-            }
-
-            Section {
-                HStack {
-                    Spacer()
-                    Button {
-                        showSelectApp = true
-                    } label: {
-                        Label(AppLocalization.localized("Add App"), systemImage: "plus.app")
-                    }
+                        .onChange(of: appState.foldAppsMenu) {
+                            NotificationCenter.default.post(name: .menuConfigShouldUpdate, object: nil)
+                        }
                 }
 
-                List {
-                    ForEach(appState.apps) { item in
-                        LabeledContent {
-                            HStack(spacing: 8) {
-                                Button {
-                                    editingApp = item
-                                } label: {
-                                    Image(systemName: "pencil")
-                                }
-                                .buttonStyle(.borderless)
-                                .help(AppLocalization.localized("Edit App"))
-
-                                Button {
-                                    deleteApp(item)
-                                } label: {
-                                    Image(systemName: "trash")
-                                }
-                                .buttonStyle(.borderless)
-                                .help(AppLocalization.localized("Delete App"))
-                            }
+                RightClickSettingsCard {
+                    HStack {
+                        Spacer()
+                        Button {
+                            showSelectApp = true
                         } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "line.3.horizontal")
-                                    .foregroundColor(.secondary)
-                                Image(nsImage: IconCache.shared.icon(for: item.url))
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(width: 24, height: 24)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.name)
-                                    if !item.arguments.isEmpty || !item.environment.isEmpty {
-                                        Text(appSummary(item))
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
+                            Label(AppLocalization.localized("Add App"), systemImage: "plus.app")
+                        }
+                    }
+
+                    List {
+                        ForEach(appState.apps) { item in
+                            LabeledContent {
+                                HStack(spacing: 8) {
+                                    Button {
+                                        editingApp = item
+                                    } label: {
+                                        Image(systemName: "pencil")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help(AppLocalization.localized("Edit App"))
+
+                                    Button {
+                                        deleteApp(item)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help(AppLocalization.localized("Delete App"))
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "line.3.horizontal")
+                                        .foregroundColor(.secondary)
+                                    Image(nsImage: IconCache.shared.icon(for: item.url))
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(width: 24, height: 24)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.name)
+                                        if !item.arguments.isEmpty || !item.environment.isEmpty {
+                                            Text(appSummary(item))
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
                                     }
                                 }
                             }
                         }
+                        .onMove { source, destination in
+                            appState.moveApps(from: source, to: destination)
+                            messager.sendRunningNotification()
+                        }
                     }
-                    .onMove { source, destination in
-                        appState.moveApps(from: source, to: destination)
-                        messager.sendRunningNotification()
-                    }
+                    .rightClickListStyle()
+                    .frame(minHeight: 180)
                 }
-                .frame(minHeight: 180)
             }
+            .padding(.vertical, 20)
         }
-        .formStyle(.grouped)
         .fileImporter(
             isPresented: $showSelectApp,
             allowedContentTypes: [.application],

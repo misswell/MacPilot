@@ -2059,9 +2059,14 @@ struct ContentView: View {
             Divider()
             VStack(alignment: .leading, spacing: 0) {
                 if section == .exit {
-                    header
-                    if model.rules.isEmpty { EmptyRulesView(addRule: { showingAdd = true }) }
-                    else { rulesList }
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 24) {
+                            header
+                            if model.rules.isEmpty { EmptyRulesView(addRule: { showingAdd = true }) }
+                            else { rulesCard }
+                        }
+                        .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
+                    }
                 } else if section == .launch {
                     LaunchRulesView(showingAdd: $showingLaunchAdd, editingRule: $editingLaunchRule)
                 } else if section == .ble {
@@ -2083,7 +2088,6 @@ struct ContentView: View {
                     PictureInPictureView(pictureInPicture: model.pictureInPicture)
                 } else if section == .windowSwitcher {
                     WindowSwitcherSettingsView(windowSwitcher: model.windowSwitcher)
-                        .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
                 } else if section == .smoothScrolling {
                     SmoothScrollSettingsView(smoothScrolling: model.smoothScrolling)
                 } else if section == .clipboard {
@@ -2146,31 +2150,32 @@ struct ContentView: View {
             Button { showingAdd = true } label: { Label(model.t("addApp"), systemImage: "plus") }
                 .buttonStyle(.borderedProminent).controlSize(.large)
         }
-        .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 28)
     }
 
-    private var rulesList: some View {
-        List {
-            Section(model.t("apps")) {
-                ForEach(model.rules) { rule in
-                    RuleRow(
-                        rule: rule,
-                        edit: { editingRule = rule },
-                        toggle: { model.toggleRule(rule) },
-                        remove: { model.remove(rule) }
-                    )
-                        .contextMenu {
-                            Button(model.t("editRule")) { editingRule = rule }
-                            Divider()
-                            Button(model.t("deleteRule"), role: .destructive) { model.remove(rule) }
-                        }
+    private var rulesCard: some View {
+        SettingsCard {
+            List {
+                Section(model.t("apps")) {
+                    ForEach(model.rules) { rule in
+                        RuleRow(
+                            rule: rule,
+                            edit: { editingRule = rule },
+                            toggle: { model.toggleRule(rule) },
+                            remove: { model.remove(rule) }
+                        )
+                            .contextMenu {
+                                Button(model.t("editRule")) { editingRule = rule }
+                                Divider()
+                                Button(model.t("deleteRule"), role: .destructive) { model.remove(rule) }
+                            }
+                    }
+                    .onMove(perform: model.move)
                 }
-                .onMove(perform: model.move)
             }
+            .listStyle(.inset(alternatesRowBackgrounds: false))
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 220)
         }
-        .listStyle(.inset(alternatesRowBackgrounds: false))
-        .padding(.horizontal, 22)
-        .padding(.bottom, 20)
     }
 
     private func acceptDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -2641,43 +2646,48 @@ struct LaunchRulesView: View {
     @Binding var editingRule: LaunchRule?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(model.t("launch")).font(.system(size: 30, weight: .bold))
-                    Text(model.t("launchSubtitle")).foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(model.t("launch")).font(.system(size: 30, weight: .bold))
+                        Text(model.t("launchSubtitle")).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button { showingAdd = true } label: { Label(model.t("addLaunchApp"), systemImage: "plus") }
+                        .buttonStyle(.borderedProminent).controlSize(.large)
                 }
-                Spacer()
-                Button { showingAdd = true } label: { Label(model.t("addLaunchApp"), systemImage: "plus") }
-                    .buttonStyle(.borderedProminent).controlSize(.large)
-            }
-            .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 22)
 
-            launchControls
+                launchControls
 
-            if model.launchRules.isEmpty {
-                EmptyLaunchRulesView(addRule: { showingAdd = true })
-            } else {
-                List {
-                    Section(model.t("launchApps")) {
-                        ForEach(model.launchRules) { rule in
-                            LaunchRuleRow(
-                                rule: rule,
-                                edit: { editingRule = rule },
-                                toggle: { model.toggleLaunchRule(rule) },
-                                remove: { model.removeLaunchRule(rule) }
-                            )
-                                .contextMenu {
-                                    Button(model.t("edit")) { editingRule = rule }
-                                    Divider()
-                                    Button(model.t("deleteRule"), role: .destructive) { model.removeLaunchRule(rule) }
+                if model.launchRules.isEmpty {
+                    EmptyLaunchRulesView(addRule: { showingAdd = true })
+                } else {
+                    SettingsCard {
+                        List {
+                            Section(model.t("launchApps")) {
+                                ForEach(model.launchRules) { rule in
+                                    LaunchRuleRow(
+                                        rule: rule,
+                                        edit: { editingRule = rule },
+                                        toggle: { model.toggleLaunchRule(rule) },
+                                        remove: { model.removeLaunchRule(rule) }
+                                    )
+                                        .contextMenu {
+                                            Button(model.t("edit")) { editingRule = rule }
+                                            Divider()
+                                            Button(model.t("deleteRule"), role: .destructive) { model.removeLaunchRule(rule) }
+                                        }
                                 }
+                            }
                         }
+                        .listStyle(.inset(alternatesRowBackgrounds: false))
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 220)
                     }
                 }
-                .listStyle(.inset(alternatesRowBackgrounds: false))
-                .padding(.horizontal, 22).padding(.bottom, 20)
             }
+            .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
         }
     }
 
@@ -2696,8 +2706,12 @@ struct LaunchRulesView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(16)
-        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 36).padding(.bottom, 16)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var launchPlanMessage: String {
@@ -3054,7 +3068,7 @@ struct BLEUnlockView: View {
     }
 
     private var enableSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        SettingsCard {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(model.t("bleEnable")).font(.headline)
@@ -3070,7 +3084,6 @@ struct BLEUnlockView: View {
                 accessibilityHint
             }
         }
-        .padding(16).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 14))
     }
 
     @ViewBuilder private var accessibilityHint: some View {
@@ -3118,7 +3131,7 @@ struct BLEUnlockView: View {
     }
 
     private var deviceSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        SettingsCard {
             sectionTitle(model.t("bleDevice"))
             Text(model.t("bleDeviceHint")).font(.subheadline).foregroundStyle(.secondary)
             if let name = ble.settings.monitoredDeviceName, !name.isEmpty {
@@ -3134,7 +3147,6 @@ struct BLEUnlockView: View {
                     Spacer()
                     Button(model.t("bleChangeDevice")) { showPicker = true; ble.startScanning() }
                 }
-                .padding(14).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
             }
             if showPicker { deviceScanList }
             else if ble.settings.monitoredDeviceUUID == nil {
@@ -3170,7 +3182,6 @@ struct BLEUnlockView: View {
                 }
             }
         }
-        .padding(14).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func sortedDevices() -> [BLEUnlockDevice] {
@@ -3207,11 +3218,11 @@ struct BLEUnlockView: View {
     }
 
     private func sectionTitle(_ text: String) -> some View {
-        Text(text).font(.title3.bold()).padding(.top, 6)
+        Text(text).font(.headline)
     }
 
     private var thresholdSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        SettingsCard {
             sectionTitle(model.t("bleThresholds"))
             rssiRangeBar
             rssiPickerRow(model.t("bleUnlockRSSI"), selection: Binding(get: { ble.settings.unlockRSSI }, set: { ble.setUnlockRSSI($0) }), options: [BLEUnlockModel.unlockDisabled] + BLEUnlockModel.rssiOptions, info: model.t("bleUnlockRSSIInfo"))
@@ -3257,7 +3268,7 @@ struct BLEUnlockView: View {
     }
 
     private var optionsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        SettingsCard {
             sectionTitle(model.t("bleTiming"))
             timingRow(model.t("bleLockDelay"), selection: Binding(get: { ble.settings.proximityTimeout }, set: { ble.setProximityTimeout($0) }), options: BLEUnlockModel.lockDelayOptions, info: model.t("bleLockDelayInfo"))
             timingRow(model.t("bleNoSignalTimeout"), selection: Binding(get: { ble.settings.signalTimeout }, set: { ble.setSignalTimeout($0) }), options: BLEUnlockModel.timeoutOptions, info: model.t("bleTimeoutInfo"))
@@ -3278,7 +3289,7 @@ struct BLEUnlockView: View {
     }
 
     private var actionsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        SettingsCard {
             sectionTitle(model.t("bleBehavior"))
             VStack(alignment: .leading, spacing: 12) {
                 toggleRow(model.t("bleWakeOnProximity"), isOn: Binding(get: { ble.settings.wakeOnProximity }, set: { ble.setWakeOnProximity($0) }))
@@ -3491,7 +3502,7 @@ struct SettingsView: View {
     @State private var quitterImportPreview: QuitterImportPreview?
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(model.t("settings")).font(.system(size: 30, weight: .bold))
                     Text(model.t("manageRules")).foregroundStyle(.secondary)
@@ -3500,8 +3511,7 @@ struct SettingsView: View {
                         .foregroundStyle(.tertiary)
                         .textSelection(.enabled)
                 }
-                Divider()
-                VStack(alignment: .leading, spacing: 10) {
+                SettingsCard {
                     Toggle(model.t("startAtLogin"), isOn: Binding(
                         get: { model.launchesAtLogin },
                         set: { model.setLaunchAtLogin($0) }
@@ -3509,10 +3519,10 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     Text(model.t("startAtLoginHint")).font(.subheadline).foregroundStyle(.secondary)
                 }
-                Divider()
-                SoftwareUpdateSettingsView(updater: model.updater, language: model.language)
-                Divider()
-                VStack(alignment: .leading, spacing: 10) {
+                SettingsCard {
+                    SoftwareUpdateSettingsView(updater: model.updater, language: model.language)
+                }
+                SettingsCard {
                     Text(model.t("language")).font(.headline)
                     Text(model.t("languageDescription")).font(.subheadline).foregroundStyle(.secondary)
                     Picker(model.t("language"), selection: $model.language) {
@@ -3522,8 +3532,7 @@ struct SettingsView: View {
                     }
                     .labelsHidden().pickerStyle(.segmented).frame(width: 390)
                 }
-                Divider()
-                VStack(alignment: .leading, spacing: 10) {
+                SettingsCard {
                     Text(model.t("configFile")).font(.headline)
                     Text(model.t("configDescription")).font(.subheadline).foregroundStyle(.secondary)
                     Text(model.configurationFilePath)
@@ -3532,8 +3541,7 @@ struct SettingsView: View {
                         .textSelection(.enabled)
                     Button(model.t("revealInFinder")) { model.revealConfigurationFile() }
                 }
-                Divider()
-                VStack(alignment: .leading, spacing: 10) {
+                SettingsCard {
                     Text(model.t("importQuitter")).font(.headline)
                     Text(model.t("importQuitterDescription")).font(.subheadline).foregroundStyle(.secondary)
                     Button(model.t("importQuitter")) { quitterImportPreview = model.prepareQuitterImportFromDefaultLocation() }

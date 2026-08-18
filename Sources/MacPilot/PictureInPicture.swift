@@ -2947,43 +2947,17 @@ struct PictureInPictureView: View {
                     }
                     pageContent
                 }
-                .frame(maxWidth: 940)
-                .padding(.horizontal, 28)
+                .padding(.horizontal, 36)
                 .padding(.vertical, 24)
-                .frame(maxWidth: .infinity)
             }
-            .background(
-                LinearGradient(
-                    colors: [Color.accentColor.opacity(0.025), .clear],
-                    startPoint: .top,
-                    endPoint: .center
-                )
-            )
         }
     }
 
     private var dashboardHeader: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "rectangle.inset.filled.and.person.filled")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
-                .background(
-                    LinearGradient(
-                        colors: [Color.accentColor, Color.purple.opacity(0.85)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    in: RoundedRectangle(cornerRadius: 13, style: .continuous)
-                )
-                .shadow(color: Color.accentColor.opacity(0.25), radius: 9, y: 4)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(t("pictureInPicture"))
-                    .font(.headline)
-                Text(t("pictureInPictureSubtitle"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(t("pictureInPicture")).font(.system(size: 30, weight: .bold))
+                Text(t("pictureInPictureSubtitle")).foregroundStyle(.secondary)
             }
             Spacer()
             HStack(spacing: 7) {
@@ -3013,9 +2987,9 @@ struct PictureInPictureView: View {
             .buttonStyle(.borderedProminent)
             .disabled(!pictureInPicture.settings.isEnabled)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
-        .background(.bar)
+        .padding(.horizontal, 36)
+        .padding(.top, 34)
+        .padding(.bottom, 18)
     }
 
     private var categoryBar: some View {
@@ -3595,8 +3569,14 @@ private struct PiPOcclusionSettingsView: View {
 
     private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 14, content: content)
-            .padding(18)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(.primary.opacity(0.07))
+            )
+            .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private func t(_ key: String) -> String {

@@ -53,14 +53,13 @@ struct RightClickSettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .frame(minWidth: 450)
-        .padding()
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(appLocalized: "Right-click Menu")
-                    .font(.system(size: 26, weight: .bold))
+                    .font(.system(size: 30, weight: .bold))
                 Text(appLocalized: "Right-click Menu Subtitle")
                     .foregroundStyle(.secondary)
             }
@@ -72,7 +71,7 @@ struct RightClickSettingsView: View {
             detailView
         }
         .padding(.horizontal, 36)
-        .padding(.top, 30)
+        .padding(.top, 34)
         .padding(.bottom, 30)
     }
 

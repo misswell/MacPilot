@@ -13,35 +13,36 @@ import SwiftUI
 
 struct AboutSettingsTabView: View {
     var body: some View {
-        Form {
-            Section {
-                VStack(spacing: 12) {
-                    Image(nsImage: NSApp.applicationIconImage)
-                        .resizable()
-                        .frame(width: 96, height: 96)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                RightClickSettingsCard {
+                    VStack(spacing: 12) {
+                        Image(nsImage: NSApp.applicationIconImage)
+                            .resizable()
+                            .frame(width: 96, height: 96)
 
-                    VStack(spacing: 4) {
-                        Text("MacPilot").font(.title)
-                        Text(String(format: AppLocalization.localized("Version %@ (%@)"), getAppVersion(), getBuildVersion()))
-                            .foregroundColor(.secondary)
+                        VStack(spacing: 4) {
+                            Text("MacPilot").font(.title)
+                            Text(String(format: AppLocalization.localized("Version %@ (%@)"), getAppVersion(), getBuildVersion()))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+
+                RightClickSettingsCard {
+                    Text(appLocalized: "MacPilot's Finder context menu provides quick actions for opening folders, managing files, and creating new files.")
+                        .font(.body)
+                }
+
+                RightClickSettingsCard {
+                    Link(destination: URL(string: "https://github.com/misswell/MacPilot")!) {
+                        Label("github.com/misswell/MacPilot", systemImage: "chevron.left.forwardslash.chevron.right")
                     }
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
             }
-
-            Section {
-                Text(appLocalized: "MacPilot's Finder context menu provides quick actions for opening folders, managing files, and creating new files.")
-                    .font(.body)
-            }
-
-            Section {
-                Link(destination: URL(string: "https://github.com/misswell/MacPilot")!) {
-                    Label("github.com/misswell/MacPilot", systemImage: "chevron.left.forwardslash.chevron.right")
-                }
-            }
+            .padding(.vertical, 20)
         }
-        .formStyle(.grouped)
     }
 
     func getAppVersion() -> String {

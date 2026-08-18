@@ -13,50 +13,53 @@ struct ActionSettingsTabView: View {
     let messager = Messager.shared
 
     var body: some View {
-        Form {
-            Section {
-                Toggle(isOn: $appState.foldActionsMenu) {
-                    Text(appLocalized: "Collapse actions menu")
-                }
-                    .onChange(of: appState.foldActionsMenu) {
-                        NotificationCenter.default.post(name: .menuConfigShouldUpdate, object: nil)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                RightClickSettingsCard {
+                    Toggle(isOn: $appState.foldActionsMenu) {
+                        Text(appLocalized: "Collapse actions menu")
                     }
-            }
+                        .onChange(of: appState.foldActionsMenu) {
+                            NotificationCenter.default.post(name: .menuConfigShouldUpdate, object: nil)
+                        }
+                }
 
-            Section {
-                List {
-                    ForEach($appState.actions) { $item in
-                        LabeledContent {
-                            Toggle(AppLocalization.localized("Enabled"), isOn: $item.enabled)
-                                .toggleStyle(.switch)
-                                .onChange(of: item.enabled) {
-                                    appState.toggleActionItem()
-                                    messager.sendRunningNotification()
+                RightClickSettingsCard {
+                    List {
+                        ForEach($appState.actions) { $item in
+                            LabeledContent {
+                                Toggle(AppLocalization.localized("Enabled"), isOn: $item.enabled)
+                                    .toggleStyle(.switch)
+                                    .onChange(of: item.enabled) {
+                                        appState.toggleActionItem()
+                                        messager.sendRunningNotification()
+                                    }
+                                    .labelsHidden()
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "line.3.horizontal")
+                                        .foregroundColor(.secondary)
+                                    Label(item.displayName, systemImage: item.icon)
                                 }
-                                .labelsHidden()
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "line.3.horizontal")
-                                    .foregroundColor(.secondary)
-                                Label(item.displayName, systemImage: item.icon)
                             }
                         }
+                        .onMove { source, destination in
+                            appState.moveActions(from: source, to: destination)
+                            messager.sendRunningNotification()
+                        }
                     }
-                    .onMove { source, destination in
-                        appState.moveActions(from: source, to: destination)
-                        messager.sendRunningNotification()
-                    }
-                }
-                .frame(minHeight: 180)
-            } footer: {
-                HStack {
-                    Spacer()
-                    Button(AppLocalization.localized("Restore Defaults")) {
-                        appState.resetActionItems()
+                    .rightClickListStyle()
+                    .frame(minHeight: 180)
+
+                    HStack {
+                        Spacer()
+                        Button(AppLocalization.localized("Restore Defaults")) {
+                            appState.resetActionItems()
+                        }
                     }
                 }
             }
+            .padding(.vertical, 20)
         }
-        .formStyle(.grouped)
     }
 }

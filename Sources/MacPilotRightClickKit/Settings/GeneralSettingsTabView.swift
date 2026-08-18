@@ -32,118 +32,124 @@ struct GeneralSettingsTabView: View {
     let messager = Messager.shared
 
     var body: some View {
-        Form {
-            // MARK: - 第一组：主要控制
-            Section {
-                Toggle(isOn: Binding(
-                    get: { finderSyncStatus == .enabled },
-                    set: { newValue in
-                        if newValue {
-                            // 开启：如果未启用，打开 Finder 扩展设置
-                            if !FIFinderSyncController.isExtensionEnabled {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // MARK: - 第一组：主要控制
+                RightClickSettingsCard {
+                    Text(appLocalized: "Main Controls")
+                        .font(.headline)
+                    Toggle(isOn: Binding(
+                        get: { finderSyncStatus == .enabled },
+                        set: { newValue in
+                            if newValue {
+                                // 开启：如果未启用，打开 Finder 扩展设置
+                                if !FIFinderSyncController.isExtensionEnabled {
+                                    openFileProviderSettings()
+                                }
+                            } else {
+                                // 关闭：同样打开设置让用户手动关闭
                                 openFileProviderSettings()
                             }
-                        } else {
-                            // 关闭：同样打开设置让用户手动关闭
-                            openFileProviderSettings()
                         }
+                    )) {
+                        Text(appLocalized: "Enable MacPilot Finder extension")
                     }
-                )) {
-                            Text(appLocalized: "Enable MacPilot Finder extension")
-                }
 
-                Toggle(isOn: $showMenuBarExtra) {
-                    Text(appLocalized: "Show icon in menu bar")
-                }
-            } header: {
-                Text(appLocalized: "Main Controls")
-            } footer: {
-                Text(appLocalized: "Enable MacPilot Finder extension to show its actions in Finder context menus")
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            // MARK: - 第二组：权限
-            Section {
-                // Finder 扩展状态
-                LabeledContent {
-                    Text(finderSyncStatus.description)
-                        .foregroundColor(.secondary)
-                } label: {
-                    Label(AppLocalization.localized("Finder Extension"), systemImage: finderSyncStatus.icon)
-                        .foregroundColor(finderSyncStatus.color)
-                }
-
-                // 辅助功能权限
-                LabeledContent {
-                    Button(AppLocalization.localized("Settings…")) {
-                        openAccessibilitySettings()
+                    Toggle(isOn: $showMenuBarExtra) {
+                        Text(appLocalized: "Show icon in menu bar")
                     }
-                } label: {
-                    Label(AppLocalization.localized("Accessibility"), systemImage: accessibilityStatus.icon)
-                        .foregroundColor(accessibilityStatus.color)
+
+                    Text(appLocalized: "Enable MacPilot Finder extension to show its actions in Finder context menus")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
-                // 文件夹权限（Bookmark）
-                LabeledContent {
-                    HStack(spacing: 8) {
-                        Text("\(bookmarkManager.authorizedDirectories.count)")
+                // MARK: - 第二组：权限
+                RightClickSettingsCard {
+                    Text(appLocalized: "Permissions")
+                        .font(.headline)
+
+                    // Finder 扩展状态
+                    LabeledContent {
+                        Text(finderSyncStatus.description)
                             .foregroundColor(.secondary)
-                        Button(AppLocalization.localized("Manage…")) {
-                            showFolderPermissionsSheet = true
-                        }
+                    } label: {
+                        Label(AppLocalization.localized("Finder Extension"), systemImage: finderSyncStatus.icon)
+                            .foregroundColor(finderSyncStatus.color)
                     }
-                } label: {
-                    Label(AppLocalization.localized("Folder Permissions"), systemImage: "folder.badge.person.crop")
+
+                    // 辅助功能权限
+                    LabeledContent {
+                        Button(AppLocalization.localized("Settings…")) {
+                            openAccessibilitySettings()
+                        }
+                    } label: {
+                        Label(AppLocalization.localized("Accessibility"), systemImage: accessibilityStatus.icon)
+                            .foregroundColor(accessibilityStatus.color)
+                    }
+
+                    // 文件夹权限（Bookmark）
+                    LabeledContent {
+                        HStack(spacing: 8) {
+                            Text("\(bookmarkManager.authorizedDirectories.count)")
+                                .foregroundColor(.secondary)
+                            Button(AppLocalization.localized("Manage…")) {
+                                showFolderPermissionsSheet = true
+                            }
+                        }
+                    } label: {
+                        Label(AppLocalization.localized("Folder Permissions"), systemImage: "folder.badge.person.crop")
+                    }
+
+                    Text(appLocalized: "System Settings: Select MacPilot in the list to enable the Finder context menu")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-            } header: {
-                Text(appLocalized: "Permissions")
-            } footer: {
-                Text(appLocalized: "System Settings: Select MacPilot in the list to enable the Finder context menu")
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+
+                // MARK: - 第三组：设置管理
+                RightClickSettingsCard {
+                    Text(appLocalized: "Settings Management")
+                        .font(.headline)
+
+                    // 备份
+                    LabeledContent {
+                        HStack(spacing: 12) {
+                            Button(AppLocalization.localized("Export…")) {
+                                exportSettings()
+                            }
+                            Button(AppLocalization.localized("Import…")) {
+                                importSettings()
+                            }
+                        }
+                    } label: {
+                        Text(appLocalized: "Backup")
+                    }
+
+                    // 日志
+                    LabeledContent {
+                        Button(AppLocalization.localized("Export Logs…")) {
+                            exportLogs()
+                        }
+                    } label: {
+                        Text(appLocalized: "Logs")
+                    }
+
+                    // 重置所有设置
+                    HStack {
+                        Spacer()
+                        Button(AppLocalization.localized("Reset All Settings…")) {
+                            resetAllSettings()
+                        }
+                        .foregroundColor(.red)
+                    }
+
+                    Text(appLocalized: "Resetting all settings restores the default configuration and cannot be undone")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-
-            // MARK: - 第三组：设置管理
-            Section {
-                // 备份
-                LabeledContent {
-                    HStack(spacing: 12) {
-                        Button(AppLocalization.localized("Export…")) {
-                            exportSettings()
-                        }
-                        Button(AppLocalization.localized("Import…")) {
-                            importSettings()
-                        }
-                    }
-                } label: {
-                    Text(appLocalized: "Backup")
-                }
-
-                // 日志
-                LabeledContent {
-                    Button(AppLocalization.localized("Export Logs…")) {
-                        exportLogs()
-                    }
-                } label: {
-                    Text(appLocalized: "Logs")
-                }
-
-                // 重置所有设置
-                HStack {
-                    Spacer()
-                    Button(AppLocalization.localized("Reset All Settings…")) {
-                        resetAllSettings()
-                    }
-                    .foregroundColor(.red)
-                }
-            } header: {
-                Text(appLocalized: "Settings Management")
-            } footer: {
-                Text(appLocalized: "Resetting all settings restores the default configuration and cannot be undone")
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            .padding(.vertical, 20)
         }
-        .formStyle(.grouped)
         .onAppear {
             updatePermissionStatus()
         }

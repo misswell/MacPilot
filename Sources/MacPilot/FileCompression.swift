@@ -2120,10 +2120,11 @@ private extension View {
     func compressionCard() -> some View {
         self
             .padding(20)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.primary.opacity(0.07), lineWidth: 1)
-            }
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(.primary.opacity(0.07))
+            )
+            .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 }

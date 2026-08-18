@@ -15,28 +15,31 @@ struct ClipboardSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(model.t("clipboard")).font(.system(size: 30, weight: .bold))
                     Text(model.t("clipboardSubtitle")).foregroundStyle(.secondary)
                 }
 
-                Toggle(model.t("clipboardEnable"), isOn: Binding(
-                    get: { clipboard.settings.isEnabled },
-                    set: { clipboard.setEnabled($0) }
-                ))
-                .toggleStyle(.switch)
+                SettingsCard {
+                    Toggle(model.t("clipboardEnable"), isOn: Binding(
+                        get: { clipboard.settings.isEnabled },
+                        set: { clipboard.setEnabled($0) }
+                    ))
+                    .toggleStyle(.switch)
 
-                if !clipboard.settings.isEnabled {
-                    Label(model.t("clipboardNotConfiguredHint"), systemImage: "info.circle")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                    if !clipboard.settings.isEnabled {
+                        Label(model.t("clipboardNotConfiguredHint"), systemImage: "info.circle")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+
+                    if clipboard.settings.isEnabled {
+                        permissionStatus
+                    }
                 }
 
                 if clipboard.settings.isEnabled {
-                    permissionStatus
-
-                    Divider()
-                    VStack(alignment: .leading, spacing: 14) {
+                    SettingsCard {
                         Text(model.t("clipboardHotkey"))
                             .font(.headline)
                         ClipboardHotkeyRecorder(
@@ -45,44 +48,47 @@ struct ClipboardSettingsView: View {
                                 set: { clipboard.setHotkey($0) }
                             )
                         )
-                    }
 
-                    Divider()
-                    Picker(model.t("clipboardStorageLimit"), selection: Binding(
-                        get: { clipboard.settings.storageLimit },
-                        set: { clipboard.setStorageLimit($0) }
-                    )) {
-                        ForEach(ClipboardSettings.storageLimitOptions, id: \.self) { value in
-                            Text("\(value)").tag(value)
+                        Divider()
+
+                        Picker(model.t("clipboardStorageLimit"), selection: Binding(
+                            get: { clipboard.settings.storageLimit },
+                            set: { clipboard.setStorageLimit($0) }
+                        )) {
+                            ForEach(ClipboardSettings.storageLimitOptions, id: \.self) { value in
+                                Text("\(value)").tag(value)
+                            }
                         }
-                    }
-                    .pickerStyle(.segmented)
+                        .pickerStyle(.segmented)
 
-                    Divider()
-                    Toggle(model.t("clipboardPasteByDefault"), isOn: Binding(
-                        get: { clipboard.settings.pasteByDefault },
-                        set: { clipboard.setPasteByDefault($0) }
-                    ))
-                    Toggle(model.t("clipboardShowSearch"), isOn: Binding(
-                        get: { clipboard.settings.showSearch },
-                        set: { clipboard.setShowSearch($0) }
-                    ))
-                    Toggle(model.t("clipboardClearSystemClipboard"), isOn: Binding(
-                        get: { clipboard.settings.clearSystemClipboardOnClear },
-                        set: { clipboard.setClearSystemClipboardOnClear($0) }
-                    ))
-                    Toggle(model.t("clipboardPinsAtTop"), isOn: Binding(
-                        get: { clipboard.settings.pinsAtTop },
-                        set: { clipboard.setPinsAtTop($0) }
-                    ))
+                        Divider()
 
-                    Divider()
-                    HStack {
-                        Button(model.t("clipboardClearHistory")) {
-                            clipboard.clearHistory()
-                        }
-                        Button(model.t("clipboardClearAllHistory"), role: .destructive) {
-                            showClearAllConfirmation = true
+                        Toggle(model.t("clipboardPasteByDefault"), isOn: Binding(
+                            get: { clipboard.settings.pasteByDefault },
+                            set: { clipboard.setPasteByDefault($0) }
+                        ))
+                        Toggle(model.t("clipboardShowSearch"), isOn: Binding(
+                            get: { clipboard.settings.showSearch },
+                            set: { clipboard.setShowSearch($0) }
+                        ))
+                        Toggle(model.t("clipboardClearSystemClipboard"), isOn: Binding(
+                            get: { clipboard.settings.clearSystemClipboardOnClear },
+                            set: { clipboard.setClearSystemClipboardOnClear($0) }
+                        ))
+                        Toggle(model.t("clipboardPinsAtTop"), isOn: Binding(
+                            get: { clipboard.settings.pinsAtTop },
+                            set: { clipboard.setPinsAtTop($0) }
+                        ))
+
+                        Divider()
+
+                        HStack {
+                            Button(model.t("clipboardClearHistory")) {
+                                clipboard.clearHistory()
+                            }
+                            Button(model.t("clipboardClearAllHistory"), role: .destructive) {
+                                showClearAllConfirmation = true
+                            }
                         }
                     }
                 }

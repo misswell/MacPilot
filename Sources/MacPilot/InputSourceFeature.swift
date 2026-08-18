@@ -1315,8 +1315,13 @@ struct InputSourcesView: View {
                     .foregroundStyle(.orange)
             }
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 14))
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var currentSourceCard: some View {
@@ -1341,8 +1346,13 @@ struct InputSourcesView: View {
                 Button(model.t("refresh")) { inputSources.refreshSources() }
             }
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var defaultSourceCard: some View {
@@ -1363,8 +1373,13 @@ struct InputSourcesView: View {
             .labelsHidden()
             .frame(maxWidth: 420)
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var indicatorCard: some View {
@@ -1398,8 +1413,13 @@ struct InputSourcesView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var shortcutCard: some View {
@@ -1444,8 +1464,13 @@ struct InputSourcesView: View {
                 .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
             }
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var appRulesCard: some View {
@@ -1477,8 +1502,13 @@ struct InputSourcesView: View {
                 }
             }
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var browserRulesCard: some View {
@@ -1510,8 +1540,13 @@ struct InputSourcesView: View {
                 }
             }
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private func sectionTitle(_ title: String) -> some View {

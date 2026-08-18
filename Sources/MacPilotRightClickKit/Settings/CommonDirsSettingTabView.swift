@@ -22,50 +22,52 @@ struct CommonDirsSettingTabView: View {
     @State private var showCommonDirImporter = false
 
     var body: some View {
-        Form {
-            Section {
-                Toggle(isOn: $store.showCommonDirs) {
-                    Text(appLocalized: "Enable common folders")
-                }
-                    .onChange(of: store.showCommonDirs) {
-                        NotificationCenter.default.post(name: .menuConfigShouldUpdate, object: nil)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                RightClickSettingsCard {
+                    Toggle(isOn: $store.showCommonDirs) {
+                        Text(appLocalized: "Enable common folders")
                     }
-                Toggle(isOn: $store.foldCommonDirMenu) {
-                    Text(appLocalized: "Collapse menu")
-                }
-                    .disabled(!store.showCommonDirs)
-                    .onChange(of: store.foldCommonDirMenu) {
-                        NotificationCenter.default.post(name: .menuConfigShouldUpdate, object: nil)
-                    }
-            }
-
-            Section {
-                HStack {
-                    Spacer()
-                    Button {
-                        showCommonDirImporter = true
-                    } label: {
-                        Label(AppLocalization.localized("Add Folder"), systemImage: "folder.badge.plus")
-                    }
-                }
-
-                ForEach(store.cdirs) { item in
-                    LabeledContent {
-                        Button {
-                            removeCommonDir(item)
-                        } label: {
-                            Image(systemName: "trash")
+                        .onChange(of: store.showCommonDirs) {
+                            NotificationCenter.default.post(name: .menuConfigShouldUpdate, object: nil)
                         }
-                        .buttonStyle(.borderless)
-                    } label: {
-                        Label(item.displayName, systemImage: item.icon.isEmpty ? "folder" : item.icon)
+                    Toggle(isOn: $store.foldCommonDirMenu) {
+                        Text(appLocalized: "Collapse menu")
+                    }
+                        .disabled(!store.showCommonDirs)
+                        .onChange(of: store.foldCommonDirMenu) {
+                            NotificationCenter.default.post(name: .menuConfigShouldUpdate, object: nil)
+                        }
+                }
+
+                RightClickSettingsCard {
+                    Text(appLocalized: "Added Folders")
+                        .font(.headline)
+                    HStack {
+                        Spacer()
+                        Button {
+                            showCommonDirImporter = true
+                        } label: {
+                            Label(AppLocalization.localized("Add Folder"), systemImage: "folder.badge.plus")
+                        }
+                    }
+
+                    ForEach(store.cdirs) { item in
+                        LabeledContent {
+                            Button {
+                                removeCommonDir(item)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        } label: {
+                            Label(item.displayName, systemImage: item.icon.isEmpty ? "folder" : item.icon)
+                        }
                     }
                 }
-            } header: {
-                Text(appLocalized: "Added Folders")
             }
+            .padding(.vertical, 20)
         }
-        .formStyle(.grouped)
         .fileImporter(
             isPresented: $showCommonDirImporter,
             allowedContentTypes: [.directory],

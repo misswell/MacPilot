@@ -6,23 +6,26 @@ struct SmoothScrollSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(model.t("smoothScrolling")).font(.system(size: 30, weight: .bold))
                     Text(model.t("smoothScrollingSubtitle")).foregroundStyle(.secondary)
                 }
-                Toggle(model.t("smoothScrollingEnable"), isOn: Binding(
-                    get: { smoothScrolling.settings.isEnabled },
-                    set: { smoothScrolling.setEnabled($0) }
-                ))
-                .toggleStyle(.switch)
-                if !smoothScrolling.settings.isEnabled {
-                    Label(model.t("smoothScrollingNotConfiguredHint"), systemImage: "info.circle")
-                        .font(.subheadline).foregroundStyle(.secondary)
+
+                SettingsCard {
+                    Toggle(model.t("smoothScrollingEnable"), isOn: Binding(
+                        get: { smoothScrolling.settings.isEnabled },
+                        set: { smoothScrolling.setEnabled($0) }
+                    ))
+                    .toggleStyle(.switch)
+                    if !smoothScrolling.settings.isEnabled {
+                        Label(model.t("smoothScrollingNotConfiguredHint"), systemImage: "info.circle")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    permissionStatus
                 }
-                permissionStatus
-                Divider()
-                controlGroup {
+
+                SettingsCard {
                     Toggle(model.t("smoothScrollingVertical"), isOn: Binding(
                         get: { smoothScrolling.settings.smoothVertical },
                         set: { smoothScrolling.setSmoothVertical($0) }
@@ -31,9 +34,21 @@ struct SmoothScrollSettingsView: View {
                         get: { smoothScrolling.settings.smoothHorizontal },
                         set: { smoothScrolling.setSmoothHorizontal($0) }
                     ))
+                    Toggle(model.t("smoothScrollingReverseVertical"), isOn: Binding(
+                        get: { smoothScrolling.settings.reverseVertical },
+                        set: { smoothScrolling.setReverseVertical($0) }
+                    ))
+                    Toggle(model.t("smoothScrollingReverseHorizontal"), isOn: Binding(
+                        get: { smoothScrolling.settings.reverseHorizontal },
+                        set: { smoothScrolling.setReverseHorizontal($0) }
+                    ))
+                    Toggle(model.t("smoothScrollingBlockWithCommand"), isOn: Binding(
+                        get: { smoothScrolling.settings.blockSmoothWhileCommandHeld },
+                        set: { smoothScrolling.setBlockSmoothWhileCommandHeld($0) }
+                    ))
                 }
-                Divider()
-                controlGroup {
+
+                SettingsCard {
                     Toggle(model.t("smoothScrollingAdaptiveSpeed"), isOn: Binding(
                         get: { smoothScrolling.settings.adaptiveSpeedEnabled },
                         set: { smoothScrolling.setAdaptiveSpeedEnabled($0) }
@@ -44,20 +59,9 @@ struct SmoothScrollSettingsView: View {
                             set: { smoothScrolling.setAdaptiveSpeedMaximum($0) }
                         ), range: SmoothScrollSettings.adaptiveSpeedRange, step: 0.1, display: { String(format: "%.1f×", $0) })
                     }
-                }
-                Divider()
-                controlGroup {
-                    Toggle(model.t("smoothScrollingReverseVertical"), isOn: Binding(
-                        get: { smoothScrolling.settings.reverseVertical },
-                        set: { smoothScrolling.setReverseVertical($0) }
-                    ))
-                    Toggle(model.t("smoothScrollingReverseHorizontal"), isOn: Binding(
-                        get: { smoothScrolling.settings.reverseHorizontal },
-                        set: { smoothScrolling.setReverseHorizontal($0) }
-                    ))
-                }
-                Divider()
-                VStack(alignment: .leading, spacing: 14) {
+
+                    Divider()
+
                     sliderRow(model.t("smoothScrollingStep"), value: Binding(
                         get: { smoothScrolling.settings.minimumStep },
                         set: { smoothScrolling.setMinimumStep($0) }
@@ -74,12 +78,14 @@ struct SmoothScrollSettingsView: View {
                         get: { smoothScrolling.settings.deadZone },
                         set: { smoothScrolling.setDeadZone($0) }
                     ), range: SmoothScrollSettings.deadZoneRange, step: 0.1, display: { String(format: "%.1f", $0) })
+
+                    Divider()
+
+                    Toggle(model.t("smoothScrollingSimulatePhases"), isOn: Binding(
+                        get: { smoothScrolling.settings.simulatesTrackpadPhases },
+                        set: { smoothScrolling.setSimulatesTrackpadPhases($0) }
+                    ))
                 }
-                Divider()
-                Toggle(model.t("smoothScrollingSimulatePhases"), isOn: Binding(
-                    get: { smoothScrolling.settings.simulatesTrackpadPhases },
-                    set: { smoothScrolling.setSimulatesTrackpadPhases($0) }
-                ))
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
         }
@@ -104,10 +110,6 @@ struct SmoothScrollSettingsView: View {
                 .padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
             }
         }
-    }
-
-    private func controlGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) { content() }
     }
 
     private func sliderRow(

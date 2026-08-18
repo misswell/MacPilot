@@ -1713,7 +1713,12 @@ struct ScreenCaptureView: View {
             shortcutRow(.objectCutout, action: { capture.startObjectCutoutCapture() })
         }
         .padding(20)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var recordingCard: some View {
@@ -1831,7 +1836,12 @@ struct ScreenCaptureView: View {
             }
         }
         .padding(20)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var recordingStatusText: String {
@@ -1942,7 +1952,12 @@ struct ScreenCaptureView: View {
             }
         }
         .padding(20)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     // MARK: - Schedule card
@@ -2013,7 +2028,12 @@ struct ScreenCaptureView: View {
             }
         }
         .padding(20)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private func intervalRow(label: String, value: Int, onSet: @escaping (Int) -> Void) -> some View {
@@ -2102,7 +2122,12 @@ struct ScreenCaptureView: View {
             }
         }
         .padding(20)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private func formatLabel(_ format: ScreenCaptureImageFormat) -> String {
@@ -2184,7 +2209,12 @@ struct ScreenCaptureView: View {
             }
         }
         .padding(20)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var historyCard: some View {
@@ -2242,7 +2272,12 @@ struct ScreenCaptureView: View {
             }
         }
         .padding(20)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.07))
+        )
+        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private func historyKindLabel(_ kind: SmartCaptureHistoryKind) -> String {

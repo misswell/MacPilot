@@ -1776,95 +1776,110 @@ struct WindowSwitcherSettingsView: View {
     @ObservedObject var windowSwitcher: WindowSwitcherModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(model.t("windowSwitcher"))
-                    .font(.headline)
-                Spacer()
-                Toggle(
-                    "",
-                    isOn: Binding(
-                        get: { windowSwitcher.settings.isEnabled },
-                        set: { windowSwitcher.setEnabled($0) }
-                    )
-                )
-                .labelsHidden()
-            }
-            Text(model.t("windowSwitcherSubtitle"))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Text(model.t("windowSwitcherShortcutHint"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(model.t("windowSwitcher")).font(.system(size: 30, weight: .bold))
+                    Text(model.t("windowSwitcherSubtitle")).foregroundStyle(.secondary)
+                }
 
-            Toggle(
-                model.t("windowSwitcherIncludeMinimized"),
-                isOn: Binding(
-                    get: { windowSwitcher.settings.includeMinimizedWindows },
-                    set: { windowSwitcher.setIncludeMinimizedWindows($0) }
-                )
-            )
-            Toggle(
-                model.t("windowSwitcherIncludeHidden"),
-                isOn: Binding(
-                    get: { windowSwitcher.settings.includeHiddenApplications },
-                    set: { windowSwitcher.setIncludeHiddenApplications($0) }
-                )
-            )
-            Toggle(
-                model.t("windowSwitcherShowThumbnails"),
-                isOn: Binding(
-                    get: { windowSwitcher.settings.showThumbnails },
-                    set: { windowSwitcher.setShowThumbnails($0) }
-                )
-            )
-            Toggle(
-                model.t("windowSwitcherShowTitles"),
-                isOn: Binding(
-                    get: { windowSwitcher.settings.showWindowTitles },
-                    set: { windowSwitcher.setShowWindowTitles($0) }
-                )
-            )
-            Toggle(
-                model.t("windowSwitcherShowIconsOnly"),
-                isOn: Binding(
-                    get: { windowSwitcher.settings.showIconsOnly },
-                    set: { windowSwitcher.setShowIconsOnly($0) }
-                )
-            )
-            Picker(model.t("windowSwitcherPreviewSize"), selection: Binding(
-                get: { windowSwitcher.settings.previewSize },
-                set: { windowSwitcher.setPreviewSize($0) }
-            )) {
-                Text(model.t("windowSwitcherPreviewSmall")).tag(WindowSwitcherPreviewSize.small)
-                Text(model.t("windowSwitcherPreviewMedium")).tag(WindowSwitcherPreviewSize.medium)
-                Text(model.t("windowSwitcherPreviewLarge")).tag(WindowSwitcherPreviewSize.large)
-            }
-
-            if !windowSwitcher.hasAccessibilityPermission {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label(model.t("windowSwitcherAccessibilityRequired"), systemImage: "lock.shield")
-                        .foregroundStyle(.orange)
+                SettingsCard {
                     HStack {
-                        Button(model.t("windowSwitcherGrantAccessibility")) {
-                            windowSwitcher.requestAccessibility()
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(model.t("windowSwitcherTitle")).font(.headline)
+                            Text(model.t("windowSwitcherShortcutHint"))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
                         }
-                        Button(model.t("openAccessibilitySettings")) {
-                            windowSwitcher.openAccessibilitySettings()
-                        }
+                        Spacer()
+                        Toggle(
+                            "",
+                            isOn: Binding(
+                                get: { windowSwitcher.settings.isEnabled },
+                                set: { windowSwitcher.setEnabled($0) }
+                            )
+                        )
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.large)
                     }
                 }
-                .padding(12)
-                .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
-            } else {
-                Label(model.t("windowSwitcherAccessibilityReady"), systemImage: "checkmark.shield.fill")
-                    .foregroundStyle(.green)
-            }
 
-            Button(model.t("windowSwitcherTestNow")) {
-                windowSwitcher.showSwitcherNow()
+                SettingsCard {
+                    Toggle(
+                        model.t("windowSwitcherIncludeMinimized"),
+                        isOn: Binding(
+                            get: { windowSwitcher.settings.includeMinimizedWindows },
+                            set: { windowSwitcher.setIncludeMinimizedWindows($0) }
+                        )
+                    )
+                    Toggle(
+                        model.t("windowSwitcherIncludeHidden"),
+                        isOn: Binding(
+                            get: { windowSwitcher.settings.includeHiddenApplications },
+                            set: { windowSwitcher.setIncludeHiddenApplications($0) }
+                        )
+                    )
+                    Toggle(
+                        model.t("windowSwitcherShowThumbnails"),
+                        isOn: Binding(
+                            get: { windowSwitcher.settings.showThumbnails },
+                            set: { windowSwitcher.setShowThumbnails($0) }
+                        )
+                    )
+                    Toggle(
+                        model.t("windowSwitcherShowTitles"),
+                        isOn: Binding(
+                            get: { windowSwitcher.settings.showWindowTitles },
+                            set: { windowSwitcher.setShowWindowTitles($0) }
+                        )
+                    )
+                    Toggle(
+                        model.t("windowSwitcherShowIconsOnly"),
+                        isOn: Binding(
+                            get: { windowSwitcher.settings.showIconsOnly },
+                            set: { windowSwitcher.setShowIconsOnly($0) }
+                        )
+                    )
+                    Divider()
+                    Picker(model.t("windowSwitcherPreviewSize"), selection: Binding(
+                        get: { windowSwitcher.settings.previewSize },
+                        set: { windowSwitcher.setPreviewSize($0) }
+                    )) {
+                        Text(model.t("windowSwitcherPreviewSmall")).tag(WindowSwitcherPreviewSize.small)
+                        Text(model.t("windowSwitcherPreviewMedium")).tag(WindowSwitcherPreviewSize.medium)
+                        Text(model.t("windowSwitcherPreviewLarge")).tag(WindowSwitcherPreviewSize.large)
+                    }
+                }
+
+                SettingsCard {
+                    if !windowSwitcher.hasAccessibilityPermission {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(model.t("windowSwitcherAccessibilityRequired"), systemImage: "lock.shield")
+                                .foregroundStyle(.orange)
+                            HStack {
+                                Button(model.t("windowSwitcherGrantAccessibility")) {
+                                    windowSwitcher.requestAccessibility()
+                                }
+                                Button(model.t("openAccessibilitySettings")) {
+                                    windowSwitcher.openAccessibilitySettings()
+                                }
+                            }
+                        }
+                    } else {
+                        Label(model.t("windowSwitcherAccessibilityReady"), systemImage: "checkmark.shield.fill")
+                            .foregroundStyle(.green)
+                    }
+
+                    Divider()
+
+                    Button(model.t("windowSwitcherTestNow")) {
+                        windowSwitcher.showSwitcherNow()
+                    }
+                    .disabled(!windowSwitcher.settings.isEnabled || !windowSwitcher.hasAccessibilityPermission)
+                }
             }
-            .disabled(!windowSwitcher.settings.isEnabled || !windowSwitcher.hasAccessibilityPermission)
+            .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
         }
         .onAppear { windowSwitcher.refreshPermissionStatus() }
     }
