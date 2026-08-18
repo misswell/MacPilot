@@ -175,3 +175,14 @@ alt-tab-macos 使用 GPL-3.0 授权，MacPilot 只参考其公开行为和架构
 - 相位模拟按 Mos 顺序先发送 `TrackingBegin` 再进入 `TrackingOngoing`/惯性阶段，避免普通应用因缺少开始阶段而忽略平滑滚动。
 
 平滑滚动部分改编自 Caldis 的 [Mos](https://github.com/Caldis/Mos)（提交 `5f93f47`，CC BY-NC 4.0）。仅迁移与平滑滚动相关的算法和流水线，不包含按钮映射、Logi/HID、更新器或 Mos 的完整 UI；第三方声明已更新到 `THIRD_PARTY_NOTICES.md`，该部分必须保持非商业使用。
+
+## 十六、Finder 右键菜单扩展
+
+集成自 RClick（GPLv3，https://github.com/wflixu/RClick）的 FinderSync 右键菜单，随 `v1.1.126` 首次发布，`v1.1.127` 修复启动崩溃：
+
+- 扩展本体（`FinderSync/`，沙盒、App Group entitlement）只负责菜单渲染与事件转发，通过 `DistributedNotificationCenter` 与主 App 通信，**不读取 SwiftData**。
+- 主 App（非沙盒）与扩展通过 `UserDefaults(suiteName: appGroupIdentifier)` 共享菜单开关等设置——非沙盒 App 访问 App Group 的 **UserDefaults 可用**，无需处理。
+- **关键坑（v1.1.126 启动崩溃根因）**：主 App 是非沙盒的，带 `com.apple.security.application-groups` entitlement 也无法向 App Group 容器写文件（TCC 返回 errno 1 / `Sandbox access to file-write-create denied`）。原 `SharedDataManager.sharedModelContainer` 直接把 SQLite 放到 `~/Library/Group Containers/group.com.misswell.macpilot.rightclick/`，SwiftData 初始化抛错后 `fatalError`，导致 App 启动即崩溃。
+- **修复**：`ModelContainer.swift` 先检查 App Group 目录是否真正可写（`isWritableFile`，仅沙盒上下文为 true），不可写则回退到 `~/Library/Application Support/MacPilot/RightClick/RClickDatabase.sqlite`；只有全部候选都失败才 `fatalError`。
+- 判断「App Group 是否可写」必须用实际进程（带真实 entitlements 签名）验证；从终端直接运行二进制会继承终端的 TCC 身份，行为可能与真实启动不同。
+- `swiftc -output-file-map <(...)` 进程替换在部分 shell/沙箱环境下会报 `unable to load output file map '/dev/fd/11'`；本地临时构建可改为先写临时文件再传入（CI 的 runner 不受影响）。
