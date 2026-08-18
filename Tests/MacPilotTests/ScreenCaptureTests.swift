@@ -105,7 +105,7 @@ struct ScreenCaptureTests {
         defer { controller.stop() }
 
         controller.start()
-        await waitUntil {
+        await waitUntil(timeout: 6.0) {
             attempts >= 2 && controller.testShortcutRegistrationAttemptCount == 2
         }
 

@@ -586,6 +586,7 @@ enum AppText {
         "smoothScrollingStep": "最短步长", "smoothScrollingSpeed": "速度增益", "smoothScrollingDuration": "持续时长",
         "smoothScrollingDeadZone": "死区", "smoothScrollingSimulatePhases": "模拟触控板相位",
         "smoothScrollingAdaptiveSpeed": "滚轮越快加速越多", "smoothScrollingAdaptiveSpeedMaximum": "自动加速上限",
+        "smoothScrollingBlockWithCommand": "按住 Command 时禁用平滑滚动",
         "smoothScrollingAccessibilityRequired": "平滑滚动需要辅助功能权限来读取并改写其他应用中的滚轮事件。",
         "smoothScrollingGrantAccessibility": "授权辅助功能…", "smoothScrollingOpenAccessibility": "打开辅助功能设置",
         "smoothScrollingAccessibilityReady": "辅助功能权限已就绪",
@@ -609,7 +610,12 @@ enum AppText {
         "clipboardAccessibilityRequired": "粘贴需要辅助功能权限来模拟 ⌘V。",
         "clipboardGrantAccessibility": "授权辅助功能…",
         "clipboardAccessibilityReady": "辅助功能权限已就绪",
-        "clipboardNotConfiguredHint": "未启用时不会记录剪贴板内容。"
+        "clipboardNotConfiguredHint": "未启用时不会记录剪贴板内容。",
+        "clipboardSearchPlaceholder": "搜索剪贴板历史…",
+        "clipboardHistoryEmpty": "剪贴板历史为空",
+        "clipboardFooterHint": "%d 条 · ↑↓ 选择 · ⏎ 粘贴 · ⌘⏎ 复制 · ⌫ 删除",
+        "clipboardImageLabel": "图片",
+        "clipboardHotkeyLabel": "快捷键 %@"
     ]
 
     static func value(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
@@ -861,6 +867,7 @@ enum AppText {
             "smoothScrollingStep": "Minimum step", "smoothScrollingSpeed": "Speed gain", "smoothScrollingDuration": "Glide duration",
             "smoothScrollingDeadZone": "Dead zone", "smoothScrollingSimulatePhases": "Simulate trackpad phases",
             "smoothScrollingAdaptiveSpeed": "Accelerate more when scrolling faster", "smoothScrollingAdaptiveSpeedMaximum": "Auto-acceleration limit",
+            "smoothScrollingBlockWithCommand": "Disable smooth scrolling while Command is held",
             "smoothScrollingAccessibilityRequired": "Smooth scrolling needs Accessibility access to read and rewrite wheel events in other apps.",
             "smoothScrollingGrantAccessibility": "Grant Accessibility…", "smoothScrollingOpenAccessibility": "Open Accessibility Settings",
             "smoothScrollingAccessibilityReady": "Accessibility access is ready",
@@ -884,7 +891,12 @@ enum AppText {
             "clipboardAccessibilityRequired": "Pasting requires Accessibility access to simulate ⌘V.",
             "clipboardGrantAccessibility": "Grant Accessibility…",
             "clipboardAccessibilityReady": "Accessibility access is ready",
-            "clipboardNotConfiguredHint": "When disabled, clipboard content is not recorded."
+            "clipboardNotConfiguredHint": "When disabled, clipboard content is not recorded.",
+            "clipboardSearchPlaceholder": "Search clipboard history…",
+            "clipboardHistoryEmpty": "Clipboard history is empty",
+            "clipboardFooterHint": "%d items · ↑↓ select · ⏎ paste · ⌘⏎ copy · ⌫ delete",
+            "clipboardImageLabel": "Image",
+            "clipboardHotkeyLabel": "Shortcut %@"
         ]
 }
 
@@ -963,7 +975,7 @@ final class MacPilotModel: ObservableObject {
     @Published private(set) var isResettingAccessibility = false
     @Published private(set) var isResettingScreenCapture = false
     @Published private(set) var launchesAtLogin = false
-    @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; screenRecording.language = language; windowSwitcher.language = language; saveIfReady() } }
+    @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; screenRecording.language = language; windowSwitcher.language = language; clipboard.language = language; saveIfReady() } }
     let ble = BLEUnlockModel()
     let updater = SoftwareUpdater()
     let fileCompression = FolderCompressionModel()
@@ -1077,6 +1089,7 @@ final class MacPilotModel: ObservableObject {
         smoothScrolling.persist = { [weak self] in self?.saveIfReady() }
         clipboard.persist = { [weak self] in self?.saveIfReady() }
         windowSwitcher.language = language
+        clipboard.language = language
         ble.startObservingSystemState()
         ble.activateFromConfiguration()
         fileCompression.activateFromConfiguration()

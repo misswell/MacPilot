@@ -47,6 +47,9 @@ final class ClipboardModel: ObservableObject {
     @Published private(set) var settings = ClipboardSettings()
     @Published private(set) var hasAccessibilityPermission = false
 
+    /// 界面语言（由 MacPilotModel 同步），用于面板内文案。
+    var language: AppLanguage = .system
+
     let history = ClipboardHistory()
     private let monitor = ClipboardMonitor()
 
@@ -90,6 +93,10 @@ final class ClipboardModel: ObservableObject {
         monitor.stop()
         unregisterHotKey()
         closePanel()
+    }
+
+    func t(_ key: String, _ arguments: CVarArg...) -> String {
+        AppText.value(key, language: language, arguments: arguments)
     }
 
     private func start() {

@@ -32,44 +32,6 @@ enum Tabs: String, CaseIterable, Identifiable {
 struct RightClickSettingsView: View {
     @State private var selectedTab: Tabs = .general
     @EnvironmentObject var appState: AppState
-    @State var showSelectApp = false
-
-    @ViewBuilder
-    private var sidebar: some View {
-        List(selection: self.$selectedTab) {
-            ForEach(Tabs.allCases, id: \.self) { tab in
-                Label {
-                    Text(appLocalized: tab.rawValue)
-                } icon: {
-                    Image(systemName: tab.icon)
-                }
-                    .labelStyle(.titleAndIcon)
-            }
-        }
-        .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(220)
-        .safeAreaInset(edge: .top) {
-            //  App Icon 部分
-            VStack {
-                HStack {
-                    Spacer()
-                    Image("Logo")
-                        .resizable()
-                        .frame(width: 64, height: 64)
-                    Spacer()
-                }
-                HStack {
-                    Spacer()
-                    Text("MacPilot").font(.title)
-                    Text("\(self.getAppVersion())")
-                    Spacer()
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 24)
-        }
-        .toolbar(removing: .sidebarToggle)
-    }
 
     @ViewBuilder var detailView: some View {
         // 右侧内容
@@ -95,10 +57,50 @@ struct RightClickSettingsView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            self.sidebar
-        } detail: {
-            self.detailView
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(appLocalized: "Right-click Menu")
+                    .font(.system(size: 26, weight: .bold))
+                Text(appLocalized: "Right-click Menu Subtitle")
+                    .foregroundStyle(.secondary)
+            }
+
+            tabBar
+
+            Divider()
+
+            detailView
+        }
+        .padding(.horizontal, 36)
+        .padding(.top, 30)
+        .padding(.bottom, 30)
+    }
+
+    private var tabBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(Tabs.allCases, id: \.self) { tab in
+                    Button {
+                        selectedTab = tab
+                    } label: {
+                        Label {
+                            Text(appLocalized: tab.rawValue)
+                        } icon: {
+                            Image(systemName: tab.icon)
+                        }
+                        .font(.subheadline)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(
+                            selectedTab == tab
+                                ? Color.accentColor.opacity(0.12)
+                                : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 8)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
     }
 

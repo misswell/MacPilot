@@ -246,10 +246,24 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
 
         let menu = NSMenu(title: "MacPilot")
 
+        // 品牌头部：禁用态标题项 + 图标，让菜单一眼属于 MacPilot。
+        let brandItem = NSMenuItem(title: "MacPilot", action: nil, keyEquivalent: "")
+        brandItem.isEnabled = false
+        brandItem.image = templateSymbol("cursorarrow.click")
+        menu.addItem(brandItem)
+
         // 如果缓存为空，触发请求并返回加载中的菜单
         guard let config = cachedMenuConfig else {
             requestMenuConfig()
             menu.addItem(withTitle: AppLocalization.localized("MacPilot (loading...)"), action: nil, keyEquivalent: "")
+            return menu
+        }
+
+        // 全部为空时给出明确反馈，避免只剩一个空品牌头。
+        if config.actions.isEmpty, config.apps.isEmpty, config.newFiles.isEmpty, config.commonDirs.isEmpty {
+            let emptyItem = NSMenuItem(title: AppLocalization.localized("No items"), action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            menu.addItem(emptyItem)
             return menu
         }
 
@@ -274,10 +288,15 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
                 }
                 let actionsItem = NSMenuItem(title: actionsTitle, action: nil, keyEquivalent: "")
                 actionsItem.submenu = actionsSubMenu
-                actionsItem.image = templateSymbol("ellipsis.circle")
+                actionsItem.image = templateSymbol("bolt.square")
+                menu.addItem(NSMenuItem.separator())
                 menu.addItem(actionsItem)
             } else {
-                // 不折叠：直接显示菜单项
+                // 不折叠：分组标题 + 直接显示菜单项
+                menu.addItem(NSMenuItem.separator())
+                let header = NSMenuItem(title: AppLocalization.localized("Actions"), action: nil, keyEquivalent: "")
+                header.isEnabled = false
+                menu.addItem(header)
                 for action in config.actions {
                     let item = NSMenuItem(
                         title: AppLocalization.localizedActionName(id: action.id, fallback: action.name),
@@ -309,10 +328,15 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
                 }
                 let appsItem = NSMenuItem(title: appsTitle, action: nil, keyEquivalent: "")
                 appsItem.submenu = appsSubMenu
-                appsItem.image = templateSymbol("square.and.arrow.up.on.square")
+                appsItem.image = templateSymbol("app.badge")
+                menu.addItem(NSMenuItem.separator())
                 menu.addItem(appsItem)
             } else {
-                // 不折叠：直接显示菜单项
+                // 不折叠：分组标题 + 直接显示菜单项
+                menu.addItem(NSMenuItem.separator())
+                let header = NSMenuItem(title: AppLocalization.localized("Open With"), action: nil, keyEquivalent: "")
+                header.isEnabled = false
+                menu.addItem(header)
                 for app in config.apps {
                     let item = NSMenuItem(title: app.name, action: #selector(handleAppClick(_:)), keyEquivalent: "")
                     item.tag = hashForApp(app)
@@ -340,9 +364,14 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
                 let newFilesItem = NSMenuItem(title: newFilesTitle, action: nil, keyEquivalent: "")
                 newFilesItem.submenu = newFilesSubMenu
                 newFilesItem.image = templateSymbol("doc.badge.plus")
+                menu.addItem(NSMenuItem.separator())
                 menu.addItem(newFilesItem)
             } else {
-                // 不折叠：直接显示菜单项
+                // 不折叠：分组标题 + 直接显示菜单项
+                menu.addItem(NSMenuItem.separator())
+                let header = NSMenuItem(title: AppLocalization.localized("New File"), action: nil, keyEquivalent: "")
+                header.isEnabled = false
+                menu.addItem(header)
                 for newFile in config.newFiles {
                     let item = NSMenuItem(title: newFile.name, action: #selector(handleNewFileClick(_:)), keyEquivalent: "")
                     item.tag = hashForNewFile(newFile)
@@ -369,10 +398,15 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
                 }
                 let commonDirsItem = NSMenuItem(title: commonDirsTitle, action: nil, keyEquivalent: "")
                 commonDirsItem.submenu = commonDirsSubMenu
-                commonDirsItem.image = templateSymbol("folder")
+                commonDirsItem.image = templateSymbol("folder.badge.gearshape")
+                menu.addItem(NSMenuItem.separator())
                 menu.addItem(commonDirsItem)
             } else {
-                // 不折叠：直接显示菜单项
+                // 不折叠：分组标题 + 直接显示菜单项
+                menu.addItem(NSMenuItem.separator())
+                let header = NSMenuItem(title: AppLocalization.localized("Common Dirs"), action: nil, keyEquivalent: "")
+                header.isEnabled = false
+                menu.addItem(header)
                 for commonDir in config.commonDirs {
                     let item = NSMenuItem(title: commonDir.name, action: #selector(handleCommonDirClick(_:)), keyEquivalent: "")
                     item.tag = hashForCommonDir(commonDir)

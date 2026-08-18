@@ -197,3 +197,14 @@ alt-tab-macos 使用 GPL-3.0 授权，MacPilot 只参考其公开行为和架构
 - 粘贴通过 CGEvent 模拟 ⌘V（需要辅助功能权限）；⌘ 点击=复制、⌥ 点击=粘贴、⌥⇧=无格式粘贴。
 - 去依赖移植：不用 SwiftData（上次 App Group 容器坑的教训）、不用 Maccy 的 Sauce/Defaults/KeyboardShortcuts/Settings/Fuse 依赖。
 - 已知取舍：搜索仅大小写不敏感子串（未移植 Fuse 模糊搜索）；数字/字母快捷键优先于在搜索框输入数字/字母（与 Maccy 行为一致）；未提供忽略应用/正则规则（v2 候选）。
+
+## 十八、剪切板与右键菜单样式统一（v1.1.132）
+
+把剪切板面板与 Finder 右键菜单的界面统一到 MacPilot 现有视觉语言，去掉「复制」痕迹：
+
+- **剪切板面板**：背景改为 `.ultraThinMaterial` + 白色描边圆角（与窗口切换器一致），新增顶部标题栏（图标 + 剪切板 + 快捷键），选中行改为系统蓝高亮 + 蓝色描边，历史列表高度上限 440、宽度上限 480（避免历史条目多时面板撑满整屏）。
+- **剪切板面板文案**：接入应用双语（`ClipboardModel.language` + `t(_:)`，由 `MacPilotModel.language` 同步），不再写死中文。
+- **右键菜单设置页**：去掉 RClick 的 NavigationSplitView 侧边栏与 Logo，改为 MacPilot 风格的大标题 + 图标标签栏（通用/应用/操作/新建文件/常用目录/关于），选中态与主窗口侧边栏一致。
+- **关于页**：应用图标改用 `NSApp.applicationIconImage`，RClick GitHub 链接替换为 MacPilot 仓库。
+- **Finder 右键菜单**：顶部加品牌头部（MacPilot + 图标），展开的各分组加禁用态分组标题与分隔线，子菜单图标与设置页标签一致，空配置时给出「暂无可用菜单项」。
+- **中文本地化**：补齐 MacPilotRightClickKit 与 FinderSync 两份 `AppLocalization.simplifiedChinese` 词条（约 120 项），设置页与右键菜单全程中文。

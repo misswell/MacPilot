@@ -99,8 +99,10 @@ final class ClipboardPanel: NSPanel {
         guard let screen = NSScreen.main else { return }
         let visibleFrame = screen.visibleFrame
         let panelSize = contentView?.fittingSize ?? NSSize(width: 420, height: 420)
-        let width = min(max(panelSize.width, 360), visibleFrame.width - 24)
-        let height = min(max(panelSize.height, 120), visibleFrame.height - 60)
+        // 列表内容会让 fittingSize 随历史长度增长，这里给面板一个
+        // 有上限的合理尺寸：内容较少时贴合内容，较多时固定并滚动。
+        let width = min(max(panelSize.width, 360), 480, visibleFrame.width - 24)
+        let height = min(max(panelSize.height, 120), 440, visibleFrame.height - 60)
         setContentSize(NSSize(width: width, height: height))
         let x = visibleFrame.midX - width / 2
         let y = visibleFrame.maxY - height - 12
@@ -209,16 +211,20 @@ struct ClipboardPanelContent: View {
     @ObservedObject var model: ClipboardModel
     @FocusState private var searchFocused: Bool
 
-    private static let cornerRadius: CGFloat = 12
-    private static let horizontalPadding: CGFloat = 10
+    private static let cornerRadius: CGFloat = 18
+    private static let horizontalPadding: CGFloat = 12
 
     var body: some View {
         VStack(spacing: 0) {
+            header
+                .padding(.horizontal, Self.horizontalPadding + 2)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
+
             if model.settings.showSearch {
                 searchField
                     .padding(.horizontal, Self.horizontalPadding)
-                    .padding(.top, 10)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 10)
             }
 
             historyList
@@ -226,12 +232,16 @@ struct ClipboardPanelContent: View {
 
             footer
                 .padding(.horizontal, Self.horizontalPadding)
-                .padding(.vertical, 8)
+                .padding(.vertical, 10)
         }
         .background(
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .fill(.regularMaterial)
-                .shadow(color: .black.opacity(0.18), radius: 20, y: 6)
+            RoundedRectangle(cornerRadius: Self.cornerRadius)
+                .fill(.ultraThinMaterial)
+                .shadow(color: .black.opacity(0.18), radius: 22, y: 8)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Self.cornerRadius)
+                .stroke(.white.opacity(0.18))
         )
         .onChange(of: searchFocused) { _, focused in
             if let panel = windowPanel {
@@ -246,6 +256,19 @@ struct ClipboardPanelContent: View {
         }
     }
 
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clipboard")
+                .foregroundStyle(.secondary)
+            Text(model.t("clipboard"))
+                .font(.headline)
+            Spacer()
+            Text(model.t("clipboardHotkeyLabel", model.settings.hotkey.displayName))
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var windowPanel: ClipboardPanel? {
         NSApp.keyWindow as? ClipboardPanel
     }
@@ -253,10 +276,10 @@ struct ClipboardPanelContent: View {
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
             TextField(
-                "搜索剪贴板历史…",
+                model.t("clipboardSearchPlaceholder"),
                 text: Binding(
                     get: { model.history.searchQuery },
                     set: { model.history.searchQuery = $0 }
@@ -277,8 +300,9 @@ struct ClipboardPanelContent: View {
             }
         }
         .padding(.horizontal, 8)
-        .frame(height: 26)
-        .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .frame(height: 28)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary.opacity(0.6)))
     }
 
     private var historyList: some View {
@@ -289,7 +313,8 @@ struct ClipboardPanelContent: View {
                         ClipboardItemRow(
                             item: item,
                             shortcut: Self.shortcutLabel(for: item, in: model.history.items),
-                            isSelected: index == model.history.selectedIndex
+                            isSelected: index == model.history.selectedIndex,
+                            imageLabel: model.t("clipboardImageLabel")
                         ) {
                             model.performAction(on: item, modifierFlags: NSEvent.modifierFlags)
                         }
@@ -315,23 +340,16 @@ struct ClipboardPanelContent: View {
     }
 
     private var footer: some View {
-        HStack {
-            if model.history.items.isEmpty {
-                Text("剪贴板历史为空")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("\(model.history.items.count) 条 · ↑↓ 选择 · ⏎ 粘贴 · ⌘⏎ 复制 · ⌫ 删除")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+        HStack(spacing: 8) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+            Text(model.history.items.isEmpty
+                 ? model.t("clipboardHistoryEmpty")
+                 : model.t("clipboardFooterHint", model.history.items.count))
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Spacer()
-            let hotkey = model.settings.hotkey.displayName
-            if !hotkey.isEmpty {
-                Text("快捷键 \(hotkey)")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
         }
     }
 
@@ -354,6 +372,7 @@ private struct ClipboardItemRow: View {
     let item: ClipboardItem
     let shortcut: String?
     let isSelected: Bool
+    let imageLabel: String
     let onSelect: () -> Void
 
     var body: some View {
@@ -365,8 +384,8 @@ private struct ClipboardItemRow: View {
                 Spacer(minLength: 4)
                 if item.isPinned {
                     Image(systemName: "pin.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.orange)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: .systemOrange))
                 }
                 if let appName = appName {
                     Text(appName)
@@ -375,10 +394,21 @@ private struct ClipboardItemRow: View {
                         .lineLimit(1)
                 }
             }
-            .padding(.horizontal, 8)
-            .frame(height: 26)
+            .padding(.horizontal, 9)
+            .frame(height: 28)
             .contentShape(Rectangle())
-            .background(isSelected ? Color.accentColor.opacity(0.22) : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .background(
+                isSelected
+                    ? Color(nsColor: .systemBlue).opacity(0.24)
+                    : Color.white.opacity(0.06),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color(nsColor: .systemBlue), lineWidth: 1.5)
+                }
+            }
         }
         .buttonStyle(.plain)
     }
@@ -387,11 +417,11 @@ private struct ClipboardItemRow: View {
     private var shortcutBadge: some View {
         if let shortcut {
             Text(shortcut)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(isSelected ? Color(nsColor: .systemBlue) : .secondary)
+                .frame(width: 18)
         } else {
-            Color.clear.frame(width: 16)
+            Color.clear.frame(width: 18)
         }
     }
 
@@ -417,10 +447,10 @@ private struct ClipboardItemRow: View {
             } else if !item.title.isEmpty {
                 Text(item.title)
             } else {
-                Text("图片")
+                Text(imageLabel)
             }
         }
-        .font(.system(size: 12))
+        .font(.system(size: 12, weight: .medium))
         .lineLimit(1)
         .truncationMode(.tail)
     }

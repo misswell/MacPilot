@@ -16,7 +16,7 @@ struct AboutSettingsTabView: View {
         Form {
             Section {
                 VStack(spacing: 12) {
-                    Image("Logo")
+                    Image(nsImage: NSApp.applicationIconImage)
                         .resizable()
                         .frame(width: 96, height: 96)
 
@@ -36,8 +36,8 @@ struct AboutSettingsTabView: View {
             }
 
             Section {
-                Link(destination: URL(string: "https://github.com/wflixu/RClick")!) {
-                    Label("github.com/wflixu/RClick", image: "github")
+                Link(destination: URL(string: "https://github.com/misswell/MacPilot")!) {
+                    Label("github.com/misswell/MacPilot", systemImage: "chevron.left.forwardslash.chevron.right")
                 }
             }
         }
