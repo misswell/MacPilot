@@ -420,7 +420,7 @@ enum AppText {
         "bleWakeOnProximity": "接近时唤醒", "bleWakeWithoutUnlocking": "唤醒但不解锁", "blePauseNowPlaying": "锁定时暂停播放",
         "bleUseScreensaver": "用屏幕保护程序锁定", "bleTurnOffScreen": "锁定时关闭屏幕", "blePassiveMode": "被动模式",
         "blePassiveModeInfo": "默认主动连接设备读取 RSSI，更稳定。若与其他蓝牙设备相互干扰，可开启被动模式仅靠扫描。",
-        "bleSetPassword": "设置密码…", "bleEnable": "启用 BLE 解锁", "bleEnabledStatus": "BLE 解锁：已启用", "bleDisabledStatus": "BLE 解锁：已停用",
+        "bleSetPassword": "设置密码…", "bleEnable": "启用 BLE 解锁",
         "bleBluetoothOff": "蓝牙未打开", "bleEnterPassword": "请输入登录密码", "blePasswordInfo": "密码将安全保存在钥匙串中，仅在屏幕锁定时用于解锁。",
         "blePasswordStored": "密码已保存到钥匙串。", "blePasswordFailed": "无法保存密码：%@", "blePasswordNotSet": "尚未设置登录密码。请使用“设置密码…”。",
         "bleMinRSSI": "设置最小 RSSI…", "bleManage": "管理 BLE 解锁", "bleManageDevices": "在主窗口管理设备…",
@@ -435,7 +435,7 @@ enum AppText {
         "bleNoDevicesFound": "未发现附近 BLE 设备。",
         "inputSources": "输入法", "inputSourcesSubtitle": "按应用或浏览器网站自动切换 macOS 输入法，并显示切换提示。",
         "inputSourcesEnable": "启用输入法自动化", "inputSourcesEnabled": "输入法规则正在运行", "inputSourcesDisabled": "输入法规则已停用",
-        "inputSourcesEnabledStatus": "输入法：已启用", "inputSourcesDisabledStatus": "输入法：已停用", "inputSourcesCycleNow": "切换到下一个输入法",
+        "inputSourcesCycleNow": "切换到下一个输入法",
         "inputSourcesUnavailable": "没有找到可切换的键盘输入源。", "inputSourcesCurrent": "当前输入法", "inputSourcesNotDetected": "尚未检测到输入法",
         "inputSourcesActiveApp": "当前应用：%@", "refresh": "刷新", "inputSourcesDefault": "默认输入法",
         "inputSourcesDefaultHint": "没有匹配到应用或网站规则时使用此输入法；留空则保留系统当前选择。", "inputSourcesNoDefault": "不自动切换",
@@ -579,7 +579,6 @@ enum AppText {
         "windowSwitcherAccessibilityRequired": "窗口切换需要辅助功能权限，才能读取和聚焦其他应用的窗口。",
         "windowSwitcherGrantAccessibility": "授权辅助功能…", "windowSwitcherAccessibilityReady": "辅助功能权限已就绪",
         "windowSwitcherTestNow": "立即显示窗口切换器", "windowSwitcherNoWindows": "当前没有可切换的窗口。",
-        "windowSwitcherEnabledStatus": "窗口切换：已启用", "windowSwitcherDisabledStatus": "窗口切换：已停用",
         "windowSwitcherMerge": "合并窗口",
         "windowSwitcherMergeHint": "把指定应用的多个窗口合并成一个窗口：应用支持时合并为标签页，否则叠放在主窗口位置。需要辅助功能权限。",
         "windowSwitcherAddMergeApp": "添加应用…",
@@ -588,7 +587,7 @@ enum AppText {
         "windowSwitcherNotRunning": "未运行",
         "windowSwitcherRemove": "移除",
         "smoothScrolling": "平滑滚动", "smoothScrollingSubtitle": "把鼠标滚轮转换成类似触控板的连续平滑滚动，保留必要的精准控制。",
-        "smoothScrollingEnable": "启用平滑滚动", "smoothScrollingEnabledStatus": "平滑滚动：已启用", "smoothScrollingDisabledStatus": "平滑滚动：已停用",
+        "smoothScrollingEnable": "启用平滑滚动",
         "smoothScrollingVertical": "垂直平滑", "smoothScrollingHorizontal": "水平平滑", "smoothScrollingReverse": "反转方向",
         "smoothScrollingReverseVertical": "反转垂直方向", "smoothScrollingReverseHorizontal": "反转水平方向",
         "smoothScrollingStep": "最短步长", "smoothScrollingSpeed": "速度增益", "smoothScrollingDuration": "持续时长",
@@ -601,7 +600,7 @@ enum AppText {
         "smoothScrollingNotConfiguredHint": "未启用时鼠标滚轮会按系统默认行为传递。",
         "rightClickMenu": "访达右键菜单",
         "clipboard": "剪切板", "clipboardSubtitle": "记录复制历史，随时搜索、固定并重新粘贴，支持文本、图片与文件。",
-        "clipboardEnable": "启用剪切板", "clipboardEnabledStatus": "剪切板：已启用", "clipboardDisabledStatus": "剪切板：已停用",
+        "clipboardEnable": "启用剪切板",
         "clipboardHotkey": "全局快捷键", "clipboardHotkeyRecord": "点击后按下新快捷键…",
         "clipboardStorageLimit": "历史记录数量上限",
         "clipboardPasteByDefault": "点击条目时默认粘贴（关闭则仅复制）",
@@ -704,7 +703,7 @@ enum AppText {
             "bleWakeOnProximity": "Wake on Proximity", "bleWakeWithoutUnlocking": "Wake without Unlocking", "blePauseNowPlaying": "Pause “Now Playing” while Locked",
             "bleUseScreensaver": "Use Screensaver to Lock", "bleTurnOffScreen": "Turn Off Screen on Lock", "blePassiveMode": "Passive Mode",
             "blePassiveModeInfo": "By default it actively connects to the device and reads RSSI, which is more stable. If it interferes with other Bluetooth devices, enable Passive Mode to scan only.",
-            "bleSetPassword": "Set Password…", "bleEnable": "Enable BLE Unlock", "bleEnabledStatus": "BLE Unlock: Enabled", "bleDisabledStatus": "BLE Unlock: Disabled",
+            "bleSetPassword": "Set Password…", "bleEnable": "Enable BLE Unlock",
             "bleBluetoothOff": "Bluetooth is off", "bleEnterPassword": "Enter your login password", "blePasswordInfo": "It will be securely stored in Keychain and used only to unlock the locked screen.",
             "blePasswordStored": "Password saved to Keychain.", "blePasswordFailed": "Couldn’t save password: %@", "blePasswordNotSet": "Login password is not set. Use Set Password….",
             "bleMinRSSI": "Set Minimum RSSI…", "bleManage": "Manage BLE Unlock", "bleManageDevices": "Manage devices in main window…",
@@ -719,7 +718,7 @@ enum AppText {
             "bleNoDevicesFound": "No nearby BLE devices found.",
             "inputSources": "Input Sources", "inputSourcesSubtitle": "Automatically switch macOS input sources by app or browser website, with a visual indicator.",
             "inputSourcesEnable": "Enable input source automation", "inputSourcesEnabled": "Input source rules are running", "inputSourcesDisabled": "Input source rules are paused",
-            "inputSourcesEnabledStatus": "Input Sources: On", "inputSourcesDisabledStatus": "Input Sources: Off", "inputSourcesCycleNow": "Switch to Next Input Source",
+            "inputSourcesCycleNow": "Switch to Next Input Source",
             "inputSourcesUnavailable": "No selectable keyboard input sources were found.", "inputSourcesCurrent": "Current Input Source", "inputSourcesNotDetected": "Input source not detected",
             "inputSourcesActiveApp": "Active app: %@", "refresh": "Refresh", "inputSourcesDefault": "Default Input Source",
             "inputSourcesDefaultHint": "Used when no app or website rule matches. Leave it empty to keep the system selection.", "inputSourcesNoDefault": "Do not switch automatically",
@@ -863,7 +862,6 @@ enum AppText {
             "windowSwitcherAccessibilityRequired": "Accessibility access is required to read and focus windows from other applications.",
             "windowSwitcherGrantAccessibility": "Grant Accessibility…", "windowSwitcherAccessibilityReady": "Accessibility access is ready",
             "windowSwitcherTestNow": "Show Window Switcher Now", "windowSwitcherNoWindows": "There are no switchable windows right now.",
-            "windowSwitcherEnabledStatus": "Window Switcher: On", "windowSwitcherDisabledStatus": "Window Switcher: Off",
             "windowSwitcherMerge": "Merge Windows",
             "windowSwitcherMergeHint": "Merge a chosen app's windows into one: as tabs when the app supports it, otherwise stacked over the main window. Requires Accessibility.",
             "windowSwitcherAddMergeApp": "Add App…",
@@ -872,7 +870,7 @@ enum AppText {
             "windowSwitcherNotRunning": "Not running",
             "windowSwitcherRemove": "Remove",
             "smoothScrolling": "Smooth Scrolling", "smoothScrollingSubtitle": "Turn mouse-wheel deltas into continuous, trackpad-like scrolling while keeping precise control.",
-            "smoothScrollingEnable": "Enable smooth scrolling", "smoothScrollingEnabledStatus": "Smooth Scrolling: On", "smoothScrollingDisabledStatus": "Smooth Scrolling: Off",
+            "smoothScrollingEnable": "Enable smooth scrolling",
             "smoothScrollingVertical": "Smooth vertical", "smoothScrollingHorizontal": "Smooth horizontal", "smoothScrollingReverse": "Reverse direction",
             "smoothScrollingReverseVertical": "Reverse vertical", "smoothScrollingReverseHorizontal": "Reverse horizontal",
             "smoothScrollingStep": "Minimum step", "smoothScrollingSpeed": "Speed gain", "smoothScrollingDuration": "Glide duration",
@@ -885,7 +883,7 @@ enum AppText {
             "smoothScrollingNotConfiguredHint": "When disabled, mouse-wheel events pass through using the system default behavior.",
             "rightClickMenu": "Finder Context Menu",
             "clipboard": "Clipboard", "clipboardSubtitle": "Keeps your copy history so you can search, pin, and re-paste text, images, and files.",
-            "clipboardEnable": "Enable clipboard", "clipboardEnabledStatus": "Clipboard: On", "clipboardDisabledStatus": "Clipboard: Off",
+            "clipboardEnable": "Enable clipboard",
             "clipboardHotkey": "Global hotkey", "clipboardHotkeyRecord": "Click and press a new shortcut…",
             "clipboardStorageLimit": "History size limit",
             "clipboardPasteByDefault": "Paste when clicking an item (otherwise copy only)",
@@ -3382,71 +3380,67 @@ struct MenuBarView: View {
     }
 
     var body: some View {
+        // 应用状态与总开关
         Text(model.isEnforcing ? model.t("enabledStatus") : model.t("disabledStatus"))
-        Divider()
         Button(model.isEnforcing ? model.t("disableApp") : model.t("enableApp")) { model.isEnforcing.toggle() }
-        Button(model.t("checkNow")) { model.evaluateRules() }
         Divider()
+
+        // 核心功能页
+        Button(model.t("rules")) { model.requestedSection = .exit; showMainWindow() }
+        Button(model.t("launch")) { model.requestedSection = .launch; showMainWindow() }
+        Button(model.t("checkNow")) { model.evaluateRules() }
         Button(model.t("runNow")) { model.runLaunchPlanNow() }
             .disabled(!model.isLaunchSchedulingEnabled || model.enabledLaunchCount == 0)
         Button(model.t("cancelLaunches")) { model.cancelScheduledLaunches() }
             .disabled(model.pendingLaunchCount == 0)
-        Divider()
-        Toggle(model.t("startAtLogin"), isOn: Binding(get: { model.launchesAtLogin }, set: { model.setLaunchAtLogin($0) }))
-        Button(model.t("showApp"), action: showMainWindow)
+
+        // 已启用的功能：名称进入对应功能页，下方提供快捷操作
         if model.ble.settings.isEnabled {
             Divider()
-            Toggle(model.t("bleEnabledStatus"),
-                   isOn: Binding(get: { model.ble.settings.isEnabled }, set: { model.ble.setEnabled($0) }))
+            Button(model.t("bleUnlock")) { model.requestedSection = .ble; showMainWindow() }
             Button(model.t("bleLockNow")) { model.ble.lockNow() }
-            if let name = model.ble.settings.monitoredDeviceName, !name.isEmpty {
-                Button(name) { model.requestedSection = .ble; showMainWindow() }
-            } else {
-                Button(model.t("bleSelectDevice")) { model.requestedSection = .ble; showMainWindow() }
-            }
         }
         if inputSources.settings.isEnabled {
             Divider()
-            Toggle(model.t("inputSourcesEnabledStatus"),
-                   isOn: Binding(get: { inputSources.settings.isEnabled }, set: { inputSources.setEnabled($0) }))
+            Button(model.t("inputSources")) { model.requestedSection = .inputSources; showMainWindow() }
             Button(model.t("inputSourcesCycleNow")) { inputSources.cycleInputSource() }
                 .disabled(inputSources.availableSources.count < 2)
-            Button(model.t("inputSources")) { model.requestedSection = .inputSources; showMainWindow() }
         }
         if windowSwitcher.settings.isEnabled {
             Divider()
-            Toggle(model.t("windowSwitcherEnabledStatus"),
-                   isOn: Binding(get: { windowSwitcher.settings.isEnabled }, set: { windowSwitcher.setEnabled($0) }))
+            Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
             Button(model.t("windowSwitcherTestNow")) { windowSwitcher.showSwitcherNow() }
                 .disabled(!windowSwitcher.hasAccessibilityPermission)
-            Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
         }
         if smoothScrolling.settings.isEnabled {
             Divider()
-            Toggle(model.t("smoothScrollingEnabledStatus"),
-                   isOn: Binding(get: { smoothScrolling.settings.isEnabled }, set: { smoothScrolling.setEnabled($0) }))
             Button(model.t("smoothScrolling")) { model.requestedSection = .smoothScrolling; showMainWindow() }
         }
         if clipboard.settings.isEnabled {
             Divider()
-            Toggle(model.t("clipboardEnabledStatus"),
-                   isOn: Binding(get: { clipboard.settings.isEnabled }, set: { clipboard.setEnabled($0) }))
-            Button(model.t("clipboardOpenNow")) {
-                deferCaptureAction { clipboard.openPanel() }
-            }
             Button(model.t("clipboard")) { model.requestedSection = .clipboard; showMainWindow() }
+            Button(model.t("clipboardOpenNow")) { deferCaptureAction { clipboard.openPanel() } }
         }
         if model.screenCapture.settings.screenshotEnabled {
             Divider()
+            Button(model.t("screenCapture")) { model.requestedSection = .capture; showMainWindow() }
             Button(model.t("scSmartCaptureNow")) { deferCaptureAction { model.screenCapture.startSmartCapture() } }
-            Divider()
         }
+        if pictureInPicture.settings.isEnabled {
+            Divider()
+            Button(model.t("pictureInPicture")) { model.requestedSection = .pictureInPicture; showMainWindow() }
+            Button(model.t("pipCaptureFocused")) { pictureInPicture.captureFocusedWindowNow() }
+        }
+        Divider()
+        Button(model.t("fileCompression")) { model.requestedSection = .compression; showMainWindow() }
+
+        Divider()
         UpdateMenuItems(updater: model.updater) {
             model.requestedSection = .settings
             showMainWindow()
         }
-        Divider()
-        Text(AppVersionInfo.current().localizedDescription(language: model.language))
+        Button(model.t("settings")) { model.requestedSection = .settings; showMainWindow() }
+        Button(model.t("showApp"), action: showMainWindow)
         Button(model.t("quitApp")) { NSApp.terminate(nil) }
     }
 
