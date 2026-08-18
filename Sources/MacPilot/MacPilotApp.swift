@@ -26,7 +26,8 @@ struct MacPilotApp: App {
                 pictureInPicture: model.pictureInPicture,
                 inputSources: model.inputSources,
                 windowSwitcher: model.windowSwitcher,
-                smoothScrolling: model.smoothScrolling
+                smoothScrolling: model.smoothScrolling,
+                clipboard: model.clipboard
             ).environmentObject(model)
         } label: {
             Image(systemName: model.isEnforcing ? "timer" : "pause.circle")
@@ -593,7 +594,22 @@ enum AppText {
         "rightClickMenuSubtitle": "在访达中使用复制路径、删除、隐藏、新建文件、打开应用和常用目录等快捷操作。",
         "rightClickOpenSettings": "打开右键菜单设置",
         "rightClickMenuHint": "首次使用前，请在系统设置中启用 MacPilot 的 FinderSync 扩展。",
-        "rightClickBack": "返回简介"
+        "rightClickBack": "返回简介",
+        "clipboard": "剪切板", "clipboardSubtitle": "记录复制历史，随时搜索、固定并重新粘贴，支持文本、图片与文件。",
+        "clipboardEnable": "启用剪切板", "clipboardEnabledStatus": "剪切板：已启用", "clipboardDisabledStatus": "剪切板：已停用",
+        "clipboardHotkey": "全局快捷键", "clipboardHotkeyRecord": "点击后按下新快捷键…",
+        "clipboardStorageLimit": "历史记录数量上限",
+        "clipboardPasteByDefault": "点击条目时默认粘贴（关闭则仅复制）",
+        "clipboardShowSearch": "打开面板时显示搜索框",
+        "clipboardClearSystemClipboard": "清除历史时同时清空系统剪贴板",
+        "clipboardPinsAtTop": "固定条目置顶",
+        "clipboardOpenNow": "打开剪切板面板",
+        "clipboardClearHistory": "清除历史", "clipboardClearAllHistory": "清空全部历史",
+        "clipboardClearAllConfirm": "确定要清空全部剪切板历史吗？此操作无法撤销。",
+        "clipboardAccessibilityRequired": "粘贴需要辅助功能权限来模拟 ⌘V。",
+        "clipboardGrantAccessibility": "授权辅助功能…",
+        "clipboardAccessibilityReady": "辅助功能权限已就绪",
+        "clipboardNotConfiguredHint": "未启用时不会记录剪贴板内容。"
     ]
 
     static func value(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
@@ -853,7 +869,22 @@ enum AppText {
             "rightClickMenuSubtitle": "Use shortcuts in Finder for copying paths, deleting, hiding, creating files, opening apps, and browsing common folders.",
             "rightClickOpenSettings": "Open Context Menu Settings",
             "rightClickMenuHint": "Before using it for the first time, enable MacPilot's FinderSync extension in System Settings.",
-            "rightClickBack": "Back to overview"
+            "rightClickBack": "Back to overview",
+            "clipboard": "Clipboard", "clipboardSubtitle": "Keeps your copy history so you can search, pin, and re-paste text, images, and files.",
+            "clipboardEnable": "Enable clipboard", "clipboardEnabledStatus": "Clipboard: On", "clipboardDisabledStatus": "Clipboard: Off",
+            "clipboardHotkey": "Global hotkey", "clipboardHotkeyRecord": "Click and press a new shortcut…",
+            "clipboardStorageLimit": "History size limit",
+            "clipboardPasteByDefault": "Paste when clicking an item (otherwise copy only)",
+            "clipboardShowSearch": "Show the search field when the panel opens",
+            "clipboardClearSystemClipboard": "Also clear the system clipboard when clearing history",
+            "clipboardPinsAtTop": "Pinned items on top",
+            "clipboardOpenNow": "Open Clipboard Panel",
+            "clipboardClearHistory": "Clear History", "clipboardClearAllHistory": "Clear All History",
+            "clipboardClearAllConfirm": "Are you sure you want to clear all clipboard history? This cannot be undone.",
+            "clipboardAccessibilityRequired": "Pasting requires Accessibility access to simulate ⌘V.",
+            "clipboardGrantAccessibility": "Grant Accessibility…",
+            "clipboardAccessibilityReady": "Accessibility access is ready",
+            "clipboardNotConfiguredHint": "When disabled, clipboard content is not recorded."
         ]
 }
 
@@ -879,9 +910,10 @@ final class MacPilotModel: ObservableObject {
         var inputSources: InputSourceSettings
         var windowSwitcher: WindowSwitcherSettings
         var smoothScrolling: SmoothScrollSettings
+        var clipboard: ClipboardSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings) {
-            version = 13
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings) {
+            version = 14
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -896,6 +928,7 @@ final class MacPilotModel: ObservableObject {
             self.inputSources = inputSources
             self.windowSwitcher = windowSwitcher
             self.smoothScrolling = smoothScrolling
+            self.clipboard = clipboard
         }
 
         init(from decoder: Decoder) throws {
@@ -915,6 +948,7 @@ final class MacPilotModel: ObservableObject {
             inputSources = try container.decodeIfPresent(InputSourceSettings.self, forKey: .inputSources) ?? InputSourceSettings()
             windowSwitcher = try container.decodeIfPresent(WindowSwitcherSettings.self, forKey: .windowSwitcher) ?? WindowSwitcherSettings()
             smoothScrolling = try container.decodeIfPresent(SmoothScrollSettings.self, forKey: .smoothScrolling) ?? SmoothScrollSettings()
+            clipboard = try container.decodeIfPresent(ClipboardSettings.self, forKey: .clipboard) ?? ClipboardSettings()
         }
     }
 
@@ -939,6 +973,7 @@ final class MacPilotModel: ObservableObject {
     let inputSources = InputSourceModel()
     let windowSwitcher = WindowSwitcherModel()
     let smoothScrolling = SmoothScrollModel()
+    let clipboard = ClipboardModel()
     @Published var requestedSection: MainSection?
     /// Set by the menu bar/deep-link shortcut entry so the capture settings
     /// can present the recorder immediately after the main window is opened.
@@ -1000,6 +1035,13 @@ final class MacPilotModel: ObservableObject {
             Task { @MainActor in smoothScrolling?.shutdown() }
         }
         NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak clipboard] _ in
+            Task { @MainActor in clipboard?.shutdown() }
+        }
+        NotificationCenter.default.addObserver(
             forName: .macPilotDeepLink,
             object: nil,
             queue: .main
@@ -1033,6 +1075,7 @@ final class MacPilotModel: ObservableObject {
         inputSources.persist = { [weak self] in self?.scheduleInputSourceSave() }
         windowSwitcher.persist = { [weak self] in self?.saveIfReady() }
         smoothScrolling.persist = { [weak self] in self?.saveIfReady() }
+        clipboard.persist = { [weak self] in self?.saveIfReady() }
         windowSwitcher.language = language
         ble.startObservingSystemState()
         ble.activateFromConfiguration()
@@ -1044,6 +1087,7 @@ final class MacPilotModel: ObservableObject {
         inputSources.activateFromConfiguration()
         windowSwitcher.activateFromConfiguration()
         smoothScrolling.activateFromConfiguration()
+        clipboard.activateFromConfiguration()
         // Finder 右键菜单（融合 RClick FinderSync 扩展）。
         startRightClickMenu()
         Task { [weak updater] in
@@ -1723,6 +1767,7 @@ final class MacPilotModel: ObservableObject {
         inputSources.applyLoadedSettings(configuration.inputSources)
         windowSwitcher.applyLoadedSettings(configuration.windowSwitcher)
         smoothScrolling.applyLoadedSettings(configuration.smoothScrolling)
+        clipboard.applyLoadedSettings(configuration.clipboard)
     }
 
     private func scheduleInputSourceSave() {
@@ -1755,7 +1800,8 @@ final class MacPilotModel: ObservableObject {
             pictureInPicture: pictureInPicture.settings,
             inputSources: inputSources.settings,
             windowSwitcher: windowSwitcher.settings,
-            smoothScrolling: smoothScrolling.settings
+            smoothScrolling: smoothScrolling.settings,
+            clipboard: clipboard.settings
         )
         let data: Data
         do {
@@ -1990,7 +2036,7 @@ final class MacPilotModel: ObservableObject {
     var timeString: String { lastChecked.formatted(.dateTime.hour().minute().locale(language.locale)) }
 }
 
-enum MainSection { case exit, launch, ble, inputSources, compression, capture, pictureInPicture, windowSwitcher, smoothScrolling, rightClick, settings }
+enum MainSection { case exit, launch, ble, inputSources, compression, capture, pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick, settings }
 
 struct ContentView: View {
     @EnvironmentObject private var model: MacPilotModel
@@ -2034,6 +2080,8 @@ struct ContentView: View {
                         .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
                 } else if section == .smoothScrolling {
                     SmoothScrollSettingsView(smoothScrolling: model.smoothScrolling)
+                } else if section == .clipboard {
+                    ClipboardSettingsView(clipboard: model.clipboard)
                 } else if section == .rightClick {
                     RightClickMenuSettingsView()
                 } else {
@@ -2256,6 +2304,16 @@ struct Sidebar: View {
             }
             .buttonStyle(.plain)
             .background(section == .smoothScrolling ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            Button { section = .clipboard } label: {
+                Label(model.t("clipboard"), systemImage: "clipboard")
+                    .labelStyle(SidebarLabelStyle())
+                    .padding(.vertical, 9).padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(section == .clipboard ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             Button { section = .rightClick } label: {
                 Label(model.t("rightClickMenu"), systemImage: "contextualmenu.and.cursorarrow")
@@ -3286,17 +3344,20 @@ struct MenuBarView: View {
     @ObservedObject var inputSources: InputSourceModel
     @ObservedObject var windowSwitcher: WindowSwitcherModel
     @ObservedObject var smoothScrolling: SmoothScrollModel
+    @ObservedObject var clipboard: ClipboardModel
 
     init(
         pictureInPicture: PictureInPictureModel,
         inputSources: InputSourceModel = InputSourceModel(),
         windowSwitcher: WindowSwitcherModel = WindowSwitcherModel(),
-        smoothScrolling: SmoothScrollModel = SmoothScrollModel()
+        smoothScrolling: SmoothScrollModel = SmoothScrollModel(),
+        clipboard: ClipboardModel = ClipboardModel()
     ) {
         self._pictureInPicture = ObservedObject(wrappedValue: pictureInPicture)
         self._inputSources = ObservedObject(wrappedValue: inputSources)
         self._windowSwitcher = ObservedObject(wrappedValue: windowSwitcher)
         self._smoothScrolling = ObservedObject(wrappedValue: smoothScrolling)
+        self._clipboard = ObservedObject(wrappedValue: clipboard)
     }
 
     var body: some View {
@@ -3344,6 +3405,13 @@ struct MenuBarView: View {
             Toggle(model.t("smoothScrollingEnabledStatus"),
                    isOn: Binding(get: { smoothScrolling.settings.isEnabled }, set: { smoothScrolling.setEnabled($0) }))
             Button(model.t("smoothScrolling")) { model.requestedSection = .smoothScrolling; showMainWindow() }
+        }
+        if clipboard.settings.isEnabled {
+            Divider()
+            Toggle(model.t("clipboardEnabledStatus"),
+                   isOn: Binding(get: { clipboard.settings.isEnabled }, set: { clipboard.setEnabled($0) }))
+            Button(model.t("clipboardOpenNow")) { clipboard.openPanel() }
+            Button(model.t("clipboard")) { model.requestedSection = .clipboard; showMainWindow() }
         }
         if model.screenCapture.settings.screenshotEnabled {
             Divider()

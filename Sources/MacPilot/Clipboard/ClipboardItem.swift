@@ -1,0 +1,212 @@
+//
+//  ClipboardItem.swift
+//  MacPilot
+//
+//  剪贴板历史数据模型。
+//  改编自 Maccy（MIT License, https://github.com/p0deje/Maccy）：
+//  - Maccy/Models/HistoryItem.swift
+//  - Maccy/Models/HistoryItemContent.swift
+//  - Maccy/Extensions/NSPasteboard.PasteboardType+Types.swift
+//
+
+import AppKit
+import Foundation
+
+/// 剪贴板历史条目中的一段内容（一种 pasteboard type 及其原始数据）。
+struct ClipboardContent: Codable, Hashable {
+    var type: String
+    var value: Data?
+
+    init(type: String, value: Data? = nil) {
+        self.type = type
+        self.value = value
+    }
+}
+
+/// 一条剪贴板历史记录。使用值语义，便于 SwiftUI 观察与 Codable 持久化。
+struct ClipboardItem: Codable, Hashable, Identifiable {
+    let id: UUID
+    var application: String?
+    var firstCopiedAt: Date
+    var lastCopiedAt: Date
+    var numberOfCopies: Int
+    var pin: String?
+    var title: String
+    var contents: [ClipboardContent]
+
+    init(contents: [ClipboardContent]) {
+        self.id = UUID()
+        self.application = nil
+        self.firstCopiedAt = Date.now
+        self.lastCopiedAt = Date.now
+        self.numberOfCopies = 1
+        self.pin = nil
+        self.title = ""
+        self.contents = contents
+    }
+
+    var isPinned: Bool { pin != nil }
+
+    /// 复制时产生的临时类型，不参与相似度判定。
+    private static let transientTypes: [String] = [
+        NSPasteboard.PasteboardType.modified.rawValue,
+        NSPasteboard.PasteboardType.fromMaccy.rawValue,
+        NSPasteboard.PasteboardType.linkPresentationMetadata.rawValue,
+        NSPasteboard.PasteboardType.customWebKitPasteboardData.rawValue,
+        NSPasteboard.PasteboardType.source.rawValue,
+        NSPasteboard.PasteboardType.customChromiumWebData.rawValue,
+        NSPasteboard.PasteboardType.chromiumSourceUrl.rawValue,
+        NSPasteboard.PasteboardType.chromiumSourceToken.rawValue,
+        NSPasteboard.PasteboardType.notesRichText.rawValue
+    ]
+
+    private static let imageTypes: [NSPasteboard.PasteboardType] = [.tiff, .png]
+
+    /// 新条目是否完全包含既有条目的内容（用于合并重复复制）。
+    func supersedes(_ item: ClipboardItem) -> Bool {
+        item.contents
+            .filter { content in !Self.transientTypes.contains(content.type) }
+            .allSatisfy { content in
+                contents.contains { $0.type == content.type && $0.value == content.value }
+            }
+    }
+
+    /// 生成用于列表展示的标题。
+    func generateTitle() -> String {
+        if image != nil {
+            return ""
+        }
+
+        var title = previewableText.shortened(to: 1_000)
+        title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title
+    }
+
+    /// 用于搜索与展示的纯文本。
+    var previewableText: String {
+        if !fileURLs.isEmpty {
+            return fileURLs
+                .compactMap { $0.absoluteString.removingPercentEncoding }
+                .joined(separator: "\n")
+        } else if let text = text, !text.isEmpty {
+            return text
+        } else if let rtf = rtf, !rtf.string.isEmpty {
+            return rtf.string
+        } else if let html = html, !html.string.isEmpty {
+            return html.string
+        } else {
+            return title
+        }
+    }
+
+    var fileURLs: [URL] {
+        allContentData([.fileURL])
+            .compactMap { URL(dataRepresentation: $0, relativeTo: nil, isAbsolute: true) }
+    }
+
+    var htmlData: Data? { contentData([.html]) }
+    var html: NSAttributedString? {
+        guard let data = htmlData else { return nil }
+        return NSAttributedString(html: data, documentAttributes: nil)
+    }
+
+    var imageData: Data? { contentData(Self.imageTypes) }
+    var image: NSImage? {
+        guard let data = imageData else { return nil }
+        return NSImage(data: data)
+    }
+
+    var rtfData: Data? { contentData([.rtf]) }
+    var rtf: NSAttributedString? {
+        guard let data = rtfData else { return nil }
+        return NSAttributedString(rtf: data, documentAttributes: nil)
+    }
+
+    var text: String? {
+        guard let data = contentData([.string]) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    var fromMaccy: Bool { contentData([.fromMaccy]) != nil }
+
+    private func contentData(_ types: [NSPasteboard.PasteboardType]) -> Data? {
+        contents.first { types.contains(NSPasteboard.PasteboardType($0.type)) }?.value
+    }
+
+    private func allContentData(_ types: [NSPasteboard.PasteboardType]) -> [Data] {
+        contents
+            .filter { types.contains(NSPasteboard.PasteboardType($0.type)) }
+            .compactMap { $0.value }
+    }
+}
+
+// MARK: - Pasteboard type helpers (源自 Maccy)
+
+extension NSPasteboard.PasteboardType {
+    static let heic = NSPasteboard.PasteboardType(rawValue: "public.heic")
+    static let jpeg = NSPasteboard.PasteboardType(rawValue: "public.jpeg")
+    static let universalClipboard = NSPasteboard.PasteboardType(rawValue: "com.apple.is-remote-clipboard")
+
+    // 参见 http://nspasteboard.org
+    static let autoGenerated = NSPasteboard.PasteboardType(rawValue: "org.nspasteboard.AutoGeneratedType")
+    static let concealed = NSPasteboard.PasteboardType(rawValue: "org.nspasteboard.ConcealedType")
+    static let source = NSPasteboard.PasteboardType(rawValue: "org.nspasteboard.source")
+    static let transient = NSPasteboard.PasteboardType(rawValue: "org.nspasteboard.TransientType")
+
+    // https://github.com/p0deje/Maccy/issues/429
+    static let modified = NSPasteboard.PasteboardType(rawValue: "x.nspasteboard.ModifiedType")
+
+    /// 标记「本次复制来自 MacPilot 剪切板」。
+    static let fromMaccy = NSPasteboard.PasteboardType(rawValue: "com.misswell.macpilot.clipboard")
+
+    static let microsoftObjectLink = NSPasteboard.PasteboardType(rawValue: "com.microsoft.ObjectLink")
+    static let microsoftLinkSource = NSPasteboard.PasteboardType(rawValue: "com.microsoft.Link-Source")
+    static let linkPresentationMetadata = NSPasteboard.PasteboardType(rawValue: "com.apple.linkpresentation.metadata")
+    static let customWebKitPasteboardData = NSPasteboard.PasteboardType(rawValue: "com.apple.WebKit.custom-pasteboard-data")
+    static let customChromiumWebData = NSPasteboard.PasteboardType(rawValue: "org.chromium.web-custom-data")
+    static let chromiumSourceUrl = NSPasteboard.PasteboardType(rawValue: "org.chromium.source-url")
+    static let chromiumSourceToken = NSPasteboard.PasteboardType(rawValue: "org.chromium.internal.source-rfh-token")
+    static let notesRichText = NSPasteboard.PasteboardType(rawValue: "com.apple.notes.richtext")
+}
+
+// MARK: - Small helpers (源自 Maccy)
+
+extension String {
+    /// 截断到最大长度（按字符，不截断多字节字符）。
+    func shortened(to maxLength: Int) -> String {
+        guard count > maxLength else { return self }
+        return String(self[startIndex..<index(startIndex, offsetBy: maxLength)])
+    }
+}
+
+extension NSImage {
+    var pixelSize: NSSize {
+        if let bitmapRep = representations.first(where: { $0 is NSBitmapImageRep }) as? NSBitmapImageRep {
+            return NSSize(width: CGFloat(bitmapRep.pixelsWide), height: CGFloat(bitmapRep.pixelsHigh))
+        }
+        return size
+    }
+
+    /// 等比缩放到不超过目标尺寸（不放大）。
+    func resized(to newSize: NSSize) -> NSImage {
+        let ratioX = newSize.width / size.width
+        let ratioY = newSize.height / size.height
+        let ratio = min(ratioX, ratioY)
+        let newWidth = size.width * ratio
+        let newHeight = size.height * ratio
+        let resized = NSSize(width: newWidth, height: newHeight)
+
+        // 不放大。
+        if resized.height >= size.height {
+            return self
+        }
+
+        return NSImage(size: resized, flipped: false) { _ in
+            if let context = NSGraphicsContext.current {
+                context.imageInterpolation = .high
+                self.draw(in: NSRect(origin: .zero, size: resized), from: NSRect.zero, operation: .copy, fraction: 1)
+            }
+            return true
+        }
+    }
+}

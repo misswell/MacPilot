@@ -3,6 +3,19 @@ import Testing
 @testable import MacPilot
 
 struct BLEWakeRecoveryTests {
+    /// 在并发测试负载下，固定时长 sleep 不够可靠；改为有界轮询等待条件成立。
+    @MainActor
+    private func waitUntil(
+        timeout: TimeInterval = 2.0,
+        _ condition: () -> Bool
+    ) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     @Test func deepSleepWakeRestartsMonitoringAndRetriesUnlock() throws {
         let plan = try #require(BLEWakeRecoveryPlan.make(
             isEnabled: true,
@@ -36,7 +49,7 @@ struct BLEWakeRecoveryTests {
         model.settings.signalTimeout = 0
         model.startMonitor(UUID())
 
-        try await Task.sleep(for: .milliseconds(20))
+        await waitUntil { !model.presence }
 
         #expect(!model.presence)
     }
