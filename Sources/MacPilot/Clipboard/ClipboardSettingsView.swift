@@ -125,78 +125,70 @@ struct ClipboardSettingsView: View {
 
 // MARK: - Hotkey recorder
 
+/// Pure SwiftUI hotkey recorder. Uses an `NSEvent` local monitor while
+/// recording (instead of an `NSViewRepresentable`) so the control renders
+/// correctly inside the frosted-glass `SettingsCard` scroll view.
 private struct ClipboardHotkeyRecorder: View {
     @Binding var binding: SmartCaptureShortcutBinding
+    @State private var isRecording = false
+    @State private var eventMonitor: Any?
+
+    private var displayText: String {
+        if isRecording { return "…" }
+        return binding.displayName.isEmpty ? "…" : binding.displayName
+    }
 
     var body: some View {
-        ClipboardHotkeyRecorderNSViewRepresentable(binding: $binding)
-            .frame(width: 220, height: 34)
-    }
-}
-
-private struct ClipboardHotkeyRecorderNSViewRepresentable: NSViewRepresentable {
-    @Binding var binding: SmartCaptureShortcutBinding
-
-    func makeNSView(context: Context) -> ClipboardHotkeyRecorderNSView {
-        let view = ClipboardHotkeyRecorderNSView()
-        view.binding = $binding
-        view.onCapture = { keyCode, modifiers in
-            let newBinding = SmartCaptureShortcutBinding(keyCode: keyCode, modifiers: modifiers)
-            if newBinding.isValid {
-                binding = newBinding
-            }
+        Button {
+            isRecording = true
+            installMonitor()
+        } label: {
+            Text(displayText)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(nsColor: .controlBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(isRecording ? Color.accentColor : Color(nsColor: .separatorColor))
+                )
         }
-        return view
+        .buttonStyle(.plain)
+        .onDisappear(perform: removeMonitor)
     }
 
-    func updateNSView(_ nsView: ClipboardHotkeyRecorderNSView, context: Context) {
-        nsView.displayText = binding.displayName.isEmpty ? "…" : binding.displayName
-        nsView.needsDisplay = true
-    }
-}
-
-@MainActor
-private final class ClipboardHotkeyRecorderNSView: NSView {
-    var binding: Binding<SmartCaptureShortcutBinding>?
-    var onCapture: ((UInt16, InputSourceShortcutModifiers) -> Void)?
-    var displayText: String = "…"
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        displayText = "…"
-        needsDisplay = true
-    }
-
-    override func keyDown(with event: NSEvent) {
-        let modifierKeys: Set<UInt16> = [
-            UInt16(kVK_Shift), UInt16(kVK_RightShift), UInt16(kVK_Control), UInt16(kVK_RightControl),
-            UInt16(kVK_Option), UInt16(kVK_RightOption), UInt16(kVK_Command), UInt16(kVK_RightCommand)
-        ]
-        guard !modifierKeys.contains(event.keyCode) else { return }
-        let modifiers = InputSourceShortcutModifiers(event.modifierFlags)
-        guard !modifiers.isEmpty else { return }
-        onCapture?(event.keyCode, modifiers)
-        needsDisplay = true
+    private func installMonitor() {
+        removeMonitor()
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Ignore presses that only toggle a modifier key.
+            let modifierKeyCodes: Set<UInt16> = [
+                UInt16(kVK_Shift), UInt16(kVK_RightShift), UInt16(kVK_Control), UInt16(kVK_RightControl),
+                UInt16(kVK_Option), UInt16(kVK_RightOption), UInt16(kVK_Command), UInt16(kVK_RightCommand),
+                UInt16(kVK_CapsLock), UInt16(kVK_Function)
+            ]
+            guard !modifierKeyCodes.contains(event.keyCode) else { return nil }
+            // Escape cancels recording.
+            if event.keyCode == UInt16(kVK_Escape) {
+                isRecording = false
+                removeMonitor()
+                return nil
+            }
+            let candidate = SmartCaptureShortcutBinding(keyCode: event.keyCode, modifiers: InputSourceShortcutModifiers(event.modifierFlags))
+            guard candidate.isValid else { return nil }
+            binding = candidate
+            isRecording = false
+            removeMonitor()
+            return nil
+        }
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.controlBackgroundColor.setFill()
-        dirtyRect.fill()
-
-        let title = displayText
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: NSColor.labelColor
-        ]
-        let textSize = title.size(withAttributes: attributes)
-        title.draw(
-            at: NSPoint(x: bounds.midX - textSize.width / 2, y: bounds.midY - textSize.height / 2),
-            withAttributes: attributes
-        )
-
-        NSColor.separatorColor.setStroke()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8).stroke()
+    private func removeMonitor() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+        }
+        eventMonitor = nil
     }
 }
