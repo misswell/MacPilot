@@ -363,7 +363,7 @@ final class PiPOcclusionController: ObservableObject {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.arguments = Self.launchArguments()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration) { _, error in
+            NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration) { @Sendable _, error in
                 if let error {
                     continuation.resume(throwing: error)
                 } else {

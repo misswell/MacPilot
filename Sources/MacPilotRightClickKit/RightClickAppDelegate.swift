@@ -281,7 +281,7 @@ public final class RightClickMenuCoordinator {
             else {
                 let config = NSWorkspace.OpenConfiguration()
                 let logger = self.logger  // 捕获 Sendable logger
-                NSWorkspace.shared.open([dir], withApplicationAt: appUrl, configuration: config) { runningApp, error in
+                NSWorkspace.shared.open([dir], withApplicationAt: appUrl, configuration: config) { @Sendable [logger] runningApp, error in
                     if let error = error {
                         logger.error("Error opening with application: \(error.localizedDescription)")
                         logger.error("Error code: \((error as NSError).code), domain: \((error as NSError).domain)")
@@ -645,7 +645,7 @@ public final class RightClickMenuCoordinator {
                 [directory],
                 withApplicationAt: terminalURL,
                 configuration: configuration
-            ) { [logger] _, error in
+            ) { @Sendable [logger] _, error in
                 if let error {
                     logger.error("Failed to open Terminal at \(directory.path): \(error.localizedDescription)")
                 } else {

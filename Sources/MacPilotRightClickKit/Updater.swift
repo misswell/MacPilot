@@ -433,7 +433,7 @@ class UpdateManager: ObservableObject {
         let newAppURL = applicationsURL.appendingPathComponent("\(currentAppName).app")
 
         let configuration = NSWorkspace.OpenConfiguration()
-        NSWorkspace.shared.openApplication(at: newAppURL, configuration: configuration) { _, error in
+        NSWorkspace.shared.openApplication(at: newAppURL, configuration: configuration) { @Sendable _, error in
             if error != nil {
                 print("启动新应用失败，可能需要手动启动")
             }
