@@ -26,12 +26,3 @@ struct RightClickSettingsCard<Content: View>: View {
             .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 }
-
-/// 卡片内嵌列表：固定高度、无自带背景，避免与卡片视觉冲突。
-extension View {
-    func rightClickListStyle() -> some View {
-        self
-            .listStyle(.inset(alternatesRowBackgrounds: false))
-            .scrollContentBackground(.hidden)
-    }
-}

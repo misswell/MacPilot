@@ -2059,14 +2059,9 @@ struct ContentView: View {
             Divider()
             VStack(alignment: .leading, spacing: 0) {
                 if section == .exit {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 24) {
-                            header
-                            if model.rules.isEmpty { EmptyRulesView(addRule: { showingAdd = true }) }
-                            else { rulesCard }
-                        }
-                        .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
-                    }
+                    header
+                    if model.rules.isEmpty { EmptyRulesView(addRule: { showingAdd = true }) }
+                    else { rulesList }
                 } else if section == .launch {
                     LaunchRulesView(showingAdd: $showingLaunchAdd, editingRule: $editingLaunchRule)
                 } else if section == .ble {
@@ -2150,32 +2145,31 @@ struct ContentView: View {
             Button { showingAdd = true } label: { Label(model.t("addApp"), systemImage: "plus") }
                 .buttonStyle(.borderedProminent).controlSize(.large)
         }
+        .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 28)
     }
 
-    private var rulesCard: some View {
-        SettingsCard {
-            List {
-                Section(model.t("apps")) {
-                    ForEach(model.rules) { rule in
-                        RuleRow(
-                            rule: rule,
-                            edit: { editingRule = rule },
-                            toggle: { model.toggleRule(rule) },
-                            remove: { model.remove(rule) }
-                        )
-                            .contextMenu {
-                                Button(model.t("editRule")) { editingRule = rule }
-                                Divider()
-                                Button(model.t("deleteRule"), role: .destructive) { model.remove(rule) }
-                            }
-                    }
-                    .onMove(perform: model.move)
+    private var rulesList: some View {
+        List {
+            Section(model.t("apps")) {
+                ForEach(model.rules) { rule in
+                    RuleRow(
+                        rule: rule,
+                        edit: { editingRule = rule },
+                        toggle: { model.toggleRule(rule) },
+                        remove: { model.remove(rule) }
+                    )
+                        .contextMenu {
+                            Button(model.t("editRule")) { editingRule = rule }
+                            Divider()
+                            Button(model.t("deleteRule"), role: .destructive) { model.remove(rule) }
+                        }
                 }
+                .onMove(perform: model.move)
             }
-            .listStyle(.inset(alternatesRowBackgrounds: false))
-            .scrollContentBackground(.hidden)
-            .frame(minHeight: 220)
         }
+        .listStyle(.inset(alternatesRowBackgrounds: false))
+        .padding(.horizontal, 22)
+        .padding(.bottom, 20)
     }
 
     private func acceptDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -2646,48 +2640,43 @@ struct LaunchRulesView: View {
     @Binding var editingRule: LaunchRule?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(model.t("launch")).font(.system(size: 30, weight: .bold))
-                        Text(model.t("launchSubtitle")).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button { showingAdd = true } label: { Label(model.t("addLaunchApp"), systemImage: "plus") }
-                        .buttonStyle(.borderedProminent).controlSize(.large)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(model.t("launch")).font(.system(size: 30, weight: .bold))
+                    Text(model.t("launchSubtitle")).foregroundStyle(.secondary)
                 }
-
-                launchControls
-
-                if model.launchRules.isEmpty {
-                    EmptyLaunchRulesView(addRule: { showingAdd = true })
-                } else {
-                    SettingsCard {
-                        List {
-                            Section(model.t("launchApps")) {
-                                ForEach(model.launchRules) { rule in
-                                    LaunchRuleRow(
-                                        rule: rule,
-                                        edit: { editingRule = rule },
-                                        toggle: { model.toggleLaunchRule(rule) },
-                                        remove: { model.removeLaunchRule(rule) }
-                                    )
-                                        .contextMenu {
-                                            Button(model.t("edit")) { editingRule = rule }
-                                            Divider()
-                                            Button(model.t("deleteRule"), role: .destructive) { model.removeLaunchRule(rule) }
-                                        }
-                                }
-                            }
-                        }
-                        .listStyle(.inset(alternatesRowBackgrounds: false))
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: 220)
-                    }
-                }
+                Spacer()
+                Button { showingAdd = true } label: { Label(model.t("addLaunchApp"), systemImage: "plus") }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
             }
-            .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
+            .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 22)
+
+            launchControls
+
+            if model.launchRules.isEmpty {
+                EmptyLaunchRulesView(addRule: { showingAdd = true })
+            } else {
+                List {
+                    Section(model.t("launchApps")) {
+                        ForEach(model.launchRules) { rule in
+                            LaunchRuleRow(
+                                rule: rule,
+                                edit: { editingRule = rule },
+                                toggle: { model.toggleLaunchRule(rule) },
+                                remove: { model.removeLaunchRule(rule) }
+                            )
+                                .contextMenu {
+                                    Button(model.t("edit")) { editingRule = rule }
+                                    Divider()
+                                    Button(model.t("deleteRule"), role: .destructive) { model.removeLaunchRule(rule) }
+                                }
+                        }
+                    }
+                }
+                .listStyle(.inset(alternatesRowBackgrounds: false))
+                .padding(.horizontal, 22).padding(.bottom, 20)
+            }
         }
     }
 
@@ -2712,6 +2701,7 @@ struct LaunchRulesView: View {
                 .strokeBorder(.primary.opacity(0.07))
         )
         .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
+        .padding(.horizontal, 36).padding(.bottom, 16)
     }
 
     private var launchPlanMessage: String {

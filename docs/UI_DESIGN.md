@@ -78,25 +78,29 @@ struct 新功能SettingsView: View {
 
 ### 列表的处理
 
-需要展示可排序/多行列表时，把 `List` 嵌在 `SettingsCard` 内：
+**应用/规则类的可排序列表：使用原生全高 `List` 作为页面滚动容器，不要包进卡片、不要套 `ScrollView`。**
+把 `List` 直接放在页头下方，让它占满剩余高度（父容器已给 `maxHeight: .infinity`），否则会出现嵌套/多余的滚动条：
 
 ```swift
-SettingsCard {
-    List {
-        Section(标题) {
-            ForEach(items) { item in ... }
-                .onMove { ... }
+var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+        // 页头（30pt 标题 + 副标题，自带 36/34/22 内边距）
+        List {
+            Section(标题) {
+                ForEach(items) { item in ... }
+                    .onMove { ... }
+            }
         }
+        .listStyle(.inset(alternatesRowBackgrounds: false))
+        .padding(.horizontal, 22)
+        .padding(.bottom, 20)
     }
-    .listStyle(.inset(alternatesRowBackgrounds: false))
-    .scrollContentBackground(.hidden)
-    .frame(minHeight: 220)
 }
 ```
 
-- 隐藏 List 自带背景，避免与毛玻璃卡片冲突。
-- 给一个 `minHeight`（约 220）保证空列表也有可读区域。
-- 页面滚动由外层 `ScrollView` 负责。
+- 列表是页面唯一的滚动容器，只显示一条原生滚动条。
+- 不要在列表外加 `ScrollView`，也不要给列表设固定 `minHeight`。
+- 列表上方的少量设置控件（如折叠开关、添加按钮）放在页头与列表之间的普通行里。
 
 ## 5. 特殊情况
 
@@ -119,7 +123,7 @@ SettingsCard {
 - [ ] 外边距 `36 / 34 / 30`，卡片间距 `24`
 - [ ] 卡片内小节标题用 `.font(.headline)`，说明文字用 `caption/subheadline` + `secondary`
 - [ ] 启停开关用 `.toggleStyle(.switch)`
-- [ ] 列表按「4. 列表的处理」嵌在卡片内
+- [ ] 应用/规则列表用原生全高 `List`（不嵌卡片、不加 `ScrollView`/`minHeight`，避免嵌套滚动条）
 - [ ] 文案走 `AppText`/`AppLocalization`，中英文同步
 - [ ] 深色 / 浅色模式都正常（毛玻璃材质自动适配）
 - [ ] `swift build` 通过；`swift test` 无新增失败

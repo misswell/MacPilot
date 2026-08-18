@@ -19,50 +19,48 @@ struct AppsSettingsTabView: View {
     let messager = Messager.shared
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                RightClickSettingsCard {
-                    Toggle(isOn: $appState.foldAppsMenu) {
-                        Text(appLocalized: "Collapse apps menu")
-                    }
-                        .onChange(of: appState.foldAppsMenu) {
-                            NotificationCenter.default.post(name: .menuConfigShouldUpdate, object: nil)
-                        }
+        VStack(alignment: .leading, spacing: 16) {
+            RightClickSettingsCard {
+                Toggle(isOn: $appState.foldAppsMenu) {
+                    Text(appLocalized: "Collapse apps menu")
                 }
-
-                RightClickSettingsCard {
-                    HStack {
-                        Spacer()
-                        Button {
-                            showSelectApp = true
-                        } label: {
-                            Label(AppLocalization.localized("Add App"), systemImage: "plus.app")
-                        }
+                    .onChange(of: appState.foldAppsMenu) {
+                        NotificationCenter.default.post(name: .menuConfigShouldUpdate, object: nil)
                     }
+            }
 
-                    List {
-                        ForEach(appState.apps) { item in
-                            LabeledContent {
-                                HStack(spacing: 8) {
-                                    Button {
-                                        editingApp = item
-                                    } label: {
-                                        Image(systemName: "pencil")
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .help(AppLocalization.localized("Edit App"))
+            HStack {
+                Spacer()
+                Button {
+                    showSelectApp = true
+                } label: {
+                    Label(AppLocalization.localized("Add App"), systemImage: "plus.app")
+                }
+            }
 
-                                    Button {
-                                        deleteApp(item)
-                                    } label: {
-                                        Image(systemName: "trash")
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .help(AppLocalization.localized("Delete App"))
-                                }
+            List {
+                ForEach(appState.apps) { item in
+                    LabeledContent {
+                        HStack(spacing: 8) {
+                            Button {
+                                editingApp = item
                             } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "line.3.horizontal")
+                                Image(systemName: "pencil")
+                            }
+                            .buttonStyle(.borderless)
+                            .help(AppLocalization.localized("Edit App"))
+
+                            Button {
+                                deleteApp(item)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .help(AppLocalization.localized("Delete App"))
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "line.3.horizontal")
                                         .foregroundColor(.secondary)
                                     Image(nsImage: IconCache.shared.icon(for: item.url))
                                         .resizable()
@@ -84,13 +82,10 @@ struct AppsSettingsTabView: View {
                             messager.sendRunningNotification()
                         }
                     }
-                    .rightClickListStyle()
-                    .frame(minHeight: 180)
+                    .listStyle(.inset(alternatesRowBackgrounds: false))
                 }
-            }
-            .padding(.vertical, 20)
-        }
-        .fileImporter(
+                .padding(.vertical, 20)
+                .fileImporter(
             isPresented: $showSelectApp,
             allowedContentTypes: [.application],
             allowsMultipleSelection: false
