@@ -54,11 +54,31 @@ struct WindowSwitcherTests {
         settings.includeHiddenApplications = true
         settings.showThumbnails = false
         settings.showWindowTitles = false
+        settings.mergeApplicationBundleIdentifiers = ["com.apple.Safari", "com.apple.finder"]
 
         let decoded = try JSONDecoder().decode(
             WindowSwitcherSettings.self,
             from: JSONEncoder().encode(settings)
         )
         #expect(decoded == settings)
+    }
+
+    @Test func mergeCommandMatchesKnownLocalizedTitles() {
+        #expect(WindowMerger.isMergeCommand("Merge All Windows"))
+        #expect(WindowMerger.isMergeCommand("Merge Windows"))
+        #expect(WindowMerger.isMergeCommand("合并所有窗口"))
+        #expect(WindowMerger.isMergeCommand("合并窗口"))
+        #expect(!WindowMerger.isMergeCommand("Close All Windows"))
+        #expect(!WindowMerger.isMergeCommand("Move Window to Left Side of Screen"))
+        #expect(!WindowMerger.isMergeCommand("Bring All to Front"))
+        #expect(!WindowMerger.isMergeCommand("最小化窗口"))
+    }
+
+    @Test func mergeApplicationListSurvivesMissingKeyDecode() throws {
+        let settings = try JSONDecoder().decode(
+            WindowSwitcherSettings.self,
+            from: Data(#"{"isEnabled":false}"#.utf8)
+        )
+        #expect(settings.mergeApplicationBundleIdentifiers.isEmpty)
     }
 }

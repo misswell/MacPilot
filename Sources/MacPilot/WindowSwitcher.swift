@@ -22,6 +22,8 @@ struct WindowSwitcherSettings: Codable, Equatable, Sendable {
     var showWindowTitles = true
     var previewSize = WindowSwitcherPreviewSize.medium
     var showIconsOnly = false
+    /// Bundle identifiers of apps whose windows the user wants to merge into one.
+    var mergeApplicationBundleIdentifiers: [String] = []
 
     init() {}
 
@@ -34,11 +36,137 @@ struct WindowSwitcherSettings: Codable, Equatable, Sendable {
         showWindowTitles = try container.decodeIfPresent(Bool.self, forKey: .showWindowTitles) ?? true
         previewSize = try container.decodeIfPresent(WindowSwitcherPreviewSize.self, forKey: .previewSize) ?? .medium
         showIconsOnly = try container.decodeIfPresent(Bool.self, forKey: .showIconsOnly) ?? false
+        mergeApplicationBundleIdentifiers = try container.decodeIfPresent([String].self, forKey: .mergeApplicationBundleIdentifiers) ?? []
     }
 }
 
 enum WindowSwitcherPreviewSize: String, Codable, CaseIterable, Sendable {
     case small, medium, large
+}
+
+/// Merges all windows of one application into a single window.
+///
+/// macOS only allows real tabbed-window merging inside the owning process, so a
+/// third-party app cannot call `NSWindow.addTabbedWindow` across processes.
+/// Instead we press the target app's own "Merge All Windows" menu command
+/// through Accessibility when it has one (Safari, Finder, TextEdit, Xcode, ...),
+/// which produces genuine tabs, and otherwise fall back to stacking every
+/// window onto the main window's frame so the app shows a single window.
+enum WindowMerger {
+    static func merge(processID: pid_t) -> Bool {
+        let app = AXUIElementCreateApplication(processID)
+        if performMergeMenuCommand(in: app) {
+            return true
+        }
+        return stackAXWindows(of: app)
+    }
+
+    // MARK: - Menu command (real tab merging)
+
+    private static func performMergeMenuCommand(in app: AXUIElement) -> Bool {
+        guard let menus = attributeChildren(app, kAXMenuBarAttribute as CFString) else { return false }
+        for menu in menus {
+            guard let items = attributeChildren(menu, kAXChildrenAttribute as CFString) else { continue }
+            for item in items {
+                guard let title = attributeString(item, kAXTitleAttribute as CFString),
+                      isMergeCommand(title) else { continue }
+                AXUIElementPerformAction(item, kAXPressAction as CFString)
+                return true
+            }
+        }
+        return false
+    }
+
+    static func isMergeCommand(_ title: String) -> Bool {
+        let compact = title.lowercased().filter { !$0.isWhitespace }
+        if compact.contains("merge"), compact.contains("window") { return true }
+        if compact.contains("合并"), compact.contains("窗口") { return true }
+        return false
+    }
+
+    // MARK: - Fallback: stack windows onto the main window
+
+    private static func stackAXWindows(of app: AXUIElement) -> Bool {
+        guard let windows = attributeChildren(app, kAXWindowsAttribute as CFString) else { return false }
+        let entries = windows.enumerated().compactMap { index, window -> (Int, AXUIElement, CGRect)? in
+            guard let frame = frame(of: window) else { return nil }
+            return (index, window, frame)
+        }
+        guard entries.count > 1 else { return false }
+
+        var mainIndex = 0
+        if let mainWindow = indexOfMainWindow(in: windows) {
+            mainIndex = entries.firstIndex(where: { $0.0 == mainWindow }) ?? 0
+        }
+        let target = entries[mainIndex].2
+
+        var changed = false
+        for entry in entries where entry.0 != entries[mainIndex].0 {
+            if setFrame(entry.1, target) { changed = true }
+        }
+        return changed
+    }
+
+    private static func indexOfMainWindow(in windows: [AXUIElement]) -> Int? {
+        for (index, window) in windows.enumerated() {
+            if attributeBool(window, kAXMainAttribute as CFString) == true {
+                return index
+            }
+        }
+        return nil
+    }
+
+    private static func setFrame(_ window: AXUIElement, _ frame: CGRect) -> Bool {
+        var position = CGPoint(x: frame.minX, y: frame.minY)
+        var size = CGSize(width: frame.width, height: frame.height)
+        var succeeded = true
+        if let positionValue = AXValueCreate(.cgPoint, &position) {
+            succeeded = succeeded
+                && AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue) == .success
+        }
+        if let sizeValue = AXValueCreate(.cgSize, &size) {
+            succeeded = succeeded
+                && AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) == .success
+        }
+        return succeeded
+    }
+
+    // MARK: - AX helpers
+
+    private static func frame(of element: AXUIElement) -> CGRect? {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
+              let positionRef = positionValue,
+              let sizeRef = sizeValue else { return nil }
+        let position = positionRef as! AXValue
+        let size = sizeRef as! AXValue
+        var point = CGPoint.zero
+        var cgSize = CGSize.zero
+        guard AXValueGetValue(position, .cgPoint, &point),
+              AXValueGetValue(size, .cgSize, &cgSize) else { return nil }
+        return CGRect(x: point.x, y: point.y, width: cgSize.width, height: cgSize.height)
+    }
+
+    private static func attributeChildren(_ element: AXUIElement, _ attribute: CFString) -> [AXUIElement]? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let children = value as? [AXUIElement] else { return nil }
+        return children
+    }
+
+    private static func attributeString(_ element: AXUIElement, _ attribute: CFString) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    private static func attributeBool(_ element: AXUIElement, _ attribute: CFString) -> Bool? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
+        return value as? Bool
+    }
 }
 
 enum WindowSwitcherSelection {
@@ -735,6 +863,35 @@ final class WindowSwitcherModel: ObservableObject {
             stopRuntime()
         }
         persist?()
+    }
+
+    /// Adds or removes an app from the merge-windows list.
+    func setMergeApplication(_ bundleIdentifier: String, enabled: Bool) {
+        var identifiers = settings.mergeApplicationBundleIdentifiers
+        if enabled {
+            guard !identifiers.contains(bundleIdentifier) else { return }
+            identifiers.append(bundleIdentifier)
+        } else {
+            identifiers.removeAll { $0 == bundleIdentifier }
+        }
+        settings.mergeApplicationBundleIdentifiers = identifiers
+        persist?()
+    }
+
+    /// Merges all windows of the app with the given bundle identifier.
+    @discardableResult
+    func mergeApplicationWindows(_ bundleIdentifier: String) -> Bool {
+        guard let process = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
+            return false
+        }
+        return mergeWindows(of: process.processIdentifier)
+    }
+
+    /// Merges all windows of the given process into one window.
+    @discardableResult
+    func mergeWindows(of processID: pid_t) -> Bool {
+        guard hasAccessibilityPermission else { return false }
+        return WindowMerger.merge(processID: processID)
     }
 
     private func startRuntime(inventoryPriority: TaskPriority) {
@@ -1775,6 +1932,31 @@ struct WindowSwitcherSettingsView: View {
     @EnvironmentObject private var model: MacPilotModel
     @ObservedObject var windowSwitcher: WindowSwitcherModel
 
+    private struct MergeAppRow: Identifiable {
+        let id: String
+        let name: String
+        let icon: NSImage
+        let isRunning: Bool
+    }
+
+    private var mergeApps: [MergeAppRow] {
+        windowSwitcher.settings.mergeApplicationBundleIdentifiers.map { identifier in
+            let app = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).first
+            return MergeAppRow(
+                id: identifier,
+                name: app?.localizedName ?? identifier,
+                icon: app?.icon ?? NSImage(),
+                isRunning: app != nil
+            )
+        }
+    }
+
+    private var runningApps: [NSRunningApplication] {
+        NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil && $0.bundleIdentifier != Bundle.main.bundleIdentifier }
+            .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -1850,6 +2032,58 @@ struct WindowSwitcherSettingsView: View {
                         Text(model.t("windowSwitcherPreviewMedium")).tag(WindowSwitcherPreviewSize.medium)
                         Text(model.t("windowSwitcherPreviewLarge")).tag(WindowSwitcherPreviewSize.large)
                     }
+                }
+
+                SettingsCard {
+                    Text(model.t("windowSwitcherMerge")).font(.headline)
+                    Text(model.t("windowSwitcherMergeHint")).font(.subheadline).foregroundStyle(.secondary)
+
+                    if mergeApps.isEmpty {
+                        Text(model.t("windowSwitcherNoMergeApps"))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(mergeApps) { app in
+                            HStack(spacing: 10) {
+                                Image(nsImage: app.icon)
+                                    .resizable()
+                                    .frame(width: 24, height: 24)
+                                Text(app.name).lineLimit(1)
+                                Spacer()
+                                if !app.isRunning {
+                                    Text(model.t("windowSwitcherNotRunning"))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Button(model.t("windowSwitcherMergeNow")) {
+                                    windowSwitcher.mergeApplicationWindows(app.id)
+                                }
+                                .disabled(!app.isRunning || !windowSwitcher.hasAccessibilityPermission)
+                                Button {
+                                    windowSwitcher.setMergeApplication(app.id, enabled: false)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .help(model.t("windowSwitcherRemove"))
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Menu {
+                        ForEach(runningApps, id: \.processIdentifier) { app in
+                            if let identifier = app.bundleIdentifier {
+                                Button(app.localizedName ?? identifier) {
+                                    windowSwitcher.setMergeApplication(identifier, enabled: true)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label(model.t("windowSwitcherAddMergeApp"), systemImage: "plus")
+                    }
+                    .disabled(runningApps.isEmpty)
                 }
 
                 SettingsCard {
