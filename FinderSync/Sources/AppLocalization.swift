@@ -40,21 +40,22 @@ enum AppLocalization {
             Locale.current.identifier,
             Locale.autoupdatingCurrent.identifier,
         ] + Locale.preferredLanguages
+        let systemLanguages = (UserDefaults.standard.array(forKey: "AppleLanguages") as? [String]) ?? []
 
-        return identifiers.contains { identifier in
+        return (identifiers + systemLanguages).contains { identifier in
             identifier.lowercased().replacingOccurrences(of: "_", with: "-").hasPrefix("zh")
         }
     }
 
     static func localized(_ key: String) -> String {
-        let bundledValue = Bundle.main.localizedString(forKey: key, value: nil, table: tableName)
-        if bundledValue != key {
-            return bundledValue
-        }
-
         if usesChinese,
            let translation = simplifiedChinese[key] {
             return translation
+        }
+
+        let bundledValue = Bundle.main.localizedString(forKey: key, value: nil, table: tableName)
+        if bundledValue != key {
+            return bundledValue
         }
 
         return Bundle.main.localizedString(forKey: key, value: key, table: tableName)
