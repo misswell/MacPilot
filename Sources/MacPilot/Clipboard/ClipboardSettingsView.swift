@@ -35,9 +35,9 @@ struct ClipboardSettingsView: View {
                     if clipboard.settings.isEnabled {
                         permissionStatus
                     }
+                }
 
-                    Divider()
-
+                SettingsCard {
                     Text(model.t("clipboardHotkey"))
                         .font(.headline)
                     ClipboardHotkeyRecorder(
