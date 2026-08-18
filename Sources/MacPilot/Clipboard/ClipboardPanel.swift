@@ -35,7 +35,7 @@ final class ClipboardPanel: NSPanel {
 
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 420),
-            styleMask: [.nonactivatingPanel, .fullSizeContentView],
+            styleMask: [.nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -234,6 +234,7 @@ struct ClipboardPanelContent: View {
                 .padding(.horizontal, Self.horizontalPadding)
                 .padding(.vertical, 10)
         }
+        .ignoresSafeArea(.container)
         .background(
             RoundedRectangle(cornerRadius: Self.cornerRadius)
                 .fill(.ultraThinMaterial)
