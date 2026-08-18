@@ -166,13 +166,6 @@ private final class ClipboardHotkeyRecorderNSView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window != nil {
-            window?.makeFirstResponder(self)
-        }
-    }
-
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         displayText = "…"
