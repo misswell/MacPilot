@@ -26,6 +26,12 @@ Contributor guide for **MacPilot**, a native macOS menu-bar app (Swift 6, SwiftP
 - Types `UpperCamelCase`, members `lowerCamelCase`. Test methods are behavioral phrases (`closeWindowsModeUsesBehaviorBasedName`).
 - Route user-facing strings through `AppText.value(_:language:)`, keeping `.simplifiedChinese` and `.english` entries in sync.
 
+## UI Design Standards
+
+- All feature pages MUST follow the unified UI language (30pt header + frosted-glass `SettingsCard`). Read `docs/UI_DESIGN.md` before adding or modifying any UI, and run its new-feature checklist before submitting.
+- Reuse `SettingsCard` (`Sources/MacPilot/SettingsUI.swift`) in the main module and `RightClickSettingsCard` (`Sources/MacPilotRightClickKit/Settings/RightClickSettingsCard.swift`) in the Kit — never write an ad-hoc card style.
+- The design tokens (margins 36/34/30, card spacing 24, card corner radius 16 continuous, material background, etc.) are normative in `docs/UI_DESIGN.md`; do not deviate.
+
 ## Testing Guidelines
 
 - Framework: **Swift Testing** (`import Testing`; `@Test`, `#expect`, `#require`). Suites are `struct`s of `@testable import MacPilot` functions.
