@@ -186,3 +186,14 @@ alt-tab-macos 使用 GPL-3.0 授权，MacPilot 只参考其公开行为和架构
 - **修复**：`ModelContainer.swift` 先检查 App Group 目录是否真正可写（`isWritableFile`，仅沙盒上下文为 true），不可写则回退到 `~/Library/Application Support/MacPilot/RightClick/RClickDatabase.sqlite`；只有全部候选都失败才 `fatalError`。
 - 判断「App Group 是否可写」必须用实际进程（带真实 entitlements 签名）验证；从终端直接运行二进制会继承终端的 TCC 身份，行为可能与真实启动不同。
 - `swiftc -output-file-map <(...)` 进程替换在部分 shell/沙箱环境下会报 `unable to load output file map '/dev/fd/11'`；本地临时构建可改为先写临时文件再传入（CI 的 runner 不受影响）。
+
+## 十七、剪切板历史（源自 Maccy）
+
+从 [Maccy](https://github.com/p0deje/Maccy)（MIT）移植的剪切板历史功能，随 `v1.1.128` 首次发布：
+
+- 核心逻辑（`Sources/MacPilot/Clipboard/`）：剪切板监听（Timer 轮询 `NSPasteboard.changeCount`）、历史去重合并、固定（pin）、数量上限裁剪、大小写不敏感搜索、Codable JSON 持久化到 `~/Library/Application Support/MacPilot/ClipboardHistory.json`。
+- 弹出面板：非激活 `NSPanel`（不抢占前台焦点），搜索框 + 历史列表 + 底部提示；键盘操作：↑↓ 选择、⏎ 粘贴（默认）/复制、1-9 选前 9 条未固定、字母选固定条目、⌫ 删除、Esc 关闭；失焦自动关闭；面板打开期间暂停记录。
+- 全局快捷键：默认 ⌘⇧V（Carbon `RegisterEventHotKey`，复用 `SmartCaptureShortcutBinding`），可在设置里录制。
+- 粘贴通过 CGEvent 模拟 ⌘V（需要辅助功能权限）；⌘ 点击=复制、⌥ 点击=粘贴、⌥⇧=无格式粘贴。
+- 去依赖移植：不用 SwiftData（上次 App Group 容器坑的教训）、不用 Maccy 的 Sauce/Defaults/KeyboardShortcuts/Settings/Fuse 依赖。
+- 已知取舍：搜索仅大小写不敏感子串（未移植 Fuse 模糊搜索）；数字/字母快捷键优先于在搜索框输入数字/字母（与 Maccy 行为一致）；未提供忽略应用/正则规则（v2 候选）。
