@@ -267,7 +267,6 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
     var triggerKey: String
     var triggerModifier: PiPShortcutModifier
     var showMenuBarIcon: Bool
-    var launchAtLogin: Bool
     var position: PiPPanelPosition
     var autoHideOnHover: Bool
     var clickToFocusSource: Bool
@@ -304,7 +303,6 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
         triggerKey: String = "p",
         triggerModifier: PiPShortcutModifier = .commandOption,
         showMenuBarIcon: Bool = false,
-        launchAtLogin: Bool = false,
         position: PiPPanelPosition = .bottomRight,
         autoHideOnHover: Bool = false,
         clickToFocusSource: Bool = true,
@@ -341,7 +339,6 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
         self.triggerKey = normalizedKey.isEmpty ? "p" : String(normalizedKey.prefix(1))
         self.triggerModifier = triggerModifier
         self.showMenuBarIcon = showMenuBarIcon
-        self.launchAtLogin = launchAtLogin
         self.position = position
         self.autoHideOnHover = autoHideOnHover
         self.clickToFocusSource = clickToFocusSource
@@ -375,7 +372,7 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, triggerKey, triggerModifier, showMenuBarIcon, launchAtLogin
+        case isEnabled, triggerKey, triggerModifier, showMenuBarIcon
         case position, autoHideOnHover, clickToFocusSource, sourceFocusBehavior
         case showOnFullscreenSpaces, multiWindowMode, showHoverHints, dimOnHover
         case blurAmount, cornerRadius, quickLookWithSpace, defaultFrameRate
@@ -395,7 +392,6 @@ struct PictureInPictureSettings: Codable, Equatable, Sendable {
             triggerKey: try c.decodeIfPresent(String.self, forKey: .triggerKey) ?? "p",
             triggerModifier: try c.decodeIfPresent(PiPShortcutModifier.self, forKey: .triggerModifier) ?? .commandOption,
             showMenuBarIcon: try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? false,
-            launchAtLogin: try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false,
             position: try c.decodeIfPresent(PiPPanelPosition.self, forKey: .position) ?? .bottomRight,
             autoHideOnHover: try c.decodeIfPresent(Bool.self, forKey: .autoHideOnHover) ?? false,
             clickToFocusSource: try c.decodeIfPresent(Bool.self, forKey: .clickToFocusSource) ?? true,
@@ -2055,7 +2051,6 @@ final class PictureInPictureModel: ObservableObject {
         eventTapContext?.updateTriggerModifierFlags(modifier.cgEventFlags)
     }
     func setShowMenuBarIcon(_ value: Bool) { updateSettings { $0.showMenuBarIcon = value } }
-    func setLaunchAtLogin(_ value: Bool) { updateSettings { $0.launchAtLogin = value } }
     func setPosition(_ value: PiPPanelPosition) { updateSettings { $0.position = value } }
     func setAutoHideOnHover(_ value: Bool) { updateSettings { $0.autoHideOnHover = value } }
     func setClickToFocusSource(_ value: Bool) { updateSettings { $0.clickToFocusSource = value } }
@@ -3101,14 +3096,6 @@ struct PictureInPictureView: View {
                             .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                     }
                 }
-                Divider()
-                Toggle(t("pipLaunchAtLogin"), isOn: Binding(
-                    get: { appModel.launchesAtLogin },
-                    set: { value in
-                        if appModel.launchesAtLogin != value { appModel.setLaunchAtLogin(value) }
-                        pictureInPicture.setLaunchAtLogin(appModel.launchesAtLogin)
-                    }
-                ))
             }
 
             card {

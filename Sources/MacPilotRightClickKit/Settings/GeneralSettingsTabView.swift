@@ -17,7 +17,6 @@ struct GeneralSettingsTabView: View {
     @AppLog(category: "settings-general")
     private var logger
 
-    @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage(Key.showMenuBarExtra, store: .group) private var showMenuBarExtra = true
     @EnvironmentObject var store: AppState
     @ObservedObject private var bookmarkManager = AppState.shared.bookmarkManager
@@ -55,10 +54,6 @@ struct GeneralSettingsTabView: View {
 
                 Toggle(isOn: $showMenuBarExtra) {
                     Text(appLocalized: "Show icon in menu bar")
-                }
-
-                Toggle(isOn: $launchAtLogin) {
-                    Text(appLocalized: "Launch at login")
                 }
             } header: {
                 Text(appLocalized: "Main Controls")

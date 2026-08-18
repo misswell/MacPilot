@@ -386,6 +386,7 @@ enum AppText {
         "import": "导入",
         "languageDescription": "选择 MacPilot 的显示语言。更改会立即生效。", "systemLanguage": "跟随系统",
         "english": "English", "simplifiedChinese": "简体中文", "checkNow": "立即检查", "startAtLogin": "登录时启动",
+        "startAtLoginHint": "登录 Mac 后自动在后台启动 MacPilot。",
         "showApp": "显示 MacPilot", "quitApp": "退出 MacPilot", "enabledStatus": "MacPilot：已启用",
         "disabledStatus": "MacPilot：已停用", "disableApp": "停用 MacPilot", "enableApp": "启用 MacPilot",
         "loginError": "无法更新登录启动项：%@", "aboutAutomation": "自动化", "manageRules": "管理应用规则和界面偏好。",
@@ -553,7 +554,7 @@ enum AppText {
         "pipGlobalShortcut": "全局快捷键", "pipGlobalShortcutHint": "当前为 %@；在其他 App 中使用需要辅助功能权限。加 Shift 可选择窗口区域。",
         "pipShortcutModifier": "组合键", "pipShortcutKey": "触发键",
         "pipShortcutCommandOption": "Option + Command", "pipShortcutCommandControl": "Control + Command", "pipShortcutControlOption": "Control + Option", "pipShortcutCommandControlOption": "Control + Option + Command",
-        "pipLaunchAtLogin": "登录时启动", "pipShowMenuBarIcon": "显示菜单栏图标", "pipCheatSheet": "快捷键速查",
+        "pipShowMenuBarIcon": "显示菜单栏图标", "pipCheatSheet": "快捷键速查",
         "pipCheatSheetBody": "%@ 捕获窗口 · %@ + Shift 选择区域 · %@ 双击快速区域 · 滚轮缩放 · ⌘+滚轮平移 · Backspace 关闭 · 空格快速查看 · +/- 缩放 · ⌘ 双击重置缩放",
         "pipPosition": "位置", "pipPositionTopLeft": "左上", "pipPositionTopRight": "右上", "pipPositionBottomLeft": "左下", "pipPositionBottomRight": "右下",
         "pipAutoHide": "悬停时自动隐藏", "pipAutoHideHint": "鼠标移到面板上时淡出，让你操作后面的窗口；移开后恢复。",
@@ -663,7 +664,7 @@ enum AppText {
             "import": "Import",
             "minute": "minute", "minutes": "minutes", "language": "Language", "languageDescription": "Choose MacPilot’s display language. Changes apply immediately.",
             "systemLanguage": "System Language", "english": "English", "simplifiedChinese": "Simplified Chinese", "checkNow": "Check now",
-            "startAtLogin": "Start at Login", "showApp": "Show MacPilot", "quitApp": "Quit MacPilot", "enabledStatus": "MacPilot: Enabled",
+            "startAtLogin": "Start at Login", "startAtLoginHint": "Launch MacPilot automatically in the background when you log in.", "showApp": "Show MacPilot", "quitApp": "Quit MacPilot", "enabledStatus": "MacPilot: Enabled",
             "disabledStatus": "MacPilot: Disabled", "disableApp": "Disable MacPilot", "enableApp": "Enable MacPilot",
             "loginError": "Couldn’t update the login item: %@", "aboutAutomation": "AUTOMATION", "manageRules": "Manage app rules and interface preferences.",
             "quitsIn": "Quits in %d min",
@@ -830,7 +831,7 @@ enum AppText {
             "pipGlobalShortcut": "Global shortcut", "pipGlobalShortcutHint": "Current shortcut: %@. Accessibility access is required in other apps. Add Shift to select a window region.",
             "pipShortcutModifier": "Modifier", "pipShortcutKey": "Trigger key",
             "pipShortcutCommandOption": "Option + Command", "pipShortcutCommandControl": "Control + Command", "pipShortcutControlOption": "Control + Option", "pipShortcutCommandControlOption": "Control + Option + Command",
-            "pipLaunchAtLogin": "Launch at login", "pipShowMenuBarIcon": "Show menubar icon", "pipCheatSheet": "Cheat sheet",
+            "pipShowMenuBarIcon": "Show menubar icon", "pipCheatSheet": "Cheat sheet",
             "pipCheatSheetBody": "%@ capture window · %@ + Shift select region · %@ double-click quick region · Scroll to zoom · ⌘+scroll to pan · Backspace close · Space QuickLook · +/- zoom · ⌘ double-click reset",
             "pipPosition": "Position", "pipPositionTopLeft": "Top Left", "pipPositionTopRight": "Top Right", "pipPositionBottomLeft": "Bottom Left", "pipPositionBottomRight": "Bottom Right",
             "pipAutoHide": "Auto-hide on hover", "pipAutoHideHint": "Fade the panel while the pointer is over it so you can interact with the window behind it.",
@@ -3498,6 +3499,15 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .textSelection(.enabled)
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle(model.t("startAtLogin"), isOn: Binding(
+                        get: { model.launchesAtLogin },
+                        set: { model.setLaunchAtLogin($0) }
+                    ))
+                    .toggleStyle(.switch)
+                    Text(model.t("startAtLoginHint")).font(.subheadline).foregroundStyle(.secondary)
                 }
                 Divider()
                 SoftwareUpdateSettingsView(updater: model.updater, language: model.language)
