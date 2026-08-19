@@ -868,6 +868,8 @@ final class WindowSwitcherModel: ObservableObject {
     private var mouseSelectionAnchor: CGPoint?
     private var autoMergedWindowCounts: [String: Int] = [:]
     private var previousSnapshotWindowIDs: Set<String> = []
+    private var activationCandidate: NSRunningApplication?
+    private var activationConfirmTask: Task<Void, Never>?
 
     var gridColumnCount: Int {
         let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
@@ -1402,11 +1404,31 @@ final class WindowSwitcherModel: ObservableObject {
                         Self.activationLogger.info(
                             "App activated: \(application?.localizedName ?? "?", privacy: .public)"
                         )
-                        self.noteApplicationActivation(application)
+                        // Background apps frequently grab activation briefly (notifications,
+                        // update checkers, menu-bar helpers). Only record an app as "recent"
+                        // once it has actually stayed in the foreground, so they don't get
+                        // inserted into the middle of an Alt+Tab cycle.
+                        self.scheduleActivationConfirmation(application)
                     }
                     self.requestInventoryRefresh(priority: .utility)
                 }
             }
+        }
+    }
+
+    /// Defer recording an activation until the app keeps foreground focus for a
+    /// short while, filtering out transient background activations.
+    private func scheduleActivationConfirmation(_ application: NSRunningApplication?) {
+        activationConfirmTask?.cancel()
+        activationCandidate = application
+        activationConfirmTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled, let self else { return }
+            guard let candidate = self.activationCandidate,
+                  let frontmost = NSWorkspace.shared.frontmostApplication,
+                  candidate.processIdentifier == frontmost.processIdentifier else { return }
+            DiagnosticLog.write("WindowSwitcher", "Confirmed foreground: \(candidate.localizedName ?? "?")")
+            self.noteApplicationActivation(candidate)
         }
     }
 
