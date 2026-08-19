@@ -2201,7 +2201,7 @@ final class SmartScreenshotController {
                 case .ocr:
                     self.onOCRCapture(crop.image)
                 case .pin:
-                    self.pin(image: crop.image)
+                    self.pin(image: crop.image, scaleFactor: crop.scaleFactor)
                 case .cancel:
                     break
                 }
@@ -2251,9 +2251,9 @@ final class SmartScreenshotController {
         }
     }
 
-    func pin(image: CGImage) {
+    func pin(image: CGImage, scaleFactor: CGFloat = 1) {
         let id = UUID()
-        let controller = SmartPinWindowController(image: image, language: language()) { [weak self] in
+        let controller = SmartPinWindowController(image: image, scaleFactor: scaleFactor, language: language()) { [weak self] in
             Self.logger.info("Pin controller removed")
             self?.pinControllers.removeValue(forKey: id)
         }
@@ -4234,13 +4234,15 @@ private struct SmartMediaEditorView: View {
 private final class SmartPinWindowController: NSObject, NSWindowDelegate {
     nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     private var image: CGImage
+    private let scaleFactor: CGFloat
     private let language: AppLanguage
     private let onClose: () -> Void
     private var panel: NSPanel?
     private var annotationController: SmartAnnotationWindowController?
 
-    init(image: CGImage, language: AppLanguage, onClose: @escaping () -> Void) {
+    init(image: CGImage, scaleFactor: CGFloat = 1, language: AppLanguage, onClose: @escaping () -> Void) {
         self.image = image
+        self.scaleFactor = max(0.25, scaleFactor)
         self.language = language
         self.onClose = onClose
     }
@@ -4249,18 +4251,23 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
         // 顶部工具栏高度（SmartPinView 里的操作栏），窗口内容区需要预留，
         // 否则图片区可用高度变小，scaledToFit 会四周留白、没有充满贴图范围。
         let toolbarHeight: CGFloat = 38
-        // 贴图按原图 1:1 大小显示；只有图片超过屏幕可见区域时才缩小到适配屏幕。
+        // 贴图按「框选区域的实际点尺寸」显示（原图比例），即 像素 / 缩放比例；
+        // 只有图片超过屏幕可见区域时才缩小到适配屏幕。
+        let naturalImageSize = CGSize(
+            width: CGFloat(image.width) / scaleFactor,
+            height: CGFloat(image.height) / scaleFactor
+        )
         let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
         let maxImageWidth = max(180, visibleFrame.width - 32)
         let maxImageHeight = max(120, visibleFrame.height - toolbarHeight - 48)
         let scale = min(
             1,
-            maxImageWidth / CGFloat(image.width),
-            maxImageHeight / CGFloat(image.height)
+            maxImageWidth / naturalImageSize.width,
+            maxImageHeight / naturalImageSize.height
         )
         let imageSize = CGSize(
-            width: max(180, CGFloat(image.width) * scale),
-            height: max(120, CGFloat(image.height) * scale)
+            width: max(180, naturalImageSize.width * scale),
+            height: max(120, naturalImageSize.height * scale)
         )
         let size = CGSize(width: imageSize.width, height: imageSize.height + toolbarHeight)
         let panel = NSPanel(
