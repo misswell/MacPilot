@@ -1572,7 +1572,7 @@ struct PiPPanelView: View {
                         .background(.black.opacity(0.58), in: Circle())
                         .overlay(Circle().strokeBorder(.white.opacity(0.18)))
                         .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
-                        .accessibilityLabel("Media paused")
+                        .accessibilityLabel(AppText.value("pipMediaPaused", language: .system))
                 }
 
                 if session.presentationSettings.dimOnHover && session.isHovering {

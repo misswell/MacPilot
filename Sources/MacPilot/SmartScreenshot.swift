@@ -4249,11 +4249,14 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
         // 顶部工具栏高度（SmartPinView 里的操作栏），窗口内容区需要预留，
         // 否则图片区可用高度变小，scaledToFit 会四周留白、没有充满贴图范围。
         let toolbarHeight: CGFloat = 38
-        let maxImageSize = CGSize(width: 720, height: 520)
+        // 贴图按原图 1:1 大小显示；只有图片超过屏幕可见区域时才缩小到适配屏幕。
+        let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
+        let maxImageWidth = max(180, visibleFrame.width - 32)
+        let maxImageHeight = max(120, visibleFrame.height - toolbarHeight - 48)
         let scale = min(
             1,
-            maxImageSize.width / CGFloat(image.width),
-            (maxImageSize.height - toolbarHeight) / CGFloat(image.height)
+            maxImageWidth / CGFloat(image.width),
+            maxImageHeight / CGFloat(image.height)
         )
         let imageSize = CGSize(
             width: max(180, CGFloat(image.width) * scale),

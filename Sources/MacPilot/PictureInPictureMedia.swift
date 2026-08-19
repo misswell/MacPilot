@@ -367,24 +367,24 @@ struct PiPMediaTransportControls: View {
                         Button { session.seekMedia(by: -5) } label: {
                             Image(systemName: "gobackward.5")
                         }
-                        .help("Back 5 seconds")
+                        .help(AppText.value("pipBack5Seconds", language: .system))
                     }
                     Button { session.toggleMediaPlayback() } label: {
                         Image(systemName: snapshot.isPlaying ? "pause.fill" : "play.fill")
                             .frame(width: 16)
                     }
-                    .help(snapshot.isPlaying ? "Pause" : "Play")
+                    .help(AppText.value(snapshot.isPlaying ? "pipPause" : "pipPlay", language: .system))
                     if session.presentationSettings.seekBar {
                         Button { session.seekMedia(by: 5) } label: {
                             Image(systemName: "goforward.5")
                         }
-                        .help("Forward 5 seconds")
+                        .help(AppText.value("pipForward5Seconds", language: .system))
                     }
                     if session.presentationSettings.youtubeCaptions && session.isYouTubeSource {
                         Button { session.toggleYouTubeCaptions() } label: {
                             Image(systemName: "captions.bubble")
                         }
-                        .help("Toggle captions")
+                        .help(AppText.value("pipToggleCaptions", language: .system))
                     }
                 }
                 .buttonStyle(.plain)
