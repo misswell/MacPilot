@@ -4246,9 +4246,20 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
     }
 
     func show() {
-        let maxSize = CGSize(width: 720, height: 520)
-        let scale = min(1, maxSize.width / CGFloat(image.width), maxSize.height / CGFloat(image.height))
-        let size = CGSize(width: max(180, CGFloat(image.width) * scale), height: max(120, CGFloat(image.height) * scale))
+        // 顶部工具栏高度（SmartPinView 里的操作栏），窗口内容区需要预留，
+        // 否则图片区可用高度变小，scaledToFit 会四周留白、没有充满贴图范围。
+        let toolbarHeight: CGFloat = 38
+        let maxImageSize = CGSize(width: 720, height: 520)
+        let scale = min(
+            1,
+            maxImageSize.width / CGFloat(image.width),
+            (maxImageSize.height - toolbarHeight) / CGFloat(image.height)
+        )
+        let imageSize = CGSize(
+            width: max(180, CGFloat(image.width) * scale),
+            height: max(120, CGFloat(image.height) * scale)
+        )
+        let size = CGSize(width: imageSize.width, height: imageSize.height + toolbarHeight)
         let panel = NSPanel(
             contentRect: CGRect(origin: .zero, size: size),
             styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
