@@ -38,14 +38,18 @@ struct ClipboardSettingsView: View {
                 }
 
                 SettingsCard {
-                    Text(model.t("clipboardHotkey"))
-                        .font(.headline)
-                    ClipboardHotkeyRecorder(
-                        binding: Binding(
-                            get: { clipboard.settings.hotkey },
-                            set: { clipboard.setHotkey($0) }
+                    HStack(spacing: 12) {
+                        Text(model.t("clipboardHotkey"))
+                            .font(.subheadline)
+                        Spacer()
+                        ClipboardHotkeyRecorder(
+                            binding: Binding(
+                                get: { clipboard.settings.hotkey },
+                                set: { clipboard.setHotkey($0) }
+                            ),
+                            help: model.t("clipboardHotkeyRecord")
                         )
-                    )
+                    }
 
                     Divider()
 
@@ -128,8 +132,11 @@ struct ClipboardSettingsView: View {
 /// Pure SwiftUI hotkey recorder. Uses an `NSEvent` local monitor while
 /// recording (instead of an `NSViewRepresentable`) so the control renders
 /// correctly inside the frosted-glass `SettingsCard` scroll view.
+/// Compact monospaced badge, consistent with the shortcut style used by the
+/// screenshot and other feature pages.
 private struct ClipboardHotkeyRecorder: View {
     @Binding var binding: SmartCaptureShortcutBinding
+    var help: String = ""
     @State private var isRecording = false
     @State private var eventMonitor: Any?
 
@@ -144,19 +151,23 @@ private struct ClipboardHotkeyRecorder: View {
             installMonitor()
         } label: {
             Text(displayText)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, minHeight: 36)
+                .font(.system(.body, design: .monospaced).weight(.semibold))
+                .foregroundStyle(isRecording ? Color.accentColor : .primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color(nsColor: .controlBackgroundColor))
+                    isRecording
+                        ? AnyShapeStyle(Color.accentColor.opacity(0.12))
+                        : AnyShapeStyle(.quaternary),
+                    in: RoundedRectangle(cornerRadius: 6)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(isRecording ? Color.accentColor : Color(nsColor: .separatorColor))
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(isRecording ? Color.accentColor : Color.clear, lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
+        .help(help)
         .onDisappear(perform: removeMonitor)
     }
 
