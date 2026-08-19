@@ -24,6 +24,8 @@ struct WindowSwitcherSettings: Codable, Equatable, Sendable {
     var showIconsOnly = false
     /// Bundle identifiers of apps whose windows the user wants to merge into one.
     var mergeApplicationBundleIdentifiers: [String] = []
+    /// Automatically merge listed apps' windows whenever they have several.
+    var autoMergeApplicationWindows = true
 
     init() {}
 
@@ -37,6 +39,7 @@ struct WindowSwitcherSettings: Codable, Equatable, Sendable {
         previewSize = try container.decodeIfPresent(WindowSwitcherPreviewSize.self, forKey: .previewSize) ?? .medium
         showIconsOnly = try container.decodeIfPresent(Bool.self, forKey: .showIconsOnly) ?? false
         mergeApplicationBundleIdentifiers = try container.decodeIfPresent([String].self, forKey: .mergeApplicationBundleIdentifiers) ?? []
+        autoMergeApplicationWindows = try container.decodeIfPresent(Bool.self, forKey: .autoMergeApplicationWindows) ?? true
     }
 }
 
@@ -53,12 +56,21 @@ enum WindowSwitcherPreviewSize: String, Codable, CaseIterable, Sendable {
 /// which produces genuine tabs, and otherwise fall back to stacking every
 /// window onto the main window's frame so the app shows a single window.
 enum WindowMerger {
+    private static let logger = Logger(
+        subsystem: "com.misswell.macpilot",
+        category: "WindowMerger"
+    )
+
     static func merge(processID: pid_t) -> Bool {
         let app = AXUIElementCreateApplication(processID)
+        let appName = NSRunningApplication(processIdentifier: processID)?.localizedName ?? "\(processID)"
         if performMergeMenuCommand(in: app) {
+            logger.info("Merged \(appName) via 'Merge All Windows' menu command")
             return true
         }
-        return stackAXWindows(of: app)
+        let stacked = stackAXWindows(of: app)
+        logger.info("Merged \(appName) via stacking: \(stacked)")
+        return stacked
     }
 
     // MARK: - Menu command (real tab merging)
@@ -814,6 +826,7 @@ final class WindowSwitcherModel: ObservableObject {
     private var panelController: WindowSwitcherPanelController?
     private var mouseSelectionEnabled = true
     private var mouseSelectionAnchor: CGPoint?
+    private var autoMergedWindowCounts: [String: Int] = [:]
 
     var gridColumnCount: Int {
         let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
@@ -875,6 +888,15 @@ final class WindowSwitcherModel: ObservableObject {
             identifiers.removeAll { $0 == bundleIdentifier }
         }
         settings.mergeApplicationBundleIdentifiers = identifiers
+        autoMergedWindowCounts[bundleIdentifier] = nil
+        persist?()
+    }
+
+    /// Turns automatic merging of listed apps on or off.
+    func setAutoMergeApplicationWindows(_ enabled: Bool) {
+        guard settings.autoMergeApplicationWindows != enabled else { return }
+        settings.autoMergeApplicationWindows = enabled
+        if !enabled { autoMergedWindowCounts = [:] }
         persist?()
     }
 
@@ -884,7 +906,9 @@ final class WindowSwitcherModel: ObservableObject {
         guard let process = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
             return false
         }
-        return mergeWindows(of: process.processIdentifier)
+        let merged = mergeWindows(of: process.processIdentifier)
+        autoMergedWindowCounts[bundleIdentifier] = currentWindowCount(of: process.processIdentifier)
+        return merged
     }
 
     /// Merges all windows of the given process into one window.
@@ -892,6 +916,35 @@ final class WindowSwitcherModel: ObservableObject {
     func mergeWindows(of processID: pid_t) -> Bool {
         guard hasAccessibilityPermission else { return false }
         return WindowMerger.merge(processID: processID)
+    }
+
+    /// For each listed app with more than one window, merge its windows into one.
+    /// Only acts when the visible window count actually increased since the last
+    /// merge, so opening a brand-new window in a listed app re-merges it without
+    /// repeatedly fighting windows that a terminal can already tab internally.
+    private func autoMergeConfiguredApplications() {
+        guard settings.autoMergeApplicationWindows else { return }
+        guard hasAccessibilityPermission else { return }
+        for identifier in settings.mergeApplicationBundleIdentifiers {
+            guard let process = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).first else {
+                autoMergedWindowCounts[identifier] = nil
+                continue
+            }
+            let count = currentWindowCount(of: process.processIdentifier)
+            let previous = autoMergedWindowCounts[identifier]
+            if count >= 2, previous != count {
+                mergeWindows(of: process.processIdentifier)
+                autoMergedWindowCounts[identifier] = count
+            } else if count < 2 {
+                autoMergedWindowCounts[identifier] = nil
+            }
+        }
+    }
+
+    private func currentWindowCount(of processID: pid_t) -> Int {
+        cachedWindows.reduce(into: 0) { count, item in
+            if item.processID == processID { count += 1 }
+        }
     }
 
     private func startRuntime(inventoryPriority: TaskPriority) {
@@ -1403,6 +1456,7 @@ final class WindowSwitcherModel: ObservableObject {
                     self.cachedWindows = snapshot
                     self.applyCachedPreviews(to: snapshot)
                     self.noteApplicationActivation(NSWorkspace.shared.frontmostApplication)
+                    self.autoMergeConfiguredApplications()
                 }
                 if let pending = self.pendingSession {
                     self.pendingSession = nil
@@ -2037,6 +2091,13 @@ struct WindowSwitcherSettingsView: View {
                 SettingsCard {
                     Text(model.t("windowSwitcherMerge")).font(.headline)
                     Text(model.t("windowSwitcherMergeHint")).font(.subheadline).foregroundStyle(.secondary)
+
+                    Toggle(model.t("windowSwitcherAutoMerge"), isOn: Binding(
+                        get: { windowSwitcher.settings.autoMergeApplicationWindows },
+                        set: { windowSwitcher.setAutoMergeApplicationWindows($0) }
+                    ))
+
+                    Divider()
 
                     if mergeApps.isEmpty {
                         Text(model.t("windowSwitcherNoMergeApps"))

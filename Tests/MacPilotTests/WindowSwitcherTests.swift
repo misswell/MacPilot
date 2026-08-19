@@ -45,6 +45,7 @@ struct WindowSwitcherTests {
         #expect(!settings.includeHiddenApplications)
         #expect(settings.showThumbnails)
         #expect(settings.showWindowTitles)
+        #expect(settings.autoMergeApplicationWindows)
     }
 
     @Test func settingsRoundTripThroughCodable() throws {
@@ -55,6 +56,7 @@ struct WindowSwitcherTests {
         settings.showThumbnails = false
         settings.showWindowTitles = false
         settings.mergeApplicationBundleIdentifiers = ["com.apple.Safari", "com.apple.finder"]
+        settings.autoMergeApplicationWindows = false
 
         let decoded = try JSONDecoder().decode(
             WindowSwitcherSettings.self,
