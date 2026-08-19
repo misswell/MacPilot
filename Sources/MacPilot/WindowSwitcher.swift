@@ -51,10 +51,11 @@ enum WindowSwitcherPreviewSize: String, Codable, CaseIterable, Sendable {
 ///
 /// macOS only allows real tabbed-window merging inside the owning process, so a
 /// third-party app cannot call `NSWindow.addTabbedWindow` across processes.
-/// Instead we press the target app's own "Merge All Windows" menu command
+/// We therefore press the target app's own "Merge All Windows" menu command
 /// through Accessibility when it has one (Safari, Finder, TextEdit, Xcode, ...),
-/// which produces genuine tabs, and otherwise fall back to stacking every
-/// window onto the main window's frame so the app shows a single window.
+/// which produces genuine tabs. For apps without that command (many terminals
+/// and custom apps) we minimize every extra window so only the main window stays
+/// visible, which is the closest possible "merge to one window".
 enum WindowMerger {
     private static let logger = Logger(
         subsystem: "com.misswell.macpilot",
@@ -64,13 +65,28 @@ enum WindowMerger {
     static func merge(processID: pid_t) -> Bool {
         let app = AXUIElementCreateApplication(processID)
         let appName = NSRunningApplication(processIdentifier: processID)?.localizedName ?? "\(processID)"
+        let countBefore = realWindowCount(in: app)
         if performMergeMenuCommand(in: app) {
-            logger.info("Merged \(appName) via 'Merge All Windows' menu command")
+            logger.info("Merged \(appName) (had \(countBefore) windows) via 'Merge All Windows' menu command")
             return true
         }
-        let stacked = stackAXWindows(of: app)
-        logger.info("Merged \(appName) via stacking: \(stacked)")
-        return stacked
+        let minimized = minimizeExtraWindows(of: app)
+        logger.info("Merged \(appName) (had \(countBefore) windows) via minimizing extra windows: \(minimized)")
+        return minimized
+    }
+
+    /// Counts the app's real windows (AX window role, at least 2x2 points).
+    static func realWindowCount(processID: pid_t) -> Int {
+        realWindowCount(in: AXUIElementCreateApplication(processID))
+    }
+
+    private static func realWindowCount(in app: AXUIElement) -> Int {
+        guard let windows = attributeChildren(app, kAXWindowsAttribute as CFString) else { return 0 }
+        return windows.filter { window in
+            guard attributeString(window, kAXRoleAttribute as CFString) == kAXWindowRole as String else { return false }
+            guard let frame = frame(of: window) else { return false }
+            return frame.width >= 2 && frame.height >= 2
+        }.count
     }
 
     // MARK: - Menu command (real tab merging)
@@ -96,25 +112,33 @@ enum WindowMerger {
         return false
     }
 
-    // MARK: - Fallback: stack windows onto the main window
+    // MARK: - Fallback: minimize every window except the main one
 
-    private static func stackAXWindows(of app: AXUIElement) -> Bool {
+    private static func minimizeExtraWindows(of app: AXUIElement) -> Bool {
         guard let windows = attributeChildren(app, kAXWindowsAttribute as CFString) else { return false }
-        let entries = windows.enumerated().compactMap { index, window -> (Int, AXUIElement, CGRect)? in
-            guard let frame = frame(of: window) else { return nil }
-            return (index, window, frame)
+        // Keep only real, sizable windows; ignore the tiny toolbars/panels that
+        // many apps (terminals especially) expose as child windows.
+        let real = windows.filter { window in
+            guard attributeString(window, kAXRoleAttribute as CFString) == kAXWindowRole as String else { return false }
+            guard let frame = frame(of: window) else { return false }
+            return frame.width >= 2 && frame.height >= 2
         }
-        guard entries.count > 1 else { return false }
+        guard real.count > 1 else { return false }
 
         var mainIndex = 0
-        if let mainWindow = indexOfMainWindow(in: windows) {
-            mainIndex = entries.firstIndex(where: { $0.0 == mainWindow }) ?? 0
+        if let mainWindow = indexOfMainWindow(in: real) {
+            mainIndex = mainWindow
         }
-        let target = entries[mainIndex].2
 
         var changed = false
-        for entry in entries where entry.0 != entries[mainIndex].0 {
-            if setFrame(entry.1, target) { changed = true }
+        for (index, window) in real.enumerated() where index != mainIndex {
+            if attributeBool(window, kAXMinimizedAttribute as CFString) == true { continue }
+            let result = AXUIElementSetAttributeValue(
+                window,
+                kAXMinimizedAttribute as CFString,
+                kCFBooleanTrue
+            )
+            if result == .success { changed = true }
         }
         return changed
     }
@@ -126,21 +150,6 @@ enum WindowMerger {
             }
         }
         return nil
-    }
-
-    private static func setFrame(_ window: AXUIElement, _ frame: CGRect) -> Bool {
-        var position = CGPoint(x: frame.minX, y: frame.minY)
-        var size = CGSize(width: frame.width, height: frame.height)
-        var succeeded = true
-        if let positionValue = AXValueCreate(.cgPoint, &position) {
-            succeeded = succeeded
-                && AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue) == .success
-        }
-        if let sizeValue = AXValueCreate(.cgSize, &size) {
-            succeeded = succeeded
-                && AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) == .success
-        }
-        return succeeded
     }
 
     // MARK: - AX helpers
@@ -790,6 +799,10 @@ final class WindowSwitcherModel: ObservableObject {
         subsystem: "com.misswell.macpilot",
         category: "WindowSwitcherPerformance"
     )
+    private static let mergeLogger = Logger(
+        subsystem: "com.misswell.macpilot",
+        category: "WindowMerger"
+    )
 
     @Published private(set) var settings = WindowSwitcherSettings()
     private(set) var windows: [WindowSwitcherItem] = []
@@ -907,7 +920,7 @@ final class WindowSwitcherModel: ObservableObject {
             return false
         }
         let merged = mergeWindows(of: process.processIdentifier)
-        autoMergedWindowCounts[bundleIdentifier] = currentWindowCount(of: process.processIdentifier)
+        autoMergedWindowCounts[bundleIdentifier] = WindowMerger.realWindowCount(processID: process.processIdentifier)
         return merged
     }
 
@@ -930,20 +943,17 @@ final class WindowSwitcherModel: ObservableObject {
                 autoMergedWindowCounts[identifier] = nil
                 continue
             }
-            let count = currentWindowCount(of: process.processIdentifier)
+            let count = WindowMerger.realWindowCount(processID: process.processIdentifier)
             let previous = autoMergedWindowCounts[identifier]
             if count >= 2, previous != count {
-                mergeWindows(of: process.processIdentifier)
+                let merged = mergeWindows(of: process.processIdentifier)
+                Self.mergeLogger.info(
+                    "Auto-merge \(process.localizedName ?? identifier): windows=\(count) previous=\(previous ?? -1) merged=\(merged)"
+                )
                 autoMergedWindowCounts[identifier] = count
             } else if count < 2 {
                 autoMergedWindowCounts[identifier] = nil
             }
-        }
-    }
-
-    private func currentWindowCount(of processID: pid_t) -> Int {
-        cachedWindows.reduce(into: 0) { count, item in
-            if item.processID == processID { count += 1 }
         }
     }
 
