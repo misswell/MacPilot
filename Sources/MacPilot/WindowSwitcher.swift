@@ -966,15 +966,26 @@ final class WindowSwitcherModel: ObservableObject {
     /// merge, so opening a brand-new window in a listed app re-merges it without
     /// repeatedly fighting windows that a terminal can already tab internally.
     private func autoMergeConfiguredApplications() {
-        guard settings.autoMergeApplicationWindows else { return }
-        guard hasAccessibilityPermission else { return }
+        let enabled = settings.autoMergeApplicationWindows
+        let hasAX = hasAccessibilityPermission
+        DiagnosticLog.write(
+            "WindowMerger",
+            "autoMergeConfiguredApplications called: enabled=\(enabled) ax=\(hasAX) list=\(settings.mergeApplicationBundleIdentifiers.joined(separator: ","))"
+        )
+        guard enabled else { return }
+        guard hasAX else { return }
         for identifier in settings.mergeApplicationBundleIdentifiers {
             guard let process = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).first else {
                 autoMergedWindowCounts[identifier] = nil
+                DiagnosticLog.write("WindowMerger", "\(identifier): not running")
                 continue
             }
             let count = WindowMerger.realWindowCount(processID: process.processIdentifier)
             let previous = autoMergedWindowCounts[identifier]
+            DiagnosticLog.write(
+                "WindowMerger",
+                "\(identifier): running pid=\(process.processIdentifier) realWindows=\(count) previous=\(previous ?? -1)"
+            )
             if count >= 2, previous != count {
                 let merged = mergeWindows(of: process.processIdentifier)
                 let log = "Auto-merge \(process.localizedName ?? identifier): windows=\(count) previous=\(previous ?? -1) merged=\(merged)"
