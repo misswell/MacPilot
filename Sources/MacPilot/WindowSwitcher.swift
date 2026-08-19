@@ -312,6 +312,8 @@ private struct WindowSwitcherAXAttributes {
     let title: String
     let isMinimized: Bool
     let frame: CGRect?
+    /// Stable window number (kAXWindowNumberAttribute); nil when unavailable.
+    let windowNumber: CGWindowID?
 }
 
 private enum WindowSwitcherInventory {
@@ -376,6 +378,7 @@ private enum WindowSwitcherInventory {
                     serverRecord: record,
                     frame: frame,
                     fallbackTitle: resolvedTitle,
+                    windowNumber: attributes.windowNumber,
                     index: index,
                     icon: icon,
                     minimized: minimized
@@ -393,6 +396,7 @@ private enum WindowSwitcherInventory {
                         serverRecord: record,
                         frame: record.frame,
                         fallbackTitle: record.title,
+                        windowNumber: record.windowID,
                         index: index,
                         icon: icon,
                         minimized: false
@@ -433,6 +437,7 @@ private enum WindowSwitcherInventory {
         serverRecord: WindowSwitcherServerRecord?,
         frame: CGRect?,
         fallbackTitle: String,
+        windowNumber: CGWindowID?,
         index: Int,
         icon: NSImage,
         minimized: Bool
@@ -444,6 +449,11 @@ private enum WindowSwitcherInventory {
         let stableID: String
         if let windowID {
             stableID = "window-\(windowID)"
+        } else if let windowNumber {
+            // AX window number is stable across refreshes even when the
+            // WindowServer record does not match, so the switcher does not
+            // mistake a long-lived window for a brand-new one on every scan.
+            stableID = "window-\(windowNumber)"
         } else {
             stableID = "ax-\(processID)-\(index)-\(fallbackTitle)"
         }
@@ -519,12 +529,13 @@ private enum WindowSwitcherInventory {
     }
 
     private static func windowAttributes(of element: AXUIElement) -> WindowSwitcherAXAttributes {
-        let keys = [
-            kAXRoleAttribute,
-            kAXTitleAttribute,
-            kAXMinimizedAttribute,
-            kAXPositionAttribute,
-            kAXSizeAttribute
+        let keys: [CFString] = [
+            kAXRoleAttribute as CFString,
+            kAXTitleAttribute as CFString,
+            kAXMinimizedAttribute as CFString,
+            kAXPositionAttribute as CFString,
+            kAXSizeAttribute as CFString,
+            "AXWindowNumber" as CFString
         ]
         var values: CFArray?
         if AXUIElementCopyMultipleAttributeValues(element, keys as CFArray, [], &values) == .success,
@@ -535,15 +546,23 @@ private enum WindowSwitcherInventory {
                 role: values[0] as? String,
                 title: values[1] as? String ?? "",
                 isMinimized: (values[2] as? NSNumber)?.boolValue ?? false,
-                frame: position.flatMap { position in size.map { CGRect(origin: position, size: $0) } }
+                frame: position.flatMap { position in size.map { CGRect(origin: position, size: $0) } },
+                windowNumber: (values[5] as? NSNumber).map { CGWindowID($0.intValue) }
             )
         }
         return WindowSwitcherAXAttributes(
             role: stringAttribute(kAXRoleAttribute, from: element),
             title: stringAttribute(kAXTitleAttribute, from: element) ?? "",
             isMinimized: boolAttribute(kAXMinimizedAttribute, from: element),
-            frame: frame(of: element)
+            frame: frame(of: element),
+            windowNumber: intAttribute("AXWindowNumber", from: element).map { CGWindowID($0) }
         )
+    }
+
+    private static func intAttribute(_ attribute: String, from element: AXUIElement) -> Int? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return (value as? NSNumber)?.intValue
     }
 
     private static func stringAttribute(_ attribute: String, from element: AXUIElement) -> String? {
@@ -1409,6 +1428,10 @@ final class WindowSwitcherModel: ObservableObject {
         let currentIDs = Set(snapshot.map(\.id))
         let newIDs = currentIDs.subtracting(previousSnapshotWindowIDs)
         if !newIDs.isEmpty {
+            if newIDs.count <= 8 {
+                let names = snapshot.filter { newIDs.contains($0.id) }.map(\.appName)
+                Self.mergeLogger.debug("Promoting new windows to front: \(names.joined(separator: ", "))")
+            }
             for id in newIDs where !recentWindowIDs.contains(id) {
                 recentWindowIDs.insert(id, at: 0)
             }
