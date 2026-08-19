@@ -67,11 +67,15 @@ enum WindowMerger {
         let appName = NSRunningApplication(processIdentifier: processID)?.localizedName ?? "\(processID)"
         let countBefore = realWindowCount(in: app)
         if performMergeMenuCommand(in: app) {
-            logger.info("Merged \(appName) (had \(countBefore) windows) via 'Merge All Windows' menu command")
+            let message = "Merged \(appName) (had \(countBefore) windows) via 'Merge All Windows' menu command"
+            DiagnosticLog.write("WindowMerger", message)
+            logger.info("\(message, privacy: .public)")
             return true
         }
         let minimized = minimizeExtraWindows(of: app)
-        logger.info("Merged \(appName) (had \(countBefore) windows) via minimizing extra windows: \(minimized)")
+        let message = "Merged \(appName) (had \(countBefore) windows) via minimizing extra windows: \(minimized)"
+        DiagnosticLog.write("WindowMerger", message)
+        logger.info("\(message, privacy: .public)")
         return minimized
     }
 
@@ -971,9 +975,9 @@ final class WindowSwitcherModel: ObservableObject {
             let previous = autoMergedWindowCounts[identifier]
             if count >= 2, previous != count {
                 let merged = mergeWindows(of: process.processIdentifier)
-                Self.mergeLogger.info(
-                    "Auto-merge \(process.localizedName ?? identifier): windows=\(count) previous=\(previous ?? -1) merged=\(merged)"
-                )
+                let log = "Auto-merge \(process.localizedName ?? identifier): windows=\(count) previous=\(previous ?? -1) merged=\(merged)"
+                DiagnosticLog.write("WindowMerger", log)
+                Self.mergeLogger.info("\(log, privacy: .public)")
                 autoMergedWindowCounts[identifier] = count
             } else if count < 2 {
                 autoMergedWindowCounts[identifier] = nil
@@ -1201,6 +1205,10 @@ final class WindowSwitcherModel: ObservableObject {
         guard !isShowing else { return true }
         let startedAt = CFAbsoluteTimeGetCurrent()
         let snapshot = orderedForSession(cachedWindows)
+        DiagnosticLog.write(
+            "WindowSwitcher",
+            "Session began: \(snapshot.map { "\($0.appName):\($0.id)" }.joined(separator: ", "))"
+        )
         guard !snapshot.isEmpty else {
             pendingSession = WindowSwitcherPendingSession(
                 reverse: reverse,
@@ -1390,6 +1398,7 @@ final class WindowSwitcherModel: ObservableObject {
                 Task { @MainActor in
                     guard let self else { return }
                     if name == NSWorkspace.didActivateApplicationNotification {
+                        DiagnosticLog.write("WindowSwitcher", "App activated: \(application?.localizedName ?? "?")")
                         Self.activationLogger.info(
                             "App activated: \(application?.localizedName ?? "?", privacy: .public)"
                         )
@@ -1419,6 +1428,10 @@ final class WindowSwitcherModel: ObservableObject {
             processID: processID,
             candidates: candidates
         )
+        DiagnosticLog.write(
+            "WindowSwitcher",
+            "Promoting window \(focusedWindowID ?? fallbackID) for \(application?.localizedName ?? "?")"
+        )
         Self.activationLogger.info(
             "Promoting \(application?.localizedName ?? "?") window \(focusedWindowID ?? fallbackID, privacy: .public)"
         )
@@ -1440,8 +1453,10 @@ final class WindowSwitcherModel: ObservableObject {
         if !newIDs.isEmpty {
             if newIDs.count <= 8 {
                 let names = snapshot.filter { newIDs.contains($0.id) }.map(\.appName)
+                DiagnosticLog.write("WindowSwitcher", "Promoting new windows to front: \(names.joined(separator: ", "))")
                 Self.mergeLogger.info("Promoting new windows to front: \(names.joined(separator: ", "))")
             } else {
+                DiagnosticLog.write("WindowSwitcher", "Promoting \(newIDs.count) new windows to front (batch)")
                 Self.mergeLogger.info("Promoting \(newIDs.count) new windows to front (batch)")
             }
             for id in newIDs where !recentWindowIDs.contains(id) {
@@ -1517,7 +1532,6 @@ final class WindowSwitcherModel: ObservableObject {
                     self.cachedWindows = snapshot
                     self.applyCachedPreviews(to: snapshot)
                     self.promoteNewWindowsToFront(snapshot)
-                    self.noteApplicationActivation(NSWorkspace.shared.frontmostApplication)
                     self.autoMergeConfiguredApplications()
                 }
                 if let pending = self.pendingSession {
