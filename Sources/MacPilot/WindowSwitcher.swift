@@ -840,6 +840,7 @@ final class WindowSwitcherModel: ObservableObject {
     private var mouseSelectionEnabled = true
     private var mouseSelectionAnchor: CGPoint?
     private var autoMergedWindowCounts: [String: Int] = [:]
+    private var previousSnapshotWindowIDs: Set<String> = []
 
     var gridColumnCount: Int {
         let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
@@ -1401,6 +1402,21 @@ final class WindowSwitcherModel: ObservableObject {
         if recentWindowIDs.count > 128 { recentWindowIDs.removeLast(recentWindowIDs.count - 128) }
     }
 
+    /// Newly appearing windows (just launched apps, or brand-new windows of a
+    /// running app) should sit at the front of the switcher instead of being
+    /// treated as never-activated and sorted to the end.
+    private func promoteNewWindowsToFront(_ snapshot: [WindowSwitcherItem]) {
+        let currentIDs = Set(snapshot.map(\.id))
+        let newIDs = currentIDs.subtracting(previousSnapshotWindowIDs)
+        if !newIDs.isEmpty {
+            for id in newIDs where !recentWindowIDs.contains(id) {
+                recentWindowIDs.insert(id, at: 0)
+            }
+            if recentWindowIDs.count > 128 { recentWindowIDs.removeLast(recentWindowIDs.count - 128) }
+        }
+        previousSnapshotWindowIDs = currentIDs
+    }
+
     private func orderedForSession(_ items: [WindowSwitcherItem]) -> [WindowSwitcherItem] {
         WindowSwitcherOrdering.orderedIndices(
             ids: items.map(\.id),
@@ -1465,6 +1481,7 @@ final class WindowSwitcherModel: ObservableObject {
                 if let snapshot = refresh.snapshot {
                     self.cachedWindows = snapshot
                     self.applyCachedPreviews(to: snapshot)
+                    self.promoteNewWindowsToFront(snapshot)
                     self.noteApplicationActivation(NSWorkspace.shared.frontmostApplication)
                     self.autoMergeConfiguredApplications()
                 }

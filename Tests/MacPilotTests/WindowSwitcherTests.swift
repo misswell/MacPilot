@@ -29,6 +29,13 @@ struct WindowSwitcherTests {
         ) == [2, 0, 1, 3, 4])
     }
 
+    @Test func newlyOpenedWindowsSortBeforeNeverActivatedOnes() {
+        // w3 was just opened and promoted to the front of recentIDs, so it sorts
+        // first; w2 was never activated and goes to the end.
+        let ids = ["w1", "w2", "w3"]
+        #expect(WindowSwitcherOrdering.orderedIndices(ids: ids, recentIDs: ["w3", "w1"]) == [2, 0, 1])
+    }
+
     @Test func thumbnailWorkStartsAtTheSelectionAndFansOut() {
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 5, selectedIndex: 2) == [2, 3, 1, 4, 0])
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 0, selectedIndex: 0).isEmpty)
