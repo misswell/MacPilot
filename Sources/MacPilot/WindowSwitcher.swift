@@ -822,6 +822,10 @@ final class WindowSwitcherModel: ObservableObject {
         subsystem: "com.misswell.macpilot",
         category: "WindowMerger"
     )
+    private static let activationLogger = Logger(
+        subsystem: "com.misswell.macpilot",
+        category: "WindowSwitcherActivation"
+    )
 
     @Published private(set) var settings = WindowSwitcherSettings()
     private(set) var windows: [WindowSwitcherItem] = []
@@ -1386,6 +1390,9 @@ final class WindowSwitcherModel: ObservableObject {
                 Task { @MainActor in
                     guard let self else { return }
                     if name == NSWorkspace.didActivateApplicationNotification {
+                        Self.activationLogger.info(
+                            "App activated: \(application?.localizedName ?? "?", privacy: .public)"
+                        )
                         self.noteApplicationActivation(application)
                     }
                     self.requestInventoryRefresh(priority: .utility)
@@ -1412,6 +1419,9 @@ final class WindowSwitcherModel: ObservableObject {
             processID: processID,
             candidates: candidates
         )
+        Self.activationLogger.info(
+            "Promoting \(application?.localizedName ?? "?") window \(focusedWindowID ?? fallbackID, privacy: .public)"
+        )
         noteWindowActivation(focusedWindowID ?? fallbackID)
     }
 
@@ -1430,7 +1440,9 @@ final class WindowSwitcherModel: ObservableObject {
         if !newIDs.isEmpty {
             if newIDs.count <= 8 {
                 let names = snapshot.filter { newIDs.contains($0.id) }.map(\.appName)
-                Self.mergeLogger.debug("Promoting new windows to front: \(names.joined(separator: ", "))")
+                Self.mergeLogger.info("Promoting new windows to front: \(names.joined(separator: ", "))")
+            } else {
+                Self.mergeLogger.info("Promoting \(newIDs.count) new windows to front (batch)")
             }
             for id in newIDs where !recentWindowIDs.contains(id) {
                 recentWindowIDs.insert(id, at: 0)
