@@ -72,36 +72,41 @@ struct WindowSwitcherTests {
         #expect(decoded == settings)
     }
 
-    @Test func mergedApplicationsHideMinimizedWindowsEvenWhenTheyAreNormallyIncluded() {
+    @Test func mergedApplicationsDisplayOnlyOneRepresentativeWindow() {
         var settings = WindowSwitcherSettings()
         settings.mergeApplicationBundleIdentifiers = ["com.cmuxterm.app"]
 
-        #expect(WindowSwitcherWindowInclusion.shouldInclude(
-            isMinimized: false,
+        #expect(WindowSwitcherApplicationGrouping.displayedIndices(
+            isMinimized: [false, true, true, true],
             applicationBundleIdentifier: "com.cmuxterm.app",
             settings: settings
-        ))
-        #expect(!WindowSwitcherWindowInclusion.shouldInclude(
-            isMinimized: true,
+        ) == [0])
+        #expect(WindowSwitcherApplicationGrouping.displayedIndices(
+            isMinimized: [true, false, true],
             applicationBundleIdentifier: "com.cmuxterm.app",
             settings: settings
-        ))
-        #expect(WindowSwitcherWindowInclusion.shouldInclude(
-            isMinimized: true,
+        ) == [1])
+        #expect(WindowSwitcherApplicationGrouping.displayedIndices(
+            isMinimized: [false, true, false],
             applicationBundleIdentifier: "com.apple.Terminal",
             settings: settings
-        ))
+        ) == [0, 1, 2])
     }
 
-    @Test func mergeCommandMatchesKnownLocalizedTitles() {
-        #expect(WindowMerger.isMergeCommand("Merge All Windows"))
-        #expect(WindowMerger.isMergeCommand("Merge Windows"))
-        #expect(WindowMerger.isMergeCommand("合并所有窗口"))
-        #expect(WindowMerger.isMergeCommand("合并窗口"))
-        #expect(!WindowMerger.isMergeCommand("Close All Windows"))
-        #expect(!WindowMerger.isMergeCommand("Move Window to Left Side of Screen"))
-        #expect(!WindowMerger.isMergeCommand("Bring All to Front"))
-        #expect(!WindowMerger.isMergeCommand("最小化窗口"))
+    @Test func hiddenMinimizedWindowsStillRespectTheGlobalSettingForUnmergedApplications() {
+        var settings = WindowSwitcherSettings()
+        settings.includeMinimizedWindows = false
+
+        #expect(WindowSwitcherApplicationGrouping.displayedIndices(
+            isMinimized: [false, true, false],
+            applicationBundleIdentifier: "com.apple.Terminal",
+            settings: settings
+        ) == [0, 2])
+        #expect(WindowSwitcherApplicationGrouping.displayedIndices(
+            isMinimized: [false, true],
+            applicationBundleIdentifier: "com.cmuxterm.app",
+            settings: settings
+        ) == [0])
     }
 
     @Test func mergeApplicationListSurvivesMissingKeyDecode() throws {

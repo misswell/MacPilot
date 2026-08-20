@@ -18,7 +18,7 @@ enum DiagnosticLog {
 
     private static let fileURL = directory.appendingPathComponent("Diagnostics.log")
 
-    /// 追加一条日志；`category` 用于区分模块（如 WindowSwitcher / WindowMerger / RightClickMenu）。
+    /// 追加一条日志；`category` 用于区分模块（如 WindowSwitcher / RightClickMenu）。
     static func write(_ category: String, _ message: String) {
         lock.lock()
         defer { lock.unlock() }

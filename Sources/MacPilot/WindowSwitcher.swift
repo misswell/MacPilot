@@ -22,9 +22,11 @@ struct WindowSwitcherSettings: Codable, Equatable, Sendable {
     var showWindowTitles = true
     var previewSize = WindowSwitcherPreviewSize.medium
     var showIconsOnly = false
-    /// Bundle identifiers of apps whose windows the user wants to merge into one.
+    /// Bundle identifiers of apps whose windows should appear as one switcher item.
     var mergeApplicationBundleIdentifiers: [String] = []
-    /// Automatically merge listed apps' windows whenever they have several.
+    /// Legacy configuration field retained so older config files decode safely.
+    /// Listed apps are now always collapsed in the switcher without changing
+    /// their actual windows.
     var autoMergeApplicationWindows = true
 
     init() {}
@@ -43,170 +45,29 @@ struct WindowSwitcherSettings: Codable, Equatable, Sendable {
     }
 }
 
-enum WindowSwitcherWindowInclusion {
-    static func shouldInclude(
-        isMinimized: Bool,
+/// Presentation-only grouping for configured applications. It never changes
+/// the owning application's windows; it only chooses which item the switcher
+/// should display.
+enum WindowSwitcherApplicationGrouping {
+    static func displayedIndices(
+        isMinimized: [Bool],
         applicationBundleIdentifier: String?,
         settings: WindowSwitcherSettings
-    ) -> Bool {
-        guard isMinimized else { return true }
-        if let applicationBundleIdentifier,
-           settings.mergeApplicationBundleIdentifiers.contains(applicationBundleIdentifier) {
-            return false
+    ) -> [Int] {
+        let allIndices = isMinimized.indices.filter {
+            settings.includeMinimizedWindows || !isMinimized[$0]
         }
-        return settings.includeMinimizedWindows
+        guard let applicationBundleIdentifier,
+              settings.mergeApplicationBundleIdentifiers.contains(applicationBundleIdentifier),
+              !allIndices.isEmpty else {
+            return allIndices
+        }
+        return [allIndices.first(where: { !isMinimized[$0] }) ?? allIndices[0]]
     }
 }
 
 enum WindowSwitcherPreviewSize: String, Codable, CaseIterable, Sendable {
     case small, medium, large
-}
-
-/// Merges all windows of one application into a single window.
-///
-/// macOS only allows real tabbed-window merging inside the owning process, so a
-/// third-party app cannot call `NSWindow.addTabbedWindow` across processes.
-/// We therefore press the target app's own "Merge All Windows" menu command
-/// through Accessibility when it has one (Safari, Finder, TextEdit, Xcode, ...),
-/// which produces genuine tabs. For apps without that command (many terminals
-/// and custom apps) we minimize every extra window so only the main window stays
-/// visible, which is the closest possible "merge to one window".
-enum WindowMerger {
-    private static let logger = Logger(
-        subsystem: "com.misswell.macpilot",
-        category: "WindowMerger"
-    )
-
-    static func merge(processID: pid_t) -> Bool {
-        let app = AXUIElementCreateApplication(processID)
-        let appName = NSRunningApplication(processIdentifier: processID)?.localizedName ?? "\(processID)"
-        let countBefore = realWindowCount(in: app)
-        if performMergeMenuCommand(in: app) {
-            let message = "Merged \(appName) (had \(countBefore) windows) via 'Merge All Windows' menu command"
-            DiagnosticLog.write("WindowMerger", message)
-            logger.info("\(message, privacy: .public)")
-            return true
-        }
-        let minimized = minimizeExtraWindows(of: app)
-        let message = "Merged \(appName) (had \(countBefore) windows) via minimizing extra windows: \(minimized)"
-        DiagnosticLog.write("WindowMerger", message)
-        logger.info("\(message, privacy: .public)")
-        return minimized
-    }
-
-    /// Counts the app's real windows (AX window role, at least 2x2 points).
-    static func realWindowCount(processID: pid_t) -> Int {
-        realWindowCount(in: AXUIElementCreateApplication(processID))
-    }
-
-    private static func realWindowCount(in app: AXUIElement) -> Int {
-        guard let windows = attributeChildren(app, kAXWindowsAttribute as CFString) else { return 0 }
-        return windows.filter { window in
-            guard attributeString(window, kAXRoleAttribute as CFString) == kAXWindowRole as String else { return false }
-            guard let frame = frame(of: window) else { return false }
-            return frame.width >= 2 && frame.height >= 2
-        }.count
-    }
-
-    // MARK: - Menu command (real tab merging)
-
-    private static func performMergeMenuCommand(in app: AXUIElement) -> Bool {
-        guard let menus = attributeChildren(app, kAXMenuBarAttribute as CFString) else { return false }
-        for menu in menus {
-            guard let items = attributeChildren(menu, kAXChildrenAttribute as CFString) else { continue }
-            for item in items {
-                guard let title = attributeString(item, kAXTitleAttribute as CFString),
-                      isMergeCommand(title) else { continue }
-                AXUIElementPerformAction(item, kAXPressAction as CFString)
-                return true
-            }
-        }
-        return false
-    }
-
-    static func isMergeCommand(_ title: String) -> Bool {
-        let compact = title.lowercased().filter { !$0.isWhitespace }
-        if compact.contains("merge"), compact.contains("window") { return true }
-        if compact.contains("合并"), compact.contains("窗口") { return true }
-        return false
-    }
-
-    // MARK: - Fallback: minimize every window except the main one
-
-    private static func minimizeExtraWindows(of app: AXUIElement) -> Bool {
-        guard let windows = attributeChildren(app, kAXWindowsAttribute as CFString) else { return false }
-        // Keep only real, sizable windows; ignore the tiny toolbars/panels that
-        // many apps (terminals especially) expose as child windows.
-        let real = windows.filter { window in
-            guard attributeString(window, kAXRoleAttribute as CFString) == kAXWindowRole as String else { return false }
-            guard let frame = frame(of: window) else { return false }
-            return frame.width >= 2 && frame.height >= 2
-        }
-        guard real.count > 1 else { return false }
-
-        var mainIndex = 0
-        if let mainWindow = indexOfMainWindow(in: real) {
-            mainIndex = mainWindow
-        }
-
-        var changed = false
-        for (index, window) in real.enumerated() where index != mainIndex {
-            if attributeBool(window, kAXMinimizedAttribute as CFString) == true { continue }
-            let result = AXUIElementSetAttributeValue(
-                window,
-                kAXMinimizedAttribute as CFString,
-                kCFBooleanTrue
-            )
-            if result == .success { changed = true }
-        }
-        return changed
-    }
-
-    private static func indexOfMainWindow(in windows: [AXUIElement]) -> Int? {
-        for (index, window) in windows.enumerated() {
-            if attributeBool(window, kAXMainAttribute as CFString) == true {
-                return index
-            }
-        }
-        return nil
-    }
-
-    // MARK: - AX helpers
-
-    private static func frame(of element: AXUIElement) -> CGRect? {
-        var positionValue: CFTypeRef?
-        var sizeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,
-              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
-              let positionRef = positionValue,
-              let sizeRef = sizeValue else { return nil }
-        let position = positionRef as! AXValue
-        let size = sizeRef as! AXValue
-        var point = CGPoint.zero
-        var cgSize = CGSize.zero
-        guard AXValueGetValue(position, .cgPoint, &point),
-              AXValueGetValue(size, .cgSize, &cgSize) else { return nil }
-        return CGRect(x: point.x, y: point.y, width: cgSize.width, height: cgSize.height)
-    }
-
-    private static func attributeChildren(_ element: AXUIElement, _ attribute: CFString) -> [AXUIElement]? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
-              let children = value as? [AXUIElement] else { return nil }
-        return children
-    }
-
-    private static func attributeString(_ element: AXUIElement, _ attribute: CFString) -> String? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
-        return value as? String
-    }
-
-    private static func attributeBool(_ element: AXUIElement, _ attribute: CFString) -> Bool? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
-        return value as? Bool
-    }
 }
 
 enum WindowSwitcherSelection {
@@ -381,11 +242,6 @@ private enum WindowSwitcherInventory {
                 if let windowNumber = attributes.windowNumber, excludedWindowIDs.contains(windowNumber) { continue }
                 let title = attributes.title
                 let minimized = attributes.isMinimized
-                guard WindowSwitcherWindowInclusion.shouldInclude(
-                    isMinimized: minimized,
-                    applicationBundleIdentifier: application.bundleIdentifier,
-                    settings: settings
-                ) else { continue }
 
                 let frame = attributes.frame
                 let record = matchingRecord(
@@ -431,11 +287,17 @@ private enum WindowSwitcherInventory {
             }
 
             let recordOrder: [CGWindowID: Int] = Dictionary(uniqueKeysWithValues: records.map { ($0.windowID, $0.order) })
-            result.append(contentsOf: appItems.sorted { lhs, rhs in
+            let orderedItems = appItems.sorted { lhs, rhs in
                 let lhsOrder = lhs.windowID.flatMap { recordOrder[$0] } ?? Int.max
                 let rhsOrder = rhs.windowID.flatMap { recordOrder[$0] } ?? Int.max
                 return lhsOrder == rhsOrder ? lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending : lhsOrder < rhsOrder
-            })
+            }
+            let displayedIndices = WindowSwitcherApplicationGrouping.displayedIndices(
+                isMinimized: orderedItems.map(\.isMinimized),
+                applicationBundleIdentifier: application.bundleIdentifier,
+                settings: settings
+            )
+            result.append(contentsOf: displayedIndices.map { orderedItems[$0] })
         }
 
         return result
@@ -844,9 +706,9 @@ final class WindowSwitcherModel: ObservableObject {
         subsystem: "com.misswell.macpilot",
         category: "WindowSwitcherPerformance"
     )
-    private static let mergeLogger = Logger(
+    private static let windowSwitcherLogger = Logger(
         subsystem: "com.misswell.macpilot",
-        category: "WindowMerger"
+        category: "WindowSwitcher"
     )
     private static let activationLogger = Logger(
         subsystem: "com.misswell.macpilot",
@@ -888,7 +750,6 @@ final class WindowSwitcherModel: ObservableObject {
     private var panelController: WindowSwitcherPanelController?
     private var mouseSelectionEnabled = true
     private var mouseSelectionAnchor: CGPoint?
-    private var autoMergedWindowCounts: [String: Int] = [:]
     private var previousSnapshotWindowIDs: Set<String> = []
     private var activationCandidate: NSRunningApplication?
     private var activationConfirmTask: Task<Void, Never>?
@@ -953,85 +814,7 @@ final class WindowSwitcherModel: ObservableObject {
             identifiers.removeAll { $0 == bundleIdentifier }
         }
         settings.mergeApplicationBundleIdentifiers = identifiers
-        autoMergedWindowCounts[bundleIdentifier] = nil
         persist?()
-    }
-
-    /// Turns automatic merging of listed apps on or off.
-    func setAutoMergeApplicationWindows(_ enabled: Bool) {
-        guard settings.autoMergeApplicationWindows != enabled else { return }
-        settings.autoMergeApplicationWindows = enabled
-        if !enabled { autoMergedWindowCounts = [:] }
-        persist?()
-    }
-
-    /// Merges all windows of the app with the given bundle identifier.
-    @discardableResult
-    func mergeApplicationWindows(_ bundleIdentifier: String) -> Bool {
-        guard let process = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
-            return false
-        }
-        let merged = mergeWindows(of: process.processIdentifier)
-        autoMergedWindowCounts[bundleIdentifier] = WindowMerger.realWindowCount(processID: process.processIdentifier)
-        if merged {
-            invalidateInventoryCache()
-            requestInventoryRefresh(priority: .utility)
-        }
-        return merged
-    }
-
-    /// Merges all windows of the given process into one window.
-    @discardableResult
-    func mergeWindows(of processID: pid_t) -> Bool {
-        guard hasAccessibilityPermission else { return false }
-        return WindowMerger.merge(processID: processID)
-    }
-
-    /// For each listed app with more than one window, merge its windows into one.
-    /// Only acts when the visible window count actually increased since the last
-    /// merge, so opening a brand-new window in a listed app re-merges it without
-    /// repeatedly fighting windows that a terminal can already tab internally.
-    @discardableResult
-    private func autoMergeConfiguredApplications() -> Bool {
-        let enabled = settings.autoMergeApplicationWindows
-        let hasAX = hasAccessibilityPermission
-        DiagnosticLog.write(
-            "WindowMerger",
-            "autoMergeConfiguredApplications called: enabled=\(enabled) ax=\(hasAX) list=\(settings.mergeApplicationBundleIdentifiers.joined(separator: ","))"
-        )
-        guard enabled else { return false }
-        guard hasAX else { return false }
-        var didMerge = false
-        for identifier in settings.mergeApplicationBundleIdentifiers {
-            guard let process = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).first else {
-                autoMergedWindowCounts[identifier] = nil
-                DiagnosticLog.write("WindowMerger", "\(identifier): not running")
-                continue
-            }
-            let count = WindowMerger.realWindowCount(processID: process.processIdentifier)
-            let previous = autoMergedWindowCounts[identifier]
-            DiagnosticLog.write(
-                "WindowMerger",
-                "\(identifier): running pid=\(process.processIdentifier) realWindows=\(count) previous=\(previous ?? -1)"
-            )
-            if count >= 2, previous != count {
-                let merged = mergeWindows(of: process.processIdentifier)
-                let countAfter = WindowMerger.realWindowCount(processID: process.processIdentifier)
-                let log = "Auto-merge \(process.localizedName ?? identifier): windows=\(count) after=\(countAfter) previous=\(previous ?? -1) merged=\(merged)"
-                DiagnosticLog.write("WindowMerger", log)
-                Self.mergeLogger.info("\(log, privacy: .public)")
-                autoMergedWindowCounts[identifier] = countAfter
-                didMerge = didMerge || merged
-            } else if count < 2 {
-                autoMergedWindowCounts[identifier] = nil
-            }
-        }
-        return didMerge
-    }
-
-    private func invalidateInventoryCache() {
-        cachedWindows.removeAll(keepingCapacity: true)
-        inventorySignature = nil
     }
 
     private func startRuntime(inventoryPriority: TaskPriority) {
@@ -1523,10 +1306,10 @@ final class WindowSwitcherModel: ObservableObject {
             if newIDs.count <= 8 {
                 let names = snapshot.filter { newIDs.contains($0.id) }.map(\.appName)
                 DiagnosticLog.write("WindowSwitcher", "Promoting new windows to front: \(names.joined(separator: ", "))")
-                Self.mergeLogger.info("Promoting new windows to front: \(names.joined(separator: ", "))")
+                Self.windowSwitcherLogger.info("Promoting new windows to front: \(names.joined(separator: ", "))")
             } else {
                 DiagnosticLog.write("WindowSwitcher", "Promoting \(newIDs.count) new windows to front (batch)")
-                Self.mergeLogger.info("Promoting \(newIDs.count) new windows to front (batch)")
+                Self.windowSwitcherLogger.info("Promoting \(newIDs.count) new windows to front (batch)")
             }
             for id in newIDs where !recentWindowIDs.contains(id) {
                 recentWindowIDs.insert(id, at: 0)
@@ -1603,21 +1386,12 @@ final class WindowSwitcherModel: ObservableObject {
             self.inventorySignature = refresh.signature
             let settingsStillMatch = settings == self.settings
             if settingsStillMatch {
-                var didAutoMerge = false
                 if let snapshot = refresh.snapshot {
                     self.cachedWindows = snapshot
                     self.applyCachedPreviews(to: snapshot)
                     self.promoteNewWindowsToFront(snapshot)
-                    didAutoMerge = self.autoMergeConfiguredApplications()
-                    if didAutoMerge {
-                        // The snapshot was collected before Accessibility minimized
-                        // the extra windows. Do not expose that stale snapshot; let
-                        // the revision check below schedule a post-merge scan.
-                        self.invalidateInventoryCache()
-                        self.inventoryRevision += 1
-                    }
                 }
-                if !didAutoMerge, let pending = self.pendingSession {
+                if let pending = self.pendingSession {
                     self.pendingSession = nil
                     self.completePendingSession(pending, snapshot: self.cachedWindows)
                 }
@@ -2257,11 +2031,6 @@ struct WindowSwitcherSettingsView: View {
                     Text(model.t("windowSwitcherMerge")).font(.headline)
                     Text(model.t("windowSwitcherMergeHint")).font(.subheadline).foregroundStyle(.secondary)
 
-                    Toggle(model.t("windowSwitcherAutoMerge"), isOn: Binding(
-                        get: { windowSwitcher.settings.autoMergeApplicationWindows },
-                        set: { windowSwitcher.setAutoMergeApplicationWindows($0) }
-                    ))
-
                     Divider()
 
                     if mergeApps.isEmpty {
@@ -2281,10 +2050,6 @@ struct WindowSwitcherSettingsView: View {
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
-                                Button(model.t("windowSwitcherMergeNow")) {
-                                    windowSwitcher.mergeApplicationWindows(app.id)
-                                }
-                                .disabled(!app.isRunning || !windowSwitcher.hasAccessibilityPermission)
                                 Button {
                                     windowSwitcher.setMergeApplication(app.id, enabled: false)
                                 } label: {
