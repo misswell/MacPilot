@@ -43,10 +43,30 @@ struct WindowSwitcherTests {
         ) == 0)
         #expect(!WindowSwitcherWindowMatching.shouldIncludeAXWindow(
             hasMatchingServerRecord: false,
+            isOnScreen: false,
+            isMinimized: false
+        ))
+        #expect(!WindowSwitcherWindowMatching.shouldIncludeAXWindow(
+            hasMatchingServerRecord: false,
+            isOnScreen: false,
+            isMinimized: true
+        ))
+    }
+
+    @Test func onlyMissionControlVisibleWindowsEnterTheInventory() {
+        #expect(!WindowSwitcherWindowMatching.shouldIncludeAXWindow(
+            hasMatchingServerRecord: true,
+            isOnScreen: false,
             isMinimized: false
         ))
         #expect(WindowSwitcherWindowMatching.shouldIncludeAXWindow(
-            hasMatchingServerRecord: false,
+            hasMatchingServerRecord: true,
+            isOnScreen: true,
+            isMinimized: false
+        ))
+        #expect(!WindowSwitcherWindowMatching.shouldIncludeAXWindow(
+            hasMatchingServerRecord: true,
+            isOnScreen: false,
             isMinimized: true
         ))
     }

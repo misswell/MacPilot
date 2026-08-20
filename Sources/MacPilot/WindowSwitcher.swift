@@ -257,9 +257,14 @@ enum WindowSwitcherWindowMatching {
 
     static func shouldIncludeAXWindow(
         hasMatchingServerRecord: Bool,
+        isOnScreen: Bool,
         isMinimized: Bool
     ) -> Bool {
-        hasMatchingServerRecord || isMinimized
+        // The switcher inventory intentionally follows the same set of
+        // windows that Mission Control can show. AX also reports minimized
+        // windows and windows from other Spaces, but neither belongs in that
+        // set when there is no current on-screen WindowServer record.
+        !isMinimized && hasMatchingServerRecord && isOnScreen
     }
 
     static func matchingFrameIndex(
@@ -341,10 +346,11 @@ private enum WindowSwitcherInventory {
                 // AX also exposes floating overlays and other non-window-layer
                 // surfaces. If WindowServer cannot match one to a regular
                 // layer-0 window, do not let it masquerade as an app window.
-                // Minimized windows may temporarily have no WindowServer match
-                // and remain eligible when the setting includes them.
+                // A minimized AX window is not part of Mission Control's
+                // visible window set, so it is not a fallback candidate here.
                 guard WindowSwitcherWindowMatching.shouldIncludeAXWindow(
                     hasMatchingServerRecord: record != nil,
+                    isOnScreen: record?.isOnScreen == true,
                     isMinimized: minimized
                 ) else { continue }
 
@@ -499,7 +505,11 @@ private enum WindowSwitcherInventory {
         records: [WindowSwitcherServerRecord],
         usedWindowIDs: Set<CGWindowID>
     ) -> WindowSwitcherServerRecord? {
-        let available = records.filter { !usedWindowIDs.contains($0.windowID) }
+        // Only records visible on the current Space are represented in
+        // Mission Control's window overview. Do this before title/frame
+        // matching so an AX window cannot borrow an off-screen window from
+        // another Space and enter the inventory.
+        let available = records.filter { $0.isOnScreen && !usedWindowIDs.contains($0.windowID) }
         if !title.isEmpty, let exact = available.first(where: { $0.title == title }) { return exact }
         guard let frame else { return nil }
         guard let index = WindowSwitcherWindowMatching.matchingFrameIndex(
