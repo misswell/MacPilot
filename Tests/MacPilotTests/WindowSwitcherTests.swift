@@ -36,6 +36,14 @@ struct WindowSwitcherTests {
         #expect(WindowSwitcherOrdering.orderedIndices(ids: ids, recentIDs: ["w3", "w1"]) == [2, 0, 1])
     }
 
+    @Test func macPilotActivationPromotesItsOnlyWindow() {
+        #expect(WindowSwitcherActivationRouting.promotedWindowID(
+            applicationProcessID: ProcessInfo.processInfo.processIdentifier,
+            candidateWindowIDs: ["window-macpilot"],
+            focusedWindowID: nil
+        ) == "window-macpilot")
+    }
+
     @Test func thumbnailWorkStartsAtTheSelectionAndFansOut() {
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 5, selectedIndex: 2) == [2, 3, 1, 4, 0])
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 0, selectedIndex: 0).isEmpty)

@@ -104,6 +104,21 @@ enum WindowSwitcherOrdering {
     }
 }
 
+enum WindowSwitcherActivationRouting {
+    static func promotedWindowID(
+        applicationProcessID: pid_t,
+        candidateWindowIDs: [String],
+        focusedWindowID: String?
+    ) -> String? {
+        // MacPilot's own windows are part of the inventory, so the app itself
+        // must follow the same activation path as every other application.
+        guard applicationProcessID > 0,
+              let fallbackID = candidateWindowIDs.first else { return nil }
+        guard candidateWindowIDs.count > 1 else { return fallbackID }
+        return focusedWindowID ?? fallbackID
+    }
+}
+
 enum WindowSwitcherThumbnailPriority {
     static func orderedIndices(count: Int, selectedIndex: Int) -> [Int] {
         guard count > 0 else { return [] }
@@ -1269,25 +1284,26 @@ final class WindowSwitcherModel: ObservableObject {
     }
 
     private func noteApplicationActivation(_ application: NSRunningApplication?) {
-        guard let processID = application?.processIdentifier, processID != getpid() else { return }
+        guard let processID = application?.processIdentifier else { return }
         let candidates = cachedWindows.filter { $0.processID == processID }
-        guard let fallbackID = candidates.first?.id else { return }
-        guard candidates.count > 1 else {
-            noteWindowActivation(fallbackID)
-            return
+        let focusedWindowID = candidates.count > 1
+            ? WindowSwitcherFocusedWindowResolver.resolve(processID: processID, candidates: candidates)
+            : nil
+        guard let promotedWindowID = WindowSwitcherActivationRouting.promotedWindowID(
+            applicationProcessID: processID,
+            candidateWindowIDs: candidates.map(\.id),
+            focusedWindowID: focusedWindowID
+        ) else { return }
+        if candidates.count > 1 {
+            DiagnosticLog.write(
+                "WindowSwitcher",
+                "Promoting window \(promotedWindowID) for \(application?.localizedName ?? "?")"
+            )
+            Self.activationLogger.info(
+                "Promoting \(application?.localizedName ?? "?") window \(promotedWindowID, privacy: .public)"
+            )
         }
-        let focusedWindowID = WindowSwitcherFocusedWindowResolver.resolve(
-            processID: processID,
-            candidates: candidates
-        )
-        DiagnosticLog.write(
-            "WindowSwitcher",
-            "Promoting window \(focusedWindowID ?? fallbackID) for \(application?.localizedName ?? "?")"
-        )
-        Self.activationLogger.info(
-            "Promoting \(application?.localizedName ?? "?") window \(focusedWindowID ?? fallbackID, privacy: .public)"
-        )
-        noteWindowActivation(focusedWindowID ?? fallbackID)
+        noteWindowActivation(promotedWindowID)
     }
 
     private func noteWindowActivation(_ windowID: String) {
