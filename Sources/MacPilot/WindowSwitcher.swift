@@ -252,6 +252,36 @@ private struct WindowSwitcherAXAttributes {
     let windowNumber: CGWindowID?
 }
 
+enum WindowSwitcherWindowMatching {
+    private static let maximumFrameDistance: CGFloat = 64
+
+    static func shouldIncludeAXWindow(
+        hasMatchingServerRecord: Bool,
+        isMinimized: Bool
+    ) -> Bool {
+        hasMatchingServerRecord || isMinimized
+    }
+
+    static func matchingFrameIndex(
+        windowFrame: CGRect,
+        candidateFrames: [CGRect]
+    ) -> Int? {
+        guard !candidateFrames.isEmpty else { return nil }
+        guard let index = candidateFrames.indices.min(by: { lhs, rhs in
+            frameDistance(windowFrame, candidateFrames[lhs])
+                < frameDistance(windowFrame, candidateFrames[rhs])
+        }), frameDistance(windowFrame, candidateFrames[index]) <= maximumFrameDistance else {
+            return nil
+        }
+        return index
+    }
+
+    private static func frameDistance(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
+        abs(lhs.minX - rhs.minX) + abs(lhs.minY - rhs.minY)
+            + abs(lhs.width - rhs.width) + abs(lhs.height - rhs.height)
+    }
+}
+
 private enum WindowSwitcherInventory {
     static func snapshot(
         settings: WindowSwitcherSettings,
@@ -307,6 +337,16 @@ private enum WindowSwitcherInventory {
                     usedWindowIDs: usedWindowIDs
                 )
                 if let record { usedWindowIDs.insert(record.windowID) }
+
+                // AX also exposes floating overlays and other non-window-layer
+                // surfaces. If WindowServer cannot match one to a regular
+                // layer-0 window, do not let it masquerade as an app window.
+                // Minimized windows may temporarily have no WindowServer match
+                // and remain eligible when the setting includes them.
+                guard WindowSwitcherWindowMatching.shouldIncludeAXWindow(
+                    hasMatchingServerRecord: record != nil,
+                    isMinimized: minimized
+                ) else { continue }
 
                 let resolvedTitle = title.isEmpty ? (record?.title ?? "") : title
                 guard frame.map({ $0.width >= 2 && $0.height >= 2 }) ?? true else { continue }
@@ -461,15 +501,12 @@ private enum WindowSwitcherInventory {
     ) -> WindowSwitcherServerRecord? {
         let available = records.filter { !usedWindowIDs.contains($0.windowID) }
         if !title.isEmpty, let exact = available.first(where: { $0.title == title }) { return exact }
-        guard let frame else { return available.first }
-        return available.min { lhs, rhs in
-            frameDistance(frame, lhs.frame) < frameDistance(frame, rhs.frame)
-        }
-    }
-
-    private static func frameDistance(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
-        abs(lhs.minX - rhs.minX) + abs(lhs.minY - rhs.minY)
-            + abs(lhs.width - rhs.width) + abs(lhs.height - rhs.height)
+        guard let frame else { return nil }
+        guard let index = WindowSwitcherWindowMatching.matchingFrameIndex(
+            windowFrame: frame,
+            candidateFrames: available.map(\.frame)
+        ) else { return nil }
+        return available[index]
     }
 
     private static func windowAttributes(of element: AXUIElement) -> WindowSwitcherAXAttributes {

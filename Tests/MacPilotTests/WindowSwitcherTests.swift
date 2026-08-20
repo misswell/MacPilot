@@ -29,6 +29,28 @@ struct WindowSwitcherTests {
         ) == [2, 0, 1, 3, 4])
     }
 
+    @Test func overlayWindowDoesNotBorrowAnUnrelatedWindowServerRecord() {
+        let overlayFrame = CGRect(x: 2223, y: 572, width: 777, height: 325)
+        let mainWindowFrame = CGRect(x: 1017, y: 281, width: 900, height: 652)
+
+        #expect(WindowSwitcherWindowMatching.matchingFrameIndex(
+            windowFrame: overlayFrame,
+            candidateFrames: [mainWindowFrame]
+        ) == nil)
+        #expect(WindowSwitcherWindowMatching.matchingFrameIndex(
+            windowFrame: mainWindowFrame.offsetBy(dx: 1, dy: -1),
+            candidateFrames: [mainWindowFrame]
+        ) == 0)
+        #expect(!WindowSwitcherWindowMatching.shouldIncludeAXWindow(
+            hasMatchingServerRecord: false,
+            isMinimized: false
+        ))
+        #expect(WindowSwitcherWindowMatching.shouldIncludeAXWindow(
+            hasMatchingServerRecord: false,
+            isMinimized: true
+        ))
+    }
+
     @Test func newlyOpenedWindowsSortBeforeNeverActivatedOnes() {
         // w3 was just opened and promoted to the front of recentIDs, so it sorts
         // first; w2 was never activated and goes to the end.
