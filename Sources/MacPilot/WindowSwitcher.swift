@@ -43,6 +43,21 @@ struct WindowSwitcherSettings: Codable, Equatable, Sendable {
     }
 }
 
+enum WindowSwitcherWindowInclusion {
+    static func shouldInclude(
+        isMinimized: Bool,
+        applicationBundleIdentifier: String?,
+        settings: WindowSwitcherSettings
+    ) -> Bool {
+        guard isMinimized else { return true }
+        if let applicationBundleIdentifier,
+           settings.mergeApplicationBundleIdentifiers.contains(applicationBundleIdentifier) {
+            return false
+        }
+        return settings.includeMinimizedWindows
+    }
+}
+
 enum WindowSwitcherPreviewSize: String, Codable, CaseIterable, Sendable {
     case small, medium, large
 }
@@ -366,7 +381,11 @@ private enum WindowSwitcherInventory {
                 if let windowNumber = attributes.windowNumber, excludedWindowIDs.contains(windowNumber) { continue }
                 let title = attributes.title
                 let minimized = attributes.isMinimized
-                if minimized && !settings.includeMinimizedWindows { continue }
+                guard WindowSwitcherWindowInclusion.shouldInclude(
+                    isMinimized: minimized,
+                    applicationBundleIdentifier: application.bundleIdentifier,
+                    settings: settings
+                ) else { continue }
 
                 let frame = attributes.frame
                 let record = matchingRecord(
@@ -954,6 +973,10 @@ final class WindowSwitcherModel: ObservableObject {
         }
         let merged = mergeWindows(of: process.processIdentifier)
         autoMergedWindowCounts[bundleIdentifier] = WindowMerger.realWindowCount(processID: process.processIdentifier)
+        if merged {
+            invalidateInventoryCache()
+            requestInventoryRefresh(priority: .utility)
+        }
         return merged
     }
 
@@ -968,15 +991,17 @@ final class WindowSwitcherModel: ObservableObject {
     /// Only acts when the visible window count actually increased since the last
     /// merge, so opening a brand-new window in a listed app re-merges it without
     /// repeatedly fighting windows that a terminal can already tab internally.
-    private func autoMergeConfiguredApplications() {
+    @discardableResult
+    private func autoMergeConfiguredApplications() -> Bool {
         let enabled = settings.autoMergeApplicationWindows
         let hasAX = hasAccessibilityPermission
         DiagnosticLog.write(
             "WindowMerger",
             "autoMergeConfiguredApplications called: enabled=\(enabled) ax=\(hasAX) list=\(settings.mergeApplicationBundleIdentifiers.joined(separator: ","))"
         )
-        guard enabled else { return }
-        guard hasAX else { return }
+        guard enabled else { return false }
+        guard hasAX else { return false }
+        var didMerge = false
         for identifier in settings.mergeApplicationBundleIdentifiers {
             guard let process = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).first else {
                 autoMergedWindowCounts[identifier] = nil
@@ -991,14 +1016,22 @@ final class WindowSwitcherModel: ObservableObject {
             )
             if count >= 2, previous != count {
                 let merged = mergeWindows(of: process.processIdentifier)
-                let log = "Auto-merge \(process.localizedName ?? identifier): windows=\(count) previous=\(previous ?? -1) merged=\(merged)"
+                let countAfter = WindowMerger.realWindowCount(processID: process.processIdentifier)
+                let log = "Auto-merge \(process.localizedName ?? identifier): windows=\(count) after=\(countAfter) previous=\(previous ?? -1) merged=\(merged)"
                 DiagnosticLog.write("WindowMerger", log)
                 Self.mergeLogger.info("\(log, privacy: .public)")
-                autoMergedWindowCounts[identifier] = count
+                autoMergedWindowCounts[identifier] = countAfter
+                didMerge = didMerge || merged
             } else if count < 2 {
                 autoMergedWindowCounts[identifier] = nil
             }
         }
+        return didMerge
+    }
+
+    private func invalidateInventoryCache() {
+        cachedWindows.removeAll(keepingCapacity: true)
+        inventorySignature = nil
     }
 
     private func startRuntime(inventoryPriority: TaskPriority) {
@@ -1570,13 +1603,21 @@ final class WindowSwitcherModel: ObservableObject {
             self.inventorySignature = refresh.signature
             let settingsStillMatch = settings == self.settings
             if settingsStillMatch {
+                var didAutoMerge = false
                 if let snapshot = refresh.snapshot {
                     self.cachedWindows = snapshot
                     self.applyCachedPreviews(to: snapshot)
                     self.promoteNewWindowsToFront(snapshot)
-                    self.autoMergeConfiguredApplications()
+                    didAutoMerge = self.autoMergeConfiguredApplications()
+                    if didAutoMerge {
+                        // The snapshot was collected before Accessibility minimized
+                        // the extra windows. Do not expose that stale snapshot; let
+                        // the revision check below schedule a post-merge scan.
+                        self.invalidateInventoryCache()
+                        self.inventoryRevision += 1
+                    }
                 }
-                if let pending = self.pendingSession {
+                if !didAutoMerge, let pending = self.pendingSession {
                     self.pendingSession = nil
                     self.completePendingSession(pending, snapshot: self.cachedWindows)
                 }

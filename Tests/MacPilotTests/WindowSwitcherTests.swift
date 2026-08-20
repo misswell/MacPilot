@@ -72,6 +72,27 @@ struct WindowSwitcherTests {
         #expect(decoded == settings)
     }
 
+    @Test func mergedApplicationsHideMinimizedWindowsEvenWhenTheyAreNormallyIncluded() {
+        var settings = WindowSwitcherSettings()
+        settings.mergeApplicationBundleIdentifiers = ["com.cmuxterm.app"]
+
+        #expect(WindowSwitcherWindowInclusion.shouldInclude(
+            isMinimized: false,
+            applicationBundleIdentifier: "com.cmuxterm.app",
+            settings: settings
+        ))
+        #expect(!WindowSwitcherWindowInclusion.shouldInclude(
+            isMinimized: true,
+            applicationBundleIdentifier: "com.cmuxterm.app",
+            settings: settings
+        ))
+        #expect(WindowSwitcherWindowInclusion.shouldInclude(
+            isMinimized: true,
+            applicationBundleIdentifier: "com.apple.Terminal",
+            settings: settings
+        ))
+    }
+
     @Test func mergeCommandMatchesKnownLocalizedTitles() {
         #expect(WindowMerger.isMergeCommand("Merge All Windows"))
         #expect(WindowMerger.isMergeCommand("Merge Windows"))
