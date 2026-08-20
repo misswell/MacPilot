@@ -123,6 +123,7 @@ final class ClipboardHistory: ObservableObject {
 
     func delete(_ item: ClipboardItem) {
         allItems.removeAll { $0.id == item.id }
+        ClipboardContentStore.delete(itemID: item.id)
         updateFilteredItems()
         save()
     }
@@ -134,8 +135,10 @@ final class ClipboardHistory: ObservableObject {
 
     /// 清除未固定的历史（保留固定条目）。
     func clear() {
+        let removed = allItems.filter { !$0.isPinned }
         let kept = allItems.filter(\.isPinned)
         allItems = kept
+        for item in removed { ClipboardContentStore.delete(itemID: item.id) }
         updateFilteredItems()
         save()
     }
@@ -146,6 +149,7 @@ final class ClipboardHistory: ObservableObject {
         items = []
         searchQuery = ""
         selectedIndex = 0
+        ClipboardContentStore.deleteAll()
         save()
     }
 
@@ -229,7 +233,12 @@ final class ClipboardHistory: ObservableObject {
         let unpinned = allItems.filter { !$0.isPinned }
         let pinned = allItems.filter(\.isPinned)
         if unpinned.count >= storageLimit {
-            allItems = pinned + unpinned.prefix(max(0, storageLimit - pinned.count))
+            let kept = pinned + unpinned.prefix(max(0, storageLimit - pinned.count))
+            let keptIDs = Set(kept.map(\.id))
+            for item in allItems where !keptIDs.contains(item.id) {
+                ClipboardContentStore.delete(itemID: item.id)
+            }
+            allItems = kept
         }
     }
 

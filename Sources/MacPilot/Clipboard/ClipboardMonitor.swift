@@ -90,14 +90,14 @@ final class ClipboardMonitor {
         pasteboard.clearContents()
 
         for content in contents where content.type != NSPasteboard.PasteboardType.fileURL.rawValue {
-            guard let value = content.value else { continue }
+            guard let value = item.resolvedData(for: content) else { continue }
             pasteboard.setData(value, forType: NSPasteboard.PasteboardType(content.type))
         }
 
         // 文件 URL 使用 writeObjects，让多文件复制真正生效。
         let fileURLItems: [NSPasteboardItem] = contents.compactMap { content in
             guard content.type == NSPasteboard.PasteboardType.fileURL.rawValue,
-                  let value = content.value else { return nil }
+                  let value = item.resolvedData(for: content) else { return nil }
             let pasteItem = NSPasteboardItem()
             pasteItem.setData(value, forType: NSPasteboard.PasteboardType(content.type))
             return pasteItem
@@ -154,6 +154,7 @@ final class ClipboardMonitor {
 
         // 某些应用（BBEdit、Edge）复制时会写入 2 个 item，
         // 合并成一个记录。
+        let itemID = UUID()
         var contents = [ClipboardContent]()
         pasteboard.pasteboardItems?.forEach { item in
             var types = Set(item.types)
@@ -170,18 +171,45 @@ final class ClipboardMonitor {
                 types = types.subtracting([.microsoftLinkSource, .microsoftObjectLink, .pdf])
             }
 
+            var index = 0
             types.forEach { type in
-                contents.append(ClipboardContent(type: type.rawValue, value: item.data(forType: type)))
+                let data = item.data(forType: type)
+                contents.append(Self.makeContent(type: type.rawValue, data: data, itemID: itemID, index: &index))
             }
         }
 
         guard !contents.isEmpty else { return }
 
-        var historyItem = ClipboardItem(contents: contents)
+        var historyItem = ClipboardItem(id: itemID, contents: contents)
         historyItem.application = frontmostApplicationBundleIdentifier()
         historyItem.title = historyItem.generateTitle()
 
         onNewCopyHooks.forEach { $0(historyItem) }
+    }
+
+    /// 大数据（图片、大段内容）落盘保存，内存里只保留文件引用，减少常驻内存。
+    private static func makeContent(
+        type: String,
+        data: Data?,
+        itemID: UUID,
+        index: inout Int
+    ) -> ClipboardContent {
+        defer { index += 1 }
+        guard let data, !data.isEmpty else {
+            return ClipboardContent(type: type, size: 0)
+        }
+        let imageTypes: Set<String> = [
+            NSPasteboard.PasteboardType.tiff.rawValue,
+            NSPasteboard.PasteboardType.png.rawValue,
+            NSPasteboard.PasteboardType.jpeg.rawValue,
+            NSPasteboard.PasteboardType.heic.rawValue,
+        ]
+        // 图片一律落盘；其他类型超过 64KB 也落盘。小文本保持内联便于即时展示与搜索。
+        let externalize = imageTypes.contains(type) || data.count > 64 * 1024
+        if externalize, let file = ClipboardContentStore.write(data, itemID: itemID, index: index) {
+            return ClipboardContent(type: type, file: file, size: data.count)
+        }
+        return ClipboardContent(type: type, value: data, size: data.count)
     }
 
     private func frontmostApplicationBundleIdentifier() -> String? {

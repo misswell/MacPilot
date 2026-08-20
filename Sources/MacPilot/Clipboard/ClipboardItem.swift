@@ -13,14 +13,34 @@ import AppKit
 import Foundation
 
 /// 剪贴板历史条目中的一段内容（一种 pasteboard type 及其原始数据）。
+///
+/// 大数据（图片等）通过 `file` 落盘，`value` 为 nil；展示或粘贴时按需从
+/// 磁盘读取，避免把整份内容常驻内存。
 struct ClipboardContent: Codable, Hashable, Sendable {
     var type: String
     var value: Data?
+    /// 落盘文件名（位于 ClipboardContentStore 目录）；设置时 value 为 nil。
+    var file: String?
+    /// 原始数据字节数（用于判定与去重）。
+    var size: Int
 
-    init(type: String, value: Data? = nil) {
+    init(type: String, value: Data? = nil, file: String? = nil, size: Int = 0) {
         self.type = type
         self.value = value
+        self.file = file
+        self.size = size
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decode(String.self, forKey: .type)
+        value = try container.decodeIfPresent(Data.self, forKey: .value)
+        file = try container.decodeIfPresent(String.self, forKey: .file)
+        size = try container.decodeIfPresent(Int.self, forKey: .size) ?? 0
+    }
+
+    /// 是否为磁盘引用（真实数据不在内存中）。
+    var isExternal: Bool { file != nil }
 }
 
 /// 一条剪贴板历史记录。使用值语义，便于 SwiftUI 观察与 Codable 持久化。
@@ -34,8 +54,8 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
     var title: String
     var contents: [ClipboardContent]
 
-    init(contents: [ClipboardContent]) {
-        self.id = UUID()
+    init(id: UUID = UUID(), contents: [ClipboardContent]) {
+        self.id = id
         self.application = nil
         self.firstCopiedAt = Date.now
         self.lastCopiedAt = Date.now
@@ -63,11 +83,16 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
     private static let imageTypes: [NSPasteboard.PasteboardType] = [.tiff, .png]
 
     /// 新条目是否完全包含既有条目的内容（用于合并重复复制）。
+    /// 磁盘引用的内容按 (type, size) 比较，避免把不同的大图误判为重复。
     func supersedes(_ item: ClipboardItem) -> Bool {
         item.contents
             .filter { content in !Self.transientTypes.contains(content.type) }
             .allSatisfy { content in
-                contents.contains { $0.type == content.type && $0.value == content.value }
+                contents.contains {
+                    $0.type == content.type
+                        && $0.size == content.size
+                        && $0.value == content.value
+                }
             }
     }
 
@@ -130,13 +155,20 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
     var fromMaccy: Bool { contentData([.fromMaccy]) != nil }
 
     private func contentData(_ types: [NSPasteboard.PasteboardType]) -> Data? {
-        contents.first { types.contains(NSPasteboard.PasteboardType($0.type)) }?.value
+        contents.first { types.contains(NSPasteboard.PasteboardType($0.type)) }.flatMap(resolvedData(for:))
     }
 
     private func allContentData(_ types: [NSPasteboard.PasteboardType]) -> [Data] {
         contents
             .filter { types.contains(NSPasteboard.PasteboardType($0.type)) }
-            .compactMap { $0.value }
+            .compactMap(resolvedData(for:))
+    }
+
+    /// 返回内容的真实数据：内存内联值优先，磁盘引用则按需读取。
+    func resolvedData(for content: ClipboardContent) -> Data? {
+        if let value = content.value { return value }
+        guard let file = content.file else { return nil }
+        return ClipboardContentStore.read(file: file)
     }
 }
 

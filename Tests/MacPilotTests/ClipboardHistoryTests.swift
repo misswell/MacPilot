@@ -133,4 +133,22 @@ struct ClipboardHistoryTests {
         #expect(reloaded.allItems.count == 1)
         #expect(reloaded.allItems.first?.title == "persisted")
     }
+
+    @Test func fileBackedContentIsStoredOnDiskAndResolvesOnDemand() async throws {
+        // 图片/大数据应落盘：内容 value 为空，仅保留文件引用；按需读取能还原数据。
+        let id = UUID()
+        let imageData = Data((0..<16_384).map { UInt8($0 % 251) })  // > 64KB? no, 16KB — 触发外部化需要图片类型
+        let content = ClipboardContent(
+            type: NSPasteboard.PasteboardType.png.rawValue,
+            file: ClipboardContentStore.write(imageData, itemID: id, index: 0),
+            size: imageData.count
+        )
+        defer { ClipboardContentStore.delete(itemID: id) }
+
+        #expect(content.isExternal)
+        #expect(content.value == nil)
+        let item = ClipboardItem(id: id, contents: [content])
+        #expect(item.imageData == imageData)
+        #expect(item.image != nil)
+    }
 }
