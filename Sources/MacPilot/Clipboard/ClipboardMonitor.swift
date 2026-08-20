@@ -198,14 +198,7 @@ final class ClipboardMonitor {
         guard let data, !data.isEmpty else {
             return ClipboardContent(type: type, size: 0)
         }
-        let imageTypes: Set<String> = [
-            NSPasteboard.PasteboardType.tiff.rawValue,
-            NSPasteboard.PasteboardType.png.rawValue,
-            NSPasteboard.PasteboardType.jpeg.rawValue,
-            NSPasteboard.PasteboardType.heic.rawValue,
-        ]
-        // 图片一律落盘；其他类型超过 64KB 也落盘。小文本保持内联便于即时展示与搜索。
-        let externalize = imageTypes.contains(type) || data.count > 64 * 1024
+        let externalize = ClipboardContentStore.shouldExternalizeContent(type: type, dataSize: data.count)
         if externalize, let file = ClipboardContentStore.write(data, itemID: itemID, index: index) {
             return ClipboardContent(type: type, file: file, size: data.count)
         }

@@ -68,8 +68,39 @@ final class ClipboardHistory: ObservableObject {
             return
         }
         allItems = decoded
+        // 旧版历史里图片/大数据是内联存进 JSON 的，加载时迁移到磁盘，
+        // 之后内存只保留文件引用，彻底释放旧数据占用的内存。
+        let migrated = migrateInlineContentToDisk()
+        if migrated { save() }
         trimToLimit()
         updateFilteredItems()
+    }
+
+    /// 把历史里仍内联的大数据（图片、>64KB）写入磁盘并替换为文件引用。
+    private func migrateInlineContentToDisk() -> Bool {
+        var changed = false
+        for (itemIndex, item) in allItems.enumerated() {
+            var newContents = item.contents
+            var itemChanged = false
+            for (contentIndex, content) in newContents.enumerated() {
+                guard let value = content.value,
+                      content.file == nil,
+                      ClipboardContentStore.shouldExternalizeContent(type: content.type, dataSize: value.count) else {
+                    continue
+                }
+                if let file = ClipboardContentStore.write(value, itemID: item.id, index: contentIndex) {
+                    newContents[contentIndex] = ClipboardContent(type: content.type, file: file, size: value.count)
+                    itemChanged = true
+                }
+            }
+            if itemChanged {
+                var updated = item
+                updated.contents = newContents
+                allItems[itemIndex] = updated
+                changed = true
+            }
+        }
+        return changed
     }
 
     private func save() {

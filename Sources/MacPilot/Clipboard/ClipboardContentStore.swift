@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// 剪切板内容文件的磁盘存储。
@@ -43,5 +44,16 @@ enum ClipboardContentStore {
         for file in files where file.hasSuffix(".bin") {
             try? FileManager.default.removeItem(at: directory.appendingPathComponent(file))
         }
+    }
+
+    /// 判断一段内容是否需要落盘（图片一律落盘；其他类型超过 64KB 落盘）。
+    static func shouldExternalizeContent(type: String, dataSize: Int) -> Bool {
+        let imageTypes: Set<String> = [
+            NSPasteboard.PasteboardType.tiff.rawValue,
+            NSPasteboard.PasteboardType.png.rawValue,
+            NSPasteboard.PasteboardType.jpeg.rawValue,
+            NSPasteboard.PasteboardType.heic.rawValue,
+        ]
+        return imageTypes.contains(type) || dataSize > 64 * 1024
     }
 }
