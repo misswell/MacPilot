@@ -323,11 +323,12 @@ private struct WindowSwitcherAXAttributes {
 private enum WindowSwitcherInventory {
     static func snapshot(
         settings: WindowSwitcherSettings,
-        serverRecords: [WindowSwitcherServerRecord]
+        serverRecords: [WindowSwitcherServerRecord],
+        excludedWindowIDs: Set<CGWindowID> = []
     ) -> [WindowSwitcherItem] {
         let recordsByProcess = Dictionary(grouping: serverRecords, by: \.processID)
         let applications = NSWorkspace.shared.runningApplications.filter { application in
-            guard application.processIdentifier != getpid(), !application.isTerminated else { return false }
+            guard !application.isTerminated else { return false }
             guard application.activationPolicy == .regular || application.activationPolicy == .accessory else { return false }
             if application.isHidden && !settings.includeHiddenApplications { return false }
             let processRecords = recordsByProcess[application.processIdentifier] ?? []
@@ -361,6 +362,8 @@ private enum WindowSwitcherInventory {
             for (index, axWindow) in axWindows.enumerated() {
                 let attributes = windowAttributes(of: axWindow)
                 guard attributes.role == kAXWindowRole as String else { continue }
+                // 跳过排除窗口（如切换器自身的面板），避免把自身显示出来。
+                if let windowNumber = attributes.windowNumber, excludedWindowIDs.contains(windowNumber) { continue }
                 let title = attributes.title
                 let minimized = attributes.isMinimized
                 if minimized && !settings.includeMinimizedWindows { continue }
@@ -1538,6 +1541,11 @@ final class WindowSwitcherModel: ObservableObject {
         let previousSignature = inventorySignature
         let hasCachedWindows = !cachedWindows.isEmpty
         let startedAt = CFAbsoluteTimeGetCurrent()
+        // 排除切换器自身面板的窗口号，避免把面板显示在清单里。
+        let excludedWindowIDs: Set<CGWindowID> = {
+            guard let panelID = panelController?.panelWindowID else { return [] }
+            return [panelID]
+        }()
         inventoryTask = Task { @MainActor [weak self] in
             let refresh = await Task.detached(priority: priority) {
                 let serverScan = WindowSwitcherInventory.scanWindowServer()
@@ -1547,7 +1555,8 @@ final class WindowSwitcherModel: ObservableObject {
                 }
                 let snapshot = WindowSwitcherInventory.snapshot(
                     settings: settings,
-                    serverRecords: serverScan.records
+                    serverRecords: serverScan.records,
+                    excludedWindowIDs: excludedWindowIDs
                 )
                 return WindowSwitcherInventoryRefresh(snapshot: snapshot, signature: signature)
             }.value
@@ -1817,6 +1826,12 @@ private final class WindowSwitcherPanel: NSPanel {
 private final class WindowSwitcherPanelController {
     private weak var model: WindowSwitcherModel?
     private var panel: WindowSwitcherPanel?
+
+    /// 切换器面板自身的窗口号，用于从窗口清单里排除，避免显示自己。
+    var panelWindowID: CGWindowID? {
+        guard let panel else { return nil }
+        return CGWindowID(panel.windowNumber)
+    }
 
     init(model: WindowSwitcherModel) {
         self.model = model
