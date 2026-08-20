@@ -57,6 +57,32 @@ struct WindowSwitcherTests {
         ) == ["idea-primary", "zed", "idea-secondary"])
     }
 
+    @Test func newlySeenWindowsDoNotDisplaceCommittedRecency() {
+        let afterA = WindowSwitcherRecentWindowIDs.afterCommittedSelection(
+            recentIDs: ["background", "a", "e"],
+            windowID: "a"
+        )
+        let afterInventory = WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
+            recentIDs: afterA,
+            previousIDs: ["background", "a", "e"],
+            snapshotIDs: ["background", "a", "e", "new-1", "new-2"]
+        )
+        let afterE = WindowSwitcherRecentWindowIDs.afterCommittedSelection(
+            recentIDs: afterInventory,
+            windowID: "e"
+        )
+
+        #expect(Array(afterE.prefix(2)) == ["e", "a"])
+    }
+
+    @Test func newlySeenWindowsPreserveSnapshotOrderAfterKnownRecency() {
+        #expect(WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
+            recentIDs: ["a"],
+            previousIDs: ["a"],
+            snapshotIDs: ["a", "new-2", "new-1"]
+        ) == ["a", "new-2", "new-1"])
+    }
+
     @Test func thumbnailWorkStartsAtTheSelectionAndFansOut() {
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 5, selectedIndex: 2) == [2, 3, 1, 4, 0])
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 0, selectedIndex: 0).isEmpty)

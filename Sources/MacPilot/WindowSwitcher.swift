@@ -137,6 +137,21 @@ enum WindowSwitcherRecentWindowIDs {
         moveToFront(windowID, in: recentIDs, limit: limit)
     }
 
+    static func afterInventorySnapshot(
+        recentIDs: [String],
+        previousIDs: Set<String>,
+        snapshotIDs: [String],
+        limit: Int = 128
+    ) -> [String] {
+        var updated = recentIDs
+        var knownIDs = Set(updated)
+        for id in snapshotIDs where !previousIDs.contains(id) && knownIDs.insert(id).inserted {
+            updated.append(id)
+        }
+        if updated.count > limit { updated.removeLast(updated.count - limit) }
+        return updated
+    }
+
     private static func moveToFront(_ windowID: String, in recentIDs: [String], limit: Int) -> [String] {
         var updated = recentIDs.filter { $0 != windowID }
         updated.insert(windowID, at: 0)
@@ -1342,25 +1357,26 @@ final class WindowSwitcherModel: ObservableObject {
         )
     }
 
-    /// Newly appearing windows (just launched apps, or brand-new windows of a
-    /// running app) should sit at the front of the switcher instead of being
-    /// treated as never-activated and sorted to the end.
-    private func promoteNewWindowsToFront(_ snapshot: [WindowSwitcherItem]) {
+    /// Newly appearing windows (just launched apps, or windows that reappeared
+    /// in a refreshed snapshot) are recorded after already-known recency. A
+    /// refresh must never outrank a window the user just activated.
+    private func recordNewWindows(_ snapshot: [WindowSwitcherItem]) {
         let currentIDs = Set(snapshot.map(\.id))
         let newIDs = currentIDs.subtracting(previousSnapshotWindowIDs)
         if !newIDs.isEmpty {
             if newIDs.count <= 8 {
                 let names = snapshot.filter { newIDs.contains($0.id) }.map(\.appName)
-                DiagnosticLog.write("WindowSwitcher", "Promoting new windows to front: \(names.joined(separator: ", "))")
-                Self.windowSwitcherLogger.info("Promoting new windows to front: \(names.joined(separator: ", "))")
+                DiagnosticLog.write("WindowSwitcher", "Recording newly observed windows after existing recency: \(names.joined(separator: ", "))")
+                Self.windowSwitcherLogger.info("Recording newly observed windows after existing recency: \(names.joined(separator: ", "))")
             } else {
-                DiagnosticLog.write("WindowSwitcher", "Promoting \(newIDs.count) new windows to front (batch)")
-                Self.windowSwitcherLogger.info("Promoting \(newIDs.count) new windows to front (batch)")
+                DiagnosticLog.write("WindowSwitcher", "Recording \(newIDs.count) newly observed windows after existing recency")
+                Self.windowSwitcherLogger.info("Recording \(newIDs.count) newly observed windows after existing recency")
             }
-            for id in newIDs where !recentWindowIDs.contains(id) {
-                recentWindowIDs.insert(id, at: 0)
-            }
-            if recentWindowIDs.count > 128 { recentWindowIDs.removeLast(recentWindowIDs.count - 128) }
+            recentWindowIDs = WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
+                recentIDs: recentWindowIDs,
+                previousIDs: previousSnapshotWindowIDs,
+                snapshotIDs: snapshot.map(\.id)
+            )
         }
         previousSnapshotWindowIDs = currentIDs
     }
@@ -1435,7 +1451,7 @@ final class WindowSwitcherModel: ObservableObject {
                 if let snapshot = refresh.snapshot {
                     self.cachedWindows = snapshot
                     self.applyCachedPreviews(to: snapshot)
-                    self.promoteNewWindowsToFront(snapshot)
+                    self.recordNewWindows(snapshot)
                 }
                 if let pending = self.pendingSession {
                     self.pendingSession = nil
