@@ -44,6 +44,19 @@ struct WindowSwitcherTests {
         ) == "window-macpilot")
     }
 
+    @Test func previewingIdeaWindowDoesNotPromoteItBeforeCommit() {
+        let recentIDs = ["zed", "idea-secondary", "idea-primary"]
+
+        #expect(WindowSwitcherRecentWindowIDs.afterPreviewSelection(
+            recentIDs: recentIDs,
+            windowID: "idea-primary"
+        ) == recentIDs)
+        #expect(WindowSwitcherRecentWindowIDs.afterCommittedSelection(
+            recentIDs: recentIDs,
+            windowID: "idea-primary"
+        ) == ["idea-primary", "zed", "idea-secondary"])
+    }
+
     @Test func thumbnailWorkStartsAtTheSelectionAndFansOut() {
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 5, selectedIndex: 2) == [2, 3, 1, 4, 0])
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 0, selectedIndex: 0).isEmpty)

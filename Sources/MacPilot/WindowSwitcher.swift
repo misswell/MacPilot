@@ -119,6 +119,32 @@ enum WindowSwitcherActivationRouting {
     }
 }
 
+enum WindowSwitcherRecentWindowIDs {
+    /// Cycling only previews a candidate; recency changes when selection commits.
+    static func afterPreviewSelection(
+        recentIDs: [String],
+        windowID _: String
+    ) -> [String] {
+        recentIDs
+    }
+
+    /// A committed focus change moves exactly one window to the front.
+    static func afterCommittedSelection(
+        recentIDs: [String],
+        windowID: String,
+        limit: Int = 128
+    ) -> [String] {
+        moveToFront(windowID, in: recentIDs, limit: limit)
+    }
+
+    private static func moveToFront(_ windowID: String, in recentIDs: [String], limit: Int) -> [String] {
+        var updated = recentIDs.filter { $0 != windowID }
+        updated.insert(windowID, at: 0)
+        if updated.count > limit { updated.removeLast(updated.count - limit) }
+        return updated
+    }
+}
+
 enum WindowSwitcherThumbnailPriority {
     static func orderedIndices(count: Int, selectedIndex: Int) -> [Int] {
         guard count > 0 else { return [] }
@@ -1144,7 +1170,10 @@ final class WindowSwitcherModel: ObservableObject {
         } else {
             next = reverse ? windows.count - 1 : 0
         }
-        noteWindowActivation(windows[next].id)
+        recentWindowIDs = WindowSwitcherRecentWindowIDs.afterPreviewSelection(
+            recentIDs: recentWindowIDs,
+            windowID: windows[next].id
+        )
         objectWillChange.send()
         selectedIndex = next
         selectedItemID = windows[next].id
@@ -1307,9 +1336,10 @@ final class WindowSwitcherModel: ObservableObject {
     }
 
     private func noteWindowActivation(_ windowID: String) {
-        recentWindowIDs.removeAll { $0 == windowID }
-        recentWindowIDs.insert(windowID, at: 0)
-        if recentWindowIDs.count > 128 { recentWindowIDs.removeLast(recentWindowIDs.count - 128) }
+        recentWindowIDs = WindowSwitcherRecentWindowIDs.afterCommittedSelection(
+            recentIDs: recentWindowIDs,
+            windowID: windowID
+        )
     }
 
     /// Newly appearing windows (just launched apps, or brand-new windows of a
