@@ -46,6 +46,10 @@ public final class RightClickMenuCoordinator {
     public func start() {
         logger.info("RightClickMenuCoordinator.start() called")
 
+        // 自动清理重复/陈旧的 FinderSync 扩展进程，只保留当前 App 的一个实例。
+        // macOS 会在登录/更新后拉起多个扩展进程（双屏或重复注册），无需用户手动清理。
+        scheduleFinderSyncCleanup()
+
         // 监听菜单配置更新通知（设置页 toggle 动作时触发）
         NotificationCenter.default.addObserver(
             forName: .menuConfigShouldUpdate,
@@ -225,6 +229,58 @@ public final class RightClickMenuCoordinator {
         logger.debug("Performing reconnection: requesting menu config from main app")
         // 重置 pluginRunning 状态，等待心跳恢复
         pluginRunning = false
+    }
+
+    // MARK: - 进程自清理
+
+    private var finderSyncCleanupTask: Task<Void, Never>?
+
+    /// 启动后先等扩展就绪再清理，随后定期复查，自动处理重复/陈旧扩展进程。
+    private func scheduleFinderSyncCleanup() {
+        finderSyncCleanupTask?.cancel()
+        finderSyncCleanupTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, let self else { return }
+            self.cleanUpFinderSyncProcesses()
+            // 每 5 分钟复查一次，处理运行中才新出现的重复实例。
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5 * 60))
+                guard !Task.isCancelled else { return }
+                self.cleanUpFinderSyncProcesses()
+            }
+        }
+    }
+
+    /// 清理多余的 FinderSync 扩展进程：保留当前 App 的一个实例，
+    /// 杀掉重复的当前实例与来自旧/损坏 App 副本的陈旧实例。
+    @MainActor private func cleanUpFinderSyncProcesses() {
+        let currentExtensionURL = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/PlugIns/FinderSync.appex")
+        let running = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.misswell.macpilot.finder-sync"
+        )
+        guard running.count > 1 else { return }
+
+        let currentOnes = running.filter { $0.bundleURL?.standardizedFileURL == currentExtensionURL.standardizedFileURL }
+        let staleOnes = running.filter { $0.bundleURL?.standardizedFileURL != currentExtensionURL.standardizedFileURL }
+
+        if currentOnes.isEmpty {
+            // 当前扩展尚未运行：只保留一个（避免完全没扩展），其余杀掉。
+            for app in running.dropFirst() {
+                logger.info("Terminating extra FinderSync instance: \(app.processIdentifier)")
+                app.terminate()
+            }
+        } else {
+            // 保留当前扩展的一个实例，其余（当前重复 + 陈旧副本）全杀。
+            for app in currentOnes.dropFirst() {
+                logger.info("Terminating duplicate FinderSync instance: \(app.processIdentifier)")
+                app.terminate()
+            }
+            for app in staleOnes {
+                logger.info("Terminating stale FinderSync instance: \(app.processIdentifier) (\(app.bundleURL?.path ?? "?"))")
+                app.terminate()
+            }
+        }
     }
 
     // MARK: - Helper Methods
