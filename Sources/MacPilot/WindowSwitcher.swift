@@ -130,6 +130,93 @@ enum WindowSwitcherActivationRouting {
     }
 }
 
+struct WindowSwitcherWindowIdentity: Equatable {
+    let id: String
+    let processID: pid_t
+    let windowNumber: CGWindowID?
+    let title: String
+    let frame: CGRect?
+}
+
+private enum WindowSwitcherWindowIdentityMatching {
+    private static let maximumFrameDistance: CGFloat = 96
+
+    private struct Candidate {
+        let previousIndex: Int
+        let currentIndex: Int
+        let score: Int
+        let frameDistance: CGFloat
+    }
+
+    static func matches(
+        previous: [WindowSwitcherWindowIdentity],
+        current: [WindowSwitcherWindowIdentity]
+    ) -> [(previous: Int, current: Int)] {
+        var previousCountByProcess: [pid_t: Int] = [:]
+        var currentCountByProcess: [pid_t: Int] = [:]
+        for item in previous { previousCountByProcess[item.processID, default: 0] += 1 }
+        for item in current { currentCountByProcess[item.processID, default: 0] += 1 }
+
+        var candidates: [Candidate] = []
+        for previousIndex in previous.indices {
+            let previousItem = previous[previousIndex]
+            for currentIndex in current.indices {
+                let currentItem = current[currentIndex]
+                guard previousItem.processID == currentItem.processID else { continue }
+                let distance = frameDistance(previousItem.frame, currentItem.frame)
+                let score: Int?
+                if let previousNumber = previousItem.windowNumber,
+                   let currentNumber = currentItem.windowNumber,
+                   previousNumber == currentNumber {
+                    score = 0
+                } else if !previousItem.title.isEmpty,
+                          previousItem.title == currentItem.title,
+                          distance <= maximumFrameDistance {
+                    score = 1
+                } else if distance <= maximumFrameDistance {
+                    score = 2
+                } else if previousCountByProcess[previousItem.processID] == 1,
+                          currentCountByProcess[currentItem.processID] == 1 {
+                    score = 3
+                } else {
+                    score = nil
+                }
+                if let score {
+                    candidates.append(Candidate(
+                        previousIndex: previousIndex,
+                        currentIndex: currentIndex,
+                        score: score,
+                        frameDistance: distance
+                    ))
+                }
+            }
+        }
+
+        candidates.sort { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score < rhs.score }
+            if lhs.frameDistance != rhs.frameDistance { return lhs.frameDistance < rhs.frameDistance }
+            if lhs.previousIndex != rhs.previousIndex { return lhs.previousIndex < rhs.previousIndex }
+            return lhs.currentIndex < rhs.currentIndex
+        }
+
+        var usedPrevious = Set<Int>()
+        var usedCurrent = Set<Int>()
+        var result: [(previous: Int, current: Int)] = []
+        for candidate in candidates {
+            guard usedPrevious.insert(candidate.previousIndex).inserted,
+                  usedCurrent.insert(candidate.currentIndex).inserted else { continue }
+            result.append((previous: candidate.previousIndex, current: candidate.currentIndex))
+        }
+        return result
+    }
+
+    private static func frameDistance(_ lhs: CGRect?, _ rhs: CGRect?) -> CGFloat {
+        guard let lhs, let rhs else { return .greatestFiniteMagnitude }
+        return abs(lhs.minX - rhs.minX) + abs(lhs.minY - rhs.minY)
+            + abs(lhs.width - rhs.width) + abs(lhs.height - rhs.height)
+    }
+}
+
 enum WindowSwitcherRecentWindowIDs {
     /// Cycling only previews a candidate; recency changes when selection commits.
     static func afterPreviewSelection(
@@ -152,12 +239,64 @@ enum WindowSwitcherRecentWindowIDs {
         recentIDs: [String],
         previousIDs: Set<String>,
         snapshotIDs: [String],
+        activatedWindowID: String? = nil,
         limit: Int = 128
     ) -> [String] {
         var updated = recentIDs
         var knownIDs = Set(updated)
         for id in snapshotIDs where !previousIDs.contains(id) && knownIDs.insert(id).inserted {
             updated.append(id)
+        }
+        if let activatedWindowID, updated.contains(activatedWindowID) {
+            updated = moveToFront(activatedWindowID, in: updated, limit: limit)
+        }
+        if updated.count > limit { updated.removeLast(updated.count - limit) }
+        return updated
+    }
+
+    /// Rebinds a recreated WindowServer surface to the existing recency slot.
+    /// DBeaver and some Java applications can replace their main window while
+    /// starting, changing both the CGWindowID and title without changing the
+    /// visible logical window the user is switching to.
+    static func afterInventorySnapshot(
+        recentIDs: [String],
+        previousIDs: Set<String>,
+        previousWindows: [WindowSwitcherWindowIdentity],
+        snapshotWindows: [WindowSwitcherWindowIdentity],
+        activatedWindowID: String? = nil,
+        limit: Int = 128
+    ) -> [String] {
+        var updated = recentIDs
+        let matches = WindowSwitcherWindowIdentityMatching.matches(
+            previous: previousWindows,
+            current: snapshotWindows
+        )
+        var matchedCurrentIDs = Set<String>()
+
+        for match in matches {
+            let previous = previousWindows[match.previous]
+            let current = snapshotWindows[match.current]
+            matchedCurrentIDs.insert(current.id)
+            guard previous.id != current.id else { continue }
+
+            if let currentIndex = updated.firstIndex(of: current.id) {
+                updated.remove(at: currentIndex)
+            }
+            if let previousIndex = updated.firstIndex(of: previous.id) {
+                updated[previousIndex] = current.id
+            }
+        }
+
+        var seenIDs = Set<String>()
+        updated = updated.filter { seenIDs.insert($0).inserted }
+        for window in snapshotWindows {
+            guard !matchedCurrentIDs.contains(window.id),
+                  !previousIDs.contains(window.id),
+                  seenIDs.insert(window.id).inserted else { continue }
+            updated.append(window.id)
+        }
+        if let activatedWindowID, updated.contains(activatedWindowID) {
+            updated = moveToFront(activatedWindowID, in: updated, limit: limit)
         }
         if updated.count > limit { updated.removeLast(updated.count - limit) }
         return updated
@@ -196,6 +335,7 @@ final class WindowSwitcherItem: ObservableObject, Identifiable, @unchecked Senda
     let icon: NSImage
     @Published private(set) var preview: NSImage?
     let axWindow: AXUIElement?
+    let windowNumber: CGWindowID?
     let frame: CGRect?
     let isMinimized: Bool
     let isHidden: Bool
@@ -211,6 +351,7 @@ final class WindowSwitcherItem: ObservableObject, Identifiable, @unchecked Senda
         icon: NSImage,
         preview: NSImage?,
         axWindow: AXUIElement?,
+        windowNumber: CGWindowID?,
         frame: CGRect?,
         isMinimized: Bool,
         isHidden: Bool,
@@ -225,6 +366,7 @@ final class WindowSwitcherItem: ObservableObject, Identifiable, @unchecked Senda
         self.icon = icon
         self.preview = preview
         self.axWindow = axWindow
+        self.windowNumber = windowNumber
         self.frame = frame
         self.isMinimized = isMinimized
         self.isHidden = isHidden
@@ -233,6 +375,16 @@ final class WindowSwitcherItem: ObservableObject, Identifiable, @unchecked Senda
 
     var displayTitle: String {
         title.isEmpty ? appName : title
+    }
+
+    var windowIdentity: WindowSwitcherWindowIdentity {
+        WindowSwitcherWindowIdentity(
+            id: id,
+            processID: processID,
+            windowNumber: windowNumber,
+            title: title,
+            frame: frame
+        )
     }
 
     func updatePreview(_ preview: NSImage?) {
@@ -468,6 +620,7 @@ private enum WindowSwitcherInventory {
             icon: icon,
             preview: nil,
             axWindow: axWindow,
+            windowNumber: windowNumber,
             frame: frame,
             isMinimized: minimized,
             isHidden: application.isHidden,
@@ -1154,6 +1307,7 @@ final class WindowSwitcherModel: ObservableObject {
         guard isRuntimeActive else { return false }
         guard !isShowing else { return true }
         let startedAt = CFAbsoluteTimeGetCurrent()
+        promoteFrontmostWindow(in: cachedWindows)
         let snapshot = orderedForSession(cachedWindows)
         DiagnosticLog.write(
             "WindowSwitcher",
@@ -1187,8 +1341,7 @@ final class WindowSwitcherModel: ObservableObject {
         startedAt: CFAbsoluteTime,
         cacheHit: Bool
     ) {
-        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let currentIndex = snapshot.firstIndex { $0.processID == frontmost }
+        let currentIndex = currentWindowIndex(in: snapshot)
         let initialIndex = WindowSwitcherSelection.initialIndex(
             count: snapshot.count,
             currentIndex: currentIndex,
@@ -1412,6 +1565,28 @@ final class WindowSwitcherModel: ObservableObject {
         noteWindowActivation(promotedWindowID)
     }
 
+    /// The frontmost window is always the first MRU item. This also catches
+    /// windows created by an already-running application: the workspace may
+    /// report the application activation before the new window enters the
+    /// inventory, so the next inventory snapshot is the authoritative point
+    /// where we resolve the focused window.
+    private func promoteFrontmostWindow(in items: [WindowSwitcherItem]) {
+        guard !isShowing,
+              let application = NSWorkspace.shared.frontmostApplication else { return }
+        let candidates = items.filter { $0.processID == application.processIdentifier }
+        guard let promotedWindowID = WindowSwitcherActivationRouting.promotedWindowID(
+            applicationProcessID: application.processIdentifier,
+            candidateWindowIDs: candidates.map(\.id),
+            focusedWindowID: candidates.count > 1
+                ? WindowSwitcherFocusedWindowResolver.resolve(
+                    processID: application.processIdentifier,
+                    candidates: candidates
+                )
+                : nil
+        ) else { return }
+        noteWindowActivation(promotedWindowID)
+    }
+
     private func noteWindowActivation(_ windowID: String) {
         recentWindowIDs = WindowSwitcherRecentWindowIDs.afterCommittedSelection(
             recentIDs: recentWindowIDs,
@@ -1422,7 +1597,10 @@ final class WindowSwitcherModel: ObservableObject {
     /// Newly appearing windows (just launched apps, or windows that reappeared
     /// in a refreshed snapshot) are recorded after already-known recency. A
     /// refresh must never outrank a window the user just activated.
-    private func recordNewWindows(_ snapshot: [WindowSwitcherItem]) {
+    private func recordNewWindows(
+        _ snapshot: [WindowSwitcherItem],
+        previousWindows: [WindowSwitcherItem]
+    ) {
         let currentIDs = Set(snapshot.map(\.id))
         let newIDs = currentIDs.subtracting(previousSnapshotWindowIDs)
         if !newIDs.isEmpty {
@@ -1437,7 +1615,8 @@ final class WindowSwitcherModel: ObservableObject {
             recentWindowIDs = WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
                 recentIDs: recentWindowIDs,
                 previousIDs: previousSnapshotWindowIDs,
-                snapshotIDs: snapshot.map(\.id)
+                previousWindows: previousWindows.map(\.windowIdentity),
+                snapshotWindows: snapshot.map(\.windowIdentity)
             )
         }
         previousSnapshotWindowIDs = currentIDs
@@ -1448,6 +1627,20 @@ final class WindowSwitcherModel: ObservableObject {
             ids: items.map(\.id),
             recentIDs: recentWindowIDs
         ).map { items[$0] }
+    }
+
+    private func currentWindowIndex(in items: [WindowSwitcherItem]) -> Int? {
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else { return nil }
+        let candidates = items.filter { $0.processID == frontmost.processIdentifier }
+        guard !candidates.isEmpty else { return nil }
+        let focusedWindowID = candidates.count > 1
+            ? WindowSwitcherFocusedWindowResolver.resolve(
+                processID: frontmost.processIdentifier,
+                candidates: candidates
+            )
+            : candidates[0].id
+        return items.firstIndex { $0.id == focusedWindowID }
+            ?? items.firstIndex { $0.processID == frontmost.processIdentifier }
     }
 
     private func requestInventoryRefresh(priority: TaskPriority) {
@@ -1511,9 +1704,11 @@ final class WindowSwitcherModel: ObservableObject {
             let settingsStillMatch = settings == self.settings
             if settingsStillMatch {
                 if let snapshot = refresh.snapshot {
+                    let previousWindows = self.cachedWindows
                     self.cachedWindows = snapshot
                     self.applyCachedPreviews(to: snapshot)
-                    self.recordNewWindows(snapshot)
+                    self.recordNewWindows(snapshot, previousWindows: previousWindows)
+                    self.promoteFrontmostWindow(in: snapshot)
                 }
                 if let pending = self.pendingSession {
                     self.pendingSession = nil
@@ -1534,9 +1729,8 @@ final class WindowSwitcherModel: ObservableObject {
         snapshot: [WindowSwitcherItem]
     ) {
         guard !snapshot.isEmpty else { return }
-        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let ordered = orderedForSession(snapshot)
-        let currentIndex = ordered.firstIndex { $0.processID == frontmost }
+        let currentIndex = currentWindowIndex(in: ordered)
         let initialIndex = WindowSwitcherSelection.initialIndex(
             count: ordered.count,
             currentIndex: currentIndex,
@@ -1614,11 +1808,10 @@ final class WindowSwitcherModel: ObservableObject {
 
     private func prewarmThumbnails() {
         guard !isShowing else { return }
-        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let ordered = orderedForSession(cachedWindows)
         let selected = WindowSwitcherSelection.initialIndex(
             count: ordered.count,
-            currentIndex: ordered.firstIndex { $0.processID == frontmost },
+            currentIndex: currentWindowIndex(in: ordered),
             reverse: false
         )
         if let selected {

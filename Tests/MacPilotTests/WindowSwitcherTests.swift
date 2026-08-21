@@ -125,6 +125,81 @@ struct WindowSwitcherTests {
         ) == ["a", "new-2", "new-1"])
     }
 
+    @Test func recreatedDBeaverWindowRemainsSecondAfterSwitchingAnotherWindow() {
+        // DBeaver can recreate its WindowServer surface while starting. The
+        // same visible window then has a new ID and a slightly different title.
+        let recentIDs = ["window-chatgpt", "window-11723", "window-code"]
+        let frame = CGRect(x: 80, y: 120, width: 1_200, height: 760)
+        let previousWindows = [
+            WindowSwitcherWindowIdentity(
+                id: "window-chatgpt",
+                processID: 10,
+                windowNumber: 10,
+                title: "ChatGPT",
+                frame: frame
+            ),
+            WindowSwitcherWindowIdentity(
+                id: "window-11723",
+                processID: 20,
+                windowNumber: nil,
+                title: "DBeaver Community",
+                frame: frame
+            ),
+            WindowSwitcherWindowIdentity(
+                id: "window-code",
+                processID: 30,
+                windowNumber: 30,
+                title: "Code",
+                frame: frame
+            )
+        ]
+        let snapshotWindows = [
+            WindowSwitcherWindowIdentity(
+                id: "window-chatgpt",
+                processID: 10,
+                windowNumber: 10,
+                title: "ChatGPT",
+                frame: frame
+            ),
+            WindowSwitcherWindowIdentity(
+                id: "window-11733",
+                processID: 20,
+                windowNumber: nil,
+                title: "DBeaver",
+                frame: frame
+            ),
+            WindowSwitcherWindowIdentity(
+                id: "window-code",
+                processID: 30,
+                windowNumber: 30,
+                title: "Code",
+                frame: frame
+            )
+        ]
+
+        #expect(WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
+            recentIDs: recentIDs,
+            previousIDs: Set(recentIDs),
+            previousWindows: previousWindows,
+            snapshotWindows: snapshotWindows
+        ) == ["window-chatgpt", "window-11733", "window-code"])
+    }
+
+    @Test func openingNewVSCodeWindowPromotesItAboveFinder() {
+        let afterFinder = WindowSwitcherRecentWindowIDs.afterCommittedSelection(
+            recentIDs: ["vscode-old", "finder"],
+            windowID: "finder"
+        )
+        #expect(afterFinder == ["finder", "vscode-old"])
+
+        #expect(WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
+            recentIDs: afterFinder,
+            previousIDs: Set(afterFinder),
+            snapshotIDs: ["finder", "vscode-old", "vscode-new"],
+            activatedWindowID: "vscode-new"
+        ) == ["vscode-new", "finder", "vscode-old"])
+    }
+
     @Test func thumbnailWorkStartsAtTheSelectionAndFansOut() {
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 5, selectedIndex: 2) == [2, 3, 1, 4, 0])
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 0, selectedIndex: 0).isEmpty)
