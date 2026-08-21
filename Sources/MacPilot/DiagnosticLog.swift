@@ -9,6 +9,16 @@ import OSLog
 /// 保证始终能看到最近一天的记录。
 enum DiagnosticLog {
     private static let lock = NSLock()
+    private static let retentionInterval: TimeInterval = 24 * 60 * 60
+    private static let cleanupInterval: TimeInterval = 60
+    nonisolated(unsafe) private static var lastCleanupAt = Date.distantPast
+    private static let isRunningTests: Bool = {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || Bundle.main.bundleURL.pathExtension == "xctest"
+            || ProcessInfo.processInfo.arguments.contains { $0.contains(".xctest/") }
+    }()
 
     private static let directory: URL = {
         let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
@@ -20,12 +30,17 @@ enum DiagnosticLog {
 
     /// 追加一条日志；`category` 用于区分模块（如 WindowSwitcher / RightClickMenu）。
     static func write(_ category: String, _ message: String) {
+        // BLE model tests exercise the same callbacks as the app. Do not let
+        // those callbacks append synthetic UUIDs/settings to the user's
+        // one-day diagnostic history.
+        guard !isRunningTests else { return }
         lock.lock()
         defer { lock.unlock() }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            cleanExpiredLocked()
-            let line = "[\(timestamp())] [\(category)] \(message)\n"
+            let now = Date()
+            cleanExpiredLocked(now: now)
+            let line = "[\(timestamp(for: now))] [\(category)] \(message)\n"
             if let handle = try? FileHandle(forWritingTo: fileURL) {
                 handle.seekToEndOfFile()
                 handle.write(Data(line.utf8))
@@ -40,9 +55,19 @@ enum DiagnosticLog {
         }
     }
 
-    /// 删除超过 1 天的日志文件，保证只保留最近一天。
-    private static func cleanExpiredLocked() {
-        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+    /// 删除超过 1 天的日志行和日志文件，保证只保留最近一天。
+    private static func cleanExpiredLocked(now: Date) {
+        guard now.timeIntervalSince(lastCleanupAt) >= cleanupInterval else { return }
+        lastCleanupAt = now
+
+        if let contents = try? String(contentsOf: fileURL, encoding: .utf8) {
+            let retained = retainedLogContent(contents, now: now)
+            if retained != contents {
+                try? retained.data(using: .utf8)?.write(to: fileURL, options: .atomic)
+            }
+        }
+
+        let cutoff = now.addingTimeInterval(-retentionInterval)
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.contentModificationDateKey],
@@ -57,9 +82,33 @@ enum DiagnosticLog {
         }
     }
 
-    private static func timestamp() -> String {
+    /// Keeps only timestamped lines inside the retention window. Newly written
+    /// lines always use the parseable format below; malformed partial lines are
+    /// discarded so they cannot bypass the one-day retention guarantee.
+    static func retainedLogContent(_ contents: String, now: Date) -> String {
+        let formatter = makeTimestampFormatter()
+        let cutoff = now.addingTimeInterval(-retentionInterval)
+        let retainedLines = contents
+            .split(whereSeparator: \.isNewline)
+            .filter { line in
+                guard line.count >= 25 else { return false }
+                let timestampText = String(line.dropFirst().prefix(23))
+                guard let date = formatter.date(from: timestampText) else { return false }
+                return date >= cutoff
+            }
+        guard !retainedLines.isEmpty else { return "" }
+        return retainedLines.joined(separator: "\n") + "\n"
+    }
+
+    private static func makeTimestampFormatter() -> DateFormatter {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
-        return formatter.string(from: Date())
+        return formatter
+    }
+
+    private static func timestamp(for date: Date) -> String {
+        makeTimestampFormatter().string(from: date)
     }
 }

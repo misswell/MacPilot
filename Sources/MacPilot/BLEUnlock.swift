@@ -369,6 +369,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var latestRSSIs: [Double] = []
     private let latestN = 5
     private var hasPasswordCache: Bool?
+    private var lastLoggedRSSIAt = Date.distantPast
+    private var lastLoggedRSSI: Int?
+    private var lastLoggedRSSIErrorAt = Date.distantPast
 
     private var displaySleep = false
     private var systemSleep = false
@@ -385,6 +388,30 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var mrSendCommand: (@convention(c) (Int32, AnyObject?) -> Bool)?
     private var mrGetPlaying: (@convention(c) (DispatchQueue, @convention(block) (Bool) -> Void) -> Void)?
 
+    private func log(_ message: @autoclosure () -> String) {
+        DiagnosticLog.write("BLEUnlock", message())
+    }
+
+    private func logMonitoredRSSI(raw: Int, estimated: Int) {
+        let now = Date()
+        let changedEnough = lastLoggedRSSI.map { abs($0 - estimated) >= 5 } ?? true
+        guard changedEnough || now.timeIntervalSince(lastLoggedRSSIAt) >= 5 else { return }
+        lastLoggedRSSIAt = now
+        lastLoggedRSSI = estimated
+        log("RSSI sample raw=\(raw) estimated=\(estimated) presence=\(presence) active=\(activeMode) connected=\(connected) displaySleep=\(displaySleep) systemSleep=\(systemSleep)")
+    }
+
+    private func logRSSIError(_ error: Error?) {
+        let now = Date()
+        guard now.timeIntervalSince(lastLoggedRSSIErrorAt) >= 5 else { return }
+        lastLoggedRSSIErrorAt = now
+        log("RSSI read failed error=\(error?.localizedDescription ?? "unknown") presence=\(presence) connected=\(connected)")
+    }
+
+    private func logSettings(_ event: String) {
+        log("\(event) enabled=\(settings.isEnabled) device=\(settings.monitoredDeviceName ?? "?") uuid=\(monitoredUUID?.uuidString ?? settings.monitoredDeviceUUID ?? "none") lockRSSI=\(settings.lockRSSI) unlockRSSI=\(settings.unlockRSSI) signalTimeout=\(settings.signalTimeout) wakeOnProximity=\(settings.wakeOnProximity) wakeWithoutUnlocking=\(settings.wakeWithoutUnlocking) passive=\(settings.passiveMode)")
+    }
+
     // MARK: Settings mutations
 
     private func notifyChange() {
@@ -394,6 +421,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
     func setEnabled(_ enabled: Bool) {
         guard settings.isEnabled != enabled else { return }
+        log("setEnabled from=\(settings.isEnabled) to=\(enabled)")
         settings.isEnabled = enabled
         if enabled {
             if let uuid = monitoredUUID {
@@ -409,7 +437,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     func activateFromConfiguration() {
-        guard settings.isEnabled else { return }
+        guard settings.isEnabled else {
+            logSettings("configuration activation skipped")
+            return
+        }
+        logSettings("configuration activation")
         // Do not create CBCentralManager during launch while Bluetooth access
         // is still undecided.  Creating it here makes every newly installed
         // or identity-mismatched build prompt before the user asks to use BLE.
@@ -417,18 +449,19 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         if let uuid = monitoredUUID { startMonitor(uuid) }
     }
 
-    func setLockRSSI(_ value: Int) { settings.lockRSSI = value; notifyChange() }
-    func setUnlockRSSI(_ value: Int) { settings.unlockRSSI = value; notifyChange() }
-    func setProximityTimeout(_ value: Int) { settings.proximityTimeout = value; notifyChange() }
-    func setSignalTimeout(_ value: Int) { settings.signalTimeout = value; notifyChange() }
-    func setThresholdRSSI(_ value: Int) { settings.thresholdRSSI = value; notifyChange() }
-    func setWakeOnProximity(_ value: Bool) { settings.wakeOnProximity = value; notifyChange() }
-    func setWakeWithoutUnlocking(_ value: Bool) { settings.wakeWithoutUnlocking = value; notifyChange() }
-    func setPauseNowPlaying(_ value: Bool) { settings.pauseNowPlaying = value; notifyChange() }
-    func setUseScreensaver(_ value: Bool) { settings.useScreensaver = value; notifyChange() }
-    func setTurnOffScreen(_ value: Bool) { settings.turnOffScreen = value; notifyChange() }
+    func setLockRSSI(_ value: Int) { log("setLockRSSI from=\(settings.lockRSSI) to=\(value)"); settings.lockRSSI = value; notifyChange() }
+    func setUnlockRSSI(_ value: Int) { log("setUnlockRSSI from=\(settings.unlockRSSI) to=\(value)"); settings.unlockRSSI = value; notifyChange() }
+    func setProximityTimeout(_ value: Int) { log("setProximityTimeout from=\(settings.proximityTimeout) to=\(value)"); settings.proximityTimeout = value; notifyChange() }
+    func setSignalTimeout(_ value: Int) { log("setSignalTimeout from=\(settings.signalTimeout) to=\(value)"); settings.signalTimeout = value; notifyChange() }
+    func setThresholdRSSI(_ value: Int) { log("setThresholdRSSI from=\(settings.thresholdRSSI) to=\(value)"); settings.thresholdRSSI = value; notifyChange() }
+    func setWakeOnProximity(_ value: Bool) { log("setWakeOnProximity from=\(settings.wakeOnProximity) to=\(value)"); settings.wakeOnProximity = value; notifyChange() }
+    func setWakeWithoutUnlocking(_ value: Bool) { log("setWakeWithoutUnlocking from=\(settings.wakeWithoutUnlocking) to=\(value)"); settings.wakeWithoutUnlocking = value; notifyChange() }
+    func setPauseNowPlaying(_ value: Bool) { log("setPauseNowPlaying from=\(settings.pauseNowPlaying) to=\(value)"); settings.pauseNowPlaying = value; notifyChange() }
+    func setUseScreensaver(_ value: Bool) { log("setUseScreensaver from=\(settings.useScreensaver) to=\(value)"); settings.useScreensaver = value; notifyChange() }
+    func setTurnOffScreen(_ value: Bool) { log("setTurnOffScreen from=\(settings.turnOffScreen) to=\(value)"); settings.turnOffScreen = value; notifyChange() }
 
     func setPassiveMode(_ value: Bool) {
+        log("setPassiveMode from=\(settings.passiveMode) to=\(value)")
         settings.passiveMode = value
         applyPassiveMode()
         notifyChange()
@@ -437,6 +470,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     func selectDevice(_ uuid: UUID) {
         deviceMap[uuid]?.resolveIdentity()
         let selectedName = deviceMap[uuid]?.displayName
+        log("selectDevice uuid=\(uuid.uuidString) name=\(selectedName ?? "?") rssi=\(deviceMap[uuid]?.rssi ?? 0)")
         stopScanning()
         settings.monitoredDeviceUUID = uuid.uuidString
         settings.monitoredDeviceName = selectedName
@@ -453,22 +487,32 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             monitoredUUID = uuid
         }
         objectWillChange.send()
+        logSettings("settings loaded")
     }
 
     // MARK: Lifecycle
 
     func ensureCentralManager(explicitUserAction: Bool = false) {
-        guard centralMgr == nil else { return }
+        guard centralMgr == nil else {
+            log("central manager already exists state=\(String(describing: centralMgr?.state))")
+            return
+        }
+        let authorization = CBManager.authorization
         guard BLEUnlockAuthorizationGate.shouldInitializeCentralManager(
-            authorization: CBManager.authorization,
+            authorization: authorization,
             settingsEnabled: settings.isEnabled,
             hasMonitoredDevice: monitoredUUID != nil,
             explicitUserAction: explicitUserAction
-        ) else { return }
+        ) else {
+            log("central manager creation skipped authorization=\(String(describing: authorization)) enabled=\(settings.isEnabled) hasDevice=\(monitoredUUID != nil) explicitUserAction=\(explicitUserAction)")
+            return
+        }
+        log("creating central manager authorization=\(String(describing: authorization)) explicitUserAction=\(explicitUserAction)")
         centralMgr = CBCentralManager(delegate: self, queue: nil, options: [CBCentralManagerOptionShowPowerAlertKey: false])
     }
 
     func startScanning() {
+        log("startScanning")
         ensureCentralManager(explicitUserAction: true)
         isScanning = true
         startScanCleanupTimer()
@@ -476,6 +520,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     func stopScanning() {
+        log("stopScanning devices=\(deviceMap.count) monitored=\(monitoredUUID != nil)")
         isScanning = false
         scanCleanupTimer?.invalidate()
         scanCleanupTimer = nil
@@ -484,6 +529,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     private func stopMonitoring() {
+        log("stopMonitoring")
         isScanning = false
         activeModeTimer?.invalidate(); activeModeTimer = nil
         proximityTimer?.invalidate(); proximityTimer = nil
@@ -519,7 +565,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     private func scanForPeripherals() {
-        guard let central = centralMgr, central.state == .poweredOn, !central.isScanning else { return }
+        guard let central = centralMgr else {
+            log("scan skipped reason=noCentralManager")
+            return
+        }
+        guard central.state == .poweredOn else {
+            log("scan skipped reason=bluetoothState state=\(String(describing: central.state))")
+            return
+        }
+        guard !central.isScanning else { return }
+        log("scan started monitored=\(monitoredUUID?.uuidString ?? "none")")
         central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
     }
 
@@ -532,6 +587,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     func startMonitor(_ uuid: UUID) {
+        log("startMonitor uuid=\(uuid.uuidString) previousPresence=\(presence)")
         cancelUnlockAttempt()
         if let p = monitoredPeripheral { centralMgr?.cancelPeripheralConnection(p) }
         monitoredUUID = uuid
@@ -541,6 +597,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         monitoredPeripheral = nil
         activeModeTimer?.invalidate(); activeModeTimer = nil
         scanForPeripherals()
+        logSettings("monitoring started")
     }
 
     private func resetSignalTimer() {
@@ -548,6 +605,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         signalTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(settings.signalTimeout), repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                self.log("signal timeout fired timeout=\(self.settings.signalTimeout) presence=\(self.presence) lastRSSI=\(self.lastRSSI.map(String.init) ?? "none")")
                 self.lastRSSI = nil
                 self.connected = false
                 self.activeMode = false
@@ -570,6 +628,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private func updateMonitoredPeripheral(_ rssi: Int) {
         let unlockThreshold = settings.unlockRSSI == Self.unlockDisabled ? settings.lockRSSI : settings.unlockRSSI
         if rssi >= unlockThreshold && !presence {
+            log("RSSI crossed unlock threshold raw=\(rssi) threshold=\(unlockThreshold) previousPresence=false")
             presence = true
             updatePresence(presence: true, reason: "close")
             latestRSSIs.removeAll()
@@ -578,15 +637,21 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         let estimated = estimatedRSSI(rssi)
         lastRSSI = estimated
         activeMode = activeModeTimer != nil
+        logMonitoredRSSI(raw: rssi, estimated: estimated)
 
         let lockThreshold = settings.lockRSSI == Self.lockDisabled ? settings.unlockRSSI : settings.lockRSSI
         if estimated >= lockThreshold {
+            if proximityTimer != nil {
+                log("RSSI recovered above lock threshold estimated=\(estimated) threshold=\(lockThreshold); cancelling away timer")
+            }
             proximityTimer?.invalidate()
             proximityTimer = nil
         } else if presence && proximityTimer == nil {
+            log("RSSI below lock threshold estimated=\(estimated) threshold=\(lockThreshold); scheduling away timer seconds=\(settings.proximityTimeout)")
             proximityTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(settings.proximityTimeout), repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
+                    self.log("away timer fired estimatedRSSI=\(self.lastRSSI.map(String.init) ?? "none")")
                     self.presence = false
                     self.updatePresence(presence: false, reason: "away")
                     self.proximityTimer = nil
@@ -609,6 +674,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         let cutoff = Date().addingTimeInterval(-TimeInterval(settings.signalTimeout))
         let stale = deviceMap.values.filter { $0.lastSeenAt < cutoff }
         guard !stale.isEmpty else { return }
+        log("removing stale devices count=\(stale.count) timeout=\(settings.signalTimeout)")
         for device in stale {
             deviceMap.removeValue(forKey: device.uuid)
             if let peripheral = device.peripheral { centralMgr?.cancelPeripheralConnection(peripheral) }
@@ -639,7 +705,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     private func connectMonitoredPeripheral() {
-        guard let p = monitoredPeripheral else { return }
+        guard let p = monitoredPeripheral else {
+            log("connect skipped reason=noMonitoredPeripheral")
+            return
+        }
+        log("connect monitored peripheral state=\(String(describing: p.state)) passive=\(settings.passiveMode)")
         p.readRSSI()
         guard p.state == .disconnected else { return }
         centralMgr?.connect(p, options: nil)
@@ -656,12 +726,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     // MARK: CBCentralManagerDelegate
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        log("central state updated state=\(String(describing: central.state)) authorization=\(String(describing: CBManager.authorization))")
         switch central.state {
         case .poweredOn:
             bluetoothPoweredOn = true
             bluetoothPowerWarned = false
             if monitoredUUID != nil || isScanning { scanForPeripherals() }
         case .poweredOff:
+            log("bluetooth powered off; clearing presence")
             bluetoothPoweredOn = false
             presence = false
             signalTimer?.invalidate(); signalTimer = nil
@@ -669,6 +741,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 bluetoothPowerWarned = true
             }
         default:
+            log("bluetooth unavailable state=\(String(describing: central.state))")
             break
         }
     }
@@ -677,7 +750,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         let rssi = RSSI.intValue > 0 ? 0 : RSSI.intValue
 
         if let uuid = monitoredUUID, peripheral.identifier == uuid {
+            let firstDiscovery = monitoredPeripheral == nil
             if monitoredPeripheral == nil { monitoredPeripheral = peripheral }
+            if firstDiscovery {
+                log("monitored peripheral discovered rssi=\(rssi) passive=\(settings.passiveMode)")
+            }
             if activeModeTimer == nil {
                 updateMonitoredPeripheral(rssi)
                 if !settings.passiveMode { connectMonitoredPeripheral() }
@@ -708,6 +785,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         device.advertisementData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
         if peripheral.name == nil, rssi >= -60 { device.resolveIdentity() }
         deviceMap[peripheral.identifier] = device
+        log("device discovered uuid=\(peripheral.identifier.uuidString) name=\(peripheral.name ?? device.bluetoothName ?? "unknown") rssi=\(rssi) visibleCount=\(deviceMap.count)")
         if device.bluetoothName == nil, peripheral.name == nil, rssi >= -55 {
             central.connect(peripheral, options: nil)
         }
@@ -715,7 +793,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        log("peripheral connected monitored=\(peripheral === monitoredPeripheral) state=\(String(describing: peripheral.state))")
         guard isScanning || peripheral === monitoredPeripheral else {
+            log("connected peripheral cancelled because it is not monitored or scanning")
             central.cancelPeripheralConnection(peripheral)
             peripheral.delegate = nil
             return
@@ -728,10 +808,22 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         }
     }
 
+    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        log("peripheral connection failed monitored=\(peripheral === monitoredPeripheral) error=\(error?.localizedDescription ?? "unknown")")
+    }
+
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        log("peripheral disconnected monitored=\(peripheral === monitoredPeripheral) error=\(error?.localizedDescription ?? "none")")
+        if peripheral === monitoredPeripheral {
+            connected = false
+        }
+    }
+
     // MARK: CBPeripheralDelegate
 
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
         guard peripheral == monitoredPeripheral else { return }
+        if let error { logRSSIError(error) }
         let rssi = RSSI.intValue > 0 ? 0 : RSSI.intValue
         updateMonitoredPeripheral(rssi)
 
@@ -751,18 +843,29 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        if let error {
+            log("service discovery failed error=\(error.localizedDescription)")
+        } else {
+            log("service discovery completed serviceCount=\(peripheral.services?.count ?? 0)")
+        }
         for service in peripheral.services ?? [] where service.uuid == deviceInformationUUID {
             peripheral.discoverCharacteristics([manufacturerNameUUID, modelNameUUID], for: service)
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        if let error {
+            log("characteristic discovery failed service=\(service.uuid.uuidString) error=\(error.localizedDescription)")
+        }
         for chara in service.characteristics ?? [] where chara.uuid == manufacturerNameUUID || chara.uuid == modelNameUUID {
             peripheral.readValue(for: chara)
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        if let error {
+            log("characteristic value update failed characteristic=\(characteristic.uuid.uuidString) error=\(error.localizedDescription)")
+        }
         guard let value = characteristic.value, let str = String(data: value, encoding: .utf8) else { return }
         guard let device = deviceMap[peripheral.identifier] else { return }
         if characteristic.uuid == manufacturerNameUUID { device.manufacturer = str }
@@ -774,13 +877,18 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        log("peripheral services modified invalidated=\(invalidatedServices.map { $0.uuid.uuidString }.joined(separator: ","))")
         peripheral.discoverServices([deviceInformationUUID])
     }
 
     // MARK: Screen control
 
     func lockNow() {
-        guard !isScreenLocked() else { return }
+        guard !isScreenLocked() else {
+            log("manual lock skipped reason=alreadyLocked")
+            return
+        }
+        log("manual lock requested")
         manualLock = true
         cancelUnlockAttempt()
         pauseNowPlaying()
@@ -788,6 +896,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     private func lockOrSaveScreen() {
+        log("locking screen useScreensaver=\(settings.useScreensaver) turnOffScreen=\(settings.turnOffScreen)")
         if settings.useScreensaver {
             NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/ScreenSaverEngine.app"))
         } else {
@@ -804,10 +913,24 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         return false
     }
 
-    private func tryUnlockScreen() {
-        guard !manualLock, presence,
-              settings.unlockRSSI != Self.unlockDisabled,
-              !systemSleep else { return }
+    private func tryUnlockScreen(trigger: String = "unspecified") {
+        if manualLock {
+            log("unlock skipped trigger=\(trigger) reason=manualLock")
+            return
+        }
+        guard presence else {
+            log("unlock skipped trigger=\(trigger) reason=notPresent")
+            return
+        }
+        guard settings.unlockRSSI != Self.unlockDisabled else {
+            log("unlock skipped trigger=\(trigger) reason=unlockRSSIDisabled")
+            return
+        }
+        guard !systemSleep else {
+            log("unlock skipped trigger=\(trigger) reason=systemSleep")
+            return
+        }
+        log("unlock requested trigger=\(trigger) displaySleep=\(displaySleep) inScreensaver=\(inScreensaver) lastRSSI=\(lastRSSI.map(String.init) ?? "none")")
 
         if inScreensaver {
             let src = CGEventSource(stateID: .hidSystemState)
@@ -815,12 +938,15 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: false)?.post(tap: .cghidEventTap)
         }
 
-        guard !settings.wakeWithoutUnlocking else { return }
+        guard !settings.wakeWithoutUnlocking else {
+            log("unlock skipped trigger=\(trigger) reason=wakeWithoutUnlocking")
+            return
+        }
 
         // Do not make the unlock depend on a single display-wake notification.
         // A keyboard wake can make the display usable before AppKit delivers
         // `screensDidWake`, and the opposite ordering is also possible.
-        scheduleUnlockAttempt()
+        scheduleUnlockAttempt(trigger: trigger)
     }
 
     private func displayIsReadyForUnlock() -> Bool {
@@ -829,6 +955,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         // pressing a key. Query the display as well so that wake recovery can
         // proceed even when that notification was missed.
         let isAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
+        log("display readiness checked asleep=\(isAsleep) notificationSleep=\(displaySleep) systemSleep=\(systemSleep)")
         if !isAsleep, displaySleep {
             // Repair the notification-derived state as soon as the display
             // proves that it has actually woken.
@@ -839,16 +966,23 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         return !isAsleep
     }
 
-    private func cancelUnlockAttempt() {
+    private func cancelUnlockAttempt(reason: String = "unspecified") {
+        if unlockAttemptTask != nil {
+            log("unlock attempt cancelled reason=\(reason)")
+        }
         unlockAttemptGeneration &+= 1
         unlockAttemptTask?.cancel()
         unlockAttemptTask = nil
     }
 
-    private func scheduleUnlockAttempt() {
-        guard unlockAttemptTask == nil else { return }
+    private func scheduleUnlockAttempt(trigger: String) {
+        guard unlockAttemptTask == nil else {
+            log("unlock attempt already scheduled trigger=\(trigger)")
+            return
+        }
 
         let generation = unlockAttemptGeneration
+        log("unlock attempt scheduled trigger=\(trigger) deadlines=\(BLEUnlockAttemptPlan.standard.deadlines)")
         unlockAttemptTask = Task { [weak self] in
             var previousDeadline: TimeInterval = 0
             for deadline in BLEUnlockAttemptPlan.standard.deadlines {
@@ -856,16 +990,24 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 if wait > 0 {
                     try? await Task.sleep(for: .milliseconds(Int64(wait * 1_000)))
                 }
-                guard !Task.isCancelled, let self,
-                      self.unlockAttemptGeneration == generation,
-                      !self.manualLock, self.presence,
+                guard !Task.isCancelled, let self else { return }
+                guard self.unlockAttemptGeneration == generation else {
+                    self.log("unlock attempt stopped deadline=\(deadline) reason=generationChanged")
+                    return
+                }
+                guard !self.manualLock, self.presence,
                       self.settings.unlockRSSI != Self.unlockDisabled,
                       !self.settings.wakeWithoutUnlocking,
-                      !self.systemSleep else { return }
+                      !self.systemSleep else {
+                    self.log("unlock attempt stopped deadline=\(deadline) reason=stateChanged manualLock=\(self.manualLock) presence=\(self.presence) systemSleep=\(self.systemSleep)")
+                    return
+                }
+                self.log("unlock attempt checking deadline=\(deadline)")
 
                 // Keep waiting while the display is genuinely asleep. This
                 // handles both proximity-wake and a later keyboard wake.
                 if !self.displayIsReadyForUnlock() {
+                    self.log("unlock attempt deferred deadline=\(deadline) reason=displayAsleep")
                     previousDeadline = deadline
                     continue
                 }
@@ -873,26 +1015,37 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 // If the display is awake and the session is already unlocked,
                 // this was only a late wake notification; never type into the
                 // user's active application.
-                guard self.isScreenLocked() else { return }
+                guard self.isScreenLocked() else {
+                    self.log("unlock attempt stopped deadline=\(deadline) reason=sessionAlreadyUnlocked")
+                    return
+                }
 
-                guard let password = self.fetchPassword(warn: true) else { return }
+                guard let password = self.fetchPassword(warn: true) else {
+                    self.log("unlock attempt stopped deadline=\(deadline) reason=passwordUnavailable")
+                    return
+                }
+                self.log("posting unlock key events deadline=\(deadline)")
                 self.unlockedAt = Date().timeIntervalSince1970
                 self.fakeKeyStrokes(password)
                 self.playNowPlaying()
                 self.runScript("unlocked")
                 self.unlockAttemptTask = nil
+                self.log("unlock key events posted deadline=\(deadline)")
                 return
             }
 
             guard let self, self.unlockAttemptGeneration == generation else { return }
             self.unlockAttemptTask = nil
+            self.log("unlock attempt exhausted without unlock")
         }
     }
 
     func updatePresence(presence: Bool, reason: String) {
+        log("presence handler value=\(presence) reason=\(reason) currentState=\(self.presence) lastRSSI=\(lastRSSI.map(String.init) ?? "none") displaySleep=\(displaySleep) systemSleep=\(systemSleep)")
         if presence {
             if settings.unlockRSSI != Self.unlockDisabled {
                 if displaySleep && !systemSleep && settings.wakeOnProximity {
+                    log("waking display due to proximity reason=\(reason)")
                     bleWakeDisplay()
                     wakeRetryTask?.cancel()
                     wakeRetryTask = Task { [weak self] in
@@ -904,23 +1057,30 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                             bleWakeDisplay()
                         }
                         self?.wakeRetryTask = nil
+                        self?.log("display wake retry task finished")
                     }
                 }
-                tryUnlockScreen()
+                tryUnlockScreen(trigger: "presence-\(reason)")
+            } else {
+                log("presence close observed but auto-unlock is disabled")
             }
         } else {
             wakeRetryTask?.cancel(); wakeRetryTask = nil
-            cancelUnlockAttempt()
+            cancelUnlockAttempt(reason: "presence-\(reason)")
             if !isScreenLocked() && settings.lockRSSI != Self.lockDisabled {
+                log("locking due to presence loss reason=\(reason)")
                 pauseNowPlaying()
                 lockOrSaveScreen()
                 runScript(reason)
+            } else {
+                log("presence loss did not lock screen alreadyLocked=\(isScreenLocked()) lockRSSIDisabled=\(settings.lockRSSI == Self.lockDisabled)")
             }
             manualLock = false
         }
     }
 
     private func fakeKeyStrokes(_ string: String) {
+        log("posting password key events")
         let src = CGEventSource(stateID: .hidSystemState)
         let per = 20
         let utf16 = string.utf16
@@ -964,6 +1124,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     func storePassword(_ password: String) -> Bool {
         let data = password.data(using: .utf8) ?? Data()
         let status = storePasswordData(data, service: keychainService)
+        log("password stored in keychain success=\(status)")
         hasPasswordCache = status
         objectWillChange.send()
         return status
@@ -983,6 +1144,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     func fetchPassword(warn: Bool = false) -> String? {
+        if warn {
+            log("keychain password lookup started services=\(keychainServices.joined(separator: ","))")
+        }
         for service in keychainServices {
             let query: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
@@ -994,15 +1158,22 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             var item: AnyObject?
             let status = SecItemCopyMatching(query as CFDictionary, &item)
             guard status != errSecItemNotFound else { continue }
+            log("keychain lookup service=\(service) status=\(status)")
             guard status == errSecSuccess, let data = item as? Data,
                   let password = String(data: data, encoding: .utf8) else { continue }
             if service != keychainService {
                 _ = storePasswordData(data, service: keychainService)
             }
             hasPasswordCache = true
+            if warn {
+                log("keychain password lookup succeeded service=\(service)")
+            }
             return password
         }
         hasPasswordCache = false
+        if warn {
+            log("keychain password lookup failed reason=notFoundOrInaccessible")
+        }
         return nil
     }
 
@@ -1047,11 +1218,19 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         bundleIdentifiers.append(contentsOf: AppIdentity.knownBundleIdentifiers.filter { !bundleIdentifiers.contains($0) })
         guard let file = bundleIdentifiers
             .map({ scriptsDirectory.appendingPathComponent($0).appendingPathComponent("event") })
-            .first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else { return }
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
+            log("event script not found arg=\(arg)")
+            return
+        }
         let process = Process()
         process.executableURL = file
         process.arguments = lastRSSI.map { [arg, String($0)] } ?? [arg]
-        try? process.run()
+        do {
+            try process.run()
+            log("event script started arg=\(arg) path=\(file.path)")
+        } catch {
+            log("event script failed arg=\(arg) error=\(error.localizedDescription)")
+        }
     }
 
     // MARK: Display / system observers
@@ -1059,6 +1238,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var observers: [NSObjectProtocol] = []
 
     func handleSystemWillSleep() {
+        log("system will sleep presence=\(presence) lastRSSI=\(lastRSSI.map(String.init) ?? "none") monitored=\(monitoredUUID != nil)")
         systemSleep = true
         recoveringFromSystemSleep = true
         wakeRetryTask?.cancel(); wakeRetryTask = nil
@@ -1076,7 +1256,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     private func prepareMonitoringForWakeRecovery() {
-        guard settings.isEnabled, monitoredUUID != nil else { return }
+        guard settings.isEnabled, monitoredUUID != nil else {
+            log("wake recovery preparation skipped enabled=\(settings.isEnabled) monitored=\(monitoredUUID != nil)")
+            return
+        }
+        log("preparing monitoring for system wake recovery")
 
         activeModeTimer?.invalidate(); activeModeTimer = nil
         proximityTimer?.invalidate(); proximityTimer = nil
@@ -1096,12 +1280,20 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         lastRSSI = nil
         connected = false
         activeMode = false
+        log("monitoring reset for system wake recovery")
     }
 
     private func restartMonitoringAfterWake() {
-        guard settings.isEnabled, let uuid = monitoredUUID else { return }
+        guard settings.isEnabled, let uuid = monitoredUUID else {
+            log("monitoring restart after wake skipped enabled=\(settings.isEnabled) monitored=\(monitoredUUID != nil)")
+            return
+        }
+        log("restarting monitoring after system wake")
         ensureCentralManager()
-        guard let central = centralMgr, central.state == .poweredOn else { return }
+        guard let central = centralMgr, central.state == .poweredOn else {
+            log("monitoring restart after wake deferred centralState=\(String(describing: centralMgr?.state))")
+            return
+        }
 
         if monitoredPeripheral == nil,
            let peripheral = central.retrievePeripherals(withIdentifiers: [uuid]).first {
@@ -1118,6 +1310,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     func startSystemWakeRecovery(using plan: BLEWakeRecoveryPlan) {
+        log("system wake recovery scheduled monitoringDelays=\(plan.monitoringRestartDelays) unlockDelays=\(plan.unlockRetryDelays)")
         recoveringFromSystemSleep = true
         systemWakeRecoveryTask?.cancel()
         systemWakeRecoveryTask = Task { [weak self] in
@@ -1130,27 +1323,31 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                     try? await Task.sleep(for: .milliseconds(Int64(wait * 1_000)))
                 }
                 guard !Task.isCancelled, let self else { return }
+                self.log("system wake recovery deadline reached deadline=\(deadline) lastRSSI=\(self.lastRSSI.map(String.init) ?? "none") presence=\(self.presence)")
 
                 if plan.monitoringRestartDelays.contains(deadline), self.lastRSSI == nil {
                     self.restartMonitoringAfterWake()
                 }
                 if plan.unlockRetryDelays.contains(deadline) {
-                    self.tryUnlockScreen()
+                    self.tryUnlockScreen(trigger: "systemWakeRecovery-\(deadline)")
                 }
                 previousDeadline = deadline
             }
             self?.recoveringFromSystemSleep = false
             self?.systemWakeRecoveryTask = nil
-            self?.tryUnlockScreen()
+            self?.log("system wake recovery finished")
+            self?.tryUnlockScreen(trigger: "systemWakeRecovery-finished")
         }
     }
 
     private func handleSystemDidWake() {
+        log("system did wake")
         systemSleep = false
         guard let plan = BLEWakeRecoveryPlan.make(
             isEnabled: settings.isEnabled,
             hasMonitoredDevice: monitoredUUID != nil
         ) else {
+            log("system wake recovery not needed enabled=\(settings.isEnabled) monitored=\(monitoredUUID != nil)")
             recoveringFromSystemSleep = false
             return
         }
@@ -1160,20 +1357,34 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     func startObservingSystemState() {
-        guard observers.isEmpty else { return }
+        guard observers.isEmpty else {
+            log("system observers already installed count=\(observers.count)")
+            return
+        }
+        log("installing system observers")
         let nc = NSWorkspace.shared.notificationCenter
-        observers.append(nc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.displaySleep = true } })
+        observers.append(nc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.displaySleep = true
+                self.log("display sleep notification received")
+            }
+        })
         observers.append(nc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
+                self?.log("display wake notification received")
                 self?.displaySleep = false
                 self?.recoveringFromSystemSleep = false
                 self?.wakeRetryTask?.cancel()
-                self?.tryUnlockScreen()
+                self?.tryUnlockScreen(trigger: "screensDidWake")
             }
         })
-        observers.append(nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.handleSystemWillSleep() } })
+        observers.append(nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleSystemWillSleep() }
+        })
         observers.append(nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
+                self?.log("system wake notification received")
                 self?.handleSystemDidWake()
             }
         })
@@ -1182,15 +1393,29 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 guard let self else { return }
+                self.log("screen unlocked notification received unlockedAt=\(self.unlockedAt)")
                 if Date().timeIntervalSince1970 >= self.unlockedAt + 10 {
                     if self.settings.unlockRSSI != Self.unlockDisabled { self.runScript("intruded") }
                     self.playNowPlaying()
+                    self.log("screen unlock classified as external or manual")
+                } else {
+                    self.log("screen unlock classified as automatic")
                 }
                 self.manualLock = false
             }
         })
-        observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screensaver.didstart"), object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.inScreensaver = true } })
-        observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screensaver.didstop"), object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.inScreensaver = false } })
+        observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screensaver.didstart"), object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.inScreensaver = true
+                self?.log("screensaver started")
+            }
+        })
+        observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screensaver.didstop"), object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.inScreensaver = false
+                self?.log("screensaver stopped")
+            }
+        })
     }
 }
 
