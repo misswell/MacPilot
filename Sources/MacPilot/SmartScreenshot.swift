@@ -6,9 +6,11 @@ import Carbon.HIToolbox
 import CoreGraphics
 import CoreImage
 import Darwin
+import ImageIO
 import OSLog
 @preconcurrency import ScreenCaptureKit
 import SwiftUI
+import UniformTypeIdentifiers
 import Vision
 
 struct SmartCaptureElement: Equatable, Sendable {
@@ -405,11 +407,96 @@ struct SmartCaptureSelectionState: Equatable, Sendable {
 }
 
 enum SmartCaptureClipboard {
-    static func copy(image: CGImage, to pasteboard: NSPasteboard = .general) {
-        let representation = NSBitmapImageRep(cgImage: image)
-        guard let data = representation.representation(using: .png, properties: [:]) else { return }
+    /// Put a file-backed, lazy image provider on the pasteboard.
+    ///
+    /// MacPilot keeps only the provider and its URL in memory. PNG bytes are
+    /// generated only when another application requests them, then released
+    /// after that request finishes.
+    static func copy(
+        image: CGImage,
+        to pasteboard: NSPasteboard = .general,
+        cacheURL: URL? = nil
+    ) {
+        let sourceURL = autoreleasepool {
+            ScreenCaptureClipboardCache.write(image, to: cacheURL)
+        }
+        guard let sourceURL else { return }
+        copy(imageURL: sourceURL, to: pasteboard)
+    }
+
+    /// Copy an image file without loading its full contents into long-lived
+    /// application state. The source file is retained by URL only.
+    static func copy(imageURL: URL, to pasteboard: NSPasteboard = .general) {
+        guard FileManager.default.fileExists(atPath: imageURL.path) else { return }
+        let provider = FileBackedClipboardImageProvider(sourceURL: imageURL)
+        let item = NSPasteboardItem()
+        guard item.setDataProvider(provider, forTypes: [.png]) else { return }
+
         pasteboard.clearContents()
-        pasteboard.setData(data, forType: .png)
+        // ClipboardMonitor recognizes this marker and will not re-ingest
+        // MacPilot's own screenshot copy as a new history entry.
+        item.setString("", forType: .fromMaccy)
+        _ = pasteboard.writeObjects([item])
+    }
+}
+
+private enum ScreenCaptureClipboardCache {
+    private static let directory: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let directory = base.appendingPathComponent("MacPilot/Clipboard", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }()
+
+    private static let defaultURL = directory.appendingPathComponent("LastScreenCapture.png")
+
+    static func write(_ image: CGImage, to requestedURL: URL?) -> URL? {
+        let url = requestedURL ?? defaultURL
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        guard let destination = CGImageDestinationCreateWithURL(
+            url as CFURL,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+        return url
+    }
+}
+
+private final class FileBackedClipboardImageProvider: NSObject, NSPasteboardItemDataProvider {
+    private let sourceURL: URL
+
+    init(sourceURL: URL) {
+        self.sourceURL = sourceURL
+    }
+
+    func pasteboard(
+        _ pasteboard: NSPasteboard?,
+        item: NSPasteboardItem,
+        provideDataForType type: NSPasteboard.PasteboardType
+    ) {
+        guard type == .png,
+              let data = autoreleasepool(invoking: { pngData() }) else { return }
+        item.setData(data, forType: type)
+    }
+
+    private func pngData() -> Data? {
+        if sourceURL.pathExtension.caseInsensitiveCompare("png") == .orderedSame {
+            return try? Data(contentsOf: sourceURL, options: .mappedIfSafe)
+        }
+        guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            return nil
+        }
+        return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
     }
 }
 
@@ -3595,7 +3682,11 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     }
 
     private func copyImage() {
-        SmartCaptureClipboard.copy(image: image)
+        if let savedURL {
+            SmartCaptureClipboard.copy(imageURL: savedURL)
+        } else {
+            SmartCaptureClipboard.copy(image: image)
+        }
     }
 
     private func recognizeText() {

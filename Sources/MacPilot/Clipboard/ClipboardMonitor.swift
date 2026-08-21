@@ -138,6 +138,12 @@ final class ClipboardMonitor {
 
     @objc
     func checkForChangesInPasteboard() {
+        autoreleasepool {
+            checkForChangesInPasteboardWithinAutoreleasePool()
+        }
+    }
+
+    private func checkForChangesInPasteboardWithinAutoreleasePool() {
         guard !isSuspended else { return }
         guard pasteboard.changeCount != changeCount else { return }
 

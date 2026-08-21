@@ -11,6 +11,7 @@
 
 import AppKit
 import Foundation
+import ImageIO
 
 /// 剪贴板历史条目中的一段内容（一种 pasteboard type 及其原始数据）。
 ///
@@ -80,7 +81,7 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
         NSPasteboard.PasteboardType.notesRichText.rawValue
     ]
 
-    private static let imageTypes: [NSPasteboard.PasteboardType] = [.tiff, .png]
+    private static let imageTypes: [NSPasteboard.PasteboardType] = [.tiff, .png, .jpeg, .heic]
 
     /// 新条目是否完全包含既有条目的内容（用于合并重复复制）。
     /// 磁盘引用的内容按 (type, size) 比较，避免把不同的大图误判为重复。
@@ -98,7 +99,10 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
 
     /// 生成用于列表展示的标题。
     func generateTitle() -> String {
-        if image != nil {
+        // Do not resolve image data merely to decide whether this is an image.
+        // ClipboardMonitor calls this immediately after writing the image to
+        // disk, and decoding it here would recreate the memory spike.
+        if isImage {
             return ""
         }
 
@@ -139,6 +143,43 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
     var image: NSImage? {
         guard let data = imageData else { return nil }
         return NSImage(data: data)
+    }
+
+    var isImage: Bool {
+        contents.contains { content in
+            Self.imageTypes.contains(NSPasteboard.PasteboardType(content.type))
+        }
+    }
+
+    /// A bounded preview for the clipboard panel. The original image stays
+    /// file-backed and is never decoded just to render a 20px row thumbnail.
+    var thumbnailImage: NSImage? {
+        guard let content = contents.first(where: { content in
+            Self.imageTypes.contains(NSPasteboard.PasteboardType(content.type))
+        }) else { return nil }
+
+        let source: CGImageSource?
+        if let file = content.file {
+            source = CGImageSourceCreateWithURL(
+                ClipboardContentStore.fileURL(for: file) as CFURL,
+                nil
+            )
+        } else if let value = content.value {
+            source = CGImageSourceCreateWithData(value as CFData, nil)
+        } else {
+            source = nil
+        }
+        guard let source,
+              let image = CGImageSourceCreateThumbnailAtIndex(
+                  source,
+                  0,
+                  [
+                      kCGImageSourceCreateThumbnailFromImageAlways: true,
+                      kCGImageSourceCreateThumbnailWithTransform: true,
+                      kCGImageSourceThumbnailMaxPixelSize: 80
+                  ] as CFDictionary
+              ) else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 
     var rtfData: Data? { contentData([.rtf]) }

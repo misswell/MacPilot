@@ -802,7 +802,7 @@ private enum WindowSwitcherFocusedWindowResolver {
 @MainActor
 final class WindowSwitcherModel: ObservableObject {
     private static let inventoryRefreshDebounce = Duration.milliseconds(200)
-    private static let thumbnailCacheLimit = 24
+    private static let thumbnailCacheLimit = 12
     private static let thumbnailMaximumPixelSize = CGSize(width: 256, height: 160)
     private static let mouseSelectionDistanceThreshold: CGFloat = 24
     private static let performanceLogger = Logger(

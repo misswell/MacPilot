@@ -27,7 +27,29 @@ enum ClipboardContentStore {
     }
 
     static func read(file: String) -> Data? {
-        try? Data(contentsOf: directory.appendingPathComponent(file))
+        try? Data(contentsOf: fileURL(for: file))
+    }
+
+    static func fileURL(for file: String) -> URL {
+        directory.appendingPathComponent(file)
+    }
+
+    /// Replaces an inline value with a file reference when it is large enough
+    /// (or is an image). Callers should use this at the history boundary so a
+    /// producer cannot accidentally publish a large `Data` value into the
+    /// long-lived history model.
+    static func externalized(
+        _ content: ClipboardContent,
+        itemID: UUID,
+        index: Int
+    ) -> ClipboardContent {
+        guard content.file == nil,
+              let value = content.value,
+              shouldExternalizeContent(type: content.type, dataSize: value.count),
+              let file = write(value, itemID: itemID, index: index) else {
+            return content
+        }
+        return ClipboardContent(type: content.type, file: file, size: value.count)
     }
 
     /// 删除一个条目对应的所有内容文件（文件名以 `itemID-` 开头）。
@@ -43,6 +65,16 @@ enum ClipboardContentStore {
         guard let files = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return }
         for file in files where file.hasSuffix(".bin") {
             try? FileManager.default.removeItem(at: directory.appendingPathComponent(file))
+        }
+    }
+
+    /// Removes content files that are no longer referenced by the persisted
+    /// history. The screenshot pasteboard cache uses a different extension and
+    /// is intentionally left untouched.
+    static func deleteUnreferencedFiles(referencedFileNames: Set<String>) {
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return }
+        for file in files where file.hasSuffix(".bin") && !referencedFileNames.contains(file) {
+            try? FileManager.default.removeItem(at: fileURL(for: file))
         }
     }
 

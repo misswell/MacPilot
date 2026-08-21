@@ -71,8 +71,14 @@ final class ClipboardHistory: ObservableObject {
         // 旧版历史里图片/大数据是内联存进 JSON 的，加载时迁移到磁盘，
         // 之后内存只保留文件引用，彻底释放旧数据占用的内存。
         let migrated = migrateInlineContentToDisk()
-        if migrated { save() }
         trimToLimit()
+        if storageURL == Self.defaultStorageURL() {
+            let referencedFiles = Set(allItems.flatMap { item in
+                item.contents.compactMap(\.file)
+            })
+            ClipboardContentStore.deleteUnreferencedFiles(referencedFileNames: referencedFiles)
+        }
+        if migrated { save() }
         updateFilteredItems()
     }
 
@@ -83,13 +89,13 @@ final class ClipboardHistory: ObservableObject {
             var newContents = item.contents
             var itemChanged = false
             for (contentIndex, content) in newContents.enumerated() {
-                guard let value = content.value,
-                      content.file == nil,
-                      ClipboardContentStore.shouldExternalizeContent(type: content.type, dataSize: value.count) else {
-                    continue
-                }
-                if let file = ClipboardContentStore.write(value, itemID: item.id, index: contentIndex) {
-                    newContents[contentIndex] = ClipboardContent(type: content.type, file: file, size: value.count)
+                let externalized = ClipboardContentStore.externalized(
+                    content,
+                    itemID: item.id,
+                    index: contentIndex
+                )
+                if externalized != content {
+                    newContents[contentIndex] = externalized
                     itemChanged = true
                 }
             }
@@ -130,7 +136,9 @@ final class ClipboardHistory: ObservableObject {
     /// 新增一条历史记录（自动去重合并、按需裁剪、持久化）。
     @discardableResult
     func add(_ newItem: ClipboardItem) -> ClipboardItem {
-        var item = newItem
+        // Keep the published model index-like even when a caller bypasses
+        // ClipboardMonitor and supplies inline image/large data.
+        var item = externalizeInlineContent(in: newItem)
 
         if let existingIndex = allItems.firstIndex(where: { existing in
             existing.id != item.id && existing.supersedes(item)
@@ -143,6 +151,9 @@ final class ClipboardHistory: ObservableObject {
                 item.application = existing.application
             }
             allItems.remove(at: existingIndex)
+            // The new item owns its replacement files. Do not leave the
+            // discarded duplicate's image data orphaned in the cache.
+            ClipboardContentStore.delete(itemID: existing.id)
         }
 
         allItems.insert(item, at: 0)
@@ -259,6 +270,25 @@ final class ClipboardHistory: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    private func externalizeInlineContent(in item: ClipboardItem) -> ClipboardItem {
+        var contents = item.contents
+        var changed = false
+        for index in contents.indices {
+            let externalized = ClipboardContentStore.externalized(
+                contents[index],
+                itemID: item.id,
+                index: index
+            )
+            guard externalized != contents[index] else { continue }
+            contents[index] = externalized
+            changed = true
+        }
+        guard changed else { return item }
+        var updated = item
+        updated.contents = contents
+        return updated
+    }
 
     private func trimToLimit() {
         let unpinned = allItems.filter { !$0.isPinned }

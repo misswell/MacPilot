@@ -428,7 +428,7 @@ private struct ClipboardItemRow: View {
 
     @ViewBuilder
     private var thumbnail: some View {
-        if let image = item.image {
+        if let image = item.thumbnailImage {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)

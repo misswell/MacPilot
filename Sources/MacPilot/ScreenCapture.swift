@@ -1025,9 +1025,6 @@ final class ScreenCaptureModel: ObservableObject {
         displayIndex: Int? = nil,
         imageFormat: ScreenCaptureImageFormat? = nil
     ) {
-        if settings.copyAfterCapture {
-            SmartCaptureClipboard.copy(image: image)
-        }
         let configuration = ScreenCaptureSaveConfiguration(
             outputFolder: smartCaptureOutputFolder(),
             imageFormat: imageFormat ?? settings.imageFormat,
@@ -1084,12 +1081,21 @@ final class ScreenCaptureModel: ObservableObject {
                 )
                 self.captureHistory = Array(self.captureHistory.prefix(60))
                 SmartCaptureHistoryStore.save(self.captureHistory)
+                if self.settings.copyAfterCapture {
+                    SmartCaptureClipboard.copy(imageURL: saved.url)
+                }
                 self.errorMessage = nil
                 if self.settings.pinAfterCapture {
                     _ = await QuickAccessManager.shared.pinScreenshot(url: saved.url)
                 }
             } catch {
                 Self.logger.error("Smart capture save failed: \(error.localizedDescription, privacy: .public)")
+                if self?.settings.copyAfterCapture == true {
+                    // Preserve copy-after-capture even when the configured
+                    // output folder is unavailable; this path still writes a
+                    // disk-backed lazy pasteboard item.
+                    SmartCaptureClipboard.copy(image: image)
+                }
                 self?.errorMessage = error.localizedDescription
                 if self?.settings.showQuickAccess == true, quickAccessPreviewID == nil {
                     if let tempURL = TempCaptureManager.shared.saveScreenshot(image) {
@@ -1223,7 +1229,7 @@ final class ScreenCaptureModel: ObservableObject {
                 guard let self else { return }
                 self.lastCaptureSize = size
                 if self.settings.copyAfterCapture {
-                    SmartCaptureClipboard.copy(image: image)
+                    SmartCaptureClipboard.copy(imageURL: url)
                 }
             } catch {
                 self?.errorMessage = error.localizedDescription

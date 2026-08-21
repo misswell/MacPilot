@@ -151,4 +151,112 @@ struct ClipboardHistoryTests {
         #expect(item.imageData == imageData)
         #expect(item.image != nil)
     }
+
+    @Test func addingInlineLargeContentExternalizesItBeforePublishing() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipboard-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let id = UUID()
+        let data = Data(repeating: 0x5A, count: 128 * 1024)
+        let item = ClipboardItem(
+            id: id,
+            contents: [
+                ClipboardContent(
+                    type: NSPasteboard.PasteboardType.string.rawValue,
+                    value: data,
+                    size: data.count
+                )
+            ]
+        )
+        defer { ClipboardContentStore.delete(itemID: id) }
+
+        let history = makeHistory(url: url)
+        let added = history.add(item)
+        let content = try #require(added.contents.first)
+
+        #expect(content.value == nil)
+        #expect(content.file != nil)
+        #expect(content.size == data.count)
+        #expect(content.file.flatMap(ClipboardContentStore.read(file:)) == data)
+    }
+
+    @Test func mergingDuplicateRemovesDiscardedFileBackedContent() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipboard-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let firstID = UUID()
+        let secondID = UUID()
+        let firstFile = try #require(ClipboardContentStore.write(
+            Data(repeating: 0x11, count: 4 * 1024),
+            itemID: firstID,
+            index: 0
+        ))
+        let secondFile = try #require(ClipboardContentStore.write(
+            Data(repeating: 0x22, count: 4 * 1024),
+            itemID: secondID,
+            index: 0
+        ))
+        defer {
+            ClipboardContentStore.delete(itemID: firstID)
+            ClipboardContentStore.delete(itemID: secondID)
+        }
+
+        let first = ClipboardItem(id: firstID, contents: [
+            ClipboardContent(
+                type: NSPasteboard.PasteboardType.png.rawValue,
+                file: firstFile,
+                size: 4 * 1024
+            )
+        ])
+        let second = ClipboardItem(id: secondID, contents: [
+            ClipboardContent(
+                type: NSPasteboard.PasteboardType.png.rawValue,
+                file: secondFile,
+                size: 4 * 1024
+            )
+        ])
+
+        let history = makeHistory(url: url)
+        history.add(first)
+        history.add(second)
+
+        #expect(ClipboardContentStore.read(file: firstFile) == nil)
+        #expect(ClipboardContentStore.read(file: secondFile) != nil)
+    }
+
+    @Test func fileBackedImageThumbnailIsBoundedWithoutResolvingOriginalData() throws {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let context = try #require(CGContext(
+            data: nil,
+            width: 800,
+            height: 600,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(NSColor.systemBlue.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 800, height: 600))
+        let image = try #require(context.makeImage())
+        let data = try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+
+        let id = UUID()
+        let file = try #require(ClipboardContentStore.write(data, itemID: id, index: 0))
+        defer { ClipboardContentStore.delete(itemID: id) }
+
+        let item = ClipboardItem(id: id, contents: [
+            ClipboardContent(
+                type: NSPasteboard.PasteboardType.png.rawValue,
+                file: file,
+                size: data.count
+            )
+        ])
+        let thumbnail = try #require(item.thumbnailImage)
+
+        #expect(item.isImage)
+        #expect(thumbnail.pixelSize.width <= 80)
+        #expect(thumbnail.pixelSize.height <= 80)
+    }
 }

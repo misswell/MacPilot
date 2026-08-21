@@ -397,6 +397,7 @@ struct ScreenCaptureTests {
         let pasteboard = NSPasteboard(name: .init("MacPilotTests-\(UUID().uuidString)"))
         SmartCaptureClipboard.copy(image: try #require(context.makeImage()), to: pasteboard)
         #expect(pasteboard.data(forType: .png) != nil)
+        #expect(pasteboard.pasteboardItems?.contains { $0.types.contains(.fromMaccy) } == true)
     }
 
     @Test func displaySnapshotCropUsesRetinaScaleAndFlippedCoordinates() throws {
