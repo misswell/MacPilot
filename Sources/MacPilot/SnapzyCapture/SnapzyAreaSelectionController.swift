@@ -10,6 +10,7 @@
 
 import AppKit
 import Foundation
+import SwiftUI
 
 @MainActor
 final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate {
@@ -263,7 +264,15 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             }
             return
         }
-        if action == .adjustSelection || action == .more {
+        if action == .adjustSelection {
+            // Make the button observable and enter the same frame-editing
+            // state used by the resize handles.  Previously this branch was
+            // a no-op, so the button appeared dead even though the handles
+            // happened to work when grabbed directly.
+            selectedWindow?.overlayView.beginSelectionAdjustment()
+            return
+        }
+        if action == .more {
             // Adjustment is performed directly by dragging the frame/handles;
             // the More button is intentionally a non-terminal affordance until
             // its menu is implemented. Both actions must leave the selection
@@ -279,13 +288,51 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
 
     func areaSelectionWindow(_ window: AreaSelectionWindow, didChangeSelectionRect rect: CGRect) {
         guard selectedWindow === window,
-              selectedResult?.target.windowTarget == nil,
               let updated = result(for: .rect(rect), in: window) else { return }
         selectedResult = updated
         for candidate in windows {
             candidate.overlayView.updateSelectionResult(screenRect: updated.rect)
         }
         selectionPreview?(updated)
+    }
+
+    /// Installs the annotation editor directly over the selected frame.  The
+    /// editor is an NSView hosted by the existing full-screen selection panel;
+    /// no second centered annotation window is created.
+    @discardableResult
+    func presentInlineAnnotationEditor(
+        image: CGImage,
+        language: AppLanguage,
+        initialTool: AreaSelectionAnnotationTool,
+        onComplete: @escaping (CGImage) -> Void,
+        onCancel: @escaping () -> Void
+    ) -> Bool {
+        guard let selectedWindow, let selectedResult else { return false }
+        let model = SmartAnnotationModel(initialTool: initialTool.smartAnnotationTool)
+        let editor = NSHostingView(rootView: SmartAnnotationEditor(
+            image: image,
+            language: language,
+            model: model,
+            embedded: true,
+            onCancel: { [weak self] in
+                self?.dismissSelection()
+                onCancel()
+            },
+            onComplete: { [weak self] in
+                guard let self else { return }
+                guard let rendered = SmartAnnotationRenderer.render(
+                    image: image,
+                    annotations: model.annotations
+                ) else { return }
+                self.dismissSelection()
+                onComplete(rendered)
+            }
+        ))
+        selectedWindow.overlayView.showEmbeddedAnnotationEditor(
+            editor,
+            screenRect: selectedResult.rect
+        )
+        return true
     }
 
     func areaSelectionWindowDidCancel(_: AreaSelectionWindow) {

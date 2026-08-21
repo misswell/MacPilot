@@ -200,6 +200,76 @@ struct SnapzyCaptureTests {
         #expect(toolbar.frame.maxY < localSelection.minY || toolbar.frame.minY > localSelection.maxY)
     }
 
+    @Test @MainActor func adjustSelectionButtonEntersFrameEditingState() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+        let selectionRect = CGRect(
+            x: screen.frame.minX + 120,
+            y: screen.frame.minY + 160,
+            width: 320,
+            height: 220
+        )
+        var requestedAction: AreaSelectionAction?
+        window.overlayView.showSelectionResult(
+            screenRect: selectionRect,
+            showsActions: true,
+            actionHandler: { action in
+                requestedAction = action
+                if action == .adjustSelection {
+                    window.overlayView.beginSelectionAdjustment()
+                }
+            }
+        )
+
+        func buttons(in view: NSView) -> [NSButton] {
+            view.subviews.flatMap { subview in
+                (subview as? NSButton).map { [$0] } ?? buttons(in: subview)
+            }
+        }
+        let adjustButton = try #require(
+            buttons(in: window.overlayView)
+                .first(where: { $0.toolTip == "调整选区" })
+        )
+        adjustButton.performClick(nil)
+
+        #expect(requestedAction == .adjustSelection)
+        #expect(window.overlayView.isSelectionAdjustmentActive)
+    }
+
+    @Test @MainActor func annotationEditorIsMountedInsideTheSelectedFrame() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+        let selectionRect = CGRect(
+            x: screen.frame.minX + 180,
+            y: screen.frame.minY + 200,
+            width: 360,
+            height: 240
+        )
+        window.overlayView.showSelectionResult(
+            screenRect: selectionRect,
+            showsActions: true,
+            actionHandler: { _ in }
+        )
+        let editor = NSView()
+        window.overlayView.showEmbeddedAnnotationEditor(editor, screenRect: selectionRect)
+
+        let expectedFrame = CGRect(
+            x: selectionRect.minX - screen.frame.minX,
+            y: selectionRect.minY - screen.frame.minY,
+            width: selectionRect.width,
+            height: selectionRect.height
+        )
+        #expect(editor.superview === window.overlayView)
+        #expect(editor.frame == expectedFrame)
+        #expect(window.overlayView.subviews.contains { $0 is AreaSelectionActionBar } == false)
+    }
+
     @Test @MainActor func smartElementSelectionKeepsTheCrosshairCursor() throws {
         let overlay = AreaSelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
         var observedCursor: NSCursor?

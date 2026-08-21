@@ -21,6 +21,7 @@ final class AreaSelectionActionBar: NSView {
 
   private let onAction: (AreaSelectionAction) -> Void
   private let stackView = NSStackView()
+  private var actionsByTag: [Int: AreaSelectionAction] = [:]
 
   init(onAction: @escaping (AreaSelectionAction) -> Void) {
     self.onAction = onAction
@@ -63,14 +64,12 @@ final class AreaSelectionActionBar: NSView {
 
     let definitions: [ButtonDefinition] = [
       .init(imageName: "square", tooltip: "调整选区", action: .adjustSelection, separatorAfter: false),
-      .init(imageName: "pencil", tooltip: "标注", action: .annotate, separatorAfter: false),
-      .init(imageName: "arrow.up.right", tooltip: "箭头标注", action: .annotate, separatorAfter: false),
-      .init(imageName: "textformat", tooltip: "文字标注", action: .annotate, separatorAfter: false),
-      .init(imageName: "1.circle", tooltip: "序号标注", action: .annotate, separatorAfter: false),
-      .init(imageName: "circle.lefthalf.filled", tooltip: "马赛克/模糊", action: .annotate, separatorAfter: true),
-      .init(imageName: "eraser", tooltip: "清除标注", action: .annotate, separatorAfter: false),
-      .init(imageName: "arrow.uturn.backward", tooltip: "撤销", action: .annotate, separatorAfter: true),
-      .init(imageName: "scissors", tooltip: "裁剪", action: .annotate, separatorAfter: false),
+      .init(imageName: "pencil", tooltip: "标注", action: .annotateTool(.pencil), separatorAfter: false),
+      .init(imageName: "arrow.up.right", tooltip: "箭头标注", action: .annotateTool(.arrow), separatorAfter: false),
+      .init(imageName: "textformat", tooltip: "文字标注", action: .annotateTool(.text), separatorAfter: false),
+      .init(imageName: "1.circle", tooltip: "序号标注", action: .annotateTool(.counter), separatorAfter: false),
+      .init(imageName: "circle.lefthalf.filled", tooltip: "马赛克/模糊", action: .annotateTool(.blur), separatorAfter: true),
+      .init(imageName: "scissors", tooltip: "裁剪", action: .annotateTool(.crop), separatorAfter: false),
       .init(imageName: "text.viewfinder", tooltip: "识别文字", action: .ocr, separatorAfter: false),
       .init(imageName: "pin", tooltip: "置顶", action: .pin, separatorAfter: false),
       .init(imageName: "square.and.arrow.down", tooltip: "保存截图", action: .save, separatorAfter: false),
@@ -79,8 +78,10 @@ final class AreaSelectionActionBar: NSView {
       .init(imageName: "ellipsis", tooltip: "更多操作", action: .more, separatorAfter: false),
     ]
 
-    for definition in definitions {
-      stackView.addArrangedSubview(makeButton(definition))
+    for (index, definition) in definitions.enumerated() {
+      let tag = index + 1
+      actionsByTag[tag] = definition.action
+      stackView.addArrangedSubview(makeButton(definition, tag: tag))
       if definition.separatorAfter {
         let separator = NSBox()
         separator.boxType = .separator
@@ -98,19 +99,19 @@ final class AreaSelectionActionBar: NSView {
   }
 
   override var intrinsicContentSize: NSSize {
-    // Compact PixPin-style bar: 12pt grip + fifteen 28pt cells, two
-    // separators, and stack spacing. Keeping this stable makes the bar
+    // Compact PixPin-style bar: 12pt grip + thirteen 28pt cells, one
+    // separator, and stack spacing. Keeping this stable makes the bar
     // placement around a moving selection cheap.
-    let width: CGFloat = 484
+    let width: CGFloat = 426
     return NSSize(width: width, height: 38)
   }
 
-  private func makeButton(_ definition: ButtonDefinition) -> NSButton {
+  private func makeButton(_ definition: ButtonDefinition, tag: Int) -> NSButton {
     let symbol = NSImage(systemSymbolName: definition.imageName, accessibilityDescription: definition.tooltip)?
       .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 17, weight: .regular))
     let image = symbol ?? NSImage(named: NSImage.actionTemplateName)!
     let button = NSButton(image: image, target: self, action: #selector(buttonPressed(_:)))
-    button.tag = actionTag(definition.action)
+    button.tag = tag
     button.bezelStyle = .recessed
     button.isBordered = false
     button.imagePosition = .imageOnly
@@ -125,37 +126,7 @@ final class AreaSelectionActionBar: NSView {
   }
 
   @objc private func buttonPressed(_ sender: NSButton) {
-    onAction(action(forTag: sender.tag))
-  }
-
-  private func actionTag(_ action: AreaSelectionAction) -> Int {
-    switch action {
-    case .capture: return 1
-    case .copy: return 2
-    case .save: return 3
-    case .newSelection: return 4
-    case .adjustSelection: return 5
-    case .more: return 6
-    case .annotate: return 7
-    case .ocr: return 8
-    case .pin: return 9
-    case .cancel: return 10
-    }
-  }
-
-  private func action(forTag tag: Int) -> AreaSelectionAction {
-    switch tag {
-    case 2: return .copy
-    case 3: return .save
-    case 4: return .newSelection
-    case 5: return .adjustSelection
-    case 6: return .more
-    case 7: return .annotate
-    case 8: return .ocr
-    case 9: return .pin
-    case 10: return .cancel
-    default: return .capture
-    }
+    onAction(actionsByTag[sender.tag] ?? .capture)
   }
 }
 
@@ -163,6 +134,7 @@ final class AreaSelectionActionBar: NSView {
 final class AreaSelectionSideActionBar: NSView {
   private let onAction: (AreaSelectionAction) -> Void
   private let stackView = NSStackView()
+  private var actionsByTag: [Int: AreaSelectionAction] = [:]
 
   init(onAction: @escaping (AreaSelectionAction) -> Void) {
     self.onAction = onAction
@@ -203,7 +175,9 @@ final class AreaSelectionSideActionBar: NSView {
       .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 18, weight: .regular))
     let image = symbol ?? NSImage(named: NSImage.actionTemplateName)!
     let button = NSButton(image: image, target: self, action: #selector(buttonPressed(_:)))
-    button.tag = actionTag(action)
+    let tag = actionsByTag.count + 1
+    actionsByTag[tag] = action
+    button.tag = tag
     button.isBordered = false
     button.bezelStyle = .recessed
     button.imagePosition = .imageOnly
@@ -225,36 +199,6 @@ final class AreaSelectionSideActionBar: NSView {
   }
 
   @objc private func buttonPressed(_ sender: NSButton) {
-    onAction(action(forTag: sender.tag))
-  }
-
-  private func actionTag(_ action: AreaSelectionAction) -> Int {
-    switch action {
-    case .capture: return 1
-    case .copy: return 2
-    case .save: return 3
-    case .newSelection: return 4
-    case .adjustSelection: return 5
-    case .more: return 6
-    case .annotate: return 7
-    case .ocr: return 8
-    case .pin: return 9
-    case .cancel: return 10
-    }
-  }
-
-  private func action(forTag tag: Int) -> AreaSelectionAction {
-    switch tag {
-    case 2: return .copy
-    case 3: return .save
-    case 4: return .newSelection
-    case 5: return .adjustSelection
-    case 6: return .more
-    case 7: return .annotate
-    case 8: return .ocr
-    case 9: return .pin
-    case 10: return .cancel
-    default: return .capture
-    }
+    onAction(actionsByTag[sender.tag] ?? .capture)
   }
 }

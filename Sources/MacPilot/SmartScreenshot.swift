@@ -1059,7 +1059,7 @@ final class SmartScreenshotController {
     private let onRepeatLastArea: () -> Void
     private let onFullscreenCapture: () -> Void
     private let onActiveWindowCapture: () -> Void
-    private let onAreaAnnotateCapture: (CGImage) -> Void
+    private let onAreaAnnotateCapture: (CGImage, CGRect?, AreaSelectionAnnotationTool) -> Void
     private let onOCRCapture: (CGImage) -> Void
     private let onScrollingCapture: (CGImage) -> Void
     private let onObjectCutoutCapture: (CGImage) -> Void
@@ -1144,7 +1144,7 @@ final class SmartScreenshotController {
         additionalShortcutBindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding] = [:],
         onFullscreenCapture: @escaping () -> Void = {},
         onActiveWindowCapture: @escaping () -> Void = {},
-        onAreaAnnotateCapture: @escaping (CGImage) -> Void = { _ in },
+        onAreaAnnotateCapture: @escaping (CGImage, CGRect?, AreaSelectionAnnotationTool) -> Void = { _, _, _ in },
         onOCRCapture: @escaping (CGImage) -> Void = { _ in },
         onScrollingCapture: @escaping (CGImage) -> Void = { _ in },
         onObjectCutoutCapture: @escaping (CGImage) -> Void = { _ in },
@@ -2260,6 +2260,65 @@ final class SmartScreenshotController {
         frozenSession: FrozenAreaCaptureSession
     ) {
         guard snapzySessionID == sessionID else { return }
+
+        let annotationTool: AreaSelectionAnnotationTool?
+        switch action {
+        case .annotate:
+            annotationTool = .rectangle
+        case .annotateTool(let tool):
+            annotationTool = tool
+        default:
+            annotationTool = nil
+        }
+
+        // Annotation stays inside the selected frame.  Keep the frozen
+        // selection panel alive until the crop is ready, then install the
+        // editor as a child of that same panel rather than opening a centered
+        // annotation window.
+        if let annotationTool {
+            Task { [weak self] in
+                do {
+                    let crop: FrozenAreaCropResult
+                    if result.spansMultipleDisplays {
+                        crop = try frozenSession.cropCompositeImage(for: result)
+                    } else {
+                        crop = try frozenSession.cropImage(for: result)
+                    }
+                    guard let self else { return }
+                    if requestedMode == .manualArea {
+                        self.onSelectionRect(result.rect)
+                    }
+                    let presented = SnapzyAreaSelectionController.shared.presentInlineAnnotationEditor(
+                        image: crop.image,
+                        language: self.language(),
+                        initialTool: annotationTool,
+                        onComplete: { [weak self] annotated in
+                            guard let self else { return }
+                            self.resetSnapzyPreparationState()
+                            QuickAccessManager.shared.resumeAfterCapture()
+                            self.onCapture(annotated)
+                        },
+                        onCancel: { [weak self] in
+                            self?.resetSnapzyPreparationState()
+                            QuickAccessManager.shared.resumeAfterCapture()
+                        }
+                    )
+                    if !presented {
+                        self.resetSnapzyPreparationState()
+                        SnapzyAreaSelectionController.shared.cancelSelection()
+                        QuickAccessManager.shared.resumeAfterCapture()
+                        self.onError(ScreenCaptureError.captureFailed("无法在当前截图位置打开标注编辑器。"))
+                    }
+                } catch {
+                    self?.resetSnapzyPreparationState()
+                    SnapzyAreaSelectionController.shared.cancelSelection()
+                    QuickAccessManager.shared.resumeAfterCapture()
+                    self?.onError(error)
+                }
+            }
+            return
+        }
+
         SnapzyAreaSelectionController.shared.dismissSelection()
         resetSnapzyPreparationState()
         QuickAccessManager.shared.resumeAfterCapture()
@@ -2284,7 +2343,9 @@ final class SmartScreenshotController {
                 case .newSelection, .adjustSelection, .more:
                     break
                 case .annotate:
-                    self.onAreaAnnotateCapture(crop.image)
+                    self.onAreaAnnotateCapture(crop.image, result.rect, .rectangle)
+                case .annotateTool(let tool):
+                    self.onAreaAnnotateCapture(crop.image, result.rect, tool)
                 case .ocr:
                     self.onOCRCapture(crop.image)
                 case .pin:
@@ -2348,11 +2409,16 @@ final class SmartScreenshotController {
         controller.show()
     }
 
-    func presentInlineAnnotation(for image: CGImage) {
+    func presentInlineAnnotation(
+        for image: CGImage,
+        at screenRect: CGRect? = nil,
+        initialTool: AreaSelectionAnnotationTool = .rectangle
+    ) {
         let id = UUID()
         let controller = SmartAnnotationWindowController(
             image: image,
             language: language(),
+            initialTool: initialTool.smartAnnotationTool,
             onComplete: { [weak self] annotated in
                 guard let self else { return }
                 self.inlineAnnotationControllers.removeValue(forKey: id)
@@ -2363,57 +2429,16 @@ final class SmartScreenshotController {
             }
         )
         inlineAnnotationControllers[id] = controller
-        controller.show()
+        controller.show(at: screenRect)
     }
 
     /// Presents the annotation editor for a QuickAccess card item (Snapzy flow).
     /// The card's "标注" action routes here through `AnnotateManager`.
     func presentQuickAccessAnnotation(for item: QuickAccessItem) {
-        guard let image = Self.loadImage(from: item.url) else {
-            Self.logger.error("QuickAccess annotation failed to load image: \(item.url.lastPathComponent, privacy: .public)")
-            return
-        }
-
-        QuickAccessManager.shared.setWindowOpen(id: item.id, isOpen: true)
-        QuickAccessManager.shared.pauseCountdownForEditingItem(item.id)
-
-        let id = UUID()
-        let controller = SmartAnnotationWindowController(
-            image: image,
-            language: language(),
-            onComplete: { [weak self] annotated in
-                self?.saveQuickAccessAnnotatedImage(annotated, item: item)
-                QuickAccessManager.shared.resumeCountdownForEditingItem(item.id)
-                QuickAccessManager.shared.setWindowOpen(id: item.id, isOpen: false)
-                self?.inlineAnnotationControllers.removeValue(forKey: id)
-            },
-            onClose: { [weak self] in
-                QuickAccessManager.shared.resumeCountdownForEditingItem(item.id)
-                QuickAccessManager.shared.setWindowOpen(id: item.id, isOpen: false)
-                self?.inlineAnnotationControllers.removeValue(forKey: id)
-            }
+        _ = QuickAccessManager.shared.presentAnnotationEditor(
+            for: item,
+            language: language()
         )
-        inlineAnnotationControllers[id] = controller
-        controller.show()
-    }
-
-    private static func loadImage(from url: URL) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            return nil
-        }
-        return image
-    }
-
-    private func saveQuickAccessAnnotatedImage(_ image: CGImage, item: QuickAccessItem) {
-        let rep = NSBitmapImageRep(cgImage: image)
-        guard let data = rep.representation(using: .png, properties: [:]) else { return }
-        try? data.write(to: item.url, options: .atomic)
-        let nsImage = NSImage(
-            cgImage: image,
-            size: NSSize(width: image.width, height: image.height)
-        )
-        QuickAccessManager.shared.updateItemThumbnail(id: item.id, image: nsImage)
     }
 
     func showQuickAccess(
@@ -2836,7 +2861,7 @@ final class SmartScreenshotController {
                 if captureMode == .ocr {
                     self.onOCRCapture(image)
                 } else if captureMode == .areaAnnotate {
-                    self.onAreaAnnotateCapture(image)
+                    self.onAreaAnnotateCapture(image, rect, .rectangle)
                 } else if captureMode == .scrolling {
                     self.presentScrollingCapture(
                         initialImage: image,
@@ -3559,7 +3584,7 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     private let onSave: ((CGImage, URL?) -> Void)?
     private let onDelete: ((URL?) -> Void)?
     private var panel: NSPanel?
-    private var annotationController: SmartAnnotationWindowController?
+    private var annotationHostView: NSView?
     private var countdownTimer: Timer?
     private var isHovered = false
     private var countdownPaused = false
@@ -3643,8 +3668,7 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     func windowWillClose(_ notification: Notification) {
         countdownTimer?.invalidate()
         countdownTimer = nil
-        annotationController?.close()
-        annotationController = nil
+        annotationHostView = nil
         panel?.contentView = nil
         panel = nil
         onClose()
@@ -3735,26 +3759,40 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     }
 
     private func openAnnotation() {
-        annotationController?.close()
+        guard let panel else { return }
         setCountdownPaused(true)
-        panel?.orderOut(nil)
-        let controller = SmartAnnotationWindowController(
-            image: image,
+        let originalImage = image
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        let editor = NSHostingView(rootView: SmartAnnotationEditor(
+            image: originalImage,
             language: language,
-            onComplete: { [weak self] annotated in
-                guard let self else { return }
+            model: model,
+            embedded: true,
+            onCancel: { [weak self] in
+                self?.restoreAnnotationEditor()
+            },
+            onComplete: { [weak self] in
+                guard let self,
+                      let annotated = SmartAnnotationRenderer.render(
+                          image: originalImage,
+                          annotations: model.annotations
+                      ) else { return }
                 self.image = annotated
                 self.onSave?(annotated, self.savedURL)
-                if let panel = self.panel { self.installContent(in: panel) }
-            },
-            onClose: { [weak self] in
-                self?.setCountdownPaused(false)
-                self?.panel?.orderFrontRegardless()
-                self?.annotationController = nil
+                self.restoreAnnotationEditor()
             }
-        )
-        annotationController = controller
-        controller.show()
+        ))
+        annotationHostView = editor
+        panel.contentView = editor
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func restoreAnnotationEditor() {
+        annotationHostView = nil
+        guard let panel else { return }
+        installContent(in: panel)
+        setCountdownPaused(false)
+        panel.makeKeyAndOrderFront(nil)
     }
 }
 
@@ -4329,7 +4367,7 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
     private let language: AppLanguage
     private let onClose: () -> Void
     private var panel: NSPanel?
-    private var annotationController: SmartAnnotationWindowController?
+    private var annotationHostView: NSView?
 
     init(image: CGImage, scaleFactor: CGFloat = 1, language: AppLanguage, onClose: @escaping () -> Void) {
         self.image = image
@@ -4387,8 +4425,7 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         Self.logger.info("Pin window will close")
-        annotationController?.close()
-        annotationController = nil
+        annotationHostView = nil
         panel?.contentView = nil
         panel = nil
         onClose()
@@ -4426,26 +4463,39 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
     }
 
     private func openAnnotation() {
-        Self.logger.info("Annotation requested; hiding pin window")
-        annotationController?.close()
-        panel?.orderOut(nil)
-        let controller = SmartAnnotationWindowController(
-            image: image,
+        Self.logger.info("Annotation requested in pin window")
+        guard let panel else { return }
+        let originalImage = image
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        let editor = NSHostingView(rootView: SmartAnnotationEditor(
+            image: originalImage,
             language: language,
-            onComplete: { [weak self] annotated in
-                Self.logger.info("Annotation completed; updating pin image")
-                guard let self else { return }
-                self.image = annotated
-                if let panel = self.panel { self.installContent(in: panel) }
+            model: model,
+            embedded: true,
+            onCancel: { [weak self] in
+                self?.restoreAnnotationEditor()
             },
-            onClose: { [weak self] in
-                Self.logger.info("Annotation closed; restoring pin window")
-                self?.panel?.orderFrontRegardless()
-                self?.annotationController = nil
+            onComplete: { [weak self] in
+                guard let self,
+                      let annotated = SmartAnnotationRenderer.render(
+                          image: originalImage,
+                          annotations: model.annotations
+                      ) else { return }
+                Self.logger.info("Annotation completed; updating pin image")
+                self.image = annotated
+                self.restoreAnnotationEditor()
             }
-        )
-        annotationController = controller
-        controller.show()
+        ))
+        annotationHostView = editor
+        panel.contentView = editor
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func restoreAnnotationEditor() {
+        annotationHostView = nil
+        guard let panel else { return }
+        installContent(in: panel)
+        panel.makeKeyAndOrderFront(nil)
     }
 
     private func showMessage(title: String, message: String) {
@@ -4509,7 +4559,7 @@ private enum SmartOCRService {
     }
 }
 
-private enum SmartAnnotationTool: String, CaseIterable, Identifiable {
+enum SmartAnnotationTool: String, CaseIterable, Identifiable {
     case rectangle
     case filledRectangle
     case ellipse
@@ -4570,6 +4620,20 @@ private enum SmartAnnotationTool: String, CaseIterable, Identifiable {
     }
 }
 
+extension AreaSelectionAnnotationTool {
+    var smartAnnotationTool: SmartAnnotationTool {
+        switch self {
+        case .rectangle: return .rectangle
+        case .arrow: return .arrow
+        case .pencil: return .pencil
+        case .text: return .text
+        case .counter: return .counter
+        case .blur: return .blur
+        case .crop: return .crop
+        }
+    }
+}
+
 enum SmartAnnotation: Equatable {
     case rectangle(CGRect)
     case filledRectangle(CGRect)
@@ -4618,12 +4682,16 @@ struct SmartAnnotationHistory: Equatable {
 }
 
 @MainActor
-private final class SmartAnnotationModel: ObservableObject {
+final class SmartAnnotationModel: ObservableObject {
     @Published var tool: SmartAnnotationTool = .rectangle
     @Published private(set) var annotations: [SmartAnnotation] = []
     @Published private(set) var canRedo = false
     private var redoAnnotations: [SmartAnnotation] = []
     private(set) var nextCounter = 1
+
+    init(initialTool: SmartAnnotationTool = .rectangle) {
+        tool = initialTool
+    }
 
     func append(_ annotation: SmartAnnotation) {
         annotations.append(annotation)
@@ -4661,41 +4729,61 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
     private let language: AppLanguage
     private let onComplete: (CGImage) -> Void
     private let onClose: () -> Void
-    private let model = SmartAnnotationModel()
+    private let model: SmartAnnotationModel
     private var window: NSWindow?
     private var didNotifyClose = false
 
     init(
         image: CGImage,
         language: AppLanguage,
+        initialTool: SmartAnnotationTool = .rectangle,
         onComplete: @escaping (CGImage) -> Void,
         onClose: @escaping () -> Void
     ) {
         self.image = image
         self.language = language
+        self.model = SmartAnnotationModel(initialTool: initialTool)
         self.onComplete = onComplete
         self.onClose = onClose
     }
 
-    func show() {
+    func show(at screenRect: CGRect? = nil) {
+        let targetRect = screenRect?.standardized
+        let editorSize = CGSize(
+            width: max(420, targetRect?.width ?? 900),
+            height: max(300, targetRect?.height ?? 680)
+        )
         let window = NSWindow(
-            contentRect: CGRect(x: 0, y: 0, width: 900, height: 680),
-            styleMask: [.titled, .closable, .resizable],
+            contentRect: CGRect(origin: .zero, size: editorSize),
+            styleMask: targetRect == nil ? [.titled, .closable, .resizable] : [.borderless],
             backing: .buffered,
             defer: false
         )
         window.title = AppText.value("scAnnotateTitle", language: language)
-        window.level = .floating
+        window.level = targetRect == nil ? .floating : .screenSaver
+        window.isOpaque = targetRect == nil
+        window.backgroundColor = targetRect == nil ? .windowBackgroundColor : .clear
+        window.hasShadow = targetRect != nil
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentView = NSHostingView(rootView: SmartAnnotationEditor(
             image: image,
             language: language,
             model: model,
+            embedded: targetRect != nil,
             onCancel: { [weak self] in self?.close() },
             onComplete: { [weak self] in self?.complete() }
         ))
-        window.center()
+        if let targetRect {
+            let origin = CGPoint(
+                x: targetRect.midX - editorSize.width / 2,
+                y: targetRect.midY - editorSize.height / 2
+            )
+            window.setFrameOrigin(origin)
+        } else {
+            window.center()
+        }
         NSRunningApplication.current.activate(options: [.activateAllWindows])
         window.makeKeyAndOrderFront(nil)
         self.window = window
@@ -4723,10 +4811,11 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
     }
 }
 
-private struct SmartAnnotationEditor: View {
+struct SmartAnnotationEditor: View {
     let image: CGImage
     let language: AppLanguage
     @ObservedObject var model: SmartAnnotationModel
+    let embedded: Bool
     let onCancel: () -> Void
     let onComplete: () -> Void
     @State private var dragStart: CGPoint?
@@ -4737,51 +4826,28 @@ private struct SmartAnnotationEditor: View {
     @State private var textPoint = CGPoint.zero
     @State private var pendingTextTool: SmartAnnotationTool = .text
 
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                annotationToolPalette
-                Button(AppText.value("scUndo", language: language), action: model.undo)
-                    .disabled(model.annotations.isEmpty)
-                Button(AppText.value("scRedo", language: language), action: model.redo)
-                    .disabled(!model.canRedo)
-                if !model.annotations.isEmpty {
-                    Button(AppText.value("scClearAnnotations", language: language)) {
-                        model.removeAll()
-                    }
-                }
-                Spacer()
-                Button(AppText.value("scCancel", language: language), action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                Button(AppText.value("scDone", language: language), action: onComplete)
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-            }
-            .padding(10)
+    init(
+        image: CGImage,
+        language: AppLanguage,
+        model: SmartAnnotationModel,
+        embedded: Bool = false,
+        onCancel: @escaping () -> Void,
+        onComplete: @escaping () -> Void
+    ) {
+        self.image = image
+        self.language = language
+        self.model = model
+        self.embedded = embedded
+        self.onCancel = onCancel
+        self.onComplete = onComplete
+    }
 
-            GeometryReader { geometry in
-                let fitted = fittedRect(imageSize: CGSize(width: image.width, height: image.height), in: geometry.size)
-                ZStack(alignment: .topLeading) {
-                    Color.black.opacity(0.08)
-                    Image(decorative: image, scale: 1).resizable().frame(width: fitted.width, height: fitted.height)
-                        .position(x: fitted.midX, y: fitted.midY)
-                    Canvas { context, _ in
-                        drawAnnotations(context: &context, in: fitted)
-                        drawDraft(context: &context, in: fitted)
-                    }
-                    .contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            guard fitted.contains(value.location) else { return }
-                            if dragStart == nil {
-                                dragStart = value.startLocation
-                                dragPoints = [value.startLocation]
-                            }
-                            dragCurrent = value.location
-                            dragPoints.append(value.location)
-                        }
-                        .onEnded { value in finishDrag(value.location, fitted: fitted) })
-                }
+    var body: some View {
+        Group {
+            if embedded {
+                embeddedEditorBody
+            } else {
+                standaloneEditorBody
             }
         }
         .sheet(isPresented: $showingTextEntry) {
@@ -4805,6 +4871,77 @@ private struct SmartAnnotationEditor: View {
                     }.buttonStyle(.borderedProminent)
                 }
             }.padding(24).frame(width: 360)
+        }
+    }
+
+    private var standaloneEditorBody: some View {
+        VStack(spacing: 0) {
+            annotationToolbar
+                .padding(10)
+            GeometryReader { geometry in
+                annotationCanvas(in: geometry.size)
+            }
+        }
+    }
+
+    private var embeddedEditorBody: some View {
+        GeometryReader { geometry in
+            annotationCanvas(in: geometry.size)
+                .overlay(alignment: .top) {
+                    annotationToolbar
+                        .padding(4)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .padding(6)
+                }
+        }
+    }
+
+    private var annotationToolbar: some View {
+        HStack(spacing: 6) {
+            annotationToolPalette
+            Button(AppText.value("scUndo", language: language), action: model.undo)
+                .disabled(model.annotations.isEmpty)
+            Button(AppText.value("scRedo", language: language), action: model.redo)
+                .disabled(!model.canRedo)
+            if !model.annotations.isEmpty {
+                Button(AppText.value("scClearAnnotations", language: language)) {
+                    model.removeAll()
+                }
+            }
+            Spacer(minLength: 0)
+            Button(AppText.value("scCancel", language: language), action: onCancel)
+                .keyboardShortcut(.cancelAction)
+            Button(AppText.value("scDone", language: language), action: onComplete)
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private func annotationCanvas(in availableSize: CGSize) -> some View {
+        let fitted = fittedRect(
+            imageSize: CGSize(width: image.width, height: image.height),
+            in: availableSize
+        )
+        return ZStack(alignment: .topLeading) {
+            Color.black.opacity(0.08)
+            Image(decorative: image, scale: 1).resizable().frame(width: fitted.width, height: fitted.height)
+                .position(x: fitted.midX, y: fitted.midY)
+            Canvas { context, _ in
+                drawAnnotations(context: &context, in: fitted)
+                drawDraft(context: &context, in: fitted)
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    guard fitted.contains(value.location) else { return }
+                    if dragStart == nil {
+                        dragStart = value.startLocation
+                        dragPoints = [value.startLocation]
+                    }
+                    dragCurrent = value.location
+                    dragPoints.append(value.location)
+                }
+                .onEnded { value in finishDrag(value.location, fitted: fitted) })
         }
     }
 

@@ -9,6 +9,7 @@ import AppKit
 import Carbon.HIToolbox
 import Combine
 import Foundation
+import ImageIO
 import os.log
 import SwiftUI
 
@@ -168,6 +169,9 @@ final class QuickAccessManager: ObservableObject {
   private var thumbnailSaveGenerations: [UUID: UInt64] = [:]
   /// Tracks which item IDs are currently being edited (paused by editor)
   private var editingItemIds: Set<UUID> = []
+  /// The current annotation editor replaces the existing Quick Access panel
+  /// content in-place, so no second centered editor window is needed.
+  private var annotationEditingItemID: UUID?
   /// Tracks items doing async work, such as GIF conversion or cloud upload.
   private var activityHoldItemIds: Set<UUID> = []
   private let hoverShortcutRegistry = QuickAccessHoverShortcutRegistry()
@@ -1051,6 +1055,10 @@ final class QuickAccessManager: ObservableObject {
   /// Dismiss all screenshots
   func dismissAll() {
     let count = items.count
+    if annotationEditingItemID != nil {
+      annotationEditingItemID = nil
+      panelController.setAnnotationEditorInteractionEnabled(false)
+    }
     for item in items {
       cancelDismissTimer(for: item.id)
       // Clear annotation session cache
@@ -1339,6 +1347,73 @@ final class QuickAccessManager: ObservableObject {
     clearHoveredItem()
     removeEditHotKey()
     panelController.hide()
+  }
+
+  /// Replace the visible Quick Access stack with the annotation editor in the
+  /// same floating panel. This keeps the screenshot at its current screen
+  /// position and avoids opening a second centered window.
+  @discardableResult
+  func presentAnnotationEditor(for item: QuickAccessItem, language: AppLanguage) -> Bool {
+    guard !item.isVideo,
+          let source = CGImageSourceCreateWithURL(item.url as CFURL, nil),
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+      return false
+    }
+
+    if annotationEditingItemID != nil {
+      restoreAnnotationEditor()
+    }
+    if !panelController.isVisible {
+      showPanel()
+    }
+
+    annotationEditingItemID = item.id
+    setWindowOpen(id: item.id, isOpen: true)
+    pauseCountdownForEditingItem(item.id)
+    let model = SmartAnnotationModel(initialTool: .rectangle)
+    let editor = SmartAnnotationEditor(
+      image: image,
+      language: language,
+      model: model,
+      embedded: true,
+      onCancel: { [weak self] in
+        self?.restoreAnnotationEditor()
+      },
+      onComplete: { [weak self] in
+        guard let self,
+              let annotated = SmartAnnotationRenderer.render(
+                image: image,
+                annotations: model.annotations
+              ) else { return }
+        let representation = NSBitmapImageRep(cgImage: annotated)
+        if let data = representation.representation(using: .png, properties: [:]) {
+          try? data.write(to: item.url, options: .atomic)
+        }
+        let thumbnailImage = NSImage(
+          cgImage: annotated,
+          size: NSSize(width: annotated.width, height: annotated.height)
+        )
+        self.updateItemThumbnail(id: item.id, image: thumbnailImage)
+        self.restoreAnnotationEditor()
+      }
+    )
+    panelController.updateContent(editor)
+    panelController.setAnnotationEditorInteractionEnabled(true)
+    return true
+  }
+
+  private func restoreAnnotationEditor() {
+    guard let id = annotationEditingItemID else { return }
+    annotationEditingItemID = nil
+    panelController.setAnnotationEditorInteractionEnabled(false)
+    setWindowOpen(id: id, isOpen: false)
+    resumeCountdownForEditingItem(id)
+    guard !items.isEmpty else {
+      hidePanel()
+      return
+    }
+    panelController.updateContent(QuickAccessStackView(manager: self))
+    refreshPanelInteractionMetrics()
   }
 
   @discardableResult

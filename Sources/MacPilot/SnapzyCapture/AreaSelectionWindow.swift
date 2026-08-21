@@ -271,6 +271,8 @@ final class AreaSelectionOverlayView: NSView {
   private var finalizedSelectionRect: CGRect?
   private var finalizedSelectionDrag: FinalizedSelectionDrag?
   private var isShowingSelectionActions = false
+  private(set) var isSelectionAdjustmentActive = false
+  private var embeddedAnnotationView: NSView?
   private var windowSelectionSnapshot: WindowSelectionSnapshot?
   private var hoveredWindowCandidate: WindowSelectionCandidate?
   private var hoveredElementRect: CGRect?
@@ -690,6 +692,8 @@ final class AreaSelectionOverlayView: NSView {
     finalizedSelectionRect = nil
     finalizedSelectionDrag = nil
     isShowingSelectionActions = false
+    isSelectionAdjustmentActive = false
+    removeEmbeddedAnnotationEditor()
     hoveredWindowCandidate = nil
     hoveredElementRect = nil
     pendingElementHoverWork?.cancel()
@@ -799,9 +803,11 @@ final class AreaSelectionOverlayView: NSView {
     showsActions: Bool,
     actionHandler: @escaping (AreaSelectionAction) -> Void
   ) {
+    removeEmbeddedAnnotationEditor()
     isSelecting = false
     selectionEnabled = false
     isShowingSelectionActions = true
+    isSelectionAdjustmentActive = false
     finalizedSelectionDrag = nil
     finalizedSelectionRect = convertToLocalRect(screenRect).intersection(bounds)
     pendingSelectionStartPoint = nil
@@ -838,12 +844,57 @@ final class AreaSelectionOverlayView: NSView {
     positionSelectionActionBars()
   }
 
+  /// Activates the explicit "调整选区" command.  Resize handles already use
+  /// the same drag path, but keeping an explicit state makes the command
+  /// functional and gives the user immediate visual feedback.
+  func beginSelectionAdjustment() {
+    guard isShowingSelectionActions, finalizedSelectionRect != nil else { return }
+    isSelectionAdjustmentActive = true
+    selectionEnabled = true
+    updateFinalizedSelectionVisuals()
+    refreshActiveCursor()
+  }
+
+  /// Adds a SwiftUI editor as a child of this full-screen overlay, clipped to
+  /// the selected frame.  This is the PixPin/Snipaste-style in-place editing
+  /// path: the frozen display and selection location remain unchanged while
+  /// the annotation tools appear on top of the captured pixels.
+  func showEmbeddedAnnotationEditor(_ editorView: NSView, screenRect: CGRect) {
+    guard finalizedSelectionRect != nil else { return }
+    isSelecting = false
+    selectionEnabled = false
+    isShowingSelectionActions = false
+    isSelectionAdjustmentActive = false
+    finalizedSelectionRect = convertToLocalRect(screenRect).intersection(bounds)
+    finalizedSelectionDrag = nil
+    pendingSelectionStartPoint = nil
+    hideMagnifier()
+    hideSizeIndicator()
+    removeSelectionActionBars()
+    selectionBorderLayer.isHidden = true
+    for handle in selectionHandleLayers { handle.isHidden = true }
+    selectionDimensionBackgroundLayer.isHidden = true
+    selectionDimensionTextLayer.isHidden = true
+
+    removeEmbeddedAnnotationEditor()
+    editorView.frame = finalizedSelectionRect ?? .zero
+    editorView.autoresizingMask = []
+    editorView.wantsLayer = true
+    editorView.layer?.cornerRadius = 4
+    editorView.layer?.masksToBounds = true
+    embeddedAnnotationView = editorView
+    addSubview(editorView, positioned: .above, relativeTo: nil)
+    refreshActiveCursor()
+  }
+
   func hideSelectionResult() {
     guard isShowingSelectionActions || finalizedSelectionRect != nil else { return }
     isShowingSelectionActions = false
     selectionEnabled = true
+    isSelectionAdjustmentActive = false
     finalizedSelectionRect = nil
     finalizedSelectionDrag = nil
+    removeEmbeddedAnnotationEditor()
     removeSelectionActionBars()
     for handle in selectionHandleLayers {
       handle.isHidden = true
@@ -865,6 +916,11 @@ final class AreaSelectionOverlayView: NSView {
     selectionSideActionBar = nil
   }
 
+  private func removeEmbeddedAnnotationEditor() {
+    embeddedAnnotationView?.removeFromSuperview()
+    embeddedAnnotationView = nil
+  }
+
   private func updateFinalizedSelectionVisuals() {
     guard let localRect = finalizedSelectionRect, !localRect.isEmpty else {
       selectionBorderLayer.isHidden = true
@@ -877,7 +933,9 @@ final class AreaSelectionOverlayView: NSView {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     hasVisibleSelectionRect = true
-    selectionBorderLayer.strokeColor = NSColor.systemBlue.cgColor
+    selectionBorderLayer.strokeColor = isSelectionAdjustmentActive
+      ? NSColor.systemOrange.cgColor
+      : NSColor.systemBlue.cgColor
     selectionBorderLayer.lineWidth = 3
     selectionBorderLayer.path = CGPath(rect: localRect, transform: nil)
     selectionBorderLayer.isHidden = false

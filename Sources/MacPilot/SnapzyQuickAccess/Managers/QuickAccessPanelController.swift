@@ -155,6 +155,20 @@ final class QuickAccessPanelController {
     panel?.updatePassthroughRegion(itemCount: itemCount, scale: scale)
   }
 
+  /// The annotation editor fills the panel instead of following the card
+  /// hit-test region.  Keep the existing panel/window and temporarily make
+  /// the complete editor surface interactive.
+  func setAnnotationEditorInteractionEnabled(_ enabled: Bool) {
+    guard let panel else { return }
+    if enabled {
+      panel.suspendMouseMonitors()
+      panel.ignoresMouseEvents = false
+    } else {
+      panel.resumeMouseMonitors()
+      panel.updatePassthroughRegion(itemCount: visibleItemCount, scale: overlayScale)
+    }
+  }
+
   /// Update panel position on screen
   func updatePosition(_ newPosition: QuickAccessPosition) {
     position = newPosition

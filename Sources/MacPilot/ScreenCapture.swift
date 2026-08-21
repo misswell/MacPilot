@@ -514,7 +514,9 @@ final class ScreenCaptureModel: ObservableObject {
         ],
         onFullscreenCapture: { [weak self] in self?.captureFullscreen() },
         onActiveWindowCapture: { [weak self] in self?.captureActiveWindow() },
-        onAreaAnnotateCapture: { [weak self] image in self?.presentAreaAnnotation(image) },
+        onAreaAnnotateCapture: { [weak self] image, screenRect, tool in
+            self?.presentAreaAnnotation(image, at: screenRect, initialTool: tool)
+        },
         onOCRCapture: { [weak self] image in self?.handleOCRCapture(image) },
         onScrollingCapture: { [weak self] image in self?.handleSmartCapture(image) },
         onObjectCutoutCapture: { [weak self] image in self?.handleObjectCutout(image) }
@@ -588,7 +590,11 @@ final class ScreenCaptureModel: ObservableObject {
         // sessions, and route the card's "标注" action to the annotation editor.
         TempCaptureManager.shared.cleanupOrphanedFiles()
         AnnotateManager.shared.onOpenAnnotation = { [weak self] item in
-            self?.smartCapture?.presentQuickAccessAnnotation(for: item)
+            guard let self else { return }
+            _ = QuickAccessManager.shared.presentAnnotationEditor(
+                for: item,
+                language: self.language
+            )
         }
         if settings.screenshotEnabled && settings.isEnabled {
             checkAndStartCapture()
@@ -906,9 +912,17 @@ final class ScreenCaptureModel: ObservableObject {
         ensureSmartCapture().startSelection(mode: mode)
     }
 
-    private func presentAreaAnnotation(_ image: CGImage) {
+    private func presentAreaAnnotation(
+        _ image: CGImage,
+        at screenRect: CGRect?,
+        initialTool: AreaSelectionAnnotationTool
+    ) {
         guard let smartCapture else { return }
-        smartCapture.presentInlineAnnotation(for: image)
+        smartCapture.presentInlineAnnotation(
+            for: image,
+            at: screenRect,
+            initialTool: initialTool
+        )
     }
 
     func repeatSmartCapture() {

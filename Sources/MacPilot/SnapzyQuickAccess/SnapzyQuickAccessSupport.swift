@@ -412,9 +412,8 @@ final class AnnotationSessionStore {
 
 // MARK: - AnnotateManager (bridge to the app's annotation editor)
 
-/// Snapzy opens its own full annotation editor from the QuickAccess card.
-/// MacPilot bridges that entry point to its annotation editor; the full
-/// Snapzy editor migration is tracked separately.
+/// The QuickAccess card's annotation action is handled by the app's editor,
+/// which replaces the existing floating panel content in place.
 @MainActor
 final class AnnotateManager {
     static let shared = AnnotateManager()

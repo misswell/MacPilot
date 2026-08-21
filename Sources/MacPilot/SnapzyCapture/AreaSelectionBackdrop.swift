@@ -10,6 +10,19 @@ import Foundation
 
 typealias AreaSelectionResultCompletion = (AreaSelectionResult?) -> Void
 
+/// Tools that can be started directly from the post-selection HUD.  The
+/// annotation editor maps these values to its richer tool model, while the
+/// capture layer stays independent from SwiftUI/AppKit implementation types.
+nonisolated enum AreaSelectionAnnotationTool: String, Equatable, Sendable {
+  case rectangle
+  case arrow
+  case pencil
+  case text
+  case counter
+  case blur
+  case crop
+}
+
 /// Actions exposed by the post-selection HUD.  PixPin keeps the selected area
 /// on screen until the user chooses one of these actions; keeping the action
 /// as a value type lets the capture coordinator route copy/annotate/OCR/pin
@@ -22,6 +35,7 @@ nonisolated enum AreaSelectionAction: Equatable, Sendable {
   case adjustSelection
   case more
   case annotate
+  case annotateTool(AreaSelectionAnnotationTool)
   case ocr
   case pin
   case cancel
