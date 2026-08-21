@@ -200,6 +200,25 @@ struct SnapzyCaptureTests {
         #expect(toolbar.frame.maxY < localSelection.minY || toolbar.frame.minY > localSelection.maxY)
     }
 
+    @Test @MainActor func firstPostSelectionButtonStartsRectangleAnnotation() throws {
+        _ = NSApplication.shared
+        var requestedAction: AreaSelectionAction?
+        let bar = AreaSelectionActionBar { requestedAction = $0 }
+
+        func buttons(in view: NSView) -> [NSButton] {
+            view.subviews.flatMap { subview in
+                (subview as? NSButton).map { [$0] } ?? buttons(in: subview)
+            }
+        }
+
+        let rectangleButton = try #require(
+            buttons(in: bar).first(where: { $0.toolTip == "矩形标注" })
+        )
+        rectangleButton.performClick(nil)
+
+        #expect(requestedAction == .annotateTool(.rectangle))
+    }
+
     @Test @MainActor func adjustSelectionButtonEntersFrameEditingState() throws {
         _ = NSApplication.shared
         guard let screen = NSScreen.main else { return }

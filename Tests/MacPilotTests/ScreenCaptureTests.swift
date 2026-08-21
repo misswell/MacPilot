@@ -220,6 +220,8 @@ struct ScreenCaptureTests {
         #expect(ScreenCaptureShortcutKind.ocr.defaultBinding.displayName == "⇧⌘2")
         #expect(ScreenCaptureShortcutKind.scrolling.defaultBinding.displayName == "⇧⌘6")
         #expect(ScreenCaptureShortcutKind.objectCutout.defaultBinding.displayName == "⇧⌘1")
+        #expect(ScreenCaptureShortcutKind.pin.defaultBinding.displayName == "F3")
+        #expect(ScreenCaptureShortcutKind.postSelectionPin.defaultBinding.displayName == "⌘T")
 
         let settings = ScreenCaptureSettings(
             areaCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_6), modifiers: [.command, .option]),
@@ -230,7 +232,9 @@ struct ScreenCaptureTests {
             areaAnnotateShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_A), modifiers: [.control, .shift]),
             ocrShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_O), modifiers: [.command, .shift]),
             scrollingCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_6), modifiers: [.control, .shift]),
-            objectCutoutShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_1), modifiers: [.option, .shift])
+            objectCutoutShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_1), modifiers: [.option, .shift]),
+            pinCaptureShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_F9), modifiers: []),
+            postSelectionPinShortcut: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_T), modifiers: [.control, .option])
         )
         let decoded = try JSONDecoder().decode(ScreenCaptureSettings.self, from: JSONEncoder().encode(settings))
         #expect(decoded.areaCaptureShortcut == settings.areaCaptureShortcut)
@@ -242,6 +246,8 @@ struct ScreenCaptureTests {
         #expect(decoded.ocrShortcut == settings.ocrShortcut)
         #expect(decoded.scrollingCaptureShortcut == settings.scrollingCaptureShortcut)
         #expect(decoded.objectCutoutShortcut == settings.objectCutoutShortcut)
+        #expect(decoded.pinCaptureShortcut == settings.pinCaptureShortcut)
+        #expect(decoded.postSelectionPinShortcut == settings.postSelectionPinShortcut)
     }
 
     @Test func postCapturePreferencesDefaultToCopyAndQuickAccess() throws {
@@ -301,7 +307,9 @@ struct ScreenCaptureTests {
             (.areaAnnotate, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_D), modifiers: [.control, .shift])),
             (.ocr, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_E), modifiers: [.command, .control])),
             (.scrolling, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_F), modifiers: [.command, .control])),
-            (.objectCutout, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_G), modifiers: [.command, .control]))
+            (.objectCutout, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_G), modifiers: [.command, .control])),
+            (.pin, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_F9), modifiers: [])),
+            (.postSelectionPin, SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_T), modifiers: [.command]))
         ]
 
         for (kind, binding) in bindings {
@@ -318,6 +326,8 @@ struct ScreenCaptureTests {
 
         #expect(!model.setShortcut(.area, binding: model.shortcutBinding(for: .smartElement)))
         #expect(model.shortcutBinding(for: .area) == originalArea)
+        #expect(!model.setShortcut(.smartElement, binding: model.shortcutBinding(for: .pin)))
+        #expect(!model.setShortcut(.postSelectionPin, binding: model.shortcutBinding(for: .pin)))
         #expect(!model.setShortcut(
             .fullscreen,
             binding: SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_A), modifiers: [])
@@ -665,6 +675,63 @@ struct ScreenCaptureTests {
         #expect(cropped.height == 96)
     }
 
+    @Test func smartAnnotationStylesClampToSafeBounds() {
+        let minimum = SmartAnnotationStyle(lineWidth: -10, opacity: -1)
+        #expect(minimum.lineWidth == 1)
+        #expect(minimum.opacity == 0.05)
+
+        let maximum = SmartAnnotationStyle(lineWidth: 100, opacity: 2)
+        #expect(maximum.lineWidth == 48)
+        #expect(maximum.opacity == 1)
+    }
+
+    @Test @MainActor func smartAnnotationModelStoresCurrentStyleWithUndoAndRedo() {
+        let model = SmartAnnotationModel(initialTool: .arrow)
+        model.adjustLineWidth(by: 7)
+        model.adjustOpacity(by: -0.2)
+        let annotation = SmartAnnotation.arrow(CGPoint(x: 0.1, y: 0.1), CGPoint(x: 0.8, y: 0.8))
+        model.append(annotation)
+
+        let style = model.styledAnnotations[0].style
+        #expect(style.lineWidth == 10)
+        #expect(style.opacity == 0.8)
+
+        model.undo()
+        #expect(model.annotations.isEmpty)
+        model.redo()
+        #expect(model.styledAnnotations[0].style == style)
+    }
+
+    @Test func smartAnnotationRendererHonorsLineWidthAndOpacity() throws {
+        let source = try #require(makeTestImage(width: 200, height: 120, color: .white))
+        let annotation = SmartAnnotation.rectangle(CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5))
+        let thin = try #require(SmartAnnotationRenderer.render(
+            image: source,
+            annotations: [annotation],
+            styles: [SmartAnnotationStyle(lineWidth: 1, opacity: 0.25)]
+        ))
+        let thick = try #require(SmartAnnotationRenderer.render(
+            image: source,
+            annotations: [annotation],
+            styles: [SmartAnnotationStyle(lineWidth: 12, opacity: 1)]
+        ))
+
+        func redPixelCount(_ image: CGImage) -> Int {
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            return (0..<bitmap.pixelsHigh).reduce(into: 0) { count, y in
+                for x in 0..<bitmap.pixelsWide {
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                    if color.redComponent > color.greenComponent * 1.3,
+                       color.redComponent > color.blueComponent * 1.3 {
+                        count += 1
+                    }
+                }
+            }
+        }
+
+        #expect(redPixelCount(thick) > redPixelCount(thin))
+    }
+
     @Test func smartAnnotationHistorySupportsUndoAndRedo() {
         var history = SmartAnnotationHistory()
         let rectangle = SmartAnnotation.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2))
@@ -779,6 +846,8 @@ struct ScreenCaptureTests {
         #expect(settings.ocrShortcut == ScreenCaptureShortcutKind.ocr.defaultBinding)
         #expect(settings.scrollingCaptureShortcut == ScreenCaptureShortcutKind.scrolling.defaultBinding)
         #expect(settings.objectCutoutShortcut == ScreenCaptureShortcutKind.objectCutout.defaultBinding)
+        #expect(settings.pinCaptureShortcut == ScreenCaptureShortcutKind.pin.defaultBinding)
+        #expect(settings.postSelectionPinShortcut == ScreenCaptureShortcutKind.postSelectionPin.defaultBinding)
     }
 
     @Test func qualityIsClampedToValidRange() {

@@ -26,6 +26,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
     private var interactionMode: AreaSelectionInteractionMode = .manualRegion
     private var manualStart: CGPoint?
     private var manualRect: CGRect?
+    private var postSelectionPinShortcut = ScreenCaptureShortcutKind.postSelectionPin.defaultBinding
     private var sessionID = UUID()
 
     private override init() {
@@ -40,6 +41,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         backdrops: [CGDirectDisplayID: AreaSelectionBackdrop] = [:],
         applicationConfiguration: AreaSelectionApplicationConfiguration? = nil,
         initialInteractionMode: AreaSelectionInteractionMode = .manualRegion,
+        postSelectionPinShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.postSelectionPin.defaultBinding,
         elementTargetResolver: ((CGPoint) -> CGRect?)? = nil,
         sessionID requestedSessionID: UUID? = nil,
         selectionPreview: ((AreaSelectionResult) -> Void)? = nil,
@@ -53,6 +55,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         self.completion = completion
         self.selectionPreview = selectionPreview
         self.actionHandler = actionHandler
+        self.postSelectionPinShortcut = postSelectionPinShortcut
         selectedResult = nil
         selectedWindow = nil
         manualStart = nil
@@ -62,7 +65,12 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         let sessionID = self.sessionID
         let screens = NSScreen.screens
         windows = screens.map { screen in
-            let window = AreaSelectionWindow(screen: screen)
+            // Build the panel completely while hidden.  The non-pooled
+            // initializer orders the window immediately, and the old path
+            // then ordered it again after configuring the backdrop/mode.  On
+            // a shortcut-driven capture that produced a visible flash before
+            // the frozen frame had arrived.
+            let window = AreaSelectionWindow(screen: screen, pooled: true)
             window.selectionDelegate = self
             window.updateSelectionMode(mode)
             window.setReceivesKeyboardInput(true)
@@ -95,7 +103,10 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         }
         let pointer = NSEvent.mouseLocation
         let activeWindow = windows.first(where: { $0.frame.contains(pointer) }) ?? windows.first
-        activeWindow?.makeKeyAndOrderFront(nil)
+        // Every panel is already ordered above.  Only transfer key status here;
+        // ordering the active panel a second time is the last remaining source
+        // of a visible shortcut-start flash on some macOS window servers.
+        activeWindow?.makeKey()
         activeWindow?.activateKeyboardInputIfNeeded()
         NSCursor.crosshair.set()
         return sessionID
@@ -322,7 +333,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
                 guard let self else { return }
                 guard let rendered = SmartAnnotationRenderer.render(
                     image: image,
-                    annotations: model.annotations
+                    annotations: model.annotations,
+                    styles: model.styledAnnotations.map(\.style)
                 ) else { return }
                 self.dismissSelection()
                 onComplete(rendered)
@@ -353,6 +365,13 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             return true
         }
         guard let selectedResult else { return false }
+        let eventModifiers = InputSourceShortcutModifiers(event.modifierFlags)
+        if !event.isARepeat,
+           event.keyCode == postSelectionPinShortcut.keyCode,
+           eventModifiers == postSelectionPinShortcut.modifiers {
+            areaSelectionWindow(window, didRequestAction: .pin)
+            return true
+        }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if event.keyCode == 8, modifiers == [.command] || modifiers == [.control] {
             areaSelectionWindow(window, didRequestAction: .copy)

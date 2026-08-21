@@ -63,7 +63,7 @@ final class AreaSelectionActionBar: NSView {
     grip.heightAnchor.constraint(equalToConstant: 18).isActive = true
 
     let definitions: [ButtonDefinition] = [
-      .init(imageName: "square", tooltip: "调整选区", action: .adjustSelection, separatorAfter: false),
+      .init(imageName: "rectangle", tooltip: "矩形标注", action: .annotateTool(.rectangle), separatorAfter: false),
       .init(imageName: "pencil", tooltip: "标注", action: .annotateTool(.pencil), separatorAfter: false),
       .init(imageName: "arrow.up.right", tooltip: "箭头标注", action: .annotateTool(.arrow), separatorAfter: false),
       .init(imageName: "textformat", tooltip: "文字标注", action: .annotateTool(.text), separatorAfter: false),

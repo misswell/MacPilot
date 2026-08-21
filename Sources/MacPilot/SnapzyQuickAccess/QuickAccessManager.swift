@@ -1383,7 +1383,8 @@ final class QuickAccessManager: ObservableObject {
         guard let self,
               let annotated = SmartAnnotationRenderer.render(
                 image: image,
-                annotations: model.annotations
+                annotations: model.annotations,
+                styles: model.styledAnnotations.map(\.style)
               ) else { return }
         let representation = NSBitmapImageRep(cgImage: annotated)
         if let data = representation.representation(using: .png, properties: [:]) {

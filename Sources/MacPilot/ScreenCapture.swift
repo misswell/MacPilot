@@ -68,6 +68,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
     var ocrShortcut: SmartCaptureShortcutBinding
     var scrollingCaptureShortcut: SmartCaptureShortcutBinding
     var objectCutoutShortcut: SmartCaptureShortcutBinding
+    var pinCaptureShortcut: SmartCaptureShortcutBinding
+    var postSelectionPinShortcut: SmartCaptureShortcutBinding
     var copyAfterCapture: Bool
     var showQuickAccess: Bool
     var pinAfterCapture: Bool
@@ -96,6 +98,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         ocrShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.ocr.defaultBinding,
         scrollingCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.scrolling.defaultBinding,
         objectCutoutShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.objectCutout.defaultBinding,
+        pinCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.pin.defaultBinding,
+        postSelectionPinShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.postSelectionPin.defaultBinding,
         copyAfterCapture: Bool = true,
         showQuickAccess: Bool = true,
         pinAfterCapture: Bool = false,
@@ -133,6 +137,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.ocrShortcut = ocrShortcut.isValid ? ocrShortcut : ScreenCaptureShortcutKind.ocr.defaultBinding
         self.scrollingCaptureShortcut = scrollingCaptureShortcut.isValid ? scrollingCaptureShortcut : ScreenCaptureShortcutKind.scrolling.defaultBinding
         self.objectCutoutShortcut = objectCutoutShortcut.isValid ? objectCutoutShortcut : ScreenCaptureShortcutKind.objectCutout.defaultBinding
+        self.pinCaptureShortcut = pinCaptureShortcut.isValid ? pinCaptureShortcut : ScreenCaptureShortcutKind.pin.defaultBinding
+        self.postSelectionPinShortcut = postSelectionPinShortcut.isValid ? postSelectionPinShortcut : ScreenCaptureShortcutKind.postSelectionPin.defaultBinding
         self.copyAfterCapture = copyAfterCapture
         self.showQuickAccess = showQuickAccess
         self.pinAfterCapture = pinAfterCapture
@@ -142,7 +148,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         case isEnabled, outputFolder, busyStartHour, busyEndHour
         case busyIntervalMinutes, idleIntervalMinutes, imageFormat, quality
         case maxRetentionDays, captureAllDisplays, showsCursor, smartCaptureEnabled
-        case smartCaptureShortcut, areaCaptureShortcut, repeatAreaCaptureShortcut, applicationWindowCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut
+        case smartCaptureShortcut, areaCaptureShortcut, repeatAreaCaptureShortcut, applicationWindowCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut, pinCaptureShortcut, postSelectionPinShortcut
         case screenshotEnabled
         case copyAfterCapture, showQuickAccess, pinAfterCapture
     }
@@ -173,6 +179,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
             ocrShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .ocrShortcut) ?? ScreenCaptureShortcutKind.ocr.defaultBinding,
             scrollingCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .scrollingCaptureShortcut) ?? ScreenCaptureShortcutKind.scrolling.defaultBinding,
             objectCutoutShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .objectCutoutShortcut) ?? ScreenCaptureShortcutKind.objectCutout.defaultBinding,
+            pinCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .pinCaptureShortcut) ?? ScreenCaptureShortcutKind.pin.defaultBinding,
+            postSelectionPinShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .postSelectionPinShortcut) ?? ScreenCaptureShortcutKind.postSelectionPin.defaultBinding,
             copyAfterCapture: try c.decodeIfPresent(Bool.self, forKey: .copyAfterCapture) ?? true,
             showQuickAccess: try c.decodeIfPresent(Bool.self, forKey: .showQuickAccess) ?? true,
             pinAfterCapture: try c.decodeIfPresent(Bool.self, forKey: .pinAfterCapture) ?? false,
@@ -510,8 +518,10 @@ final class ScreenCaptureModel: ObservableObject {
             .areaAnnotate: settings.areaAnnotateShortcut,
             .ocr: settings.ocrShortcut,
             .scrolling: settings.scrollingCaptureShortcut,
-            .objectCutout: settings.objectCutoutShortcut
+            .objectCutout: settings.objectCutoutShortcut,
+            .pin: settings.pinCaptureShortcut
         ],
+        postSelectionPinShortcut: settings.postSelectionPinShortcut,
         onFullscreenCapture: { [weak self] in self?.captureFullscreen() },
         onActiveWindowCapture: { [weak self] in self?.captureActiveWindow() },
         onAreaAnnotateCapture: { [weak self] image, screenRect, tool in
@@ -571,8 +581,10 @@ final class ScreenCaptureModel: ObservableObject {
                 .areaAnnotate: newSettings.areaAnnotateShortcut,
                 .ocr: newSettings.ocrShortcut,
                 .scrolling: newSettings.scrollingCaptureShortcut,
-                .objectCutout: newSettings.objectCutoutShortcut
+                .objectCutout: newSettings.objectCutoutShortcut,
+                .pin: newSettings.pinCaptureShortcut
             ])
+            smartCapture.updatePostSelectionPinShortcut(newSettings.postSelectionPinShortcut)
         } else if !newSettings.screenshotEnabled {
             smartCapture = nil
         }
@@ -708,17 +720,45 @@ final class ScreenCaptureModel: ObservableObject {
         case .ocr: updated.ocrShortcut = binding
         case .scrolling: updated.scrollingCaptureShortcut = binding
         case .objectCutout: updated.objectCutoutShortcut = binding
+        case .pin: updated.pinCaptureShortcut = binding
+        case .postSelectionPin: updated.postSelectionPinShortcut = binding
         }
         guard binding.isValid else {
             errorMessage = AppText.value(binding.validationError?.messageKey ?? "scShortcutRegistrationFailed", language: language)
             return false
+        }
+        if kind == .postSelectionPin {
+            if binding == updated.smartCaptureShortcut
+                || [
+                    updated.areaCaptureShortcut,
+                    updated.repeatAreaCaptureShortcut,
+                    updated.applicationWindowCaptureShortcut,
+                    updated.fullscreenCaptureShortcut,
+                    updated.activeWindowCaptureShortcut,
+                    updated.areaAnnotateShortcut,
+                    updated.ocrShortcut,
+                    updated.scrollingCaptureShortcut,
+                    updated.objectCutoutShortcut,
+                    updated.pinCaptureShortcut
+                ].contains(binding) {
+                errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
+                return false
+            }
+            guard SmartCaptureSystemShortcutDetector.conflicts(for: binding).isEmpty else {
+                errorMessage = AppText.value("scShortcutSystemConflict", language: language)
+                return false
+            }
+            updateSettings { $0.postSelectionPinShortcut = binding }
+            smartCapture?.updatePostSelectionPinShortcut(binding)
+            errorMessage = nil
+            return true
         }
         if kind != .smartElement, binding == updated.smartCaptureShortcut {
             errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
             return false
         }
         if kind != .smartElement {
-            let others = [updated.areaCaptureShortcut, updated.repeatAreaCaptureShortcut, updated.applicationWindowCaptureShortcut, updated.fullscreenCaptureShortcut, updated.activeWindowCaptureShortcut, updated.areaAnnotateShortcut, updated.ocrShortcut, updated.scrollingCaptureShortcut, updated.objectCutoutShortcut]
+            let others = [updated.areaCaptureShortcut, updated.repeatAreaCaptureShortcut, updated.applicationWindowCaptureShortcut, updated.fullscreenCaptureShortcut, updated.activeWindowCaptureShortcut, updated.areaAnnotateShortcut, updated.ocrShortcut, updated.scrollingCaptureShortcut, updated.objectCutoutShortcut, updated.pinCaptureShortcut, updated.postSelectionPinShortcut]
             if others.filter({ $0 == binding }).count > 1 {
                 errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
                 return false
@@ -733,7 +773,8 @@ final class ScreenCaptureModel: ObservableObject {
             .areaAnnotate: updated.areaAnnotateShortcut,
             .ocr: updated.ocrShortcut,
             .scrolling: updated.scrollingCaptureShortcut,
-            .objectCutout: updated.objectCutoutShortcut
+            .objectCutout: updated.objectCutoutShortcut,
+            .pin: updated.pinCaptureShortcut
         ]
         if kind == .smartElement {
             guard setSmartCaptureShortcut(binding) else { return false }
@@ -754,6 +795,7 @@ final class ScreenCaptureModel: ObservableObject {
                 $0.ocrShortcut = updated.ocrShortcut
                 $0.scrollingCaptureShortcut = updated.scrollingCaptureShortcut
                 $0.objectCutoutShortcut = updated.objectCutoutShortcut
+                $0.pinCaptureShortcut = updated.pinCaptureShortcut
             }
             errorMessage = nil
         }
@@ -772,12 +814,14 @@ final class ScreenCaptureModel: ObservableObject {
         case .ocr: return settings.ocrShortcut
         case .scrolling: return settings.scrollingCaptureShortcut
         case .objectCutout: return settings.objectCutoutShortcut
+        case .pin: return settings.pinCaptureShortcut
+        case .postSelectionPin: return settings.postSelectionPinShortcut
         }
     }
 
     @discardableResult
     func setSmartCaptureShortcut(_ binding: SmartCaptureShortcutBinding) -> Bool {
-        if [settings.areaCaptureShortcut, settings.repeatAreaCaptureShortcut, settings.applicationWindowCaptureShortcut, settings.fullscreenCaptureShortcut, settings.activeWindowCaptureShortcut, settings.areaAnnotateShortcut, settings.ocrShortcut, settings.scrollingCaptureShortcut, settings.objectCutoutShortcut].contains(binding) {
+        if [settings.areaCaptureShortcut, settings.repeatAreaCaptureShortcut, settings.applicationWindowCaptureShortcut, settings.fullscreenCaptureShortcut, settings.activeWindowCaptureShortcut, settings.areaAnnotateShortcut, settings.ocrShortcut, settings.scrollingCaptureShortcut, settings.objectCutoutShortcut, settings.pinCaptureShortcut, settings.postSelectionPinShortcut].contains(binding) {
             errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
             return false
         }
@@ -819,6 +863,10 @@ final class ScreenCaptureModel: ObservableObject {
 
     func startAreaCapture() {
         startSelection(mode: .manualArea)
+    }
+
+    func startPinCapture() {
+        startSelection(mode: .pinArea)
     }
 
     func startRecordingSelection(mode: ScreenRecordingCaptureMode) {
@@ -1731,6 +1779,7 @@ struct ScreenCaptureView: View {
             shortcutRow(.ocr, action: { capture.startOCRCapture() })
             shortcutRow(.scrolling, action: { capture.startScrollingCapture() })
             shortcutRow(.objectCutout, action: { capture.startObjectCutoutCapture() })
+            shortcutRow(.pin, action: { capture.startPinCapture() })
         }
         .padding(20)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -1899,7 +1948,7 @@ struct ScreenCaptureView: View {
 
     private func shortcutRow(_ kind: ScreenCaptureShortcutKind, action: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: kind == .area ? "rectangle.dashed" : kind == .repeatArea ? "arrow.clockwise" : kind == .applicationWindow ? "macwindow.on.rectangle" : kind == .fullscreen ? "rectangle.inset.filled" : kind == .activeWindow ? "macwindow" : kind == .scrolling ? "arrow.down.to.line.compact" : kind == .objectCutout ? "person.crop.circle" : "text.viewfinder")
+            Image(systemName: kind == .area ? "rectangle.dashed" : kind == .repeatArea ? "arrow.clockwise" : kind == .applicationWindow ? "macwindow.on.rectangle" : kind == .fullscreen ? "rectangle.inset.filled" : kind == .activeWindow ? "macwindow" : kind == .scrolling ? "arrow.down.to.line.compact" : kind == .objectCutout ? "person.crop.circle" : kind == .pin ? "pin" : "text.viewfinder")
                 .foregroundStyle(.secondary)
                 .frame(width: 22)
             Text(t(kind.titleKey))
