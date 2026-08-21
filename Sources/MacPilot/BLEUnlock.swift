@@ -313,6 +313,18 @@ struct BLEWakeRecoveryPlan: Equatable {
     }
 }
 
+/// Gives the lock screen time to become interactive after the display wakes.
+/// The first attempt is intentionally delayed; later attempts cover both a
+/// slow wake and a missed `screensDidWake` notification without running
+/// indefinitely while the Mac is idle.
+struct BLEUnlockAttemptPlan: Equatable {
+    let deadlines: [TimeInterval]
+
+    static let standard = BLEUnlockAttemptPlan(
+        deadlines: [0.5, 1, 2, 4, 8, 12]
+    )
+}
+
 // MARK: - Model
 
 @MainActor
@@ -352,6 +364,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var connectionTimer: Timer?
     private var wakeRetryTask: Task<Void, Never>?
     private var systemWakeRecoveryTask: Task<Void, Never>?
+    private var unlockAttemptTask: Task<Void, Never>?
+    private var unlockAttemptGeneration = 0
     private var latestRSSIs: [Double] = []
     private let latestN = 5
     private var hasPasswordCache: Bool?
@@ -479,6 +493,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         deviceRefreshTask?.cancel(); deviceRefreshTask = nil
         wakeRetryTask?.cancel(); wakeRetryTask = nil
         systemWakeRecoveryTask?.cancel(); systemWakeRecoveryTask = nil
+        cancelUnlockAttempt()
         centralMgr?.stopScan()
         clearDiscoveredDevices()
         if let p = monitoredPeripheral { centralMgr?.cancelPeripheralConnection(p) }
@@ -517,6 +532,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     func startMonitor(_ uuid: UUID) {
+        cancelUnlockAttempt()
         if let p = monitoredPeripheral { centralMgr?.cancelPeripheralConnection(p) }
         monitoredUUID = uuid
         proximityTimer?.invalidate()
@@ -766,6 +782,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     func lockNow() {
         guard !isScreenLocked() else { return }
         manualLock = true
+        cancelUnlockAttempt()
         pauseNowPlaying()
         lockOrSaveScreen()
     }
@@ -790,7 +807,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private func tryUnlockScreen() {
         guard !manualLock, presence,
               settings.unlockRSSI != Self.unlockDisabled,
-              !systemSleep, !displaySleep, !recoveringFromSystemSleep else { return }
+              !systemSleep else { return }
 
         if inScreensaver {
             let src = CGEventSource(stateID: .hidSystemState)
@@ -800,21 +817,82 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
         guard !settings.wakeWithoutUnlocking else { return }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self else { return }
-            guard self.isScreenLocked() else { return }
-            guard let password = self.fetchPassword(warn: true) else { return }
-            self.unlockedAt = Date().timeIntervalSince1970
-            self.fakeKeyStrokes(password)
-            self.playNowPlaying()
-            self.runScript("unlocked")
+        // Do not make the unlock depend on a single display-wake notification.
+        // A keyboard wake can make the display usable before AppKit delivers
+        // `screensDidWake`, and the opposite ordering is also possible.
+        scheduleUnlockAttempt()
+    }
+
+    private func displayIsReadyForUnlock() -> Bool {
+        // `displaySleep` is maintained from notifications and is therefore a
+        // useful hint, but it can remain stale when the user wakes the Mac by
+        // pressing a key. Query the display as well so that wake recovery can
+        // proceed even when that notification was missed.
+        let isAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
+        if !isAsleep, displaySleep {
+            // Repair the notification-derived state as soon as the display
+            // proves that it has actually woken.
+            displaySleep = false
+            wakeRetryTask?.cancel()
+            wakeRetryTask = nil
+        }
+        return !isAsleep
+    }
+
+    private func cancelUnlockAttempt() {
+        unlockAttemptGeneration &+= 1
+        unlockAttemptTask?.cancel()
+        unlockAttemptTask = nil
+    }
+
+    private func scheduleUnlockAttempt() {
+        guard unlockAttemptTask == nil else { return }
+
+        let generation = unlockAttemptGeneration
+        unlockAttemptTask = Task { [weak self] in
+            var previousDeadline: TimeInterval = 0
+            for deadline in BLEUnlockAttemptPlan.standard.deadlines {
+                let wait = deadline - previousDeadline
+                if wait > 0 {
+                    try? await Task.sleep(for: .milliseconds(Int64(wait * 1_000)))
+                }
+                guard !Task.isCancelled, let self,
+                      self.unlockAttemptGeneration == generation,
+                      !self.manualLock, self.presence,
+                      self.settings.unlockRSSI != Self.unlockDisabled,
+                      !self.settings.wakeWithoutUnlocking,
+                      !self.systemSleep else { return }
+
+                // Keep waiting while the display is genuinely asleep. This
+                // handles both proximity-wake and a later keyboard wake.
+                if !self.displayIsReadyForUnlock() {
+                    previousDeadline = deadline
+                    continue
+                }
+
+                // If the display is awake and the session is already unlocked,
+                // this was only a late wake notification; never type into the
+                // user's active application.
+                guard self.isScreenLocked() else { return }
+
+                guard let password = self.fetchPassword(warn: true) else { return }
+                self.unlockedAt = Date().timeIntervalSince1970
+                self.fakeKeyStrokes(password)
+                self.playNowPlaying()
+                self.runScript("unlocked")
+                self.unlockAttemptTask = nil
+                return
+            }
+
+            guard let self, self.unlockAttemptGeneration == generation else { return }
+            self.unlockAttemptTask = nil
         }
     }
 
     func updatePresence(presence: Bool, reason: String) {
         if presence {
             if settings.unlockRSSI != Self.unlockDisabled {
-                if displaySleep && !systemSleep && !recoveringFromSystemSleep && settings.wakeOnProximity {
+                if displaySleep && !systemSleep && settings.wakeOnProximity {
                     bleWakeDisplay()
                     wakeRetryTask?.cancel()
                     wakeRetryTask = Task { [weak self] in
@@ -831,6 +909,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 tryUnlockScreen()
             }
         } else {
+            wakeRetryTask?.cancel(); wakeRetryTask = nil
+            cancelUnlockAttempt()
             if !isScreenLocked() && settings.lockRSSI != Self.lockDisabled {
                 pauseNowPlaying()
                 lockOrSaveScreen()
@@ -982,6 +1062,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         systemSleep = true
         recoveringFromSystemSleep = true
         wakeRetryTask?.cancel(); wakeRetryTask = nil
+        cancelUnlockAttempt()
         systemWakeRecoveryTask?.cancel(); systemWakeRecoveryTask = nil
 
         // Run-loop timers become immediately overdue after a long sleep. Stop
@@ -1001,6 +1082,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         proximityTimer?.invalidate(); proximityTimer = nil
         signalTimer?.invalidate(); signalTimer = nil
         connectionTimer?.invalidate(); connectionTimer = nil
+        cancelUnlockAttempt()
         latestRSSIs.removeAll()
 
         // A CBPeripheral or scan that survived ordinary display sleep can be

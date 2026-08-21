@@ -31,6 +31,11 @@ struct BLEWakeRecoveryTests {
         #expect(BLEWakeRecoveryPlan.make(isEnabled: true, hasMonitoredDevice: false) == nil)
     }
 
+    @Test func unlockAttemptPlanRetriesAfterARealDisplayWake() {
+        #expect(BLEUnlockAttemptPlan.standard.deadlines == [0.5, 1, 2, 4, 8, 12])
+        #expect(BLEUnlockAttemptPlan.standard.deadlines == BLEUnlockAttemptPlan.standard.deadlines.sorted())
+    }
+
     @MainActor
     @Test func wakeRecoveryFinishesWithoutAScreensDidWakeNotification() async throws {
         let model = BLEUnlockModel()
