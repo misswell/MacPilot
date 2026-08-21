@@ -411,6 +411,10 @@ enum AppText {
         "bleNotConfigured": "尚未选择设备", "bleDeviceNotDetected": "未检测到设备", "bleNoDevice": "尚未选择设备",
         "bleLockNow": "立即锁定屏幕", "bleDevice": "设备", "bleScanning": "正在扫描…", "bleSelectDevice": "选择设备",
         "bleDeviceHint": "打开设备菜单开始扫描附近的 BLE 设备，选择你的 iPhone、Apple Watch 或其他 BLE 设备。需要使用固定 MAC 地址的设备。",
+        "bleSecondDevice": "第二设备（可选）", "bleSecondDeviceInfo": "可以再添加一个设备，并选择两个设备如何共同判断是否在范围内。",
+        "bleAddSecondDevice": "添加第二设备", "bleRemoveSecondDevice": "移除第二设备",
+        "bleDeviceRelation": "设备关系", "bleRelationAny": "任意一个在范围内", "bleRelationAll": "两个都在范围内",
+        "bleDeviceRelationInfo": "“任意一个”表示任一设备在范围内就保持解锁；“两个都在”表示只有两台设备都在范围内才保持解锁。",
         "bleUnlockRSSI": "解锁 RSSI", "bleLockRSSI": "锁定 RSSI", "bleLockDelay": "锁定延迟", "bleNoSignalTimeout": "无信号超时",
         "bleCloser": "更近", "bleFarther": "更远", "bleDisabled": "禁用",
         "bleUnlockRSSIInfo": "蓝牙信号强度阈值，达到此值时解锁。数值越大，设备需要越靠近才能解锁。选择“禁用”可关闭自动解锁。",
@@ -696,6 +700,10 @@ enum AppText {
             "bleNotConfigured": "No device set", "bleDeviceNotDetected": "Not detected", "bleNoDevice": "No device selected",
             "bleLockNow": "Lock Screen Now", "bleDevice": "Device", "bleScanning": "Scanning…", "bleSelectDevice": "Select Device",
             "bleDeviceHint": "Open the device menu to scan for nearby BLE devices and pick your iPhone, Apple Watch, or other BLE device. The device must use a static MAC address.",
+            "bleSecondDevice": "Second device (optional)", "bleSecondDeviceInfo": "Add one more device and choose how the two devices should determine presence together.",
+            "bleAddSecondDevice": "Add second device", "bleRemoveSecondDevice": "Remove second device",
+            "bleDeviceRelation": "Device relationship", "bleRelationAny": "Either device is near", "bleRelationAll": "Both devices are near",
+            "bleDeviceRelationInfo": "“Either device” keeps the Mac unlocked when either device is near; “Both devices” requires both devices to be near.",
             "bleUnlockRSSI": "Unlock RSSI", "bleLockRSSI": "Lock RSSI", "bleLockDelay": "Delay to Lock", "bleNoSignalTimeout": "No-Signal Timeout",
             "bleCloser": "Closer", "bleFarther": "Farther", "bleDisabled": "Disable",
             "bleUnlockRSSIInfo": "Bluetooth signal strength to unlock. A larger value means the device must be closer to unlock. Choose Disable to turn off auto-unlock.",
@@ -3008,6 +3016,7 @@ struct BLEUnlockView: View {
     @EnvironmentObject private var model: MacPilotModel
     @ObservedObject var ble: BLEUnlockModel
     @State private var showPicker = false
+    @State private var pickingSecondary = false
     @State private var showingPassword = false
     @State private var passwordEntry = ""
     @State private var showingMinRSSI = false
@@ -3036,7 +3045,10 @@ struct BLEUnlockView: View {
         .alert("MacPilot", isPresented: Binding(get: { passwordMessage != nil }, set: { if !$0 { passwordMessage = nil } })) {
             Button("OK", role: .cancel) { passwordMessage = nil }
         } message: { Text(passwordMessage ?? "") }
-        .onDisappear { if showPicker { showPicker = false; ble.stopScanning() } }
+        .onDisappear {
+            if showPicker { showPicker = false; ble.stopScanning() }
+            pickingSecondary = false
+        }
     }
 
     private var header: some View {
@@ -3140,27 +3152,106 @@ struct BLEUnlockView: View {
         SettingsCard {
             sectionTitle(model.t("bleDevice"))
             Text(model.t("bleDeviceHint")).font(.subheadline).foregroundStyle(.secondary)
-            if let name = ble.settings.monitoredDeviceName, !name.isEmpty {
-                HStack(spacing: 14) {
-                    ZStack {
-                        Circle().fill(Color.blue.opacity(0.12)).frame(width: 42, height: 42)
-                        Image(systemName: "antenna.radiowaves.left.and.right").foregroundStyle(.blue).font(.title3)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(name).font(.body.weight(.medium))
-                        if let uuid = ble.settings.monitoredDeviceUUID { Text(uuid).font(.caption).foregroundStyle(.secondary) }
-                    }
-                    Spacer()
-                    Button(model.t("bleChangeDevice")) { showPicker = true; ble.startScanning() }
+            if ble.settings.monitoredDeviceUUID != nil {
+                configuredDeviceRow(
+                    name: ble.settings.monitoredDeviceName,
+                    uuid: ble.settings.monitoredDeviceUUID,
+                    actionTitle: model.t("bleChangeDevice")
+                ) {
+                    openDevicePicker(forSecondary: false)
                 }
             }
-            if showPicker { deviceScanList }
-            else if ble.settings.monitoredDeviceUUID == nil {
-                Button { showPicker = true; ble.startScanning() } label: {
+            if !showPicker, ble.settings.monitoredDeviceUUID == nil {
+                Button { openDevicePicker(forSecondary: false) } label: {
                     Label(model.t("bleSelectDevice"), systemImage: "viewfinder").frame(maxWidth: .infinity)
                 }.buttonStyle(.bordered).controlSize(.large)
             }
+
+            Divider()
+
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.t("bleSecondDevice")).font(.headline)
+                    Text(model.t("bleSecondDeviceInfo")).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if ble.settings.secondaryMonitoredDeviceUUID != nil {
+                    Button(model.t("bleRemoveSecondDevice"), role: .destructive) {
+                        ble.removeSecondaryDevice()
+                    }
+                }
+            }
+
+            if let uuid = ble.settings.secondaryMonitoredDeviceUUID {
+                configuredDeviceRow(
+                    name: ble.settings.secondaryMonitoredDeviceName,
+                    uuid: uuid,
+                    actionTitle: model.t("bleChangeDevice")
+                ) {
+                    openDevicePicker(forSecondary: true)
+                }
+                relationPicker
+            } else if !showPicker, ble.settings.monitoredDeviceUUID != nil {
+                Button {
+                    openDevicePicker(forSecondary: true)
+                } label: {
+                    Label(model.t("bleAddSecondDevice"), systemImage: "plus.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+            }
+
+            if showPicker { deviceScanList }
         }
+    }
+
+    @ViewBuilder
+    private func configuredDeviceRow(
+        name: String?,
+        uuid: String?,
+        actionTitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle().fill(Color.blue.opacity(0.12)).frame(width: 42, height: 42)
+                Image(systemName: "antenna.radiowaves.left.and.right").foregroundStyle(.blue).font(.title3)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name.flatMap { $0.isEmpty ? nil : $0 } ?? model.t("bleDevice"))
+                    .font(.body.weight(.medium))
+                if let uuid { Text(uuid).font(.caption).foregroundStyle(.secondary) }
+            }
+            Spacer()
+            Button(actionTitle, action: action)
+        }
+    }
+
+    private var relationPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(model.t("bleDeviceRelation")).font(.headline)
+                Spacer()
+                Picker(model.t("bleDeviceRelation"), selection: Binding(
+                    get: { ble.settings.deviceRelation },
+                    set: { ble.setDeviceRelation($0) }
+                )) {
+                    Text(model.t("bleRelationAny")).tag(BLEDevicePresenceRelation.any)
+                    Text(model.t("bleRelationAll")).tag(BLEDevicePresenceRelation.all)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.small)
+            }
+            Text(model.t("bleDeviceRelationInfo")).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func openDevicePicker(forSecondary: Bool) {
+        pickingSecondary = forSecondary
+        showPicker = true
+        ble.startScanning()
     }
 
     private var deviceScanList: some View {
@@ -3169,7 +3260,11 @@ struct BLEUnlockView: View {
                 ProgressView().controlSize(.small)
                 Text(model.t("bleScanning")).foregroundStyle(.secondary).font(.subheadline)
                 Spacer()
-                Button(model.t("cancel")) { showPicker = false; ble.stopScanning() }
+                Button(model.t("cancel")) {
+                    showPicker = false
+                    pickingSecondary = false
+                    ble.stopScanning()
+                }
             }
             if !ble.devices.isEmpty {
                 Picker(model.t("bleSortBy"), selection: $sortMode) {
@@ -3207,10 +3302,27 @@ struct BLEUnlockView: View {
             }
             Spacer()
             Text("\(device.rssi)dBm").font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-            Button(model.t("bleSelectDevice")) { showPicker = false; ble.selectDevice(device.uuid) }
+            Button(model.t("bleSelectDevice")) {
+                showPicker = false
+                let selectingSecondary = pickingSecondary
+                pickingSecondary = false
+                if selectingSecondary {
+                    ble.selectSecondaryDevice(device.uuid)
+                } else {
+                    ble.selectDevice(device.uuid)
+                }
+            }
                 .buttonStyle(.borderedProminent).controlSize(.small)
+                .disabled(selectingDeviceIsUnavailable(device.uuid))
         }
         .padding(10).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func selectingDeviceIsUnavailable(_ uuid: UUID) -> Bool {
+        if pickingSecondary {
+            return uuid.uuidString == ble.settings.monitoredDeviceUUID
+        }
+        return uuid.uuidString == ble.settings.secondaryMonitoredDeviceUUID
     }
 
     @ViewBuilder private func signalBars(_ rssi: Int) -> some View {

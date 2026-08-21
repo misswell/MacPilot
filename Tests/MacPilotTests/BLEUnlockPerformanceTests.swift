@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import MacPilot
 
@@ -44,5 +45,68 @@ struct BLEUnlockPerformanceTests {
 
         #expect(firstPublication)
         #expect(!secondPublication)
+    }
+
+    @Test func anyRelationStaysPresentWhileOneDeviceIsNear() {
+        #expect(BLEDevicePresencePolicy.isSatisfied(
+            presences: [true, false],
+            relation: .any
+        ))
+        #expect(!BLEDevicePresencePolicy.isSatisfied(
+            presences: [false, false],
+            relation: .any
+        ))
+    }
+
+    @Test func allRelationRequiresEveryConfiguredDeviceToBeNear() {
+        #expect(BLEDevicePresencePolicy.isSatisfied(
+            presences: [true, true],
+            relation: .all
+        ))
+        #expect(!BLEDevicePresencePolicy.isSatisfied(
+            presences: [true, false],
+            relation: .all
+        ))
+        #expect(!BLEDevicePresencePolicy.isSatisfied(
+            presences: [false, false],
+            relation: .all
+        ))
+    }
+
+    @Test func legacyBLESettingsDecodeWithSingleDeviceDefaults() throws {
+        let data = Data(#"""
+        {
+          "isEnabled": true,
+          "monitoredDeviceUUID": "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+          "monitoredDeviceName": "Phone",
+          "lockRSSI": -80,
+          "unlockRSSI": -60
+        }
+        """#.utf8)
+
+        let settings = try JSONDecoder().decode(BLEUnlockSettings.self, from: data)
+
+        #expect(settings.isEnabled)
+        #expect(settings.monitoredDeviceUUID == "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")
+        #expect(settings.secondaryMonitoredDeviceUUID == nil)
+        #expect(settings.secondaryMonitoredDeviceName == nil)
+        #expect(settings.deviceRelation == .any)
+    }
+
+    @Test func twoDeviceBLESettingsRoundTrip() throws {
+        var settings = BLEUnlockSettings()
+        settings.monitoredDeviceUUID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+        settings.monitoredDeviceName = "Phone"
+        settings.secondaryMonitoredDeviceUUID = "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"
+        settings.secondaryMonitoredDeviceName = "Watch"
+        settings.deviceRelation = .all
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(BLEUnlockSettings.self, from: data)
+
+        #expect(decoded.monitoredDeviceUUID == settings.monitoredDeviceUUID)
+        #expect(decoded.secondaryMonitoredDeviceUUID == settings.secondaryMonitoredDeviceUUID)
+        #expect(decoded.secondaryMonitoredDeviceName == settings.secondaryMonitoredDeviceName)
+        #expect(decoded.deviceRelation == .all)
     }
 }
