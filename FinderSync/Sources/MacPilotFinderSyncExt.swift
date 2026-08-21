@@ -246,12 +246,6 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
 
         let menu = NSMenu(title: "MacPilot")
 
-        // 品牌头部：禁用态标题项 + 图标，让菜单一眼属于 MacPilot。
-        let brandItem = NSMenuItem(title: "MacPilot", action: nil, keyEquivalent: "")
-        brandItem.isEnabled = false
-        brandItem.image = templateSymbol("cursorarrow.click")
-        menu.addItem(brandItem)
-
         // 如果缓存为空，触发请求并返回加载中的菜单
         guard let config = cachedMenuConfig else {
             requestMenuConfig()
@@ -259,7 +253,7 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
             return menu
         }
 
-        // 全部为空时给出明确反馈，避免只剩一个空品牌头。
+        // 全部为空时给出明确反馈。
         if config.actions.isEmpty, config.apps.isEmpty, config.newFiles.isEmpty, config.commonDirs.isEmpty {
             let emptyItem = NSMenuItem(title: AppLocalization.localized("No items"), action: nil, keyEquivalent: "")
             emptyItem.isEnabled = false
