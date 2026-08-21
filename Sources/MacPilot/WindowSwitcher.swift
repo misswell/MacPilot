@@ -70,6 +70,17 @@ enum WindowSwitcherPreviewSize: String, Codable, CaseIterable, Sendable {
     case small, medium, large
 }
 
+enum WindowSwitcherThumbnailCommitPolicy {
+    static func shouldStoreThumbnail(
+        taskIsCancelled: Bool,
+        revisionMatches: Bool,
+        showThumbnails: Bool,
+        showIconsOnly: Bool = false
+    ) -> Bool {
+        !taskIsCancelled && revisionMatches && showThumbnails && !showIconsOnly
+    }
+}
+
 enum WindowSwitcherSelection {
     static func initialIndex(count: Int, currentIndex: Int?, reverse: Bool) -> Int? {
         guard count > 0 else { return nil }
@@ -875,6 +886,10 @@ final class WindowSwitcherModel: ObservableObject {
     func applyLoadedSettings(_ settings: WindowSwitcherSettings) {
         self.settings = settings
         cachedWindows = []
+        if !settings.showThumbnails || settings.showIconsOnly {
+            cancelThumbnailRefresh()
+            clearThumbnailCache()
+        }
         if isActive {
             if settings.isEnabled {
                 if isRuntimeActive {
@@ -1581,7 +1596,7 @@ final class WindowSwitcherModel: ObservableObject {
     }
 
     private func applyCachedPreviews(to items: [WindowSwitcherItem]) {
-        guard settings.showThumbnails else {
+        guard settings.showThumbnails, !settings.showIconsOnly else {
             items.forEach { $0.updatePreview(nil) }
             return
         }
@@ -1618,7 +1633,7 @@ final class WindowSwitcherModel: ObservableObject {
         requireShowing: Bool
     ) {
         cancelThumbnailRefresh()
-        guard settings.showThumbnails, let selectedIndex else { return }
+        guard settings.showThumbnails, !settings.showIconsOnly, let selectedIndex else { return }
         let revision = thumbnailRevision
         let maximumPixelSize = Self.thumbnailMaximumPixelSize
         let prioritized = WindowSwitcherThumbnailPriority.orderedIndices(
@@ -1648,7 +1663,15 @@ final class WindowSwitcherModel: ObservableObject {
                         maximumPixelSize: maximumPixelSize
                     )
                 }.value
-                guard let captured else { continue }
+                guard let captured,
+                      WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
+                          taskIsCancelled: Task.isCancelled,
+                          revisionMatches: self.thumbnailRevision == revision,
+                          showThumbnails: self.settings.showThumbnails,
+                          showIconsOnly: self.settings.showIconsOnly
+                      ) else {
+                    return
+                }
                 let image = NSImage(
                     cgImage: captured.image,
                     size: NSSize(width: captured.image.width, height: captured.image.height)

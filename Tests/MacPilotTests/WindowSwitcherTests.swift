@@ -130,6 +130,35 @@ struct WindowSwitcherTests {
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 0, selectedIndex: 0).isEmpty)
     }
 
+    @Test func cancelledThumbnailWorkCannotRepopulateDisabledCache() {
+        #expect(!WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
+            taskIsCancelled: true,
+            revisionMatches: true,
+            showThumbnails: true
+        ))
+        #expect(!WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
+            taskIsCancelled: false,
+            revisionMatches: false,
+            showThumbnails: true
+        ))
+        #expect(!WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
+            taskIsCancelled: false,
+            revisionMatches: true,
+            showThumbnails: false
+        ))
+        #expect(!WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
+            taskIsCancelled: false,
+            revisionMatches: true,
+            showThumbnails: true,
+            showIconsOnly: true
+        ))
+        #expect(WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
+            taskIsCancelled: false,
+            revisionMatches: true,
+            showThumbnails: true
+        ))
+    }
+
     @Test func settingsDecodeMissingFieldsWithSafeDefaults() throws {
         let settings = try JSONDecoder().decode(
             WindowSwitcherSettings.self,
