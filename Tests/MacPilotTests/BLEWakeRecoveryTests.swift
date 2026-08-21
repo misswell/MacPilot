@@ -36,6 +36,27 @@ struct BLEWakeRecoveryTests {
         #expect(BLEUnlockAttemptPlan.standard.deadlines == BLEUnlockAttemptPlan.standard.deadlines.sorted())
     }
 
+    @Test func unlockAttemptRetriesWhileTheScreenRemainsLocked() {
+        var progress = BLEUnlockAttemptProgress(plan: .standard)
+
+        #expect(progress.nextAction(screenState: .locked) == .postPassword(deadline: 0.5))
+        #expect(progress.nextAction(screenState: .locked) == .postPassword(deadline: 1))
+        #expect(progress.nextAction(screenState: .unlocked) == .confirmed)
+    }
+
+    @Test func unlockConfirmationRequiresAConfirmedUnlockedSession() {
+        #expect(!BLEUnlockConfirmation.isConfirmed(screenState: .locked))
+        #expect(!BLEUnlockConfirmation.isConfirmed(screenState: .unknown))
+        #expect(BLEUnlockConfirmation.isConfirmed(screenState: .unlocked))
+    }
+
+    @Test func unlockAttemptDoesNotTypeWhenSessionStateIsUnknown() {
+        var progress = BLEUnlockAttemptProgress(plan: .standard)
+
+        #expect(progress.nextAction(screenState: .unknown) == .stateUnavailable)
+        #expect(progress.nextAction(screenState: .locked) == .postPassword(deadline: 1))
+    }
+
     @MainActor
     @Test func wakeRecoveryFinishesWithoutAScreensDidWakeNotification() async throws {
         let model = BLEUnlockModel()

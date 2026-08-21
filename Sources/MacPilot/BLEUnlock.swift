@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreBluetooth
 import Darwin
 import Foundation
@@ -325,6 +326,58 @@ struct BLEUnlockAttemptPlan: Equatable {
     )
 }
 
+enum BLEScreenLockState: String, Equatable {
+    case locked
+    case unlocked
+    case unknown
+}
+
+enum BLEUnlockConfirmation {
+    static func isConfirmed(screenState: BLEScreenLockState) -> Bool {
+        screenState == .unlocked
+    }
+}
+
+struct BLEUnlockAttemptProgress {
+    enum Action: Equatable {
+        case postPassword(deadline: TimeInterval)
+        case confirmed
+        case stateUnavailable
+        case exhausted
+    }
+
+    let deadlines: [TimeInterval]
+    private(set) var nextIndex = 0
+
+    init(plan: BLEUnlockAttemptPlan) {
+        deadlines = plan.deadlines
+    }
+
+    var nextDeadline: TimeInterval? {
+        guard nextIndex < deadlines.count else { return nil }
+        return deadlines[nextIndex]
+    }
+
+    mutating func skipCurrentDeadline() {
+        guard nextIndex < deadlines.count else { return }
+        nextIndex += 1
+    }
+
+    mutating func nextAction(screenState: BLEScreenLockState) -> Action {
+        switch screenState {
+        case .unlocked:
+            return .confirmed
+        case .unknown:
+            skipCurrentDeadline()
+            return .stateUnavailable
+        case .locked:
+            guard let deadline = nextDeadline else { return .exhausted }
+            nextIndex += 1
+            return .postPassword(deadline: deadline)
+        }
+    }
+}
+
 // MARK: - Model
 
 @MainActor
@@ -378,7 +431,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var recoveringFromSystemSleep = false
     private var manualLock = false
     private var inScreensaver = false
-    private var unlockedAt: TimeInterval = 0
+    private var lastUnlockRequestAt: TimeInterval = 0
+    private var lastAutomaticUnlockConfirmationAt: TimeInterval = 0
     private var nowPlayingWasPlaying = false
 
     var isRecoveringFromSystemSleep: Bool { recoveringFromSystemSleep }
@@ -905,12 +959,21 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         }
     }
 
-    func isScreenLocked() -> Bool {
-        if let dict = CGSessionCopyCurrentDictionary() as? [String: Any],
-           let locked = dict["CGSSessionScreenIsLocked"] as? Int {
-            return locked == 1
+    private func screenLockState() -> BLEScreenLockState {
+        guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any] else {
+            return .unknown
         }
-        return false
+        if let locked = dict["CGSSessionScreenIsLocked"] as? NSNumber {
+            return locked.boolValue ? .locked : .unlocked
+        }
+        if let locked = dict["CGSSessionScreenIsLocked"] as? Int {
+            return locked == 1 ? .locked : .unlocked
+        }
+        return .unknown
+    }
+
+    func isScreenLocked() -> Bool {
+        screenLockState() == .locked
     }
 
     private func tryUnlockScreen(trigger: String = "unspecified") {
@@ -973,6 +1036,34 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         unlockAttemptGeneration &+= 1
         unlockAttemptTask?.cancel()
         unlockAttemptTask = nil
+        lastUnlockRequestAt = 0
+    }
+
+    private func formattedUnlockAge(_ age: TimeInterval?) -> String {
+        guard let age else { return "none" }
+        return String(format: "%.3f", age)
+    }
+
+    private func confirmAutomaticUnlock(source: String) {
+        let now = Date().timeIntervalSince1970
+        let state = screenLockState()
+        guard BLEUnlockConfirmation.isConfirmed(screenState: state) else {
+            log("unlock confirmation rejected source=\(source) screenState=\(state.rawValue)")
+            return
+        }
+
+        let requestAge = lastUnlockRequestAt > 0 ? now - lastUnlockRequestAt : nil
+        if now - lastAutomaticUnlockConfirmationAt < 2 {
+            log("unlock confirmation already handled source=\(source) requestAge=\(formattedUnlockAge(requestAge))")
+            manualLock = false
+            return
+        }
+
+        lastAutomaticUnlockConfirmationAt = now
+        log("screen unlock confirmed source=\(source) screenState=unlocked requestAge=\(formattedUnlockAge(requestAge))")
+        manualLock = false
+        playNowPlaying()
+        runScript("unlocked")
     }
 
     private func scheduleUnlockAttempt(trigger: String) {
@@ -985,7 +1076,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         log("unlock attempt scheduled trigger=\(trigger) deadlines=\(BLEUnlockAttemptPlan.standard.deadlines)")
         unlockAttemptTask = Task { [weak self] in
             var previousDeadline: TimeInterval = 0
-            for deadline in BLEUnlockAttemptPlan.standard.deadlines {
+            var progress = BLEUnlockAttemptProgress(plan: .standard)
+            while let deadline = progress.nextDeadline {
                 let wait = deadline - previousDeadline
                 if wait > 0 {
                     try? await Task.sleep(for: .milliseconds(Int64(wait * 1_000)))
@@ -1008,35 +1100,38 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 // handles both proximity-wake and a later keyboard wake.
                 if !self.displayIsReadyForUnlock() {
                     self.log("unlock attempt deferred deadline=\(deadline) reason=displayAsleep")
+                    progress.skipCurrentDeadline()
                     previousDeadline = deadline
                     continue
                 }
 
-                // If the display is awake and the session is already unlocked,
-                // this was only a late wake notification; never type into the
-                // user's active application.
-                guard self.isScreenLocked() else {
-                    self.log("unlock attempt stopped deadline=\(deadline) reason=sessionAlreadyUnlocked")
+                let screenState = self.screenLockState()
+                self.log("unlock screen state sampled deadline=\(deadline) state=\(screenState.rawValue)")
+                switch progress.nextAction(screenState: screenState) {
+                case .confirmed:
+                    self.unlockAttemptTask = nil
+                    self.confirmAutomaticUnlock(source: "screenState deadline=\(deadline)")
                     return
+                case .stateUnavailable:
+                    self.log("unlock attempt deferred deadline=\(deadline) reason=screenStateUnavailable")
+                case .exhausted:
+                    self.log("unlock attempt exhausted before posting deadline=\(deadline)")
+                case .postPassword(let attemptDeadline):
+                    guard let password = self.fetchPassword(warn: true) else {
+                        self.log("unlock attempt stopped deadline=\(attemptDeadline) reason=passwordUnavailable")
+                        return
+                    }
+                    self.lastUnlockRequestAt = Date().timeIntervalSince1970
+                    self.log("posting unlock key events deadline=\(attemptDeadline) screenState=locked accessibilityTrusted=\(AXIsProcessTrusted())")
+                    self.fakeKeyStrokes(password)
+                    self.log("unlock key events posted deadline=\(attemptDeadline) screenStateAfterPost=\(self.screenLockState().rawValue)")
                 }
-
-                guard let password = self.fetchPassword(warn: true) else {
-                    self.log("unlock attempt stopped deadline=\(deadline) reason=passwordUnavailable")
-                    return
-                }
-                self.log("posting unlock key events deadline=\(deadline)")
-                self.unlockedAt = Date().timeIntervalSince1970
-                self.fakeKeyStrokes(password)
-                self.playNowPlaying()
-                self.runScript("unlocked")
-                self.unlockAttemptTask = nil
-                self.log("unlock key events posted deadline=\(deadline)")
-                return
+                previousDeadline = deadline
             }
 
             guard let self, self.unlockAttemptGeneration == generation else { return }
             self.unlockAttemptTask = nil
-            self.log("unlock attempt exhausted without unlock")
+            self.log("unlock attempt exhausted without unlock screenState=\(self.screenLockState().rawValue)")
         }
     }
 
@@ -1393,14 +1488,31 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 guard let self else { return }
-                self.log("screen unlocked notification received unlockedAt=\(self.unlockedAt)")
-                if Date().timeIntervalSince1970 >= self.unlockedAt + 10 {
-                    if self.settings.unlockRSSI != Self.unlockDisabled { self.runScript("intruded") }
-                    self.playNowPlaying()
-                    self.log("screen unlock classified as external or manual")
-                } else {
-                    self.log("screen unlock classified as automatic")
+                let now = Date().timeIntervalSince1970
+                let screenState = self.screenLockState()
+                let requestAge = self.lastUnlockRequestAt > 0 ? now - self.lastUnlockRequestAt : nil
+                let confirmationAge = self.lastAutomaticUnlockConfirmationAt > 0 ? now - self.lastAutomaticUnlockConfirmationAt : nil
+                self.log("screen unlocked notification received screenState=\(screenState.rawValue) requestAge=\(self.formattedUnlockAge(requestAge)) confirmationAge=\(self.formattedUnlockAge(confirmationAge))")
+
+                guard BLEUnlockConfirmation.isConfirmed(screenState: screenState) else {
+                    self.log("screen unlock notification ignored reason=sessionStillLocked")
+                    return
                 }
+
+                if let requestAge, requestAge >= 0, requestAge < 15 {
+                    self.confirmAutomaticUnlock(source: "screenIsUnlockedNotification")
+                    return
+                }
+
+                if let confirmationAge, confirmationAge >= 0, confirmationAge < 5 {
+                    self.log("screen unlock notification already handled reason=recentConfirmation")
+                    self.manualLock = false
+                    return
+                }
+
+                if self.settings.unlockRSSI != Self.unlockDisabled { self.runScript("intruded") }
+                self.playNowPlaying()
+                self.log("screen unlock classified as external or manual")
                 self.manualLock = false
             }
         })
