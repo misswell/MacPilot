@@ -37,16 +37,6 @@ struct PictureInPictureTests {
         #expect(!modifier.matches(CGEventFlags([.maskSecondaryFn])))
     }
 
-    @Test @MainActor func menuBarViewsObserveTheLivePictureInPictureModel() {
-        let pictureInPicture = PictureInPictureModel()
-        let appMenu = MenuBarView(pictureInPicture: pictureInPicture)
-
-        #expect(appMenu.pictureInPicture === pictureInPicture)
-
-        pictureInPicture.setEnabled(false)
-        #expect(!appMenu.pictureInPicture.settings.isEnabled)
-    }
-
     @Test func legacySettingsFallBackToTheStandardGlobalShortcut() throws {
         let data = Data(#"{"triggerKey":"p"}"#.utf8)
         let settings = try JSONDecoder().decode(PictureInPictureSettings.self, from: data)

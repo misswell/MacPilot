@@ -312,9 +312,11 @@ enum WindowSwitcherRecentWindowIDs {
 
 enum WindowSwitcherThumbnailPriority {
     // A preview is downscaled to at most 256x160 before it reaches NSImage.
-    // Thirty such previews are still a small, bounded session cache and let
-    // the switcher show useful previews across a larger window list.
-    static let maximumPrefetchCount = 30
+    // Capture the selected tile and its two nearest neighbours only. The
+    // source image is still created at the window's native size by
+    // CGWindowListCreateImage, so a larger prefetch count creates a sizeable
+    // transient WindowServer/Mach-message footprint on every session.
+    static let maximumPrefetchCount = 3
 
     static func orderedIndices(count: Int, selectedIndex: Int) -> [Int] {
         guard count > 0 else { return [] }
@@ -837,6 +839,23 @@ private enum WindowSwitcherPreviewCapture {
     }
 }
 
+/// WindowServer keeps the returned window image in an out-of-line Mach
+/// message while `CGWindowListCreateImage` completes. A cancelled Swift Task
+/// cannot interrupt that synchronous CoreGraphics call, so serializing the
+/// calls is important: a new switcher session must never start another full
+/// window capture while the previous one is still unwinding.
+private actor WindowSwitcherPreviewCaptureQueue {
+    func capture(windowID: CGWindowID, maximumPixelSize: CGSize) -> WindowSwitcherCapturedPreview? {
+        // Do not spend time on a request whose owning session was cancelled
+        // while it was waiting behind an older CoreGraphics capture.
+        guard !Task.isCancelled else { return nil }
+        return WindowSwitcherPreviewCapture.capture(
+            windowID: windowID,
+            maximumPixelSize: maximumPixelSize
+        )
+    }
+}
+
 // MARK: - Global shortcut event tap
 
 final class WindowSwitcherEventTapContext: @unchecked Sendable {
@@ -980,9 +999,11 @@ private enum WindowSwitcherFocusedWindowResolver {
 @MainActor
 final class WindowSwitcherModel: ObservableObject {
     private static let inventoryRefreshDebounce = Duration.milliseconds(200)
-    // Previews are session-scoped. Keep at most thirty while the switcher is
-    // visible; never prewarm a hidden process-wide image cache.
+    // Previews are session-scoped. Keep only the selected tile and its two
+    // nearest neighbours while the switcher is visible; never prewarm a
+    // hidden process-wide image cache.
     private static let thumbnailMaximumPixelSize = CGSize(width: 256, height: 160)
+    private static let thumbnailCaptureQueue = WindowSwitcherPreviewCaptureQueue()
     private static let mouseSelectionDistanceThreshold: CGFloat = 24
     private static let performanceLogger = Logger(
         subsystem: "com.misswell.macpilot",
@@ -1841,12 +1862,10 @@ final class WindowSwitcherModel: ObservableObject {
                 if requireShowing && !self.isShowing { return }
                 let item = items[index]
                 guard let windowID = item.windowID, item.canCapturePreview else { continue }
-                let captured = await Task.detached(priority: .utility) {
-                    WindowSwitcherPreviewCapture.capture(
-                        windowID: windowID,
-                        maximumPixelSize: maximumPixelSize
-                    )
-                }.value
+                let captured = await Self.thumbnailCaptureQueue.capture(
+                    windowID: windowID,
+                    maximumPixelSize: maximumPixelSize
+                )
                 guard let captured,
                       WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
                           taskIsCancelled: Task.isCancelled,

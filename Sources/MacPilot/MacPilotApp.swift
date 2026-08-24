@@ -22,15 +22,9 @@ struct MacPilotApp: App {
         .windowStyle(.hiddenTitleBar)
 
         MenuBarExtra {
-            MenuBarView(
-                pictureInPicture: model.pictureInPicture,
-                inputSources: model.inputSources,
-                windowSwitcher: model.windowSwitcher,
-                smoothScrolling: model.smoothScrolling,
-                clipboard: model.clipboard
-            ).environmentObject(model)
+            MenuBarView().environmentObject(model)
         } label: {
-            Image(systemName: model.isEnforcing ? "timer" : "pause.circle")
+            Image(systemName: model.isEnforcing ? "macwindow.on.rectangle" : "macwindow")
         }
         .menuBarExtraStyle(.menu)
     }
@@ -3475,82 +3469,9 @@ struct BLEUnlockView: View {
 struct MenuBarView: View {
     @EnvironmentObject private var model: MacPilotModel
     @Environment(\.openWindow) private var openWindow
-    @ObservedObject var pictureInPicture: PictureInPictureModel
-    @ObservedObject var inputSources: InputSourceModel
-    @ObservedObject var windowSwitcher: WindowSwitcherModel
-    @ObservedObject var smoothScrolling: SmoothScrollModel
-    @ObservedObject var clipboard: ClipboardModel
-
-    init(
-        pictureInPicture: PictureInPictureModel,
-        inputSources: InputSourceModel = InputSourceModel(),
-        windowSwitcher: WindowSwitcherModel = WindowSwitcherModel(),
-        smoothScrolling: SmoothScrollModel = SmoothScrollModel(),
-        clipboard: ClipboardModel = ClipboardModel()
-    ) {
-        self._pictureInPicture = ObservedObject(wrappedValue: pictureInPicture)
-        self._inputSources = ObservedObject(wrappedValue: inputSources)
-        self._windowSwitcher = ObservedObject(wrappedValue: windowSwitcher)
-        self._smoothScrolling = ObservedObject(wrappedValue: smoothScrolling)
-        self._clipboard = ObservedObject(wrappedValue: clipboard)
-    }
 
     var body: some View {
-        // 应用状态与总开关
-        Text(model.isEnforcing ? model.t("enabledStatus") : model.t("disabledStatus"))
-        Button(model.isEnforcing ? model.t("disableApp") : model.t("enableApp")) { model.isEnforcing.toggle() }
-        Divider()
-
-        // 核心功能页
-        Button(model.t("rules")) { model.requestedSection = .exit; showMainWindow() }
-        Button(model.t("launch")) { model.requestedSection = .launch; showMainWindow() }
-        Button(model.t("checkNow")) { model.evaluateRules() }
-        Button(model.t("runNow")) { model.runLaunchPlanNow() }
-            .disabled(!model.isLaunchSchedulingEnabled || model.enabledLaunchCount == 0)
-        Button(model.t("cancelLaunches")) { model.cancelScheduledLaunches() }
-            .disabled(model.pendingLaunchCount == 0)
-
-        // 已启用的功能：名称进入对应功能页，下方提供快捷操作
-        if model.ble.settings.isEnabled {
-            Divider()
-            Button(model.t("bleUnlock")) { model.requestedSection = .ble; showMainWindow() }
-            Button(model.t("bleLockNow")) { model.ble.lockNow() }
-        }
-        if inputSources.settings.isEnabled {
-            Divider()
-            Button(model.t("inputSources")) { model.requestedSection = .inputSources; showMainWindow() }
-            Button(model.t("inputSourcesCycleNow")) { inputSources.cycleInputSource() }
-                .disabled(inputSources.availableSources.count < 2)
-        }
-        if windowSwitcher.settings.isEnabled {
-            Divider()
-            Button(model.t("windowSwitcher")) { model.requestedSection = .windowSwitcher; showMainWindow() }
-            Button(model.t("windowSwitcherTestNow")) { windowSwitcher.showSwitcherNow() }
-                .disabled(!windowSwitcher.hasAccessibilityPermission)
-        }
-        if smoothScrolling.settings.isEnabled {
-            Divider()
-            Button(model.t("smoothScrolling")) { model.requestedSection = .smoothScrolling; showMainWindow() }
-        }
-        if clipboard.settings.isEnabled {
-            Divider()
-            Button(model.t("clipboard")) { model.requestedSection = .clipboard; showMainWindow() }
-            Button(model.t("clipboardOpenNow")) { deferCaptureAction { clipboard.openPanel() } }
-        }
-        if model.screenCapture.settings.screenshotEnabled {
-            Divider()
-            Button(model.t("screenCapture")) { model.requestedSection = .capture; showMainWindow() }
-            Button(model.t("scSmartCaptureNow")) { deferCaptureAction { model.screenCapture.startSmartCapture() } }
-        }
-        if pictureInPicture.settings.isEnabled {
-            Divider()
-            Button(model.t("pictureInPicture")) { model.requestedSection = .pictureInPicture; showMainWindow() }
-            Button(model.t("pipCaptureFocused")) { pictureInPicture.captureFocusedWindowNow() }
-        }
-        Divider()
-        Button(model.t("fileCompression")) { model.requestedSection = .compression; showMainWindow() }
-
-        Divider()
+        // 菜单栏只保留应用级入口；具体功能统一从主窗口进入。
         UpdateMenuItems(updater: model.updater) {
             model.requestedSection = .settings
             showMainWindow()
@@ -3571,13 +3492,6 @@ struct MenuBarView: View {
             NSApp.activate(ignoringOtherApps: true)
             if let window = mainWindow { present(window) }
         }
-    }
-
-    /// NSMenu remains in its tracking loop while a menu item action runs. Let
-    /// it close before creating the screen-level overlay, otherwise AppKit can
-    /// immediately order the new panel out or keep the menu as the key window.
-    private func deferCaptureAction(_ action: @escaping @MainActor @Sendable () -> Void) {
-        DispatchQueue.main.async(execute: action)
     }
 
     private var mainWindow: NSWindow? {
