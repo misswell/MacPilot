@@ -275,7 +275,7 @@ private struct ScreenCaptureMediaMetadata: Sendable {
 /// lifetime policy can be tested without requiring screen-recording access.
 struct ScreenCaptureImageCapturePipeline {
     @MainActor
-    static func captureAndSave<Image, Saved>(
+    static func captureAndSave<Image: Sendable, Saved: Sendable>(
         displayIndices: Range<Int>,
         multiDisplay: Bool,
         capture: (Int) async throws -> Image?,
