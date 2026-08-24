@@ -311,6 +311,11 @@ enum WindowSwitcherRecentWindowIDs {
 }
 
 enum WindowSwitcherThumbnailPriority {
+    // A preview is downscaled to at most 256x160 before it reaches NSImage.
+    // Thirty such previews are still a small, bounded session cache and let
+    // the switcher show useful previews across a larger window list.
+    static let maximumPrefetchCount = 30
+
     static func orderedIndices(count: Int, selectedIndex: Int) -> [Int] {
         guard count > 0 else { return [] }
         let selected = min(max(selectedIndex, 0), count - 1)
@@ -322,6 +327,15 @@ enum WindowSwitcherThumbnailPriority {
             if !result.contains(backward) { result.append(backward) }
         }
         return result
+    }
+
+    static func prefetchedIndices(
+        count: Int,
+        selectedIndex: Int,
+        maximumCount: Int = maximumPrefetchCount
+    ) -> [Int] {
+        guard maximumCount > 0 else { return [] }
+        return Array(orderedIndices(count: count, selectedIndex: selectedIndex).prefix(maximumCount))
     }
 }
 
@@ -966,10 +980,8 @@ private enum WindowSwitcherFocusedWindowResolver {
 @MainActor
 final class WindowSwitcherModel: ObservableObject {
     private static let inventoryRefreshDebounce = Duration.milliseconds(200)
-    // Previews are session-scoped. Keep only the selected tile and its two
-    // nearest neighbours while the switcher is visible; never prewarm a
-    // hidden process-wide image cache.
-    private static let thumbnailPrefetchCount = 3
+    // Previews are session-scoped. Keep at most thirty while the switcher is
+    // visible; never prewarm a hidden process-wide image cache.
     private static let thumbnailMaximumPixelSize = CGSize(width: 256, height: 160)
     private static let mouseSelectionDistanceThreshold: CGFloat = 24
     private static let performanceLogger = Logger(
@@ -1376,7 +1388,6 @@ final class WindowSwitcherModel: ObservableObject {
         refreshThumbnails(
             for: snapshot,
             selectedIndex: selectedIndex,
-            maximumCount: Self.thumbnailPrefetchCount,
             requireShowing: true
         )
         if manual {
@@ -1808,18 +1819,16 @@ final class WindowSwitcherModel: ObservableObject {
     private func refreshThumbnails(
         for items: [WindowSwitcherItem],
         selectedIndex: Int?,
-        maximumCount: Int?,
         requireShowing: Bool
     ) {
         cancelThumbnailRefresh()
         guard settings.showThumbnails, !settings.showIconsOnly, let selectedIndex else { return }
         let revision = thumbnailRevision
         let maximumPixelSize = Self.thumbnailMaximumPixelSize
-        let prioritized = WindowSwitcherThumbnailPriority.orderedIndices(
+        let indices = WindowSwitcherThumbnailPriority.prefetchedIndices(
             count: items.count,
             selectedIndex: selectedIndex
         )
-        let indices = maximumCount.map { Array(prioritized.prefix($0)) } ?? prioritized
         thumbnailTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
