@@ -494,6 +494,20 @@ private final class BLEMonitoredDeviceRuntime {
     }
 }
 
+/// Scanning must not ask CoreBluetooth to deliver every advertisement packet.
+/// The monitored peripherals receive their periodic RSSI reads through the
+/// connected-peripheral path below; duplicate advertisements only create an
+/// unbounded XPC/Mach-message stream on macOS.
+enum BLEScanPolicy {
+    static let allowsDuplicateAdvertisements = false
+
+    static var scanOptions: [String: Any]? {
+        allowsDuplicateAdvertisements
+            ? [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+            : nil
+    }
+}
+
 // MARK: - Model
 
 @MainActor
@@ -906,7 +920,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         }
         guard !central.isScanning else { return }
         log("scan started monitored=\(monitoredUUIDs.map(\.uuidString).joined(separator: ","))")
-        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        central.scanForPeripherals(withServices: nil, options: BLEScanPolicy.scanOptions)
     }
 
     private func applyPassiveMode() {

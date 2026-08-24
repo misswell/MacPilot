@@ -109,4 +109,9 @@ struct BLEUnlockPerformanceTests {
         #expect(decoded.secondaryMonitoredDeviceName == settings.secondaryMonitoredDeviceName)
         #expect(decoded.deviceRelation == .all)
     }
+
+    @Test func bluetoothScanningDoesNotRequestDuplicateAdvertisements() {
+        #expect(!BLEScanPolicy.allowsDuplicateAdvertisements)
+        #expect(BLEScanPolicy.scanOptions == nil)
+    }
 }

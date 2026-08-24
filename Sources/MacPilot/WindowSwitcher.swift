@@ -966,7 +966,10 @@ private enum WindowSwitcherFocusedWindowResolver {
 @MainActor
 final class WindowSwitcherModel: ObservableObject {
     private static let inventoryRefreshDebounce = Duration.milliseconds(200)
-    private static let thumbnailCacheLimit = 12
+    // Previews are session-scoped. Keep only the selected tile and its two
+    // nearest neighbours while the switcher is visible; never prewarm a
+    // hidden process-wide image cache.
+    private static let thumbnailPrefetchCount = 3
     private static let thumbnailMaximumPixelSize = CGSize(width: 256, height: 160)
     private static let mouseSelectionDistanceThreshold: CGFloat = 24
     private static let performanceLogger = Logger(
@@ -1007,8 +1010,6 @@ final class WindowSwitcherModel: ObservableObject {
     private var pendingSession: WindowSwitcherPendingSession?
     private var thumbnailTask: Task<Void, Never>?
     private var thumbnailRevision = 0
-    private var thumbnailCache: [CGWindowID: NSImage] = [:]
-    private var thumbnailCacheOrder: [CGWindowID] = []
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
     private var eventTapContext: WindowSwitcherEventTapContext?
@@ -1139,8 +1140,9 @@ final class WindowSwitcherModel: ObservableObject {
     func setShowThumbnails(_ enabled: Bool) {
         settings.showThumbnails = enabled
         if enabled {
+            // Capture previews only when the switcher is actually shown.
+            // Hidden prewarming kept window images live between shortcuts.
             applyCachedPreviews(to: cachedWindows)
-            prewarmThumbnails()
         } else {
             cancelThumbnailRefresh()
             clearThumbnailCache()
@@ -1374,7 +1376,7 @@ final class WindowSwitcherModel: ObservableObject {
         refreshThumbnails(
             for: snapshot,
             selectedIndex: selectedIndex,
-            maximumCount: Self.thumbnailCacheLimit,
+            maximumCount: Self.thumbnailPrefetchCount,
             requireShowing: true
         )
         if manual {
@@ -1434,6 +1436,9 @@ final class WindowSwitcherModel: ObservableObject {
         mouseSelectionAnchor = nil
         panelController?.hide()
         cancelThumbnailRefresh()
+        // A preview is useful only while this panel is visible. Release all
+        // image references before the next inventory refresh starts.
+        clearThumbnailCache()
         if commit, let selected {
             focus(selected)
         }
@@ -1720,7 +1725,6 @@ final class WindowSwitcherModel: ObservableObject {
                 return
             }
             self.prepareHiddenPanelContents()
-            self.prewarmThumbnails()
         }
     }
 
@@ -1790,33 +1794,15 @@ final class WindowSwitcherModel: ObservableObject {
     }
 
     private func applyCachedPreviews(to items: [WindowSwitcherItem]) {
-        guard settings.showThumbnails, !settings.showIconsOnly else {
-            items.forEach { $0.updatePreview(nil) }
-            return
-        }
-        for item in items {
-            guard let windowID = item.windowID else { continue }
-            item.updatePreview(thumbnailCache[windowID])
-        }
+        // Never restore previews into the hidden inventory. The next visible
+        // session captures only the tiles it needs.
+        items.forEach { $0.updatePreview(nil) }
     }
 
     private func prepareHiddenPanelContents() {
         guard !isShowing, pendingSession == nil, !cachedWindows.isEmpty else { return }
         let ordered = orderedForSession(cachedWindows)
         updatePanelContents(ordered, selectedIndex: nil)
-    }
-
-    private func prewarmThumbnails() {
-        guard !isShowing else { return }
-        let ordered = orderedForSession(cachedWindows)
-        let selected = WindowSwitcherSelection.initialIndex(
-            count: ordered.count,
-            currentIndex: currentWindowIndex(in: ordered),
-            reverse: false
-        )
-        if let selected {
-            refreshThumbnails(for: ordered, selectedIndex: selected, maximumCount: 3, requireShowing: false)
-        }
     }
 
     private func refreshThumbnails(
@@ -1846,10 +1832,6 @@ final class WindowSwitcherModel: ObservableObject {
                 if requireShowing && !self.isShowing { return }
                 let item = items[index]
                 guard let windowID = item.windowID, item.canCapturePreview else { continue }
-                if let cached = self.cachedThumbnail(for: windowID) {
-                    item.updatePreview(cached)
-                    continue
-                }
                 let captured = await Task.detached(priority: .utility) {
                     WindowSwitcherPreviewCapture.capture(
                         windowID: windowID,
@@ -1869,7 +1851,6 @@ final class WindowSwitcherModel: ObservableObject {
                     cgImage: captured.image,
                     size: NSSize(width: captured.image.width, height: captured.image.height)
                 )
-                self.storeThumbnail(image, for: windowID)
                 guard !Task.isCancelled else { return }
                 item.updatePreview(image)
             }
@@ -1882,27 +1863,7 @@ final class WindowSwitcherModel: ObservableObject {
         thumbnailTask = nil
     }
 
-    private func cachedThumbnail(for windowID: CGWindowID) -> NSImage? {
-        guard let image = thumbnailCache[windowID] else { return nil }
-        thumbnailCacheOrder.removeAll { $0 == windowID }
-        thumbnailCacheOrder.append(windowID)
-        return image
-    }
-
-    private func storeThumbnail(_ image: NSImage, for windowID: CGWindowID) {
-        thumbnailCache[windowID] = image
-        thumbnailCacheOrder.removeAll { $0 == windowID }
-        thumbnailCacheOrder.append(windowID)
-        while thumbnailCacheOrder.count > Self.thumbnailCacheLimit {
-            let removed = thumbnailCacheOrder.removeFirst()
-            thumbnailCache.removeValue(forKey: removed)
-            clearPreview(for: removed)
-        }
-    }
-
     private func clearThumbnailCache() {
-        thumbnailCache.removeAll(keepingCapacity: false)
-        thumbnailCacheOrder.removeAll(keepingCapacity: false)
         clearPreview(for: nil)
     }
 
