@@ -312,11 +312,9 @@ enum WindowSwitcherRecentWindowIDs {
 
 enum WindowSwitcherThumbnailPriority {
     // A preview is downscaled to at most 256x160 before it reaches NSImage.
-    // Capture the selected tile and its two nearest neighbours only. The
-    // source image is still created at the window's native size by
-    // CGWindowListCreateImage, so a larger prefetch count creates a sizeable
-    // transient WindowServer/Mach-message footprint on every session.
-    static let maximumPrefetchCount = 3
+    // There is no artificial count cap: every item in the current window
+    // snapshot can receive a preview. Memory is bounded by the current
+    // session because old previews are cleared before a new batch begins.
 
     static func orderedIndices(count: Int, selectedIndex: Int) -> [Int] {
         guard count > 0 else { return [] }
@@ -331,13 +329,8 @@ enum WindowSwitcherThumbnailPriority {
         return result
     }
 
-    static func prefetchedIndices(
-        count: Int,
-        selectedIndex: Int,
-        maximumCount: Int = maximumPrefetchCount
-    ) -> [Int] {
-        guard maximumCount > 0 else { return [] }
-        return Array(orderedIndices(count: count, selectedIndex: selectedIndex).prefix(maximumCount))
+    static func prefetchedIndices(count: Int, selectedIndex: Int) -> [Int] {
+        orderedIndices(count: count, selectedIndex: selectedIndex)
     }
 }
 
@@ -999,9 +992,8 @@ private enum WindowSwitcherFocusedWindowResolver {
 @MainActor
 final class WindowSwitcherModel: ObservableObject {
     private static let inventoryRefreshDebounce = Duration.milliseconds(200)
-    // Previews are session-scoped. Keep only the selected tile and its two
-    // nearest neighbours while the switcher is visible; never prewarm a
-    // hidden process-wide image cache.
+    // Previews are session-scoped. Capture every item in the visible snapshot;
+    // never prewarm a hidden process-wide image cache.
     private static let thumbnailMaximumPixelSize = CGSize(width: 256, height: 160)
     private static let thumbnailCaptureQueue = WindowSwitcherPreviewCaptureQueue()
     private static let mouseSelectionDistanceThreshold: CGFloat = 24
@@ -1843,6 +1835,11 @@ final class WindowSwitcherModel: ObservableObject {
         requireShowing: Bool
     ) {
         cancelThumbnailRefresh()
+        // A new session owns the only visible preview cache. Release any
+        // images left on shared WindowSwitcherItem instances before starting
+        // the next capture batch, so repeated sessions cannot retain old
+        // thumbnails in addition to the current session's snapshot.
+        clearThumbnailCache()
         guard settings.showThumbnails, !settings.showIconsOnly, let selectedIndex else { return }
         let revision = thumbnailRevision
         let maximumPixelSize = Self.thumbnailMaximumPixelSize

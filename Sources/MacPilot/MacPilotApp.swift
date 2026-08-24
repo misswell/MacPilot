@@ -22,9 +22,15 @@ struct MacPilotApp: App {
         .windowStyle(.hiddenTitleBar)
 
         MenuBarExtra {
-            MenuBarView().environmentObject(model)
+            MenuBarView(
+                pictureInPicture: model.pictureInPicture,
+                inputSources: model.inputSources,
+                windowSwitcher: model.windowSwitcher,
+                smoothScrolling: model.smoothScrolling,
+                clipboard: model.clipboard
+            ).environmentObject(model)
         } label: {
-            Image(systemName: model.isEnforcing ? "macwindow.on.rectangle" : "macwindow")
+            Image(systemName: model.isEnforcing ? "timer" : "pause.circle")
         }
         .menuBarExtraStyle(.menu)
     }
@@ -3469,9 +3475,57 @@ struct BLEUnlockView: View {
 struct MenuBarView: View {
     @EnvironmentObject private var model: MacPilotModel
     @Environment(\.openWindow) private var openWindow
+    @ObservedObject var pictureInPicture: PictureInPictureModel
+    @ObservedObject var inputSources: InputSourceModel
+    @ObservedObject var windowSwitcher: WindowSwitcherModel
+    @ObservedObject var smoothScrolling: SmoothScrollModel
+    @ObservedObject var clipboard: ClipboardModel
+
+    init(
+        pictureInPicture: PictureInPictureModel,
+        inputSources: InputSourceModel = InputSourceModel(),
+        windowSwitcher: WindowSwitcherModel = WindowSwitcherModel(),
+        smoothScrolling: SmoothScrollModel = SmoothScrollModel(),
+        clipboard: ClipboardModel = ClipboardModel()
+    ) {
+        self._pictureInPicture = ObservedObject(wrappedValue: pictureInPicture)
+        self._inputSources = ObservedObject(wrappedValue: inputSources)
+        self._windowSwitcher = ObservedObject(wrappedValue: windowSwitcher)
+        self._smoothScrolling = ObservedObject(wrappedValue: smoothScrolling)
+        self._clipboard = ObservedObject(wrappedValue: clipboard)
+    }
 
     var body: some View {
-        // 菜单栏只保留应用级入口；具体功能统一从主窗口进入。
+        // 移除设置页入口和规则/启动计划管理项，但保留各功能的即时操作。
+        if model.ble.settings.isEnabled {
+            Divider()
+            Button(model.t("bleLockNow")) { model.ble.lockNow() }
+        }
+        if inputSources.settings.isEnabled {
+            Divider()
+            Button(model.t("inputSourcesCycleNow")) { inputSources.cycleInputSource() }
+                .disabled(inputSources.availableSources.count < 2)
+        }
+        if windowSwitcher.settings.isEnabled {
+            Divider()
+            Button(model.t("windowSwitcherTestNow")) { windowSwitcher.showSwitcherNow() }
+                .disabled(!windowSwitcher.hasAccessibilityPermission)
+        }
+        if clipboard.settings.isEnabled {
+            Divider()
+            Button(model.t("clipboardOpenNow")) { deferCaptureAction { clipboard.openPanel() } }
+        }
+        if model.screenCapture.settings.screenshotEnabled {
+            Divider()
+            Button(model.t("scSmartCaptureNow")) {
+                deferCaptureAction { model.screenCapture.startSmartCapture() }
+            }
+        }
+        if pictureInPicture.settings.isEnabled {
+            Divider()
+            Button(model.t("pipCaptureFocused")) { pictureInPicture.captureFocusedWindowNow() }
+        }
+        Divider()
         UpdateMenuItems(updater: model.updater) {
             model.requestedSection = .settings
             showMainWindow()
@@ -3479,6 +3533,13 @@ struct MenuBarView: View {
         Button(model.t("settings")) { model.requestedSection = .settings; showMainWindow() }
         Button(model.t("showApp"), action: showMainWindow)
         Button(model.t("quitApp")) { NSApp.terminate(nil) }
+    }
+
+    /// NSMenu remains in its tracking loop while a menu item action runs. Let
+    /// it close before creating a screen-level overlay such as the clipboard
+    /// panel or smart-capture selection UI.
+    private func deferCaptureAction(_ action: @escaping @MainActor @Sendable () -> Void) {
+        DispatchQueue.main.async(execute: action)
     }
 
     private func showMainWindow() {

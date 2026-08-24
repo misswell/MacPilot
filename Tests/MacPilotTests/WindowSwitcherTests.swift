@@ -205,10 +205,10 @@ struct WindowSwitcherTests {
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 0, selectedIndex: 0).isEmpty)
     }
 
-    @Test func thumbnailPrefetchStaysBoundedToTheSelectedTileAndNeighbours() {
+    @Test func thumbnailPrefetchCoversEveryWindowInTheCurrentSnapshot() {
         let indices = WindowSwitcherThumbnailPriority.prefetchedIndices(count: 40, selectedIndex: 20)
 
-        #expect(indices.count == 3)
+        #expect(indices.count == 40)
         #expect(indices.first == 20)
     }
 
