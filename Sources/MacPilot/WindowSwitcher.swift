@@ -81,6 +81,12 @@ enum WindowSwitcherThumbnailCommitPolicy {
     }
 }
 
+enum WindowSwitcherThumbnailCachePolicy {
+    static func retainedIDs(currentIDs: [String], cachedIDs: Set<String>) -> Set<String> {
+        cachedIDs.intersection(currentIDs)
+    }
+}
+
 enum WindowSwitcherSelection {
     static func initialIndex(count: Int, currentIndex: Int?, reverse: Bool) -> Int? {
         guard count > 0 else { return nil }
@@ -842,10 +848,12 @@ private actor WindowSwitcherPreviewCaptureQueue {
         // Do not spend time on a request whose owning session was cancelled
         // while it was waiting behind an older CoreGraphics capture.
         guard !Task.isCancelled else { return nil }
-        return WindowSwitcherPreviewCapture.capture(
-            windowID: windowID,
-            maximumPixelSize: maximumPixelSize
-        )
+        return autoreleasepool {
+            WindowSwitcherPreviewCapture.capture(
+                windowID: windowID,
+                maximumPixelSize: maximumPixelSize
+            )
+        }
     }
 }
 
@@ -1035,6 +1043,11 @@ final class WindowSwitcherModel: ObservableObject {
     private var pendingSession: WindowSwitcherPendingSession?
     private var thumbnailTask: Task<Void, Never>?
     private var thumbnailRevision = 0
+    /// Reuse previews for the current window inventory across repeated
+    /// switcher sessions. Re-capturing every tile on every shortcut creates a
+    /// new WindowServer/Mach image transfer even when the window set has not
+    /// changed; this cache is pruned whenever the inventory changes.
+    private var thumbnailCache: [String: NSImage] = [:]
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
     private var eventTapContext: WindowSwitcherEventTapContext?
@@ -1165,9 +1178,7 @@ final class WindowSwitcherModel: ObservableObject {
     func setShowThumbnails(_ enabled: Bool) {
         settings.showThumbnails = enabled
         if enabled {
-            // Capture previews only when the switcher is actually shown.
-            // Hidden prewarming kept window images live between shortcuts.
-            applyCachedPreviews(to: cachedWindows)
+            restoreCachedPreviews(to: cachedWindows)
         } else {
             cancelThumbnailRefresh()
             clearThumbnailCache()
@@ -1190,7 +1201,8 @@ final class WindowSwitcherModel: ObservableObject {
         if enabled {
             cancelThumbnailRefresh()
             clearThumbnailCache()
-            applyCachedPreviews(to: cachedWindows)
+        } else {
+            restoreCachedPreviews(to: cachedWindows)
         }
         persist?()
     }
@@ -1460,9 +1472,11 @@ final class WindowSwitcherModel: ObservableObject {
         mouseSelectionAnchor = nil
         panelController?.hide()
         cancelThumbnailRefresh()
-        // A preview is useful only while this panel is visible. Release all
-        // image references before the next inventory refresh starts.
-        clearThumbnailCache()
+        // Keep the current inventory's previews so the next shortcut can
+        // reuse the same images instead of asking WindowServer for another
+        // full capture of every unchanged window. Inventory refresh prunes
+        // entries for windows that no longer exist.
+        pruneThumbnailCache(to: cachedWindows)
         if commit, let selected {
             focus(selected)
         }
@@ -1734,8 +1748,9 @@ final class WindowSwitcherModel: ObservableObject {
             if settingsStillMatch {
                 if let snapshot = refresh.snapshot {
                     let previousWindows = self.cachedWindows
+                    self.cancelThumbnailRefresh()
                     self.cachedWindows = snapshot
-                    self.applyCachedPreviews(to: snapshot)
+                    self.restoreCachedPreviews(to: snapshot)
                     self.recordNewWindows(snapshot, previousWindows: previousWindows)
                     self.promoteFrontmostWindow(in: snapshot)
                 }
@@ -1817,10 +1832,15 @@ final class WindowSwitcherModel: ObservableObject {
         )
     }
 
-    private func applyCachedPreviews(to items: [WindowSwitcherItem]) {
-        // Never restore previews into the hidden inventory. The next visible
-        // session captures only the tiles it needs.
-        items.forEach { $0.updatePreview(nil) }
+    private func restoreCachedPreviews(to items: [WindowSwitcherItem]) {
+        pruneThumbnailCache(to: items)
+        for item in items {
+            if let cached = thumbnailCache[item.id] {
+                if item.preview == nil { item.updatePreview(cached) }
+            } else if item.preview != nil {
+                item.updatePreview(nil)
+            }
+        }
     }
 
     private func prepareHiddenPanelContents() {
@@ -1835,11 +1855,7 @@ final class WindowSwitcherModel: ObservableObject {
         requireShowing: Bool
     ) {
         cancelThumbnailRefresh()
-        // A new session owns the only visible preview cache. Release any
-        // images left on shared WindowSwitcherItem instances before starting
-        // the next capture batch, so repeated sessions cannot retain old
-        // thumbnails in addition to the current session's snapshot.
-        clearThumbnailCache()
+        restoreCachedPreviews(to: items)
         guard settings.showThumbnails, !settings.showIconsOnly, let selectedIndex else { return }
         let revision = thumbnailRevision
         let maximumPixelSize = Self.thumbnailMaximumPixelSize
@@ -1859,6 +1875,10 @@ final class WindowSwitcherModel: ObservableObject {
                 if requireShowing && !self.isShowing { return }
                 let item = items[index]
                 guard let windowID = item.windowID, item.canCapturePreview else { continue }
+                if let cached = self.thumbnailCache[item.id] {
+                    if item.preview == nil { item.updatePreview(cached) }
+                    continue
+                }
                 let captured = await Self.thumbnailCaptureQueue.capture(
                     windowID: windowID,
                     maximumPixelSize: maximumPixelSize
@@ -1872,11 +1892,19 @@ final class WindowSwitcherModel: ObservableObject {
                       ) else {
                     return
                 }
-                let image = NSImage(
-                    cgImage: captured.image,
-                    size: NSSize(width: captured.image.width, height: captured.image.height)
-                )
-                guard !Task.isCancelled else { return }
+                let image = autoreleasepool {
+                    NSImage(
+                        cgImage: captured.image,
+                        size: NSSize(width: captured.image.width, height: captured.image.height)
+                    )
+                }
+                guard WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
+                    taskIsCancelled: Task.isCancelled,
+                    revisionMatches: self.thumbnailRevision == revision,
+                    showThumbnails: self.settings.showThumbnails,
+                    showIconsOnly: self.settings.showIconsOnly
+                ) else { return }
+                self.thumbnailCache[item.id] = image
                 item.updatePreview(image)
             }
         }
@@ -1889,7 +1917,16 @@ final class WindowSwitcherModel: ObservableObject {
     }
 
     private func clearThumbnailCache() {
+        thumbnailCache.removeAll(keepingCapacity: false)
         clearPreview(for: nil)
+    }
+
+    private func pruneThumbnailCache(to items: [WindowSwitcherItem]) {
+        let retainedIDs = WindowSwitcherThumbnailCachePolicy.retainedIDs(
+            currentIDs: items.map(\.id),
+            cachedIDs: Set(thumbnailCache.keys)
+        )
+        thumbnailCache = thumbnailCache.filter { retainedIDs.contains($0.key) }
     }
 
     private func clearPreview(for windowID: CGWindowID?) {

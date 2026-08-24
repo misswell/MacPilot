@@ -29,6 +29,13 @@ struct WindowSwitcherTests {
         ) == [2, 0, 1, 3, 4])
     }
 
+    @Test func thumbnailCacheRetainsOnlyWindowsInTheCurrentSnapshot() {
+        #expect(WindowSwitcherThumbnailCachePolicy.retainedIDs(
+            currentIDs: ["window-current", "window-new"],
+            cachedIDs: ["window-current", "window-removed"]
+        ) == ["window-current"])
+    }
+
     @Test func overlayWindowDoesNotBorrowAnUnrelatedWindowServerRecord() {
         let overlayFrame = CGRect(x: 2223, y: 572, width: 777, height: 325)
         let mainWindowFrame = CGRect(x: 1017, y: 281, width: 900, height: 652)
