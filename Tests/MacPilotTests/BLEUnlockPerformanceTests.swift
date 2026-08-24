@@ -114,4 +114,30 @@ struct BLEUnlockPerformanceTests {
         #expect(!BLEScanPolicy.allowsDuplicateAdvertisements)
         #expect(BLEScanPolicy.scanOptions == nil)
     }
+
+    @Test func bluetoothRSSIRequestsCannotOverlap() {
+        var gate = BLERequestGate()
+
+        let firstBegin = gate.begin()
+        let overlappingBegin = gate.begin()
+        #expect(firstBegin)
+        #expect(!overlappingBegin)
+        gate.finish()
+        let secondBegin = gate.begin()
+        #expect(secondBegin)
+        gate.reset()
+        #expect(!gate.isInFlight)
+    }
+
+    @Test func bluetoothConnectionRetriesAreThrottledWhileConnecting() {
+        var gate = BLEConnectionRetryGate()
+        let firstAttempt = Date(timeIntervalSinceReferenceDate: 1_000)
+
+        let firstBegin = gate.begin(at: firstAttempt)
+        let throttledBegin = gate.begin(at: firstAttempt.addingTimeInterval(1))
+        let nextBegin = gate.begin(at: firstAttempt.addingTimeInterval(BLEConnectionRetryGate.minimumRetryInterval))
+        #expect(firstBegin)
+        #expect(!throttledBegin)
+        #expect(nextBegin)
+    }
 }

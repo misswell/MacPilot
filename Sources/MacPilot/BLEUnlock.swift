@@ -472,6 +472,8 @@ private final class BLEMonitoredDeviceRuntime {
     var lastRSSI: Int?
     var activeMode = false
     var latestRSSIs: [Double] = []
+    var rssiReadGate = BLERequestGate()
+    var connectionRetryGate = BLEConnectionRetryGate()
     var proximityTimer: Timer?
     var signalTimer: Timer?
     var activeModeTimer: Timer?
@@ -490,7 +492,53 @@ private final class BLEMonitoredDeviceRuntime {
         activeModeTimer = nil
         connectionTimer?.invalidate()
         connectionTimer = nil
+        rssiReadGate.reset()
+        connectionRetryGate.reset()
         activeMode = false
+    }
+}
+
+/// CoreBluetooth can retain the backing storage for an outstanding request in
+/// an XPC/Mach message region. Never submit a second RSSI read until the first
+/// one has produced its delegate callback (or the connection is torn down).
+struct BLERequestGate {
+    private(set) var isInFlight = false
+
+    @discardableResult
+    mutating func begin() -> Bool {
+        guard !isInFlight else { return false }
+        isInFlight = true
+        return true
+    }
+
+    mutating func finish() {
+        isInFlight = false
+    }
+
+    mutating func reset() {
+        isInFlight = false
+    }
+}
+
+/// Avoid sending a new connect request on every active-mode timer tick while
+/// CoreBluetooth is still completing the previous connection attempt.
+struct BLEConnectionRetryGate {
+    static let minimumRetryInterval: TimeInterval = 10
+
+    private(set) var lastAttemptAt: Date?
+
+    @discardableResult
+    mutating func begin(at now: Date) -> Bool {
+        if let lastAttemptAt,
+           now.timeIntervalSince(lastAttemptAt) < Self.minimumRetryInterval {
+            return false
+        }
+        lastAttemptAt = now
+        return true
+    }
+
+    mutating func reset() {
+        lastAttemptAt = nil
     }
 }
 
@@ -1066,9 +1114,15 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             log("connect skipped reason=noMonitoredPeripheral")
             return
         }
-        log("connect monitored peripheral uuid=\(uuid.uuidString) state=\(String(describing: peripheral.state)) passive=\(settings.passiveMode)")
-        peripheral.readRSSI()
+
+        if peripheral.state == .connected {
+            requestRSSIRead(for: runtime)
+            return
+        }
         guard peripheral.state == .disconnected else { return }
+        guard runtime.connectionRetryGate.begin(at: Date()) else { return }
+
+        log("connect monitored peripheral uuid=\(uuid.uuidString) state=\(String(describing: peripheral.state)) passive=\(settings.passiveMode)")
         centralMgr?.connect(peripheral, options: nil)
         runtime.connectionTimer?.invalidate()
         runtime.connectionTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false) { [weak self] _ in
@@ -1080,6 +1134,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             }
         }
         if let timer = runtime.connectionTimer { RunLoop.main.add(timer, forMode: .common) }
+    }
+
+    private func requestRSSIRead(for runtime: BLEMonitoredDeviceRuntime) {
+        guard let peripheral = runtime.peripheral,
+              peripheral.state == .connected,
+              runtime.rssiReadGate.begin() else { return }
+        peripheral.readRSSI()
     }
 
     // MARK: CBCentralManagerDelegate
@@ -1182,17 +1243,26 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         if isMonitored, !settings.passiveMode, let monitoredRuntime {
             monitoredRuntime.connectionTimer?.invalidate()
             monitoredRuntime.connectionTimer = nil
-            peripheral.readRSSI()
+            monitoredRuntime.connectionRetryGate.reset()
+            requestRSSIRead(for: monitoredRuntime)
         }
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         log("peripheral connection failed monitored=\(runtime(for: peripheral.identifier) != nil) error=\(error?.localizedDescription ?? "unknown")")
+        if let runtime = runtime(for: peripheral.identifier) {
+            runtime.connectionTimer?.invalidate()
+            runtime.connectionTimer = nil
+            runtime.rssiReadGate.reset()
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         log("peripheral disconnected monitored=\(runtime(for: peripheral.identifier) != nil) error=\(error?.localizedDescription ?? "none")")
         if let runtime = runtime(for: peripheral.identifier) {
+            runtime.connectionTimer?.invalidate()
+            runtime.connectionTimer = nil
+            runtime.rssiReadGate.reset()
             runtime.activeMode = runtime.activeModeTimer != nil
             refreshPublishedMonitoringState()
         }
@@ -1202,6 +1272,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
         guard let runtime = runtime(for: peripheral.identifier) else { return }
+        runtime.rssiReadGate.finish()
         if let error { logRSSIError(error) }
         let rssi = RSSI.intValue > 0 ? 0 : RSSI.intValue
         updateMonitoredPeripheral(rssi, for: runtime.uuid)
@@ -1217,7 +1288,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                     guard let self, let runtime = self.runtime(for: runtimeUUID),
                           let peripheral = runtime.peripheral else { return }
                     if peripheral.state == .connected {
-                        peripheral.readRSSI()
+                        self.requestRSSIRead(for: runtime)
                     } else {
                         self.connectMonitoredPeripheral(for: runtime.uuid)
                     }
