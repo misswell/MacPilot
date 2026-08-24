@@ -36,6 +36,35 @@ struct WindowSwitcherTests {
         ) == ["window-current"])
     }
 
+    @Test func thumbnailTaskIsReusedForTheSameWindowSetRegardlessOfOrder() {
+        #expect(WindowSwitcherThumbnailTaskPolicy.canReuseTask(
+            hasTask: true,
+            activeWindowIDs: ["window-a", "window-b"],
+            requestedWindowIDs: ["window-b", "window-a"]
+        ))
+        #expect(!WindowSwitcherThumbnailTaskPolicy.canReuseTask(
+            hasTask: false,
+            activeWindowIDs: ["window-a", "window-b"],
+            requestedWindowIDs: ["window-a", "window-b"]
+        ))
+        #expect(!WindowSwitcherThumbnailTaskPolicy.canReuseTask(
+            hasTask: true,
+            activeWindowIDs: ["window-a"],
+            requestedWindowIDs: ["window-a", "window-b"]
+        ))
+    }
+
+    @Test func thumbnailTaskInvalidatesOnlyWhenTheWindowSetChanges() {
+        #expect(!WindowSwitcherThumbnailTaskPolicy.shouldInvalidateTask(
+            previousWindowIDs: ["window-a", "window-b"],
+            currentWindowIDs: ["window-b", "window-a"]
+        ))
+        #expect(WindowSwitcherThumbnailTaskPolicy.shouldInvalidateTask(
+            previousWindowIDs: ["window-a"],
+            currentWindowIDs: ["window-b"]
+        ))
+    }
+
     @Test func overlayWindowDoesNotBorrowAnUnrelatedWindowServerRecord() {
         let overlayFrame = CGRect(x: 2223, y: 572, width: 777, height: 325)
         let mainWindowFrame = CGRect(x: 1017, y: 281, width: 900, height: 652)
