@@ -189,6 +189,11 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         manualStart = nil
         manualRect = nil
         for window in currentWindows {
+            // A committed selection follows a different teardown path from
+            // cancel/dismiss. Clear the layer contents and the cached luma
+            // bitmap before closing so a full-display frozen frame cannot be
+            // retained by the window/layer tree after the HUD is gone.
+            window.overlayView.clearBackdrop()
             window.contentView = nil
             window.orderOut(nil)
             window.close()

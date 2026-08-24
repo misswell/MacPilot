@@ -3544,6 +3544,64 @@ enum SmartDisplaySnapshotCapture {
     static func capture(displayID: CGDirectDisplayID) -> CGImage? {
         captureFunction?(displayID)
     }
+
+    /// Scheduled full-display captures use CoreGraphics to avoid the long-lived
+    /// ScreenCaptureKit Mach-message allocations. Re-embed the current cursor
+    /// from AppKit when requested so the setting keeps its existing behavior.
+    @MainActor
+    static func capture(
+        displayID: CGDirectDisplayID,
+        on screen: NSScreen,
+        showsCursor: Bool
+    ) -> CGImage? {
+        autoreleasepool {
+            guard let image = capture(displayID: displayID) else { return nil }
+            guard showsCursor else { return image }
+            let pointer = NSEvent.mouseLocation
+            guard screen.frame.contains(pointer) else { return image }
+
+            let cursor = NSCursor.current
+            let cursorImage = cursor.image
+            var proposedRect = NSRect(origin: .zero, size: cursorImage.size)
+            guard let cursorCGImage = cursorImage.cgImage(
+                forProposedRect: &proposedRect,
+                context: nil,
+                hints: nil
+            ) else { return image }
+
+            let scaleX = CGFloat(image.width) / max(screen.frame.width, 1)
+            let scaleY = CGFloat(image.height) / max(screen.frame.height, 1)
+            guard scaleX.isFinite, scaleY.isFinite, scaleX > 0, scaleY > 0,
+                  let colorSpace = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+                  let context = CGContext(
+                      data: nil,
+                      width: image.width,
+                      height: image.height,
+                      bitsPerComponent: 8,
+                      bytesPerRow: 0,
+                      space: colorSpace,
+                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  ) else { return image }
+
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            let cursorSize = CGSize(
+                width: cursorImage.size.width * scaleX,
+                height: cursorImage.size.height * scaleY
+            )
+            let cursorOrigin = CGPoint(
+                x: (pointer.x - screen.frame.minX) * scaleX - cursor.hotSpot.x * scaleX,
+                y: (pointer.y - screen.frame.minY) * scaleY
+                    - cursorSize.height
+                    + cursor.hotSpot.y * scaleY
+            )
+            context.interpolationQuality = .none
+            context.draw(
+                cursorCGImage,
+                in: CGRect(origin: cursorOrigin, size: cursorSize)
+            )
+            return context.makeImage() ?? image
+        }
+    }
 }
 
 enum SmartWindowSnapshotCapture {
@@ -4483,10 +4541,9 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
     }
 
     private func copyImage() {
-        let representation = NSBitmapImageRep(cgImage: image)
-        guard let data = representation.representation(using: .png, properties: [:]) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setData(data, forType: .png)
+        // Use the same file-backed provider as normal screenshot capture so a
+        // pin action never keeps a full PNG Data object in the pasteboard.
+        SmartCaptureClipboard.copy(image: image)
     }
 
     private func recognizeText() {

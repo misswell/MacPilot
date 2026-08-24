@@ -909,11 +909,13 @@ final class QuickAccessManager: ObservableObject {
   /// Build a Quick Access thumbnail directly from a captured frame without
   /// waiting for a temporary file or ImageIO decode.
   nonisolated static func cgImageThumbnail(_ image: CGImage, maxSize: CGFloat = 200) -> NSImage {
-    let nsImage = NSImage(
-      cgImage: image,
-      size: NSSize(width: CGFloat(image.width), height: CGFloat(image.height))
-    )
-    return cgScaleThumbnail(nsImage, maxSize: maxSize)
+    autoreleasepool {
+      let nsImage = NSImage(
+        cgImage: image,
+        size: NSSize(width: CGFloat(image.width), height: CGFloat(image.height))
+      )
+      return cgScaleThumbnail(nsImage, maxSize: maxSize)
+    }
   }
 
   /// Scale image to thumbnail size (synchronous, no file I/O)
@@ -1386,9 +1388,11 @@ final class QuickAccessManager: ObservableObject {
                 annotations: model.annotations,
                 styles: model.styledAnnotations.map(\.style)
               ) else { return }
-        let representation = NSBitmapImageRep(cgImage: annotated)
-        if let data = representation.representation(using: .png, properties: [:]) {
-          try? data.write(to: item.url, options: .atomic)
+        autoreleasepool {
+          let representation = NSBitmapImageRep(cgImage: annotated)
+          if let data = representation.representation(using: .png, properties: [:]) {
+            try? data.write(to: item.url, options: .atomic)
+          }
         }
         let thumbnailImage = NSImage(
           cgImage: annotated,

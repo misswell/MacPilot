@@ -15,6 +15,7 @@ import AppKit
 import Carbon.HIToolbox
 import Combine
 import Foundation
+import ImageIO
 import os.log
 
 // MARK: - ShortcutConfig (copied from Snapzy's KeyboardShortcutManager)
@@ -553,13 +554,29 @@ final class TempCaptureManager {
     /// Encode and write a temp capture off the main actor.
     @discardableResult
     nonisolated static func writeScreenshot(_ image: SendableScreenCaptureImage, to url: URL) -> Bool {
-        let rep = NSBitmapImageRep(cgImage: image.value)
-        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
-        do {
-            try data.write(to: url, options: .atomic)
-            return true
-        } catch {
-            return false
+        autoreleasepool {
+            let temporaryURL = url.deletingLastPathComponent()
+                .appendingPathComponent(".\(url.lastPathComponent)-\(UUID().uuidString).tmp")
+            defer { try? FileManager.default.removeItem(at: temporaryURL) }
+
+            guard let destination = CGImageDestinationCreateWithURL(
+                temporaryURL as CFURL,
+                "public.png" as CFString,
+                1,
+                nil
+            ) else { return false }
+            CGImageDestinationAddImage(destination, image.value, nil)
+            guard CGImageDestinationFinalize(destination) else { return false }
+
+            do {
+                if FileManager.default.fileExists(atPath: url.path) {
+                    try FileManager.default.removeItem(at: url)
+                }
+                try FileManager.default.moveItem(at: temporaryURL, to: url)
+                return true
+            } catch {
+                return false
+            }
         }
     }
 

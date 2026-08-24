@@ -249,6 +249,13 @@ private struct ScreenCaptureSavedImage: Sendable {
     let size: Int64
 }
 
+private struct ScreenCapturePersistenceOutcome: Sendable {
+    let savedImage: ScreenCaptureSavedImage?
+    let quickAccessWriteSucceeded: Bool
+    let fallbackURL: URL?
+    let errorDescription: String?
+}
+
 private struct ScreenCaptureStorageStatistics: Sendable {
     var bytes: Int64 = 0
     var count = 0
@@ -260,6 +267,30 @@ private struct ScreenCaptureMediaMetadata: Sendable {
     let duration: TimeInterval?
     let byteCount: Int64
     let kind: SmartCaptureHistoryKind
+}
+
+/// Coordinates the capture and persistence of display images.
+///
+/// This is deliberately kept separate from ScreenCaptureKit so the image
+/// lifetime policy can be tested without requiring screen-recording access.
+struct ScreenCaptureImageCapturePipeline {
+    @MainActor
+    static func captureAndSave<Image, Saved>(
+        displayIndices: Range<Int>,
+        multiDisplay: Bool,
+        capture: (Int) async throws -> Image?,
+        save: (Image, Int?) throws -> Saved
+    ) async throws -> [Saved] {
+        var savedImages: [Saved] = []
+        for index in displayIndices {
+            guard let image = try await capture(index) else { continue }
+            let savedImage = try autoreleasepool {
+                try save(image, multiDisplay ? index : nil)
+            }
+            savedImages.append(savedImage)
+        }
+        return savedImages
+    }
 }
 
 private enum ScreenCaptureStorage {
@@ -341,26 +372,28 @@ private enum ScreenCaptureStorage {
         at url: URL,
         configuration: ScreenCaptureSaveConfiguration
     ) throws -> Int64 {
-        let temporaryURL = url.deletingLastPathComponent()
-            .appendingPathComponent(".MacPilot-edit-\(UUID().uuidString).\(configuration.imageFormat.fileExtension)")
-        defer { try? FileManager.default.removeItem(at: temporaryURL) }
-        guard let destination = CGImageDestinationCreateWithURL(
-            temporaryURL as CFURL,
-            configuration.imageFormat.utType.identifier as CFString,
-            1,
-            nil
-        ) else { throw ScreenCaptureError.encodingFailed }
-        if configuration.imageFormat.supportsQuality {
-            CGImageDestinationAddImage(destination, image.value, [
-                kCGImageDestinationLossyCompressionQuality: configuration.quality
-            ] as CFDictionary)
-        } else {
-            CGImageDestinationAddImage(destination, image.value, nil)
+        try autoreleasepool {
+            let temporaryURL = url.deletingLastPathComponent()
+                .appendingPathComponent(".MacPilot-edit-\(UUID().uuidString).\(configuration.imageFormat.fileExtension)")
+            defer { try? FileManager.default.removeItem(at: temporaryURL) }
+            guard let destination = CGImageDestinationCreateWithURL(
+                temporaryURL as CFURL,
+                configuration.imageFormat.utType.identifier as CFString,
+                1,
+                nil
+            ) else { throw ScreenCaptureError.encodingFailed }
+            if configuration.imageFormat.supportsQuality {
+                CGImageDestinationAddImage(destination, image.value, [
+                    kCGImageDestinationLossyCompressionQuality: configuration.quality
+                ] as CFDictionary)
+            } else {
+                CGImageDestinationAddImage(destination, image.value, nil)
+            }
+            guard CGImageDestinationFinalize(destination) else { throw ScreenCaptureError.encodingFailed }
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: temporaryURL)
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            return (attributes[.size] as? NSNumber)?.int64Value ?? 0
         }
-        guard CGImageDestinationFinalize(destination) else { throw ScreenCaptureError.encodingFailed }
-        _ = try FileManager.default.replaceItemAt(url, withItemAt: temporaryURL)
-        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     static func statistics(at folderURL: URL) -> ScreenCaptureStorageStatistics {
@@ -1092,78 +1125,129 @@ final class ScreenCaptureModel: ObservableObject {
             imageFormat: imageFormat ?? settings.imageFormat,
             quality: settings.quality
         )
+        let copyAfterCapture = settings.copyAfterCapture
+        let showQuickAccess = settings.showQuickAccess
+        let pinAfterCapture = settings.pinAfterCapture
         let sendableImage = SendableScreenCaptureImage(value: image)
         let quickAccessPreviewID: UUID?
+        let quickAccessURL: URL?
         if settings.showQuickAccess {
             let tempURL = TempCaptureManager.shared.makeScreenshotURL()
             let thumbnail = QuickAccessManager.cgImageThumbnail(image)
             if let item = QuickAccessManager.shared.addScreenshot(url: tempURL, thumbnail: thumbnail) {
                 let itemID = item.id
                 quickAccessPreviewID = itemID
-                Task.detached(priority: .utility) {
-                    let didWrite = TempCaptureManager.writeScreenshot(sendableImage, to: tempURL)
-                    if !didWrite {
-                        await QuickAccessManager.shared.removeScreenshot(id: itemID)
-                    }
-                }
+                quickAccessURL = tempURL
             } else {
                 quickAccessPreviewID = nil
+                quickAccessURL = nil
             }
         } else {
             quickAccessPreviewID = nil
+            quickAccessURL = nil
         }
-        Task { [weak self] in
+        let clipboardFallbackURL = copyAfterCapture
+            ? (quickAccessURL ?? TempCaptureManager.shared.makeScreenshotURL())
+            : nil
+        let imageWidth = image.width
+        let imageHeight = image.height
+        // Keep one persistence task per captured image. The previous code
+        // launched a Quick Access PNG encoder and a permanent-image encoder in
+        // parallel, so each task retained the full-resolution CGImage until it
+        // completed. Serializing the two disk writes bounds the full-image
+        // lifetime and avoids two large encoder buffers at once.
+        let persistenceTask = Task.detached(priority: .utility) {
+            var quickAccessWriteSucceeded = true
+            if let quickAccessURL {
+                quickAccessWriteSucceeded = TempCaptureManager.writeScreenshot(
+                    sendableImage,
+                    to: quickAccessURL
+                )
+            }
+
             do {
-                let saved = try await Task.detached(priority: .utility) {
-                    try autoreleasepool {
-                        try ScreenCaptureStorage.save(
-                            image: sendableImage,
-                            displayIndex: displayIndex,
-                            date: Date(),
-                            configuration: configuration
+                let savedImage = try autoreleasepool {
+                    try ScreenCaptureStorage.save(
+                        image: sendableImage,
+                        displayIndex: displayIndex,
+                        date: Date(),
+                        configuration: configuration
+                    )
+                }
+                return ScreenCapturePersistenceOutcome(
+                    savedImage: savedImage,
+                    quickAccessWriteSucceeded: quickAccessWriteSucceeded,
+                    fallbackURL: nil,
+                    errorDescription: nil
+                )
+            } catch {
+                var fallbackURL: URL?
+                if let clipboardFallbackURL {
+                    if quickAccessURL == nil || !quickAccessWriteSucceeded {
+                        quickAccessWriteSucceeded = TempCaptureManager.writeScreenshot(
+                            sendableImage,
+                            to: clipboardFallbackURL
                         )
                     }
-                }.value
-                guard let self else { return }
-                self.lastCaptureDate = Date()
-                self.lastCaptureSize = saved.size
-                self.captureCount += 1
-                self.screenshotCount += 1
-                self.totalDiskUsage += saved.size
-                self.diskUsageRevision += 1
-                self.captureHistory.removeAll { $0.url == saved.url }
-                self.captureHistory.insert(
-                    SmartCaptureHistoryItem(
-                        url: saved.url,
-                        width: image.width,
-                        height: image.height,
-                        byteCount: saved.size
-                    ),
-                    at: 0
-                )
-                self.captureHistory = Array(self.captureHistory.prefix(60))
-                SmartCaptureHistoryStore.save(self.captureHistory)
-                if self.settings.copyAfterCapture {
-                    SmartCaptureClipboard.copy(imageURL: saved.url)
-                }
-                self.errorMessage = nil
-                if self.settings.pinAfterCapture {
-                    _ = await QuickAccessManager.shared.pinScreenshot(url: saved.url)
-                }
-            } catch {
-                Self.logger.error("Smart capture save failed: \(error.localizedDescription, privacy: .public)")
-                if self?.settings.copyAfterCapture == true {
-                    // Preserve copy-after-capture even when the configured
-                    // output folder is unavailable; this path still writes a
-                    // disk-backed lazy pasteboard item.
-                    SmartCaptureClipboard.copy(image: image)
-                }
-                self?.errorMessage = error.localizedDescription
-                if self?.settings.showQuickAccess == true, quickAccessPreviewID == nil {
-                    if let tempURL = TempCaptureManager.shared.saveScreenshot(image) {
-                        await QuickAccessManager.shared.addScreenshot(url: tempURL)
+                    if quickAccessWriteSucceeded {
+                        fallbackURL = clipboardFallbackURL
                     }
                 }
+                return ScreenCapturePersistenceOutcome(
+                    savedImage: nil,
+                    quickAccessWriteSucceeded: quickAccessWriteSucceeded,
+                    fallbackURL: fallbackURL,
+                    errorDescription: error.localizedDescription
+                )
+            }
+        }
+        Task { [weak self] in
+            let outcome = await persistenceTask.value
+            guard let saved = outcome.savedImage else {
+                Self.logger.error(
+                    "Smart capture save failed: \(outcome.errorDescription ?? "unknown error", privacy: .public)"
+                )
+                if copyAfterCapture, let fallbackURL = outcome.fallbackURL {
+                    // The fallback is also file-backed; no full image is
+                    // reloaded just to populate the pasteboard.
+                    SmartCaptureClipboard.copy(imageURL: fallbackURL)
+                }
+                if showQuickAccess,
+                   quickAccessPreviewID == nil,
+                   let fallbackURL = outcome.fallbackURL {
+                    await QuickAccessManager.shared.addScreenshot(url: fallbackURL)
+                }
+                self?.errorMessage = outcome.errorDescription
+                return
+            }
+            if !outcome.quickAccessWriteSucceeded, let quickAccessPreviewID {
+                QuickAccessManager.shared.removeScreenshot(id: quickAccessPreviewID)
+            }
+            guard let self else { return }
+            self.lastCaptureDate = Date()
+            self.lastCaptureSize = saved.size
+            self.captureCount += 1
+            self.screenshotCount += 1
+            self.totalDiskUsage += saved.size
+            self.diskUsageRevision += 1
+            self.captureHistory.removeAll { $0.url == saved.url }
+            self.captureHistory.insert(
+                SmartCaptureHistoryItem(
+                    url: saved.url,
+                    width: imageWidth,
+                    height: imageHeight,
+                    byteCount: saved.size
+                ),
+                at: 0
+            )
+            self.captureHistory = Array(self.captureHistory.prefix(60))
+            SmartCaptureHistoryStore.save(self.captureHistory)
+            if copyAfterCapture {
+                SmartCaptureClipboard.copy(imageURL: saved.url)
+            }
+            self.errorMessage = nil
+            if pinAfterCapture {
+                _ = await QuickAccessManager.shared.pinScreenshot(url: saved.url)
             }
         }
     }
@@ -1498,38 +1582,36 @@ final class ScreenCaptureModel: ObservableObject {
             imageFormat: settings.imageFormat,
             quality: settings.quality
         )
+        // Scheduled screenshots are full-display captures, so ScreenCaptureKit
+        // adds no filtering value here. Its repeated XPC/Mach-message path can
+        // retain hundreds of megabytes over a long-running periodic loop on
+        // macOS 26. CoreGraphics returns one image that we encode immediately,
+        // keeping the screenshot payload out of that queue and out of memory
+        // after each display is written.
         let showsCursor = settings.showsCursor
-        var capturedImages: [(image: CGImage, displayIndex: Int?)] = []
-        if let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) {
-            let displays = settings.captureAllDisplays ? content.displays : [content.displays.first].compactMap { $0 }
-            let multiDisplay = displays.count > 1
-            for (index, display) in displays.enumerated() {
-                guard let image = try? await captureDisplay(display, showsCursor: showsCursor) else { continue }
-                capturedImages.append((image, multiDisplay ? index : nil))
-            }
-        }
-
-        if capturedImages.isEmpty {
-            let screens = settings.captureAllDisplays ? NSScreen.screens : [NSScreen.main].compactMap { $0 }
-            let multiDisplay = screens.count > 1
-            for (index, screen) in screens.enumerated() {
-                guard let displayID = screen.displayID,
-                      let image = SmartDisplaySnapshotCapture.capture(displayID: displayID) else { continue }
-                capturedImages.append((image, multiDisplay ? index : nil))
-            }
-        }
-
-        guard !capturedImages.isEmpty else { throw ScreenCaptureError.noDisplayFound }
-        return try capturedImages.map { captured in
-            try autoreleasepool {
+        let screens = settings.captureAllDisplays ? NSScreen.screens : [NSScreen.main].compactMap { $0 }
+        let savedImages = try await ScreenCaptureImageCapturePipeline.captureAndSave(
+            displayIndices: screens.indices,
+            multiDisplay: screens.count > 1,
+            capture: { index in
+                guard let displayID = screens[index].displayID else { return nil }
+                return SmartDisplaySnapshotCapture.capture(
+                    displayID: displayID,
+                    on: screens[index],
+                    showsCursor: showsCursor
+                )
+            },
+            save: { image, displayIndex in
                 try ScreenCaptureStorage.save(
-                    image: SendableScreenCaptureImage(value: captured.image),
-                    displayIndex: captured.displayIndex,
+                    image: SendableScreenCaptureImage(value: image),
+                    displayIndex: displayIndex,
                     date: Date(),
                     configuration: saveConfiguration
                 )
             }
-        }
+        )
+        guard !savedImages.isEmpty else { throw ScreenCaptureError.noDisplayFound }
+        return savedImages
     }
 
     private func captureDisplay(_ display: SCDisplay, showsCursor: Bool) async throws -> CGImage {

@@ -5,6 +5,43 @@ import Carbon.HIToolbox
 import Testing
 @testable import MacPilot
 
+private final class ScreenCaptureFrameLifetimeProbe: @unchecked Sendable {
+    private(set) var activeFrameCount = 0
+    private(set) var maximumActiveFrameCountDuringSave = 0
+
+    func acquire() -> ScreenCaptureFrameToken {
+        activeFrameCount += 1
+        return ScreenCaptureFrameToken(probe: self)
+    }
+
+    func recordSave() {
+        maximumActiveFrameCountDuringSave = max(
+            maximumActiveFrameCountDuringSave,
+            activeFrameCount
+        )
+    }
+
+    fileprivate func releaseFrame() {
+        activeFrameCount -= 1
+    }
+}
+
+private final class ScreenCaptureFrameToken: @unchecked Sendable {
+    private weak var probe: ScreenCaptureFrameLifetimeProbe?
+
+    init(probe: ScreenCaptureFrameLifetimeProbe) {
+        self.probe = probe
+    }
+
+    deinit {
+        probe?.releaseFrame()
+    }
+}
+
+private struct ScreenCaptureTestFrame: @unchecked Sendable {
+    let token: ScreenCaptureFrameToken
+}
+
 struct ScreenCaptureTests {
     @MainActor
     private func waitUntil(
@@ -940,5 +977,24 @@ struct ScreenCaptureTests {
     @Test func tempFolderIsValid() {
         let settings = ScreenCaptureSettings(outputFolder: NSTemporaryDirectory())
         #expect(settings.isOutputFolderValid == true)
+    }
+
+    @Test @MainActor func multiDisplayCaptureDoesNotRetainEarlierFullSizeFramesWhileSaving() async throws {
+        let probe = ScreenCaptureFrameLifetimeProbe()
+
+        _ = try await ScreenCaptureImageCapturePipeline.captureAndSave(
+            displayIndices: 0..<3,
+            multiDisplay: true,
+            capture: { _ in
+                ScreenCaptureTestFrame(token: probe.acquire())
+            },
+            save: { frame, _ in
+                _ = frame.token
+                probe.recordSave()
+                return true
+            }
+        )
+
+        #expect(probe.maximumActiveFrameCountDuringSave == 1)
     }
 }
