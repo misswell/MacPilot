@@ -13,8 +13,12 @@ for arch in "${ARCHS[@]}"; do
     ARCH_ARGS+=(--arch "$arch")
 done
 
-swift build -c release "${ARCH_ARGS[@]}"
-BIN_DIR="$(swift build -c release "${ARCH_ARGS[@]}" --show-bin-path)"
+# Keep local packaging under the same strict Swift concurrency diagnostics as
+# the signed CI release. This prevents a warning on one toolchain from becoming
+# a late compile failure after the commit has already been tagged.
+SWIFT_BUILD_ARGS=(-c release -Xswiftc -warnings-as-errors "${ARCH_ARGS[@]}")
+swift build "${SWIFT_BUILD_ARGS[@]}"
+BIN_DIR="$(swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
 
 # Build the FinderSync right-click extension (derived from RClick, GPLv3).
 # Build it for the same architectures as the app so the context menu keeps

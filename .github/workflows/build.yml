@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   build:
@@ -43,7 +44,7 @@ jobs:
           echo "Building MacPilot $version ($build_number)"
 
       - name: Build release binary
-        run: swift build -c release --arch arm64 --arch x86_64
+        run: swift build -c release -Xswiftc -warnings-as-errors --arch arm64 --arch x86_64
 
       - name: Package app bundle
         env:
@@ -98,8 +99,50 @@ jobs:
           path: MacPilot-${{ steps.version.outputs.version }}-macos.zip
           retention-days: 7
 
-  dist:
+  release-gate:
     if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful main-branch validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in {1..60}; do
+            main_run="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow build.yml \
+              --commit "$GITHUB_SHA" \
+              --json databaseId,headBranch,status,conclusion \
+              --limit 20 \
+              --jq '[.[] | select(.headBranch == "main")] | first')"
+            if [[ -z "$main_run" || "$main_run" == "null" ]]; then
+              echo "Waiting for the main-branch run for $GITHUB_SHA ($attempt/30)"
+              sleep 10
+              continue
+            fi
+
+            status="$(jq -r '.status' <<<"$main_run")"
+            conclusion="$(jq -r '.conclusion // empty' <<<"$main_run")"
+            if [[ "$status" != "completed" ]]; then
+              echo "Main-branch validation is still $status ($attempt/30)"
+              sleep 10
+              continue
+            fi
+            if [[ "$conclusion" == "success" ]]; then
+              echo "Main-branch validation passed for $GITHUB_SHA"
+              exit 0
+            fi
+
+            echo "Main-branch validation finished with conclusion: $conclusion"
+            exit 1
+          done
+
+          echo "Timed out waiting for main-branch validation"
+          exit 1
+
+  dist:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && needs.release-gate.result == 'success' }}
+    needs: release-gate
     runs-on: macos-15
     steps:
       - name: Check out source
