@@ -82,8 +82,15 @@ enum WindowSwitcherThumbnailCommitPolicy {
 }
 
 enum WindowSwitcherThumbnailCachePolicy {
-    static func retainedIDs(currentIDs: [String], cachedIDs: Set<String>) -> Set<String> {
-        cachedIDs.intersection(currentIDs)
+    static let maximumCount = 30
+
+    static func retainedIDs(
+        currentIDs: [String],
+        cachedIDs: Set<String>,
+        maximumCount: Int = maximumCount
+    ) -> Set<String> {
+        guard maximumCount > 0 else { return [] }
+        return Set(currentIDs.filter(cachedIDs.contains).prefix(maximumCount))
     }
 }
 
@@ -335,9 +342,9 @@ enum WindowSwitcherRecentWindowIDs {
 
 enum WindowSwitcherThumbnailPriority {
     // A preview is downscaled to at most 256x160 before it reaches NSImage.
-    // There is no artificial count cap: every item in the current window
-    // snapshot can receive a preview. Memory is bounded by the current
-    // inventory cache, not by the number of switcher sessions.
+    // Keep the capture batch bounded so switching remains responsive even
+    // when the inventory contains many windows.
+    static let maximumPrefetchCount = 30
 
     static func orderedIndices(count: Int, selectedIndex: Int) -> [Int] {
         guard count > 0 else { return [] }
@@ -353,7 +360,7 @@ enum WindowSwitcherThumbnailPriority {
     }
 
     static func prefetchedIndices(count: Int, selectedIndex: Int) -> [Int] {
-        orderedIndices(count: count, selectedIndex: selectedIndex)
+        Array(orderedIndices(count: count, selectedIndex: selectedIndex).prefix(maximumPrefetchCount))
     }
 }
 
@@ -950,6 +957,30 @@ private struct WindowSwitcherPendingSession {
     var startedAt = CFAbsoluteTimeGetCurrent()
 }
 
+private struct WindowSwitcherFocusRequest: @unchecked Sendable {
+    let axWindow: AXUIElement?
+    let isMinimized: Bool
+}
+
+private enum WindowSwitcherWindowFocus {
+    static func perform(_ request: WindowSwitcherFocusRequest) {
+        guard let axWindow = request.axWindow else { return }
+        // AX calls happen away from the event-tap run loop. A hung or
+        // terminating application must not stall keyboard and scroll events.
+        AXUIElementSetMessagingTimeout(axWindow, 0.1)
+        if request.isMinimized {
+            _ = AXUIElementSetAttributeValue(
+                axWindow,
+                kAXMinimizedAttribute as CFString,
+                false as CFTypeRef
+            )
+        }
+        _ = AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
+        _ = AXUIElementSetAttributeValue(axWindow, kAXMainAttribute as CFString, true as CFTypeRef)
+        _ = AXUIElementSetAttributeValue(axWindow, kAXFocusedAttribute as CFString, true as CFTypeRef)
+    }
+}
+
 private struct WindowSwitcherInventoryRefresh: Sendable {
     let snapshot: [WindowSwitcherItem]?
     let signature: Int
@@ -958,7 +989,7 @@ private struct WindowSwitcherInventoryRefresh: Sendable {
 private enum WindowSwitcherFocusedWindowResolver {
     static func resolve(processID: pid_t, candidates: [WindowSwitcherItem]) -> String? {
         let appElement = AXUIElementCreateApplication(processID)
-        AXUIElementSetMessagingTimeout(appElement, 0.25)
+        AXUIElementSetMessagingTimeout(appElement, 0.1)
         var focusedWindowValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             appElement,
@@ -970,6 +1001,7 @@ private enum WindowSwitcherFocusedWindowResolver {
             return candidates.first?.id
         }
         let focusedWindow = focusedWindowValue as! AXUIElement
+        AXUIElementSetMessagingTimeout(focusedWindow, 0.1)
 
         if let identityMatch = candidates.first(where: { item in
             guard let itemWindow = item.axWindow else { return false }
@@ -1017,8 +1049,8 @@ private enum WindowSwitcherFocusedWindowResolver {
 @MainActor
 final class WindowSwitcherModel: ObservableObject {
     private static let inventoryRefreshDebounce = Duration.milliseconds(200)
-    // Previews are session-scoped. Capture every item in the visible snapshot;
-    // never prewarm a hidden process-wide image cache.
+    // Previews are session-scoped. Capture at most thirty items in the visible
+    // snapshot; never prewarm a hidden process-wide image cache.
     private static let thumbnailMaximumPixelSize = CGSize(width: 256, height: 160)
     private static let thumbnailCaptureQueue = WindowSwitcherPreviewCaptureQueue()
     private static let mouseSelectionDistanceThreshold: CGFloat = 24
@@ -1077,6 +1109,7 @@ final class WindowSwitcherModel: ObservableObject {
     private var previousSnapshotWindowIDs: Set<String> = []
     private var activationCandidate: NSRunningApplication?
     private var activationConfirmTask: Task<Void, Never>?
+    private var focusTask: Task<Void, Never>?
 
     var gridColumnCount: Int {
         let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
@@ -1162,6 +1195,8 @@ final class WindowSwitcherModel: ObservableObject {
         cancelPendingSession()
         manualDismissTask?.cancel()
         manualDismissTask = nil
+        focusTask?.cancel()
+        focusTask = nil
         inventoryRevision += 1
         inventoryTask?.cancel()
         inventoryTask = nil
@@ -1352,7 +1387,7 @@ final class WindowSwitcherModel: ObservableObject {
             guard isShowing, !isManualSession, !flags.contains(.maskAlternate) else { return false }
             consumeTabKeyUp = tabIsDown
             tabIsDown = false
-            finishSession(commit: true)
+            finishSessionAfterEventTap()
             return true
 
         default:
@@ -1488,14 +1523,17 @@ final class WindowSwitcherModel: ObservableObject {
         mouseSelectionEnabled = true
         mouseSelectionAnchor = nil
         panelController?.hide()
+        // A cancelled Task cannot interrupt a CoreGraphics capture already in
+        // progress, but it prevents the remaining WindowServer captures from
+        // running after the user has returned to the target application.
+        cancelThumbnailRefresh()
         // Keep the current inventory's previews so the next shortcut can
         // reuse the same images instead of asking WindowServer for another
         // full capture of every unchanged window. Inventory refresh prunes
-        // entries for windows that no longer exist. The in-flight capture
-        // batch intentionally continues after the panel is hidden.
+        // entries for windows that no longer exist.
         pruneThumbnailCache(to: cachedWindows)
         if commit, let selected {
-            focus(selected)
+            scheduleFocus(selected)
         }
         requestInventoryRefresh(priority: .utility)
     }
@@ -1503,6 +1541,16 @@ final class WindowSwitcherModel: ObservableObject {
     private func cancelSession() {
         guard isShowing else { return }
         finishSession(commit: false)
+    }
+
+    private func finishSessionAfterEventTap() {
+        // Do not run activation, cache pruning, or panel teardown inside the
+        // CGEvent tap callback. Returning promptly keeps other keyboard and
+        // scroll taps from hitting macOS's timeout watchdog.
+        Task { @MainActor [weak self] in
+            guard let self, self.isShowing else { return }
+            self.finishSession(commit: true)
+        }
     }
 
     private func cancelPendingSession() {
@@ -1532,20 +1580,22 @@ final class WindowSwitcherModel: ObservableObject {
         }
     }
 
-    private func focus(_ item: WindowSwitcherItem) {
+    private func scheduleFocus(_ item: WindowSwitcherItem) {
+        focusTask?.cancel()
         guard let application = NSRunningApplication(processIdentifier: item.processID) else { return }
         if application.isHidden { _ = application.unhide() }
-        if let axWindow = item.axWindow, item.isMinimized {
-            _ = AXUIElementSetAttributeValue(axWindow, kAXMinimizedAttribute as CFString, false as CFTypeRef)
-        }
+        // Activate the application immediately so the next keystroke goes to
+        // the selected window, but leave potentially blocking AX operations
+        // outside the event-tap callback.
         _ = application.activate(options: [.activateAllWindows])
-        if let axWindow = item.axWindow {
-            _ = AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
-            _ = AXUIElementSetAttributeValue(axWindow, kAXMainAttribute as CFString, true as CFTypeRef)
-            _ = AXUIElementSetAttributeValue(axWindow, kAXFocusedAttribute as CFString, true as CFTypeRef)
-        }
-        noteApplicationActivation(application)
         noteWindowActivation(item.id)
+        let request = WindowSwitcherFocusRequest(
+            axWindow: item.axWindow,
+            isMinimized: item.isMinimized
+        )
+        focusTask = Task.detached(priority: .userInitiated) {
+            WindowSwitcherWindowFocus.perform(request)
+        }
     }
 
     private func installWorkspaceObserver() {
@@ -1822,7 +1872,7 @@ final class WindowSwitcherModel: ObservableObject {
         }
         if pending.commitWhenReady {
             if let resolvedIndex, ordered.indices.contains(resolvedIndex) {
-                focus(ordered[resolvedIndex])
+                scheduleFocus(ordered[resolvedIndex])
             }
         } else {
             showSession(
@@ -1980,7 +2030,14 @@ final class WindowSwitcherModel: ObservableObject {
             currentIDs: items.map(\.id),
             cachedIDs: Set(thumbnailCache.keys)
         )
+        let removedIDs = Set(thumbnailCache.keys).subtracting(retainedIDs)
         thumbnailCache = thumbnailCache.filter { retainedIDs.contains($0.key) }
+        guard !removedIDs.isEmpty else { return }
+        var visited = Set<ObjectIdentifier>()
+        for item in cachedWindows + windows where removedIDs.contains(item.id) {
+            guard visited.insert(ObjectIdentifier(item)).inserted else { continue }
+            item.updatePreview(nil)
+        }
     }
 
     private func clearPreview(for windowID: CGWindowID?) {

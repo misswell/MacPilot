@@ -36,6 +36,16 @@ struct WindowSwitcherTests {
         ) == ["window-current"])
     }
 
+    @Test func thumbnailCacheIsBoundedToThirtyWindows() {
+        let currentIDs = (0..<40).map { "window-\($0)" }
+        let cachedIDs = Set(currentIDs)
+
+        #expect(WindowSwitcherThumbnailCachePolicy.retainedIDs(
+            currentIDs: currentIDs,
+            cachedIDs: cachedIDs
+        ).count == 30)
+    }
+
     @Test func thumbnailTaskIsReusedForTheSameWindowSetRegardlessOfOrder() {
         #expect(WindowSwitcherThumbnailTaskPolicy.canReuseTask(
             hasTask: true,
@@ -241,10 +251,10 @@ struct WindowSwitcherTests {
         #expect(WindowSwitcherThumbnailPriority.orderedIndices(count: 0, selectedIndex: 0).isEmpty)
     }
 
-    @Test func thumbnailPrefetchCoversEveryWindowInTheCurrentSnapshot() {
+    @Test func thumbnailPrefetchIsBoundedToThirtyWindows() {
         let indices = WindowSwitcherThumbnailPriority.prefetchedIndices(count: 40, selectedIndex: 20)
 
-        #expect(indices.count == 40)
+        #expect(indices.count == 30)
         #expect(indices.first == 20)
     }
 
