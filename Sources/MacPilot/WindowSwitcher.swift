@@ -957,16 +957,18 @@ private struct WindowSwitcherPendingSession {
     var startedAt = CFAbsoluteTimeGetCurrent()
 }
 
-private struct WindowSwitcherFocusRequest: @unchecked Sendable {
+private struct WindowSwitcherFocusRequest {
     let axWindow: AXUIElement?
     let isMinimized: Bool
 }
 
+@MainActor
 private enum WindowSwitcherWindowFocus {
     static func perform(_ request: WindowSwitcherFocusRequest) {
         guard let axWindow = request.axWindow else { return }
-        // AX calls happen away from the event-tap run loop. A hung or
-        // terminating application must not stall keyboard and scroll events.
+        // AXUIElementPerformAction can enter AppKit when the selected window
+        // belongs to this process. Keep every AX call on the main actor; the
+        // caller schedules this work after returning from the event tap.
         AXUIElementSetMessagingTimeout(axWindow, 0.1)
         if request.isMinimized {
             _ = AXUIElementSetAttributeValue(
@@ -1593,7 +1595,10 @@ final class WindowSwitcherModel: ObservableObject {
             axWindow: item.axWindow,
             isMinimized: item.isMinimized
         )
-        focusTask = Task.detached(priority: .userInitiated) {
+        // Do not use Task.detached here. AX can re-enter AppKit and AppKit
+        // requires that path to run on the main thread. This task is still
+        // asynchronous, so the CGEvent tap callback returns immediately.
+        focusTask = Task { @MainActor in
             WindowSwitcherWindowFocus.perform(request)
         }
     }
