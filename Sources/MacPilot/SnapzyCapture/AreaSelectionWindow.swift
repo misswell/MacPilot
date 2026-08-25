@@ -5,6 +5,7 @@
 import AppKit
 import Foundation
 import QuartzCore
+import SwiftUI
 @MainActor
 protocol AreaSelectionWindowDelegate: AnyObject {
   func areaSelectionWindow(_ window: AreaSelectionWindow, didSelectRect rect: CGRect)
@@ -135,8 +136,15 @@ final class AreaSelectionWindow: NSPanel {
 
   func activateKeyboardInputIfNeeded() {
     guard receivesKeyboardInput else { return }
-    makeKey()
-    makeFirstResponder(overlayView)
+    // The overlay is already key for the whole drag. Re-ordering the panel on
+    // every mouse event makes WindowServer briefly hand input back and forth,
+    // which presents as a flashing/jumping selection frame.
+    if !isKeyWindow {
+      makeKey()
+    }
+    if firstResponder !== overlayView {
+      makeFirstResponder(overlayView)
+    }
   }
 
   var displayID: CGDirectDisplayID? {
@@ -855,11 +863,15 @@ final class AreaSelectionOverlayView: NSView {
     refreshActiveCursor()
   }
 
-  /// Adds a SwiftUI editor as a child of this full-screen overlay, clipped to
-  /// the selected frame.  This is the PixPin/Snipaste-style in-place editing
-  /// path: the frozen display and selection location remain unchanged while
-  /// the annotation tools appear on top of the captured pixels.
-  func showEmbeddedAnnotationEditor(_ editorView: NSView, screenRect: CGRect) {
+  /// Adds a SwiftUI editor as a child of this full-screen overlay.  The canvas
+  /// stays aligned with the selected frame while the toolbar is laid out as a
+  /// sibling immediately above or below it, matching PixPin/Snipaste's
+  /// in-place editing behavior without covering the captured pixels.
+  func showEmbeddedAnnotationEditor(
+    _ editorView: NSView,
+    screenRect: CGRect,
+    toolbarPlacement: SmartAnnotationToolbarPlacement = .above
+  ) {
     guard finalizedSelectionRect != nil else { return }
     isSelecting = false
     selectionEnabled = false
@@ -877,13 +889,51 @@ final class AreaSelectionOverlayView: NSView {
     selectionDimensionTextLayer.isHidden = true
 
     removeEmbeddedAnnotationEditor()
-    editorView.frame = finalizedSelectionRect ?? .zero
+    let selectionFrame = finalizedSelectionRect ?? .zero
     editorView.autoresizingMask = []
     editorView.wantsLayer = true
-    editorView.layer?.cornerRadius = 4
-    editorView.layer?.masksToBounds = true
+    editorView.layer?.cornerRadius = 0
+    editorView.layer?.masksToBounds = false
     embeddedAnnotationView = editorView
     addSubview(editorView, positioned: .above, relativeTo: nil)
+    editorView.frame = selectionFrame
+    editorView.layoutSubtreeIfNeeded()
+
+    let fittingSize = editorView.fittingSize
+    let editorWidth = max(
+      selectionFrame.width,
+      max(0, fittingSize.width),
+      SmartAnnotationEditor.embeddedToolbarMinimumWidth
+    )
+    let editorHeight = max(
+      selectionFrame.height + SmartAnnotationEditor.embeddedToolbarExtent,
+      max(0, fittingSize.height)
+    )
+    let editorX = max(
+      8,
+      min(bounds.width - editorWidth - 8, selectionFrame.midX - editorWidth / 2)
+    )
+    if let hostingView = editorView as? NSHostingView<SmartAnnotationEditor> {
+      var rootView = hostingView.rootView
+      if rootView.embeddedCanvasSize != nil {
+        let centeredCanvasX = editorX + (editorWidth - selectionFrame.width) / 2
+        rootView.embeddedCanvasHorizontalOffset = selectionFrame.minX - centeredCanvasX
+        hostingView.rootView = rootView
+        editorView.layoutSubtreeIfNeeded()
+      }
+    }
+    let editorY: CGFloat = switch toolbarPlacement {
+    case .above:
+      selectionFrame.minY
+    case .below:
+      selectionFrame.maxY - editorHeight
+    }
+    editorView.frame = CGRect(
+      x: editorX,
+      y: editorY,
+      width: editorWidth,
+      height: editorHeight
+    )
     refreshActiveCursor()
   }
 
@@ -2467,7 +2517,6 @@ final class AreaSelectionOverlayView: NSView {
 
   private func handlePrimaryMouseDragged(at point: CGPoint) {
     currentMousePosition = point
-    delegate?.overlayViewDidRequestDisplayActivation(self)
     if isShowingSelectionActions {
       guard let drag = finalizedSelectionDrag else { return }
       let updatedRect: CGRect
@@ -2521,7 +2570,6 @@ final class AreaSelectionOverlayView: NSView {
 
   private func handlePrimaryMouseUp(at point: CGPoint) {
     currentMousePosition = point
-    delegate?.overlayViewDidRequestDisplayActivation(self)
     if isShowingSelectionActions {
       finalizedSelectionDrag = nil
       return
@@ -2562,7 +2610,6 @@ final class AreaSelectionOverlayView: NSView {
 
   private func handlePrimaryMouseMoved(at point: CGPoint) {
     currentMousePosition = point
-    delegate?.overlayViewDidRequestDisplayActivation(self)
     applyActiveCursor()
     if isShowingSelectionActions {
       return

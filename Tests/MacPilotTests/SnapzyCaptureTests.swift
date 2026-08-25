@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import AppKit
+import SwiftUI
 import Testing
 @testable import MacPilot
 
@@ -50,6 +51,7 @@ struct SnapzyCaptureTests {
         var manualBegan: [CGPoint] = []
         var manualChanged: [CGPoint] = []
         var manualEnded: [CGPoint] = []
+        var displayActivationRequests = 0
 
         func overlayView(
             _ view: AreaSelectionOverlayView,
@@ -77,7 +79,9 @@ struct SnapzyCaptureTests {
         func overlayView(_ view: AreaSelectionOverlayView, didRequestAction action: AreaSelectionAction) {}
         func overlayView(_ view: AreaSelectionOverlayView, didChangeSelectionRect rect: CGRect) {}
         func overlayViewDidCancel(_ view: AreaSelectionOverlayView) {}
-        func overlayViewDidRequestDisplayActivation(_ view: AreaSelectionOverlayView) {}
+        func overlayViewDidRequestDisplayActivation(_ view: AreaSelectionOverlayView) {
+            displayActivationRequests += 1
+        }
         func overlayViewDidRequestImmediateManualSelection(_ view: AreaSelectionOverlayView) {}
     }
 
@@ -258,7 +262,7 @@ struct SnapzyCaptureTests {
         #expect(window.overlayView.isSelectionAdjustmentActive)
     }
 
-    @Test @MainActor func annotationEditorIsMountedInsideTheSelectedFrame() throws {
+    @Test @MainActor func annotationEditorToolbarIsMountedOutsideTheSelectedFrame() throws {
         _ = NSApplication.shared
         guard let screen = NSScreen.main else { return }
 
@@ -275,8 +279,19 @@ struct SnapzyCaptureTests {
             showsActions: true,
             actionHandler: { _ in }
         )
-        let editor = NSView()
-        window.overlayView.showEmbeddedAnnotationEditor(editor, screenRect: selectionRect)
+        let editor = NSView(
+            frame: CGRect(
+                x: 0,
+                y: 0,
+                width: 760,
+                height: selectionRect.height + SmartAnnotationEditor.embeddedToolbarExtent
+            )
+        )
+        window.overlayView.showEmbeddedAnnotationEditor(
+            editor,
+            screenRect: selectionRect,
+            toolbarPlacement: .above
+        )
 
         let expectedFrame = CGRect(
             x: selectionRect.minX - screen.frame.minX,
@@ -285,8 +300,96 @@ struct SnapzyCaptureTests {
             height: selectionRect.height
         )
         #expect(editor.superview === window.overlayView)
-        #expect(editor.frame == expectedFrame)
+        let expectedEditorX = max(
+            8,
+            min(
+                window.overlayView.bounds.width - editor.frame.width - 8,
+                expectedFrame.midX - editor.frame.width / 2
+            )
+        )
+        #expect(editor.frame.minX == expectedEditorX)
+        #expect(editor.frame.minY == expectedFrame.minY)
+        #expect(editor.frame.height > expectedFrame.height)
+        #expect(editor.frame.maxY > expectedFrame.maxY)
         #expect(window.overlayView.subviews.contains { $0 is AreaSelectionActionBar } == false)
+    }
+
+    @Test @MainActor func draggingSelectionDoesNotReactivateTheOverlayWindow() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+
+        let recorder = OverlaySelectionRecorder()
+        window.overlayView.delegate = recorder
+        window.overlayView.setInteractionMode(.manualRegion)
+        window.overlayView.setLivePassthroughInputEnabled(true)
+
+        let start = CGPoint(
+            x: screen.frame.minX + 100,
+            y: screen.frame.minY + 100
+        )
+        window.overlayView.handleLivePassthroughMouseDown(atScreenPoint: start)
+        for step in 1...5 {
+            let point = CGPoint(
+                x: start.x + CGFloat(step * 20),
+                y: start.y + CGFloat(step * 12)
+            )
+            window.overlayView.handleLivePassthroughMouseMoved(atScreenPoint: point)
+            window.overlayView.handleLivePassthroughMouseDragged(atScreenPoint: point)
+        }
+        window.overlayView.handleLivePassthroughMouseUp(atScreenPoint: CGPoint(x: start.x + 100, y: start.y + 60))
+
+        #expect(recorder.displayActivationRequests == 1)
+    }
+
+    @Test @MainActor func embeddedAnnotationCanvasRemainsAlignedWhenToolbarIsClamped() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+        let selectionRect = CGRect(
+            x: screen.frame.minX + 180,
+            y: screen.frame.minY + 200,
+            width: 360,
+            height: 240
+        )
+        window.overlayView.showSelectionResult(
+            screenRect: selectionRect,
+            showsActions: true,
+            actionHandler: { _ in }
+        )
+
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        let editor = NSHostingView(rootView: SmartAnnotationEditor(
+            image: image(width: 360, height: 240),
+            language: .simplifiedChinese,
+            model: model,
+            embedded: true,
+            embeddedToolbarPlacement: .above,
+            embeddedCanvasSize: selectionRect.size,
+            onCancel: {},
+            onComplete: {}
+        ))
+        window.overlayView.showEmbeddedAnnotationEditor(
+            editor,
+            screenRect: selectionRect,
+            toolbarPlacement: .above
+        )
+
+        let localSelection = CGRect(
+            x: selectionRect.minX - screen.frame.minX,
+            y: selectionRect.minY - screen.frame.minY,
+            width: selectionRect.width,
+            height: selectionRect.height
+        )
+        let centeredCanvasX = editor.frame.minX + (editor.frame.width - localSelection.width) / 2
+        let expectedOffset = localSelection.minX - centeredCanvasX
+
+        #expect(editor.frame.height >= localSelection.height + SmartAnnotationEditor.embeddedToolbarExtent)
+        #expect(editor.rootView.embeddedCanvasHorizontalOffset == expectedOffset)
     }
 
     @Test @MainActor func smartElementSelectionKeepsTheCrosshairCursor() throws {

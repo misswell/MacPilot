@@ -5075,11 +5075,24 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
     }
 }
 
+enum SmartAnnotationToolbarPlacement: Equatable {
+    case above
+    case below
+}
+
 struct SmartAnnotationEditor: View {
+    static let embeddedToolbarHeight: CGFloat = 48
+    static let embeddedToolbarGap: CGFloat = 8
+    static let embeddedToolbarExtent: CGFloat = embeddedToolbarHeight + embeddedToolbarGap
+    static let embeddedToolbarMinimumWidth: CGFloat = 760
+
     let image: CGImage
     let language: AppLanguage
     @ObservedObject var model: SmartAnnotationModel
     let embedded: Bool
+    let embeddedToolbarPlacement: SmartAnnotationToolbarPlacement
+    let embeddedCanvasSize: CGSize?
+    var embeddedCanvasHorizontalOffset: CGFloat
     let onCancel: () -> Void
     let onComplete: () -> Void
     @State private var dragStart: CGPoint?
@@ -5095,6 +5108,9 @@ struct SmartAnnotationEditor: View {
         language: AppLanguage,
         model: SmartAnnotationModel,
         embedded: Bool = false,
+        embeddedToolbarPlacement: SmartAnnotationToolbarPlacement = .above,
+        embeddedCanvasSize: CGSize? = nil,
+        embeddedCanvasHorizontalOffset: CGFloat = 0,
         onCancel: @escaping () -> Void,
         onComplete: @escaping () -> Void
     ) {
@@ -5102,8 +5118,26 @@ struct SmartAnnotationEditor: View {
         self.language = language
         self.model = model
         self.embedded = embedded
+        self.embeddedToolbarPlacement = embeddedToolbarPlacement
+        self.embeddedCanvasSize = embeddedCanvasSize
+        self.embeddedCanvasHorizontalOffset = embeddedCanvasHorizontalOffset
         self.onCancel = onCancel
         self.onComplete = onComplete
+    }
+
+    static func toolbarPlacement(
+        for selectionRect: CGRect,
+        in screenRect: CGRect
+    ) -> SmartAnnotationToolbarPlacement {
+        let spaceAbove = max(0, screenRect.maxY - selectionRect.maxY)
+        let spaceBelow = max(0, selectionRect.minY - screenRect.minY)
+        if spaceAbove >= embeddedToolbarExtent {
+            return .above
+        }
+        if spaceBelow >= embeddedToolbarExtent {
+            return .below
+        }
+        return spaceAbove >= spaceBelow ? .above : .below
     }
 
     var body: some View {
@@ -5149,14 +5183,43 @@ struct SmartAnnotationEditor: View {
     }
 
     private var embeddedEditorBody: some View {
-        GeometryReader { geometry in
-            annotationCanvas(in: geometry.size)
-                .overlay(alignment: .top) {
-                    annotationToolbar
-                        .padding(4)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .padding(6)
+        let canvasSize = embeddedCanvasSize ?? CGSize(
+            width: max(1, CGFloat(image.width)),
+            height: max(1, CGFloat(image.height))
+        )
+        let canvas = annotationCanvas(in: canvasSize)
+            .frame(width: canvasSize.width, height: canvasSize.height)
+        let positionedCanvas = canvas.offset(x: embeddedCanvasHorizontalOffset)
+        let toolbarMinimumWidth = embeddedCanvasSize.map {
+            max($0.width, Self.embeddedToolbarMinimumWidth)
+        } ?? Self.embeddedToolbarMinimumWidth
+        let toolbar = annotationToolbar
+            .padding(4)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(6)
+            .frame(minWidth: toolbarMinimumWidth)
+
+        return Group {
+            if embeddedCanvasSize != nil {
+                if embeddedToolbarPlacement == .above {
+                    VStack(spacing: Self.embeddedToolbarGap) {
+                        toolbar
+                        positionedCanvas
+                    }
+                } else {
+                    VStack(spacing: Self.embeddedToolbarGap) {
+                        positionedCanvas
+                        toolbar
+                    }
                 }
+            } else {
+                GeometryReader { geometry in
+                    annotationCanvas(in: geometry.size)
+                        .overlay(alignment: .top) {
+                            toolbar
+                        }
+                }
+            }
         }
     }
 

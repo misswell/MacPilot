@@ -324,12 +324,18 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         onCancel: @escaping () -> Void
     ) -> Bool {
         guard let selectedWindow, let selectedResult else { return false }
+        let toolbarPlacement = SmartAnnotationEditor.toolbarPlacement(
+            for: selectedResult.rect,
+            in: selectedWindow.frame
+        )
         let model = SmartAnnotationModel(initialTool: initialTool.smartAnnotationTool)
         let editor = NSHostingView(rootView: SmartAnnotationEditor(
             image: image,
             language: language,
             model: model,
             embedded: true,
+            embeddedToolbarPlacement: toolbarPlacement,
+            embeddedCanvasSize: selectedResult.rect.size,
             onCancel: { [weak self] in
                 self?.dismissSelection()
                 onCancel()
@@ -347,7 +353,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         ))
         selectedWindow.overlayView.showEmbeddedAnnotationEditor(
             editor,
-            screenRect: selectedResult.rect
+            screenRect: selectedResult.rect,
+            toolbarPlacement: toolbarPlacement
         )
         return true
     }
