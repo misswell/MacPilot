@@ -7,6 +7,21 @@ import Testing
 
 /// Geometry coverage for the source-migrated Snapzy frozen-display pipeline.
 struct SnapzyCaptureTests {
+    @Test func pinShortcutCommitsTheInlineAnnotationEditorBeforePinning() {
+        #expect(SnapzyInlineAnnotationShortcutRouting.shouldCommitInlineAnnotation(
+            action: .pin,
+            hasInlineAnnotationEditor: true
+        ))
+        #expect(!SnapzyInlineAnnotationShortcutRouting.shouldCommitInlineAnnotation(
+            action: .pin,
+            hasInlineAnnotationEditor: false
+        ))
+        #expect(!SnapzyInlineAnnotationShortcutRouting.shouldCommitInlineAnnotation(
+            action: .copy,
+            hasInlineAnnotationEditor: true
+        ))
+    }
+
     private final class InitialTargetResolverRecorder: @unchecked Sendable {
         private let lock = NSLock()
         private var observedMainThread: Bool?

@@ -12,6 +12,15 @@ import AppKit
 import Foundation
 import SwiftUI
 
+enum SnapzyInlineAnnotationShortcutRouting {
+    static func shouldCommitInlineAnnotation(
+        action: AreaSelectionAction,
+        hasInlineAnnotationEditor: Bool
+    ) -> Bool {
+        hasInlineAnnotationEditor && action == .pin
+    }
+}
+
 @MainActor
 final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate {
     static let shared = SnapzyAreaSelectionController()
@@ -28,6 +37,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
     private var manualRect: CGRect?
     private var postSelectionPinShortcut = ScreenCaptureShortcutKind.postSelectionPin.defaultBinding
     private var sessionID = UUID()
+    private var inlineAnnotationCompleteHandler: (() -> Void)?
+    private var inlineAnnotationPinHandler: (() -> Void)?
 
     private override init() {
         super.init()
@@ -60,6 +71,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         selectedWindow = nil
         manualStart = nil
         manualRect = nil
+        inlineAnnotationCompleteHandler = nil
+        inlineAnnotationPinHandler = nil
         sessionID = requestedSessionID ?? UUID()
 
         let sessionID = self.sessionID
@@ -139,6 +152,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         selectedWindow = nil
         manualStart = nil
         manualRect = nil
+        inlineAnnotationCompleteHandler = nil
+        inlineAnnotationPinHandler = nil
         sessionID = UUID()
         for window in oldWindows {
             window.overlayView.clearBackdrop()
@@ -163,6 +178,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         selectedWindow = nil
         manualStart = nil
         manualRect = nil
+        inlineAnnotationCompleteHandler = nil
+        inlineAnnotationPinHandler = nil
         sessionID = UUID()
         for window in oldWindows {
             window.overlayView.hideSelectionResult()
@@ -188,6 +205,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         windows.removeAll(keepingCapacity: false)
         manualStart = nil
         manualRect = nil
+        inlineAnnotationCompleteHandler = nil
+        inlineAnnotationPinHandler = nil
         for window in currentWindows {
             // A committed selection follows a different teardown path from
             // cancel/dismiss. Clear the layer contents and the cached luma
@@ -321,6 +340,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         language: AppLanguage,
         initialTool: AreaSelectionAnnotationTool,
         onComplete: @escaping (CGImage) -> Void,
+        onPin: @escaping (CGImage) -> Void,
         onCancel: @escaping () -> Void
     ) -> Bool {
         guard let selectedWindow, let selectedResult else { return false }
@@ -329,6 +349,30 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             in: selectedWindow.frame
         )
         let model = SmartAnnotationModel(initialTool: initialTool.smartAnnotationTool)
+        inlineAnnotationCompleteHandler = { [weak self, model] in
+            guard let self,
+                  let rendered = SmartAnnotationRenderer.render(
+                      image: image,
+                      annotations: model.annotations,
+                      styles: model.styledAnnotations.map(\.style)
+                  ) else { return }
+            self.inlineAnnotationCompleteHandler = nil
+            self.inlineAnnotationPinHandler = nil
+            self.dismissSelection()
+            onComplete(rendered)
+        }
+        inlineAnnotationPinHandler = { [weak self, model] in
+            guard let self,
+                  let rendered = SmartAnnotationRenderer.render(
+                      image: image,
+                      annotations: model.annotations,
+                      styles: model.styledAnnotations.map(\.style)
+                  ) else { return }
+            self.inlineAnnotationCompleteHandler = nil
+            self.inlineAnnotationPinHandler = nil
+            self.dismissSelection()
+            onPin(rendered)
+        }
         let editor = NSHostingView(rootView: SmartAnnotationEditor(
             image: image,
             language: language,
@@ -337,18 +381,13 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             embeddedToolbarPlacement: toolbarPlacement,
             embeddedCanvasSize: selectedResult.rect.size,
             onCancel: { [weak self] in
+                self?.inlineAnnotationCompleteHandler = nil
+                self?.inlineAnnotationPinHandler = nil
                 self?.dismissSelection()
                 onCancel()
             },
             onComplete: { [weak self] in
-                guard let self else { return }
-                guard let rendered = SmartAnnotationRenderer.render(
-                    image: image,
-                    annotations: model.annotations,
-                    styles: model.styledAnnotations.map(\.style)
-                ) else { return }
-                self.dismissSelection()
-                onComplete(rendered)
+                self?.inlineAnnotationCompleteHandler?()
             }
         ))
         selectedWindow.overlayView.showEmbeddedAnnotationEditor(
@@ -376,14 +415,21 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             complete(nil)
             return true
         }
-        guard let selectedResult else { return false }
         let eventModifiers = InputSourceShortcutModifiers(event.modifierFlags)
         if !event.isARepeat,
            event.keyCode == postSelectionPinShortcut.keyCode,
            eventModifiers == postSelectionPinShortcut.modifiers {
-            areaSelectionWindow(window, didRequestAction: .pin)
+            if SnapzyInlineAnnotationShortcutRouting.shouldCommitInlineAnnotation(
+                action: .pin,
+                hasInlineAnnotationEditor: inlineAnnotationPinHandler != nil
+            ) {
+                inlineAnnotationPinHandler?()
+            } else if selectedResult != nil {
+                areaSelectionWindow(window, didRequestAction: .pin)
+            }
             return true
         }
+        guard let selectedResult else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if event.keyCode == 8, modifiers == [.command] || modifiers == [.control] {
             areaSelectionWindow(window, didRequestAction: .copy)

@@ -2332,6 +2332,12 @@ final class SmartScreenshotController {
                             QuickAccessManager.shared.resumeAfterCapture()
                             self.onCapture(annotated)
                         },
+                        onPin: { [weak self] annotated in
+                            guard let self else { return }
+                            self.resetSnapzyPreparationState()
+                            QuickAccessManager.shared.resumeAfterCapture()
+                            self.pin(image: annotated, scaleFactor: crop.scaleFactor)
+                        },
                         onCancel: { [weak self] in
                             self?.resetSnapzyPreparationState()
                             QuickAccessManager.shared.resumeAfterCapture()

@@ -1,8 +1,69 @@
 import Foundation
+import Dispatch
 import Testing
 @testable import MacPilot
 
+private final class WindowSwitcherThreadProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var observedMainThread = false
+
+    func record() {
+        lock.lock()
+        observedMainThread = Thread.isMainThread
+        lock.unlock()
+    }
+
+    var ranOnMainThread: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return observedMainThread
+    }
+}
+
 struct WindowSwitcherTests {
+    @Test func externalWindowFocusDoesNotBlockMainActorInputWork() async {
+        let started = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let operation = WindowSwitcherFocusExecutionPolicy.schedule(
+            targetProcessID: 100,
+            ownProcessID: 200
+        ) {
+            started.signal()
+            release.wait()
+        }
+
+        let clock = ContinuousClock()
+        let probeDelay = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                started.wait()
+                let probeStart = clock.now
+                let probe = Task { @MainActor in clock.now }
+                Thread.sleep(forTimeInterval: 0.06)
+                release.signal()
+                Task {
+                    let probeTime = await probe.value
+                    continuation.resume(returning: probeStart.duration(to: probeTime))
+                }
+            }
+        }
+        operation.cancel()
+
+        #expect(probeDelay < .milliseconds(40))
+    }
+
+    @Test func ownWindowFocusRunsOnMainActor() async {
+        let probe = WindowSwitcherThreadProbe()
+        let operation = WindowSwitcherFocusExecutionPolicy.schedule(
+            targetProcessID: 100,
+            ownProcessID: 100
+        ) {
+            probe.record()
+        }
+        await operation.value
+
+        #expect(probe.ranOnMainThread)
+    }
+
     @Test func initialSelectionMovesPastTheFrontmostWindow() {
         #expect(WindowSwitcherSelection.initialIndex(count: 4, currentIndex: 0, reverse: false) == 1)
         #expect(WindowSwitcherSelection.initialIndex(count: 4, currentIndex: 0, reverse: true) == 3)

@@ -957,18 +957,37 @@ private struct WindowSwitcherPendingSession {
     var startedAt = CFAbsoluteTimeGetCurrent()
 }
 
-private struct WindowSwitcherFocusRequest {
+enum WindowSwitcherFocusExecutionPolicy {
+    static func schedule(
+        targetProcessID: pid_t,
+        ownProcessID: pid_t,
+        operation: @escaping @Sendable () -> Void
+    ) -> Task<Void, Never> {
+        if targetProcessID == ownProcessID {
+            return Task { @MainActor in
+                operation()
+            }
+        }
+        // AX requests to another application can wait for that application's
+        // accessibility server. Never let that wait occupy the main run loop,
+        // which also carries keyboard and scroll event taps.
+        return Task.detached(priority: .userInitiated) {
+            operation()
+        }
+    }
+}
+
+private struct WindowSwitcherFocusRequest: @unchecked Sendable {
     let axWindow: AXUIElement?
     let isMinimized: Bool
 }
 
-@MainActor
 private enum WindowSwitcherWindowFocus {
     static func perform(_ request: WindowSwitcherFocusRequest) {
         guard let axWindow = request.axWindow else { return }
-        // AXUIElementPerformAction can enter AppKit when the selected window
-        // belongs to this process. Keep every AX call on the main actor; the
-        // caller schedules this work after returning from the event tap.
+        // The caller keeps this on the main actor only for MacPilot's own
+        // windows. External targets are executed by the background branch in
+        // WindowSwitcherFocusExecutionPolicy.
         AXUIElementSetMessagingTimeout(axWindow, 0.1)
         if request.isMinimized {
             _ = AXUIElementSetAttributeValue(
@@ -1112,6 +1131,7 @@ final class WindowSwitcherModel: ObservableObject {
     private var activationCandidate: NSRunningApplication?
     private var activationConfirmTask: Task<Void, Never>?
     private var focusTask: Task<Void, Never>?
+    private var focusedWindowResolutionTask: Task<Void, Never>?
 
     var gridColumnCount: Int {
         let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
@@ -1199,6 +1219,8 @@ final class WindowSwitcherModel: ObservableObject {
         manualDismissTask = nil
         focusTask?.cancel()
         focusTask = nil
+        focusedWindowResolutionTask?.cancel()
+        focusedWindowResolutionTask = nil
         inventoryRevision += 1
         inventoryTask?.cancel()
         inventoryTask = nil
@@ -1595,10 +1617,12 @@ final class WindowSwitcherModel: ObservableObject {
             axWindow: item.axWindow,
             isMinimized: item.isMinimized
         )
-        // Do not use Task.detached here. AX can re-enter AppKit and AppKit
-        // requires that path to run on the main thread. This task is still
-        // asynchronous, so the CGEvent tap callback returns immediately.
-        focusTask = Task { @MainActor in
+        // External AX work is detached by the execution policy. MacPilot's
+        // own windows stay on the main actor because AX can re-enter AppKit.
+        focusTask = WindowSwitcherFocusExecutionPolicy.schedule(
+            targetProcessID: item.processID,
+            ownProcessID: ProcessInfo.processInfo.processIdentifier
+        ) {
             WindowSwitcherWindowFocus.perform(request)
         }
     }
@@ -1660,14 +1684,15 @@ final class WindowSwitcherModel: ObservableObject {
     private func noteApplicationActivation(_ application: NSRunningApplication?) {
         guard let processID = application?.processIdentifier else { return }
         let candidates = cachedWindows.filter { $0.processID == processID }
-        let focusedWindowID = candidates.count > 1
-            ? WindowSwitcherFocusedWindowResolver.resolve(processID: processID, candidates: candidates)
-            : nil
         guard let promotedWindowID = WindowSwitcherActivationRouting.promotedWindowID(
             applicationProcessID: processID,
             candidateWindowIDs: candidates.map(\.id),
-            focusedWindowID: focusedWindowID
+            // WindowServer returns windows front-to-back. Use that cheap hint
+            // immediately and correct it asynchronously for apps whose AX
+            // ordering differs.
+            focusedWindowID: candidates.first?.id
         ) else { return }
+        noteWindowActivation(promotedWindowID)
         if candidates.count > 1 {
             DiagnosticLog.write(
                 "WindowSwitcher",
@@ -1676,8 +1701,13 @@ final class WindowSwitcherModel: ObservableObject {
             Self.activationLogger.info(
                 "Promoting \(application?.localizedName ?? "?") window \(promotedWindowID, privacy: .public)"
             )
+            scheduleFocusedWindowCorrection(
+                processID: processID,
+                candidates: candidates,
+                fallbackWindowID: promotedWindowID,
+                applicationName: application?.localizedName ?? "?"
+            )
         }
-        noteWindowActivation(promotedWindowID)
     }
 
     /// The frontmost window is always the first MRU item. This also catches
@@ -1692,14 +1722,51 @@ final class WindowSwitcherModel: ObservableObject {
         guard let promotedWindowID = WindowSwitcherActivationRouting.promotedWindowID(
             applicationProcessID: application.processIdentifier,
             candidateWindowIDs: candidates.map(\.id),
-            focusedWindowID: candidates.count > 1
-                ? WindowSwitcherFocusedWindowResolver.resolve(
-                    processID: application.processIdentifier,
-                    candidates: candidates
-                )
-                : nil
+            // WindowServer snapshots are front-to-back. AX only corrects the
+            // cheap synchronous hint below, outside the shortcut hot path.
+            focusedWindowID: candidates.first?.id
         ) else { return }
         noteWindowActivation(promotedWindowID)
+        if candidates.count > 1 {
+            scheduleFocusedWindowCorrection(
+                processID: application.processIdentifier,
+                candidates: candidates,
+                fallbackWindowID: promotedWindowID,
+                applicationName: application.localizedName ?? "?"
+            )
+        }
+    }
+
+    private func scheduleFocusedWindowCorrection(
+        processID: pid_t,
+        candidates: [WindowSwitcherItem],
+        fallbackWindowID: String,
+        applicationName: String
+    ) {
+        focusedWindowResolutionTask?.cancel()
+        focusedWindowResolutionTask = Task { @MainActor [weak self] in
+            let focusedWindowID = await Task.detached(priority: .utility) {
+                WindowSwitcherFocusedWindowResolver.resolve(
+                    processID: processID,
+                    candidates: candidates
+                )
+            }.value
+            guard !Task.isCancelled,
+                  let self,
+                  !self.isShowing,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == processID,
+                  let focusedWindowID,
+                  candidates.contains(where: { $0.id == focusedWindowID }) else { return }
+            guard focusedWindowID != fallbackWindowID else { return }
+            DiagnosticLog.write(
+                "WindowSwitcher",
+                "Correcting focused window \(applicationName): \(focusedWindowID)"
+            )
+            Self.activationLogger.info(
+                "Correcting \(applicationName, privacy: .public) to \(focusedWindowID, privacy: .public)"
+            )
+            self.noteWindowActivation(focusedWindowID)
+        }
     }
 
     private func noteWindowActivation(_ windowID: String) {
@@ -1748,13 +1815,9 @@ final class WindowSwitcherModel: ObservableObject {
         guard let frontmost = NSWorkspace.shared.frontmostApplication else { return nil }
         let candidates = items.filter { $0.processID == frontmost.processIdentifier }
         guard !candidates.isEmpty else { return nil }
-        let focusedWindowID = candidates.count > 1
-            ? WindowSwitcherFocusedWindowResolver.resolve(
-                processID: frontmost.processIdentifier,
-                candidates: candidates
-            )
-            : candidates[0].id
-        return items.firstIndex { $0.id == focusedWindowID }
+        let candidateIDs = Set(candidates.map(\.id))
+        let recentWindowID = recentWindowIDs.first(where: candidateIDs.contains)
+        return items.firstIndex { $0.id == recentWindowID }
             ?? items.firstIndex { $0.processID == frontmost.processIdentifier }
     }
 
