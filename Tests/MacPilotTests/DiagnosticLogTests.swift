@@ -33,7 +33,7 @@ struct DiagnosticLogTests {
         #expect(!probe.didRun)
     }
 
-    @Test func logRetentionKeepsOnlyTheLastDay() {
+    @Test func logRetentionKeepsOnlyTheLastHour() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -44,10 +44,11 @@ struct DiagnosticLogTests {
             "[\(formatter.string(from: date))] [Test] \(message)"
         }
 
+        let oneHour: TimeInterval = 60 * 60
         let content = [
-            line(at: now.addingTimeInterval(-24 * 60 * 60 - 1), message: "old"),
-            line(at: now.addingTimeInterval(-24 * 60 * 60), message: "boundary"),
-            line(at: now.addingTimeInterval(-60 * 60), message: "recent"),
+            line(at: now.addingTimeInterval(-oneHour - 1), message: "old"),
+            line(at: now.addingTimeInterval(-oneHour), message: "boundary"),
+            line(at: now.addingTimeInterval(-60), message: "recent"),
             "legacy line without a timestamp"
         ].joined(separator: "\n") + "\n"
 

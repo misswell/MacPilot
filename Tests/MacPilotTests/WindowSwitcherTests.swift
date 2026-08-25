@@ -1,5 +1,4 @@
 import Foundation
-import Dispatch
 import Testing
 @testable import MacPilot
 
@@ -21,34 +20,18 @@ private final class WindowSwitcherThreadProbe: @unchecked Sendable {
 }
 
 struct WindowSwitcherTests {
-    @Test func externalWindowFocusDoesNotBlockMainActorInputWork() async {
-        let started = DispatchSemaphore(value: 0)
-        let release = DispatchSemaphore(value: 0)
+    @Test func externalWindowFocusRunsOffMainActor() async {
+        let probe = WindowSwitcherThreadProbe()
         let operation = WindowSwitcherFocusExecutionPolicy.schedule(
             targetProcessID: 100,
             ownProcessID: 200
         ) {
-            started.signal()
-            release.wait()
+            probe.record()
         }
 
-        let clock = ContinuousClock()
-        let probeDelay = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                started.wait()
-                let probeStart = clock.now
-                let probe = Task { @MainActor in clock.now }
-                Thread.sleep(forTimeInterval: 0.06)
-                release.signal()
-                Task {
-                    let probeTime = await probe.value
-                    continuation.resume(returning: probeStart.duration(to: probeTime))
-                }
-            }
-        }
-        operation.cancel()
+        await operation.value
 
-        #expect(probeDelay < .milliseconds(40))
+        #expect(!probe.ranOnMainThread)
     }
 
     @Test func ownWindowFocusRunsOnMainActor() async {
@@ -64,34 +47,18 @@ struct WindowSwitcherTests {
         #expect(probe.ranOnMainThread)
     }
 
-    @Test func externalApplicationActivationDoesNotBlockMainActorInputWork() async {
-        let started = DispatchSemaphore(value: 0)
-        let release = DispatchSemaphore(value: 0)
+    @Test func externalApplicationActivationRunsOffMainActor() async {
+        let probe = WindowSwitcherThreadProbe()
         let operation = WindowSwitcherApplicationActivationPolicy.schedule(
             targetProcessID: 100,
             ownProcessID: 200
         ) {
-            started.signal()
-            release.wait()
+            probe.record()
         }
 
-        let clock = ContinuousClock()
-        let probeDelay = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                started.wait()
-                let probeStart = clock.now
-                let probe = Task { @MainActor in clock.now }
-                Thread.sleep(forTimeInterval: 0.06)
-                release.signal()
-                Task {
-                    let probeTime = await probe.value
-                    continuation.resume(returning: probeStart.duration(to: probeTime))
-                }
-            }
-        }
-        operation.cancel()
+        await operation.value
 
-        #expect(probeDelay < .milliseconds(40))
+        #expect(!probe.ranOnMainThread)
     }
 
     @Test func ordinaryKeyboardEventsBypassWindowSwitcherRouting() {

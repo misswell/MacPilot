@@ -17,14 +17,14 @@ enum DiagnosticLogWriteScheduling {
 ///
 /// 系统 unified log（`log show`）对低级别日志保留时间有限，排查问题时往往
 /// 已经滚动掉。这里把关键模块的事件按时间戳追加写入
-/// `~/Library/Logs/MacPilot/Diagnostics.log`，并在写入前清理超过 1 天的旧日志，
-/// 保证始终能看到最近一天的记录。
+/// `~/Library/Logs/MacPilot/Diagnostics.log`，并在写入前清理超过 1 小时的旧日志，
+/// 保证始终能看到最近一小时的记录。
 enum DiagnosticLog {
     private static let writeQueue = DispatchQueue(
         label: "com.misswell.macpilot.diagnostic-log-write",
         qos: .utility
     )
-    private static let retentionInterval: TimeInterval = 24 * 60 * 60
+    private static let retentionInterval: TimeInterval = 60 * 60
     private static let cleanupInterval: TimeInterval = 60
     nonisolated(unsafe) private static var lastCleanupAt = Date.distantPast
     private static let isRunningTests: Bool = {
@@ -79,7 +79,7 @@ enum DiagnosticLog {
         }
     }
 
-    /// 删除超过 1 天的日志行和日志文件，保证只保留最近一天。
+    /// 删除超过 1 小时的日志行和日志文件，保证只保留最近一小时。
     private static func cleanExpired(now: Date) {
         guard now.timeIntervalSince(lastCleanupAt) >= cleanupInterval else { return }
         lastCleanupAt = now
