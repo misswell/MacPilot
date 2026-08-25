@@ -1,6 +1,18 @@
 import Foundation
 import OSLog
 
+/// Keeps diagnostic file I/O out of event taps and other latency-sensitive
+/// callers. The queue is injected in tests so the scheduling contract is
+/// testable without touching the user's diagnostic file.
+enum DiagnosticLogWriteScheduling {
+    static func enqueue(
+        on queue: DispatchQueue,
+        operation: @escaping @Sendable () -> Void
+    ) {
+        queue.async(execute: operation)
+    }
+}
+
 /// 落盘诊断日志。
 ///
 /// 系统 unified log（`log show`）对低级别日志保留时间有限，排查问题时往往
@@ -8,7 +20,10 @@ import OSLog
 /// `~/Library/Logs/MacPilot/Diagnostics.log`，并在写入前清理超过 1 天的旧日志，
 /// 保证始终能看到最近一天的记录。
 enum DiagnosticLog {
-    private static let lock = NSLock()
+    private static let writeQueue = DispatchQueue(
+        label: "com.misswell.macpilot.diagnostic-log-write",
+        qos: .utility
+    )
     private static let retentionInterval: TimeInterval = 24 * 60 * 60
     private static let cleanupInterval: TimeInterval = 60
     nonisolated(unsafe) private static var lastCleanupAt = Date.distantPast
@@ -34,12 +49,21 @@ enum DiagnosticLog {
         // those callbacks append synthetic UUIDs/settings to the user's
         // one-day diagnostic history.
         guard !isRunningTests else { return }
-        lock.lock()
-        defer { lock.unlock() }
+
+        // Evaluating the autoclosure is intentionally the only work performed
+        // by the caller. Directory creation, cleanup, timestamp formatting,
+        // and file writes all happen on the utility queue.
+        let message = message
+        DiagnosticLogWriteScheduling.enqueue(on: writeQueue) {
+            append(category: category, message: message)
+        }
+    }
+
+    private static func append(category: String, message: String) {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let now = Date()
-            cleanExpiredLocked(now: now)
+            cleanExpired(now: now)
             let line = "[\(timestamp(for: now))] [\(category)] \(message)\n"
             if let handle = try? FileHandle(forWritingTo: fileURL) {
                 handle.seekToEndOfFile()
@@ -56,7 +80,7 @@ enum DiagnosticLog {
     }
 
     /// 删除超过 1 天的日志行和日志文件，保证只保留最近一天。
-    private static func cleanExpiredLocked(now: Date) {
+    private static func cleanExpired(now: Date) {
         guard now.timeIntervalSince(lastCleanupAt) >= cleanupInterval else { return }
         lastCleanupAt = now
 

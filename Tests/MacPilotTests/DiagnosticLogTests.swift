@@ -2,7 +2,37 @@ import Foundation
 import Testing
 @testable import MacPilot
 
+private final class DiagnosticLogWriteProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    func mark() {
+        lock.lock()
+        value = true
+        lock.unlock()
+    }
+
+    var didRun: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 struct DiagnosticLogTests {
+    @Test func diagnosticLogWritesAreQueuedOffTheCallingThread() {
+        let queue = DispatchQueue(label: "com.misswell.macpilot.tests.diagnostic-log")
+        let probe = DiagnosticLogWriteProbe()
+        queue.suspend()
+        defer { queue.resume() }
+
+        DiagnosticLogWriteScheduling.enqueue(on: queue) {
+            probe.mark()
+        }
+
+        #expect(!probe.didRun)
+    }
+
     @Test func logRetentionKeepsOnlyTheLastDay() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let formatter = DateFormatter()
