@@ -324,6 +324,17 @@ struct WindowSwitcherTests {
         #expect(indices.first == 20)
     }
 
+    @Test func thumbnailCaptureOutputIsBoundedBeforeWindowServerTransfer() {
+        let output = WindowSwitcherThumbnailCapturePolicy.outputPixelSize(
+            windowSize: CGSize(width: 1_920, height: 1_080),
+            maximumPixelSize: CGSize(width: 256, height: 160)
+        )
+
+        #expect(output == CGSize(width: 256, height: 144))
+        #expect(output.width <= 256)
+        #expect(output.height <= 160)
+    }
+
     @Test func cancelledThumbnailWorkCannotRepopulateDisabledCache() {
         #expect(!WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
             taskIsCancelled: true,

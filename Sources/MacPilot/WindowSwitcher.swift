@@ -10,6 +10,7 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 import OSLog
+@preconcurrency import ScreenCaptureKit
 import SwiftUI
 
 // MARK: - Configuration and pure selection rules
@@ -361,6 +362,27 @@ enum WindowSwitcherThumbnailPriority {
 
     static func prefetchedIndices(count: Int, selectedIndex: Int) -> [Int] {
         Array(orderedIndices(count: count, selectedIndex: selectedIndex).prefix(maximumPrefetchCount))
+    }
+}
+
+enum WindowSwitcherThumbnailCapturePolicy {
+    static func outputPixelSize(
+        windowSize: CGSize,
+        maximumPixelSize: CGSize
+    ) -> CGSize {
+        let sourceWidth = max(1, windowSize.width)
+        let sourceHeight = max(1, windowSize.height)
+        let maximumWidth = max(1, maximumPixelSize.width)
+        let maximumHeight = max(1, maximumPixelSize.height)
+        let scale = min(
+            1,
+            maximumWidth / sourceWidth,
+            maximumHeight / sourceHeight
+        )
+        return CGSize(
+            width: max(1, (sourceWidth * scale).rounded()),
+            height: max(1, (sourceHeight * scale).rounded())
+        )
     }
 }
 
@@ -808,75 +830,87 @@ private enum WindowSwitcherInventory {
 }
 
 private struct WindowSwitcherCapturedPreview: @unchecked Sendable {
+    let windowID: CGWindowID
     let image: CGImage
 }
 
 private enum WindowSwitcherPreviewCapture {
-    private typealias CaptureFunction = @convention(c) (
-        CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption
-    ) -> CGImage?
+    static func captureBatch(
+        windowIDs: [CGWindowID],
+        maximumPixelSize: CGSize
+    ) async -> [WindowSwitcherCapturedPreview] {
+        guard !windowIDs.isEmpty, !Task.isCancelled else { return [] }
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+            false,
+            onScreenWindowsOnly: true
+        ) else {
+            return []
+        }
 
-    // Keep the framework handle and symbol for the process lifetime. Resolving
-    // both for every tile was measurable work on the shortcut's hot path.
-    private static let captureFunction: CaptureFunction? = {
-        guard let handle = dlopen(
-            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
-            RTLD_LAZY
-        ), let symbol = dlsym(handle, "CGWindowListCreateImage") else { return nil }
-        return unsafeBitCast(symbol, to: CaptureFunction.self)
-    }()
-
-    static func capture(windowID: CGWindowID, maximumPixelSize: CGSize) -> WindowSwitcherCapturedPreview? {
-        guard let captureFunction,
-              let source = captureFunction(
-                .null,
-                .optionIncludingWindow,
-                windowID,
-                [.nominalResolution, .boundsIgnoreFraming]
-              ) else { return nil }
-        return WindowSwitcherCapturedPreview(image: downscaled(source, maximumPixelSize: maximumPixelSize))
-    }
-
-    private static func downscaled(_ source: CGImage, maximumPixelSize: CGSize) -> CGImage {
-        let sourceSize = CGSize(width: source.width, height: source.height)
-        let scale = min(
-            1,
-            maximumPixelSize.width / max(sourceSize.width, 1),
-            maximumPixelSize.height / max(sourceSize.height, 1)
+        let windowsByID = Dictionary(
+            uniqueKeysWithValues: content.windows
+                .filter { $0.windowID != 0 }
+                .map { ($0.windowID, $0) }
         )
-        guard scale < 1 else { return source }
-        let width = max(1, Int((sourceSize.width * scale).rounded()))
-        let height = max(1, Int((sourceSize.height * scale).rounded()))
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return source }
-        context.interpolationQuality = .medium
-        context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return context.makeImage() ?? source
+        var result: [WindowSwitcherCapturedPreview] = []
+        result.reserveCapacity(windowIDs.count)
+
+        for windowID in windowIDs {
+            guard !Task.isCancelled, let window = windowsByID[windowID] else { continue }
+            let outputSize = WindowSwitcherThumbnailCapturePolicy.outputPixelSize(
+                windowSize: window.frame.size,
+                maximumPixelSize: maximumPixelSize
+            )
+            let configuration = SCStreamConfiguration()
+            configuration.width = max(1, Int(outputSize.width))
+            configuration.height = max(1, Int(outputSize.height))
+            configuration.queueDepth = 1
+            configuration.scalesToFit = true
+            configuration.preservesAspectRatio = true
+            configuration.showsCursor = false
+            configuration.capturesAudio = false
+            configuration.ignoreShadowsSingleWindow = true
+            configuration.captureResolution = .nominal
+
+            let filter = SCContentFilter(desktopIndependentWindow: window)
+            guard let image = try? await SCScreenshotManager.captureImage(
+                contentFilter: filter,
+                configuration: configuration
+            ), !Task.isCancelled else {
+                return []
+            }
+            result.append(WindowSwitcherCapturedPreview(windowID: windowID, image: image))
+        }
+        return result
     }
 }
 
-/// WindowServer keeps the returned window image in an out-of-line Mach
-/// message while `CGWindowListCreateImage` completes. A cancelled Swift Task
-/// cannot interrupt that synchronous CoreGraphics call, so serializing the
-/// calls is important: a new switcher session must never start another full
-/// window capture while the previous one is still unwinding.
+/// Keep one thumbnail batch serialized. ScreenCaptureKit is configured to
+/// produce the final 256x160-class image, so WindowServer never has to send a
+/// native-resolution window image to this process for downscaling.
 private actor WindowSwitcherPreviewCaptureQueue {
-    func capture(windowID: CGWindowID, maximumPixelSize: CGSize) -> WindowSwitcherCapturedPreview? {
-        // Do not spend time on a request whose owning session was cancelled
-        // while it was waiting behind an older CoreGraphics capture.
-        guard !Task.isCancelled else { return nil }
-        return autoreleasepool {
-            WindowSwitcherPreviewCapture.capture(
-                windowID: windowID,
+    private var lastBatch: Task<Void, Never>?
+
+    func capture(
+        windowIDs: [CGWindowID],
+        maximumPixelSize: CGSize
+    ) async -> [WindowSwitcherCapturedPreview] {
+        let previousBatch = lastBatch
+        let batch: Task<[WindowSwitcherCapturedPreview], Never> = Task.detached(priority: .utility) {
+            _ = await previousBatch?.value
+            guard !Task.isCancelled else { return [] }
+            return await WindowSwitcherPreviewCapture.captureBatch(
+                windowIDs: windowIDs,
                 maximumPixelSize: maximumPixelSize
             )
+        }
+        lastBatch = Task {
+            _ = await batch.value
+        }
+        return await withTaskCancellationHandler {
+            await batch.value
+        } onCancel: {
+            batch.cancel()
         }
     }
 }
@@ -2049,21 +2083,31 @@ final class WindowSwitcherModel: ObservableObject {
             count: items.count,
             selectedIndex: selectedIndex
         )
-        let needsCapture = indices.contains { index in
-            guard items.indices.contains(index) else { return false }
+        let captureItems = indices.compactMap { index -> WindowSwitcherItem? in
+            guard items.indices.contains(index) else { return nil }
             let item = items[index]
-            return item.windowID != nil
-                && item.canCapturePreview
-                && thumbnailCache[item.id] == nil
+            guard item.windowID != nil,
+                  item.canCapturePreview,
+                  thumbnailCache[item.id] == nil else { return nil }
+            return item
         }
-        guard needsCapture else { return }
+        guard !captureItems.isEmpty else { return }
         let revision = thumbnailRevision
         thumbnailTaskWindowIDs = requestedWindowIDs
         let maximumPixelSize = Self.thumbnailMaximumPixelSize
         thumbnailTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            var cacheHits = 0
-            var captureRequests = 0
+            let cacheHits = indices.reduce(into: 0) { count, index in
+                guard items.indices.contains(index), thumbnailCache[items[index].id] != nil else { return }
+                count += 1
+            }
+            let captureWindowIDs = captureItems.compactMap(\.windowID)
+            let itemsByWindowID = Dictionary(
+                uniqueKeysWithValues: captureItems.compactMap { item in
+                    item.windowID.map { ($0, item) }
+                }
+            )
+            let captureRequests = captureWindowIDs.count
             var committedPreviews = 0
             defer {
                 if self.thumbnailRevision == revision {
@@ -2074,29 +2118,18 @@ final class WindowSwitcherModel: ObservableObject {
                     "thumbnail batch: windows: \(requestedWindowIDs.count, privacy: .public); cache hits: \(cacheHits, privacy: .public); captures: \(captureRequests, privacy: .public); committed: \(committedPreviews, privacy: .public)"
                 )
             }
-            for index in indices {
-                guard !Task.isCancelled, self.settings.showThumbnails else { return }
-                let item = items[index]
-                guard let windowID = item.windowID, item.canCapturePreview else { continue }
-                if let cached = self.thumbnailCache[item.id] {
-                    cacheHits += 1
-                    if item.preview == nil { item.updatePreview(cached) }
-                    continue
-                }
-                captureRequests += 1
-                let captured = await Self.thumbnailCaptureQueue.capture(
-                    windowID: windowID,
-                    maximumPixelSize: maximumPixelSize
-                )
-                guard let captured,
-                      WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
-                          taskIsCancelled: Task.isCancelled,
-                          revisionMatches: self.thumbnailRevision == revision,
-                          showThumbnails: self.settings.showThumbnails,
-                          showIconsOnly: self.settings.showIconsOnly
-                      ) else {
-                    return
-                }
+            let capturedPreviews = await Self.thumbnailCaptureQueue.capture(
+                windowIDs: captureWindowIDs,
+                maximumPixelSize: maximumPixelSize
+            )
+            guard WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
+                taskIsCancelled: Task.isCancelled,
+                revisionMatches: self.thumbnailRevision == revision,
+                showThumbnails: self.settings.showThumbnails,
+                showIconsOnly: self.settings.showIconsOnly
+            ) else { return }
+            for captured in capturedPreviews {
+                guard let item = itemsByWindowID[captured.windowID] else { continue }
                 let image = autoreleasepool {
                     NSImage(
                         cgImage: captured.image,
