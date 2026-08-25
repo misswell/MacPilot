@@ -321,6 +321,12 @@ final class AreaSelectionOverlayView: NSView {
 
   private let magnifier = AreaSelectionMagnifier()
   private var currentBackdropImage: CGImage?
+  /// A display frame can finish capturing while the user is already dragging.
+  /// Swapping a full-screen layer in that event window makes WindowServer
+  /// repaint underneath the pointer and produces a visible selection flash.
+  /// Keep the newest frame until the gesture has ended, then install it with
+  /// the stable post-selection state.
+  private var pendingBackdrop: AreaSelectionBackdrop?
 
   private lazy var reusableDimMaskLayer: CAShapeLayer = {
     let layer = CAShapeLayer()
@@ -608,7 +614,13 @@ final class AreaSelectionOverlayView: NSView {
 
   override func mouseEntered(with event: NSEvent) {
     guard !isLivePassthroughInput else { return }
-    delegate?.overlayViewDidRequestDisplayActivation(self)
+    // The controller has already made the panel key before showing the
+    // selection UI. Re-activating it while the shortcut's first pointer event
+    // is arriving races WindowServer and makes an immediate drag flash.
+    // Post-selection dragging may legitimately need to reclaim key status.
+    if isShowingSelectionActions {
+      delegate?.overlayViewDidRequestDisplayActivation(self)
+    }
     applyActiveCursor()
     let point = convert(event.locationInWindow, from: nil)
     currentMousePosition = point
@@ -697,6 +709,7 @@ final class AreaSelectionOverlayView: NSView {
     isSelecting = false
     hasVisibleSelectionRect = false
     pendingSelectionStartPoint = nil
+    pendingBackdrop = nil
     finalizedSelectionRect = nil
     finalizedSelectionDrag = nil
     isShowingSelectionActions = false
@@ -819,6 +832,10 @@ final class AreaSelectionOverlayView: NSView {
     finalizedSelectionDrag = nil
     finalizedSelectionRect = convertToLocalRect(screenRect).intersection(bounds)
     pendingSelectionStartPoint = nil
+    if let pendingBackdrop {
+      self.pendingBackdrop = nil
+      installBackdrop(pendingBackdrop)
+    }
     hideMagnifier()
     hideSizeIndicator()
     crosshairIndicatorLayer.isHidden = true
@@ -1282,6 +1299,14 @@ final class AreaSelectionOverlayView: NSView {
   }
 
   func applyBackdrop(_ backdrop: AreaSelectionBackdrop, animated: Bool = false) {
+    if isSelecting || finalizedSelectionDrag != nil {
+      pendingBackdrop = backdrop
+      return
+    }
+    installBackdrop(backdrop, animated: animated)
+  }
+
+  private func installBackdrop(_ backdrop: AreaSelectionBackdrop, animated: Bool = false) {
     let shouldAnimate = animated
       && BackdropTransitionEffect.shouldCrossfade(
         isReapplication: currentBackdropImage != nil,
@@ -1317,6 +1342,7 @@ final class AreaSelectionOverlayView: NSView {
   }
 
   func clearBackdrop() {
+    pendingBackdrop = nil
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     snapshotLayer.contents = nil
@@ -2453,8 +2479,8 @@ final class AreaSelectionOverlayView: NSView {
         ]
       )
     }
-    delegate?.overlayViewDidRequestDisplayActivation(self)
     if isShowingSelectionActions {
+      delegate?.overlayViewDidRequestDisplayActivation(self)
       if clickCount >= 2 {
         delegate?.overlayView(self, didRequestAction: .copy)
         return

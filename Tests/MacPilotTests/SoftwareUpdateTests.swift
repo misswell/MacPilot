@@ -12,7 +12,7 @@ struct SoftwareUpdateTests {
         #expect(SoftwareVersion("not-a-version") == nil)
     }
 
-    @Test func decodesReleaseAndSelectsVerifiedMacArchive() throws {
+    @Test func decodesReleaseAndSelectsArmArchive() throws {
         let json = """
         {
           "tag_name": "v1.2.3",
@@ -30,17 +30,84 @@ struct SoftwareUpdateTests {
               "name": "MacPilot-1.2.3-macos.zip",
               "browser_download_url": "https://example.com/MacPilot-1.2.3-macos.zip",
               "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            },
+            {
+              "name": "MacPilot-1.2.3-x86_64-macos.zip",
+              "browser_download_url": "https://example.com/MacPilot-1.2.3-x86_64-macos.zip",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "name": "MacPilot-1.2.3-arm64-macos.zip",
+              "browser_download_url": "https://example.com/MacPilot-1.2.3-arm64-macos.zip",
+              "digest": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
             }
           ]
         }
         """
 
-        let release = try SoftwareRelease.decodeGitHubResponse(Data(json.utf8))
+        let release = try SoftwareRelease.decodeGitHubResponse(
+            Data(json.utf8),
+            architecture: .arm64
+        )
 
         #expect(release.version == SoftwareVersion("1.2.3"))
         #expect(release.releaseNotes == "Safer updates")
-        #expect(release.archiveURL.absoluteString == "https://example.com/MacPilot-1.2.3-macos.zip")
+        #expect(release.archiveURL.absoluteString == "https://example.com/MacPilot-1.2.3-arm64-macos.zip")
+        #expect(release.sha256 == "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+    }
+
+    @Test func decodesReleaseAndSelectsIntelArchive() throws {
+        let json = """
+        {
+          "tag_name": "v1.2.3",
+          "body": "",
+          "draft": false,
+          "prerelease": false,
+          "assets": [
+            {
+              "name": "MacPilot-1.2.3-arm64-macos.zip",
+              "browser_download_url": "https://example.com/MacPilot-1.2.3-arm64-macos.zip",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "name": "MacPilot-1.2.3-x86_64-macos.zip",
+              "browser_download_url": "https://example.com/MacPilot-1.2.3-x86_64-macos.zip",
+              "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            }
+          ]
+        }
+        """
+
+        let release = try SoftwareRelease.decodeGitHubResponse(
+            Data(json.utf8),
+            architecture: .x86_64
+        )
+
+        #expect(release.archiveURL.lastPathComponent == "MacPilot-1.2.3-x86_64-macos.zip")
         #expect(release.sha256 == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    }
+
+    @Test func fallsBackToUniversalArchiveWhenArchitectureAssetIsMissing() throws {
+        let json = """
+        {
+          "tag_name": "v1.2.3",
+          "body": "",
+          "draft": false,
+          "prerelease": false,
+          "assets": [{
+            "name": "MacPilot-1.2.3-macos.zip",
+            "browser_download_url": "https://example.com/MacPilot-1.2.3-macos.zip",
+            "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          }]
+        }
+        """
+
+        let release = try SoftwareRelease.decodeGitHubResponse(
+            Data(json.utf8),
+            architecture: .arm64
+        )
+
+        #expect(release.archiveURL.lastPathComponent == "MacPilot-1.2.3-macos.zip")
     }
 
     @Test func acceptsLegacyArchiveNameDuringRenameTransition() throws {
@@ -66,8 +133,10 @@ struct SoftwareUpdateTests {
     @Test func appIdentityKeepsLegacyBundleForMigration() {
         #expect(AppIdentity.bundleIdentifier == "com.misswell.macpilot")
         #expect(AppIdentity.knownBundleIdentifiers.contains("com.misswell.octopilot"))
-        #expect(AppIdentity.archiveNames(for: "1.2.3") == [
+        #expect(AppIdentity.archiveNames(for: "1.2.3", architecture: .x86_64) == [
+            "MacPilot-1.2.3-x86_64-macos.zip",
             "MacPilot-1.2.3-macos.zip",
+            "OctoPilot-1.2.3-x86_64-macos.zip",
             "OctoPilot-1.2.3-macos.zip"
         ])
     }

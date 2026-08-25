@@ -17,6 +17,18 @@ set -euo pipefail
 ROOT="${0:A:h:h}"
 cd "$ROOT"
 
+ARCHS=(${=MACPILOT_ARCHS:-arm64 x86_64})
+if (( ${#ARCHS[@]} == 0 )); then
+    echo "ERROR: MACPILOT_ARCHS must contain at least one architecture" >&2
+    exit 1
+fi
+for arch in "${ARCHS[@]}"; do
+    if [[ "$arch" != "arm64" && "$arch" != "x86_64" ]]; then
+        echo "ERROR: Unsupported architecture: $arch (expected arm64 or x86_64)" >&2
+        exit 1
+    fi
+done
+
 DEVELOPER_ID="${MACPILOT_DEVELOPER_ID:-${OCTOPILOT_DEVELOPER_ID:-}}"
 : "${DEVELOPER_ID:?Set MACPILOT_DEVELOPER_ID to your 'Developer ID Application: Name (TEAMID)' identity}"
 
@@ -46,18 +58,32 @@ else
 fi
 OUTPUT_DIR="${MACPILOT_OUTPUT_DIR:-$ROOT}"
 APP="$OUTPUT_DIR/$APP_BUNDLE_NAME"
-ZIP="$OUTPUT_DIR/$ARCHIVE_PREFIX-$VERSION-macos.zip"
+ARCHIVE_ARCH_SUFFIX=""
+if (( ${#ARCHS[@]} == 1 )); then
+    ARCHIVE_ARCH_SUFFIX="-${ARCHS[1]}"
+fi
+ZIP="$OUTPUT_DIR/$ARCHIVE_PREFIX-$VERSION${ARCHIVE_ARCH_SUFFIX}-macos.zip"
+
+PRESERVE_ARCHIVES=(
+    "$ZIP"
+    "$OUTPUT_DIR/$ARCHIVE_PREFIX-$VERSION-macos.zip"
+    "$OUTPUT_DIR/$ARCHIVE_PREFIX-$VERSION-arm64-macos.zip"
+    "$OUTPUT_DIR/$ARCHIVE_PREFIX-$VERSION-x86_64-macos.zip"
+)
 
 cleanup_historical_archives() {
     local archive
+    local preserved
 
     while IFS= read -r archive; do
-        [[ "${archive:A}" == "${ZIP:A}" ]] && continue
+        for preserved in "${PRESERVE_ARCHIVES[@]}"; do
+            [[ "${archive:A}" == "${preserved:A}" ]] && continue 2
+        done
         rm -f "$archive"
         echo "Removed historical archive: $archive"
     done < <(
         find "$OUTPUT_DIR" -maxdepth 1 -type f \
-            \( -name 'MacPilot-*-macos.zip' -o -name 'OctoPilot-*.zip' \) \
+            \( -name 'MacPilot-*-macos.zip' -o -name 'OctoPilot-*-macos.zip' \) \
             -print
     )
 }
@@ -67,6 +93,7 @@ MACPILOT_BRIDGE="$BRIDGE_MODE" \
 MACPILOT_DEVELOPER_ID="$DEVELOPER_ID" \
 MACPILOT_OUTPUT_DIR="$OUTPUT_DIR" \
 MACPILOT_VERSION="$VERSION" \
+MACPILOT_ARCHS="${ARCHS[*]}" \
 ./Scripts/build-app.sh
 
 echo "==> Archiving for notarization"
@@ -93,4 +120,3 @@ cleanup_historical_archives
 echo "Done. Distributable artifacts:"
 echo "  $APP"
 echo "  $ZIP"
-chmod +x "$ZIP" 2>/dev/null || true

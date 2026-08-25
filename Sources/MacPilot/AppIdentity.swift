@@ -1,5 +1,20 @@
 import Foundation
 
+enum AppArchitecture: String, CaseIterable {
+    case arm64
+    case x86_64
+
+    static let current: Self = {
+        #if arch(arm64)
+        .arm64
+        #elseif arch(x86_64)
+        .x86_64
+        #else
+        .arm64
+        #endif
+    }()
+}
+
 enum AppIdentity {
     static let name = "MacPilot"
     static let bundleIdentifier = "com.misswell.macpilot"
@@ -36,9 +51,14 @@ enum AppIdentity {
         return knownBundleIdentifiers.contains(identifier)
     }
 
-    static func archiveNames(for version: String) -> [String] {
+    static func archiveNames(
+        for version: String,
+        architecture: AppArchitecture = .current
+    ) -> [String] {
         [
+            "MacPilot-\(version)-\(architecture.rawValue)-macos.zip",
             "MacPilot-\(version)-macos.zip",
+            "OctoPilot-\(version)-\(architecture.rawValue)-macos.zip",
             "OctoPilot-\(version)-macos.zip"
         ]
     }

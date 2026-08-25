@@ -386,7 +386,45 @@ struct SnapzyCaptureTests {
         }
         window.overlayView.handleLivePassthroughMouseUp(atScreenPoint: CGPoint(x: start.x + 100, y: start.y + 60))
 
-        #expect(recorder.displayActivationRequests == 1)
+        // The selection controller activates the non-activating panel before
+        // the first pointer event. Re-activating it from the first mouseDown
+        // races the shortcut-start WindowServer transition and makes an
+        // immediate drag flash; pointer handling must stay activation-free.
+        #expect(recorder.displayActivationRequests == 0)
+    }
+
+    @Test @MainActor func lateBackdropDoesNotReplaceTheScreenDuringImmediateDrag() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main, let displayID = screen.displayID else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+
+        window.overlayView.setInteractionMode(.manualRegion)
+        window.overlayView.setLivePassthroughInputEnabled(true)
+        let start = CGPoint(x: screen.frame.minX + 100, y: screen.frame.minY + 100)
+        let end = CGPoint(x: screen.frame.minX + 260, y: screen.frame.minY + 220)
+        window.overlayView.handleLivePassthroughMouseDown(atScreenPoint: start)
+        window.overlayView.handleLivePassthroughMouseDragged(atScreenPoint: end)
+
+        window.overlayView.applyBackdrop(
+            AreaSelectionBackdrop(
+                displayID: displayID,
+                image: image(width: 320, height: 240),
+                scaleFactor: 1
+            )
+        )
+
+        #expect(window.overlayView.isManualSelectionInProgress)
+        #expect(window.overlayView.testSnapshotLayer.contents == nil)
+
+        window.overlayView.handleLivePassthroughMouseUp(atScreenPoint: end)
+        window.overlayView.showSelectionResult(
+            screenRect: CGRect(x: start.x, y: start.y, width: 160, height: 120),
+            showsActions: false,
+            actionHandler: { _ in }
+        )
+        #expect(window.overlayView.testSnapshotLayer.contents != nil)
     }
 
     @Test @MainActor func embeddedAnnotationCanvasRemainsAlignedWhenToolbarIsClamped() throws {

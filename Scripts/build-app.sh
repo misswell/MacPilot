@@ -8,17 +8,27 @@ cd "$ROOT"
 # the packaged app runs on both Apple Silicon and Intel Macs. Override with
 # MACPILOT_ARCHS (e.g. "arm64" for a single-arch local build).
 ARCHS=(${=MACPILOT_ARCHS:-arm64 x86_64})
+if (( ${#ARCHS[@]} == 0 )); then
+    echo "ERROR: MACPILOT_ARCHS must contain at least one architecture" >&2
+    exit 1
+fi
 ARCH_ARGS=()
+PATCH_ARCH_ARGS=()
 for arch in "${ARCHS[@]}"; do
+    if [[ "$arch" != "arm64" && "$arch" != "x86_64" ]]; then
+        echo "ERROR: Unsupported architecture: $arch (expected arm64 or x86_64)" >&2
+        exit 1
+    fi
     ARCH_ARGS+=(--arch "$arch")
+    PATCH_ARCH_ARGS+=(-arch "$arch")
 done
 
 # Keep local packaging under the same strict Swift concurrency diagnostics as
 # the signed CI release. This prevents a warning on one toolchain from becoming
 # a late compile failure after the commit has already been tagged.
 SWIFT_BUILD_ARGS=(-c release -Xswiftc -warnings-as-errors "${ARCH_ARGS[@]}")
-swift build "${SWIFT_BUILD_ARGS[@]}"
 BIN_DIR="$(swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
+swift build "${SWIFT_BUILD_ARGS[@]}"
 
 # Build the FinderSync right-click extension (derived from RClick, GPLv3).
 # Build it for the same architectures as the app so the context menu keeps
@@ -28,7 +38,7 @@ REXT_PRODUCT="$ROOT/build/FinderSync"
 BIN="$BIN_DIR/MacPilot"
 UPDATER_BIN="$BIN_DIR/MacPilotUpdater"
 OCCLUSION_PATCH_BIN="$BIN_DIR/libMacPilotOcclusionPatch.dylib"
-xcrun clang -dynamiclib -O2 -arch arm64 -arch x86_64 \
+xcrun clang -dynamiclib -O2 "${PATCH_ARCH_ARGS[@]}" \
     -mmacosx-version-min=14.0 -framework AppKit \
     -install_name @loader_path/libMacPilotOcclusionPatch.dylib \
     Sources/MacPilotOcclusionPatch/MacPilotOcclusionPatch.m \

@@ -52,19 +52,31 @@ struct SoftwareRelease: Equatable {
         return current < version
     }
 
-    static func decodeGitHubResponse(_ data: Data) throws -> SoftwareRelease {
+    static func decodeGitHubResponse(
+        _ data: Data,
+        architecture: AppArchitecture = .current
+    ) throws -> SoftwareRelease {
         let response = try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
         guard !response.draft, !response.prerelease,
               let version = SoftwareVersion(response.tagName) else {
             throw SoftwareUpdateError.invalidRelease
         }
-        let expectedNames = AppIdentity.archiveNames(for: version.description)
+        let expectedNames = AppIdentity.archiveNames(
+            for: version.description,
+            architecture: architecture
+        )
         guard let asset = expectedNames.lazy
             .compactMap({ expectedName in response.assets.first { $0.name == expectedName } })
-            .first,
-              asset.url.scheme == "https",
-              let digest = asset.digest,
-              digest.hasPrefix("sha256:") else {
+            .first(where: { asset in
+                guard asset.url.scheme == "https",
+                      let digest = asset.digest,
+                      digest.hasPrefix("sha256:") else {
+                    return false
+                }
+                let value = String(digest.dropFirst("sha256:".count)).lowercased()
+                return value.count == 64 && value.allSatisfy(\.isHexDigit)
+            }),
+              let digest = asset.digest else {
             throw SoftwareUpdateError.missingVerifiedArchive
         }
         let sha256 = String(digest.dropFirst("sha256:".count)).lowercased()

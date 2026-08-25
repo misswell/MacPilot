@@ -61,29 +61,8 @@ public final class RightClickMenuCoordinator {
             }
         }
 
-        // 在 app 启动后执行的函数
-
-        // 执行数据迁移
-        // TODO: 需要在 Xcode 中将 DataMigrationManager.swift 添加到 RClick target 后取消注释
         Task { @MainActor in
             do {
-//                if DataMigrationManager.shared.needsMigration() {
-//                    logger.info("检测到旧数据，开始迁移...")
-//
-//                    // 备份现有数据
-//                    if let backupURL = DataMigrationManager.shared.backupUserDefaults() {
-//                        logger.info("数据已备份到：\(backupURL.path)")
-//                    }
-//
-//                    // 执行迁移
-//                    let context = ModelContext(SharedDataManager.sharedModelContainer)
-//                    try await DataMigrationManager.shared.migrateFromUserDefaults(context: context)
-//
-//                    logger.info("数据迁移成功完成")
-//                } else {
-//                    logger.info("无需数据迁移")
-//                }
-
                 // 初始化默认数据
                 let context = ModelContext(SharedDataManager.sharedModelContainer)
                 await SharedDataManager.initializeDefaultData(context: context)
