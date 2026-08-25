@@ -922,6 +922,9 @@ private func windowSwitcherEventTapCallback(
 
     let typeRawValue = type.rawValue
     let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+    guard WindowSwitcherEventTapRouting.shouldInspect(type: type, keyCode: keyCode) else {
+        return Unmanaged.passUnretained(event)
+    }
     let flagsRawValue = event.flags.rawValue
     let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
     let owner = Unmanaged<WindowSwitcherModel>.fromOpaque(context.owner).takeUnretainedValue()
@@ -977,6 +980,40 @@ enum WindowSwitcherFocusExecutionPolicy {
     }
 }
 
+enum WindowSwitcherApplicationActivationPolicy {
+    static func schedule(
+        targetProcessID: pid_t,
+        ownProcessID: pid_t,
+        operation: @escaping @Sendable () -> Void
+    ) -> Task<Void, Never> {
+        if targetProcessID == ownProcessID {
+            return Task { @MainActor in
+                operation()
+            }
+        }
+        // LaunchServices activation can synchronously wait for the target
+        // application's launch/activation transaction. Keep that wait away
+        // from the main run loop, which also delivers keyboard and scroll
+        // events.
+        return Task.detached(priority: .userInitiated) {
+            operation()
+        }
+    }
+}
+
+enum WindowSwitcherEventTapRouting {
+    static func shouldInspect(type: CGEventType, keyCode: Int64) -> Bool {
+        switch type {
+        case .keyDown, .keyUp:
+            return keyCode == 48 || keyCode == 53 // Tab or Escape
+        case .flagsChanged:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 private struct WindowSwitcherFocusRequest: @unchecked Sendable {
     let axWindow: AXUIElement?
     let isMinimized: Bool
@@ -987,7 +1024,7 @@ private enum WindowSwitcherWindowFocus {
         guard let axWindow = request.axWindow else { return }
         // The caller keeps this on the main actor only for MacPilot's own
         // windows. External targets are executed by the background branch in
-        // WindowSwitcherFocusExecutionPolicy.
+        // WindowSwitcherApplicationActivationPolicy.
         AXUIElementSetMessagingTimeout(axWindow, 0.1)
         if request.isMinimized {
             _ = AXUIElementSetAttributeValue(
@@ -1606,23 +1643,23 @@ final class WindowSwitcherModel: ObservableObject {
 
     private func scheduleFocus(_ item: WindowSwitcherItem) {
         focusTask?.cancel()
-        guard let application = NSRunningApplication(processIdentifier: item.processID) else { return }
-        if application.isHidden { _ = application.unhide() }
-        // Activate the application immediately so the next keystroke goes to
-        // the selected window, but leave potentially blocking AX operations
-        // outside the event-tap callback.
-        _ = application.activate(options: [.activateAllWindows])
+        let targetProcessID = item.processID
+        guard targetProcessID > 0 else { return }
         noteWindowActivation(item.id)
         let request = WindowSwitcherFocusRequest(
             axWindow: item.axWindow,
             isMinimized: item.isMinimized
         )
-        // External AX work is detached by the execution policy. MacPilot's
-        // own windows stay on the main actor because AX can re-enter AppKit.
-        focusTask = WindowSwitcherFocusExecutionPolicy.schedule(
-            targetProcessID: item.processID,
+        // Application activation and external AX work are both kept off the
+        // event-delivery path. MacPilot's own windows stay on the main actor
+        // because AX can re-enter AppKit.
+        focusTask = WindowSwitcherApplicationActivationPolicy.schedule(
+            targetProcessID: targetProcessID,
             ownProcessID: ProcessInfo.processInfo.processIdentifier
         ) {
+            guard let application = NSRunningApplication(processIdentifier: targetProcessID) else { return }
+            if application.isHidden { _ = application.unhide() }
+            _ = application.activate(options: [.activateAllWindows])
             WindowSwitcherWindowFocus.perform(request)
         }
     }

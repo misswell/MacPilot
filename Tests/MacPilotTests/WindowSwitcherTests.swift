@@ -64,6 +64,44 @@ struct WindowSwitcherTests {
         #expect(probe.ranOnMainThread)
     }
 
+    @Test func externalApplicationActivationDoesNotBlockMainActorInputWork() async {
+        let started = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let operation = WindowSwitcherApplicationActivationPolicy.schedule(
+            targetProcessID: 100,
+            ownProcessID: 200
+        ) {
+            started.signal()
+            release.wait()
+        }
+
+        let clock = ContinuousClock()
+        let probeDelay = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                started.wait()
+                let probeStart = clock.now
+                let probe = Task { @MainActor in clock.now }
+                Thread.sleep(forTimeInterval: 0.06)
+                release.signal()
+                Task {
+                    let probeTime = await probe.value
+                    continuation.resume(returning: probeStart.duration(to: probeTime))
+                }
+            }
+        }
+        operation.cancel()
+
+        #expect(probeDelay < .milliseconds(40))
+    }
+
+    @Test func ordinaryKeyboardEventsBypassWindowSwitcherRouting() {
+        #expect(!WindowSwitcherEventTapRouting.shouldInspect(type: .keyDown, keyCode: 0))
+        #expect(!WindowSwitcherEventTapRouting.shouldInspect(type: .keyUp, keyCode: 0))
+        #expect(WindowSwitcherEventTapRouting.shouldInspect(type: .keyDown, keyCode: 48))
+        #expect(WindowSwitcherEventTapRouting.shouldInspect(type: .keyUp, keyCode: 53))
+        #expect(WindowSwitcherEventTapRouting.shouldInspect(type: .flagsChanged, keyCode: 0))
+    }
+
     @Test func initialSelectionMovesPastTheFrontmostWindow() {
         #expect(WindowSwitcherSelection.initialIndex(count: 4, currentIndex: 0, reverse: false) == 1)
         #expect(WindowSwitcherSelection.initialIndex(count: 4, currentIndex: 0, reverse: true) == 3)
