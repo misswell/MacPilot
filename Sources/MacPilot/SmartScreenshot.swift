@@ -1829,12 +1829,7 @@ final class SmartScreenshotController {
         cancelSelection()
         initialTargetUpdateTask?.cancel()
         initialTargetUpdateTask = nil
-        snapzyPreparationTask?.cancel()
-        snapzyPreparationTask = nil
-        snapzySessionID = nil
-        snapzyFrozenSession = nil
-        pendingSnapzyResult = nil
-        pendingSnapzyAction = nil
+        resetSnapzyPreparationState()
         pendingTargetUpdate?.cancel()
         pendingTargetUpdate = nil
         pendingTargetFollowUp?.cancel()
@@ -2179,7 +2174,10 @@ final class SmartScreenshotController {
                 guard !Task.isCancelled,
                       let self,
                       self.snapzySessionID == sessionID
-                else { return }
+                else {
+                    frozenSession.invalidate()
+                    return
+                }
 
                 self.snapzyFrozenSession = frozenSession
                 self.snapzyPreparationTask = nil
@@ -2226,7 +2224,7 @@ final class SmartScreenshotController {
             pendingSnapzyResult = (result, requestedMode, sessionID)
             return
         }
-        resetSnapzyPreparationState()
+        resetSnapzyPreparationState(invalidateFrozenSession: false)
         finishSnapzySelection(
             result,
             requestedMode: requestedMode,
@@ -2261,7 +2259,9 @@ final class SmartScreenshotController {
     ) {
         guard snapzySessionID == sessionID else { return }
         guard action != .cancel else {
+            resetSnapzyPreparationState()
             SnapzyAreaSelectionController.shared.cancelSelection()
+            QuickAccessManager.shared.resumeAfterCapture()
             return
         }
         guard let frozenSession = snapzyFrozenSession else {
@@ -2277,10 +2277,13 @@ final class SmartScreenshotController {
         )
     }
 
-    private func resetSnapzyPreparationState() {
+    private func resetSnapzyPreparationState(invalidateFrozenSession: Bool = true) {
         snapzyPreparationTask?.cancel()
         snapzyPreparationTask = nil
         snapzySessionID = nil
+        if invalidateFrozenSession {
+            snapzyFrozenSession?.invalidate()
+        }
         snapzyFrozenSession = nil
         pendingSnapzyResult = nil
         pendingSnapzyAction = nil
@@ -2309,8 +2312,10 @@ final class SmartScreenshotController {
         // selection panel alive until the crop is ready, then install the
         // editor as a child of that same panel rather than opening a centered
         // annotation window.
+        resetSnapzyPreparationState(invalidateFrozenSession: false)
         if let annotationTool {
             Task { [weak self] in
+                defer { frozenSession.invalidate() }
                 do {
                     let crop: FrozenAreaCropResult
                     if result.spansMultipleDisplays {
@@ -2360,10 +2365,10 @@ final class SmartScreenshotController {
         }
 
         SnapzyAreaSelectionController.shared.dismissSelection()
-        resetSnapzyPreparationState()
         QuickAccessManager.shared.resumeAfterCapture()
 
         Task { [weak self] in
+            defer { frozenSession.invalidate() }
             do {
                 let crop: FrozenAreaCropResult
                 if result.spansMultipleDisplays {
@@ -2405,8 +2410,12 @@ final class SmartScreenshotController {
         frozenSession: FrozenAreaCaptureSession
     ) {
         QuickAccessManager.shared.resumeAfterCapture()
-        guard let result else { return }
+        guard let result else {
+            frozenSession.invalidate()
+            return
+        }
         if requestedMode == .recordingArea || requestedMode == .recordingApplication {
+            frozenSession.invalidate()
             guard SmartCaptureCoordinateConversion.quartzRect(fromAppKitRect: result.rect) != nil else {
                 onError(ScreenCaptureError.captureFailed(
                     AppText.value("scCaptureCoordinateUnavailable", language: language())
@@ -2418,6 +2427,7 @@ final class SmartScreenshotController {
         }
 
         Task { [weak self] in
+            defer { frozenSession.invalidate() }
             do {
                 let crop: FrozenAreaCropResult
                 if result.spansMultipleDisplays {

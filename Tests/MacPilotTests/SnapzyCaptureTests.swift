@@ -3,10 +3,23 @@ import Foundation
 import AppKit
 import SwiftUI
 import Testing
+@preconcurrency import ScreenCaptureKit
 @testable import MacPilot
 
 /// Geometry coverage for the source-migrated Snapzy frozen-display pipeline.
 struct SnapzyCaptureTests {
+    @Test @MainActor func singleFrameCaptureConfigurationKeepsOnlyOneQueuedFrame() {
+        let configuration = SnapzyCaptureConfiguration.display(
+            width: 1_920,
+            height: 1_080,
+            showsCursor: false,
+            colorSpaceName: nil
+        )
+
+        #expect(configuration.queueDepth == 1)
+        #expect(configuration.queueDepth == SnapzyCaptureConfiguration.singleFrameQueueDepth)
+    }
+
     @Test func pinShortcutCommitsTheInlineAnnotationEditorBeforePinning() {
         #expect(SnapzyInlineAnnotationShortcutRouting.shouldCommitInlineAnnotation(
             action: .pin,
@@ -119,6 +132,23 @@ struct SnapzyCaptureTests {
         #expect(result.image.width == 60)
         #expect(result.image.height == 50)
         #expect(result.screenRect == CGRect(x: 10, y: 20, width: 30, height: 25))
+    }
+
+    @Test func invalidatingFrozenSessionReleasesItsSnapshots() {
+        let snapshot = FrozenDisplaySnapshot(
+            displayID: 1,
+            screenFrame: CGRect(x: 0, y: 0, width: 100, height: 100),
+            scaleFactor: 2,
+            colorSpaceName: nil,
+            image: image(width: 200, height: 200)
+        )
+        let session = FrozenAreaCaptureSession.fromSnapshot(snapshot)
+
+        #expect(!session.allSnapshots().isEmpty)
+        session.invalidate()
+
+        #expect(session.allSnapshots().isEmpty)
+        #expect(session.backdrops.isEmpty)
     }
 
     @Test func frozenSnapshotCompositeCropsAcrossDisplays() throws {

@@ -18,6 +18,35 @@ import CoreMedia
 import Foundation
 @preconcurrency import ScreenCaptureKit
 
+/// Configuration policy for one-shot screen captures.
+///
+/// ScreenCaptureKit's default queue keeps several full-size surfaces alive even
+/// though a screenshot needs only one frame.  Keep this policy in a small seam
+/// so the memory bound is explicit and testable.
+@MainActor
+enum SnapzyCaptureConfiguration {
+    static let singleFrameQueueDepth = 1
+
+    static func display(
+        width: Int,
+        height: Int,
+        showsCursor: Bool,
+        colorSpaceName: CFString?
+    ) -> SCStreamConfiguration {
+        let configuration = SCStreamConfiguration()
+        configuration.width = max(1, width)
+        configuration.height = max(1, height)
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA
+        configuration.queueDepth = singleFrameQueueDepth
+        configuration.showsCursor = showsCursor
+        if #available(macOS 14.2, *) { configuration.captureResolution = .best }
+        if let colorSpaceName {
+            configuration.colorSpaceName = colorSpaceName
+        }
+        return configuration
+    }
+}
+
 /// Snapzy's source-level capture manager reduced to the screenshot vertical
 /// slice used by MacPilot.  It owns only a short-lived shareable-content cache;
 /// image history and persistence remain outside the capture engine.
@@ -37,7 +66,7 @@ final class SnapzyScreenCaptureManager {
         })
     }
 
-    /// Captures frozen display snapshots using Snapzy's parallel display path.
+    /// Captures frozen display snapshots using Snapzy's serialized display path.
     /// The resulting value is consumed by `FrozenAreaCaptureSession`, whose
     /// crop/composite implementation is copied from Snapzy verbatim apart from
     /// MacPilot's error/localization seam.
@@ -60,59 +89,48 @@ final class SnapzyScreenCaptureManager {
         }
         guard !screens.isEmpty else { throw ScreenCaptureError.noDisplayFound }
 
-        return try await withThrowingTaskGroup(
-            of: (CGDirectDisplayID, FrozenDisplaySnapshot).self,
-            returning: [CGDirectDisplayID: FrozenDisplaySnapshot].self
-        ) { group in
-            for screen in screens {
-                guard let displayID = screen.snapzyDisplayID,
-                      let display = content.displays.first(where: { $0.displayID == Int(displayID) })
-                else { continue }
+        // One-shot ScreenCaptureKit calls allocate WindowServer/XPC surfaces.
+        // Capturing displays concurrently multiplies those surfaces and leaves
+        // a large Mach-message footprint on macOS 26+.  Serialize the displays
+        // so only one full-size capture is in flight at a time.
+        var result: [CGDirectDisplayID: FrozenDisplaySnapshot] = [:]
+        for screen in screens {
+            guard let displayID = screen.snapzyDisplayID,
+                  let display = content.displays.first(where: { $0.displayID == Int(displayID) })
+            else { continue }
 
-                let filter = makeFilter(
-                    display: display,
-                    content: content,
-                    excludeOwnApplication: excludeOwnApplication
-                )
-                let scaleFactor = displayScaleFactor(for: screen, display: display, filter: filter)
-                let configuration = makeDisplayConfiguration(
-                    for: screen,
-                    scaleFactor: scaleFactor,
-                    showsCursor: showCursor
-                )
-                let screenFrame = screen.frame
-                let colorSpaceName = configuration.colorSpaceName
-
-                group.addTask {
-                    let image = try await Self.captureImageCompat(
-                        contentFilter: filter,
-                        configuration: configuration
-                    )
-                    let imageScale = Self.imageScaleFactor(
-                        for: image,
-                        screenFrame: screenFrame,
-                        fallback: scaleFactor
-                    )
-                    return (
-                        displayID,
-                        FrozenDisplaySnapshot(
-                            displayID: displayID,
-                            screenFrame: screenFrame,
-                            scaleFactor: imageScale,
-                            colorSpaceName: colorSpaceName,
-                            image: image
-                        )
-                    )
-                }
-            }
-
-            var result: [CGDirectDisplayID: FrozenDisplaySnapshot] = [:]
-            for try await (displayID, snapshot) in group {
-                result[displayID] = snapshot
-            }
-            guard !result.isEmpty else { throw ScreenCaptureError.noDisplayFound }
-            return result
+            let filter = makeFilter(
+                display: display,
+                content: content,
+                excludeOwnApplication: excludeOwnApplication
+            )
+            let scaleFactor = displayScaleFactor(for: screen, display: display, filter: filter)
+            let configuration = makeDisplayConfiguration(
+                for: screen,
+                scaleFactor: scaleFactor,
+                showsCursor: showCursor
+            )
+            let screenFrame = screen.frame
+            let colorSpaceName = configuration.colorSpaceName
+            let image = try await Self.captureImageCompat(
+                contentFilter: filter,
+                configuration: configuration
+            )
+            let imageScale = Self.imageScaleFactor(
+                for: image,
+                screenFrame: screenFrame,
+                fallback: scaleFactor
+            )
+            result[displayID] = FrozenDisplaySnapshot(
+                displayID: displayID,
+                screenFrame: screenFrame,
+                scaleFactor: imageScale,
+                colorSpaceName: colorSpaceName,
+                image: image
+            )
         }
+        guard !result.isEmpty else { throw ScreenCaptureError.noDisplayFound }
+        return result
     }
 
     /// Captures an AppKit-space region through Snapzy's frozen snapshot and
@@ -153,6 +171,7 @@ final class SnapzyScreenCaptureManager {
             displayIDs: intersectingIDs
         )
         let session = FrozenAreaCaptureSession.fromSnapshots(Array(snapshots.values))
+        defer { session.invalidate() }
         let crop: FrozenAreaCropResult
         if intersectingIDs.count > 1 {
             crop = try session.cropCompositeImage(for: selection)
@@ -209,16 +228,12 @@ final class SnapzyScreenCaptureManager {
         scaleFactor: CGFloat,
         showsCursor: Bool
     ) -> SCStreamConfiguration {
-        let configuration = SCStreamConfiguration()
-        configuration.width = max(1, Int((screen.frame.width * scaleFactor).rounded()))
-        configuration.height = max(1, Int((screen.frame.height * scaleFactor).rounded()))
-        configuration.pixelFormat = kCVPixelFormatType_32BGRA
-        configuration.showsCursor = showsCursor
-        if #available(macOS 14.2, *) { configuration.captureResolution = .best }
-        if let colorSpaceName = preferredCaptureColorSpaceName(for: screen) {
-            configuration.colorSpaceName = colorSpaceName
-        }
-        return configuration
+        SnapzyCaptureConfiguration.display(
+            width: Int((screen.frame.width * scaleFactor).rounded()),
+            height: Int((screen.frame.height * scaleFactor).rounded()),
+            showsCursor: showsCursor,
+            colorSpaceName: preferredCaptureColorSpaceName(for: screen)
+        )
     }
 
     private func preferredCaptureColorSpaceName(for screen: NSScreen) -> CFString? {

@@ -1316,6 +1316,7 @@ final class ScreenCaptureModel: ObservableObject {
                 }
                 let filter = SCContentFilter(desktopIndependentWindow: window)
                 let configuration = SCStreamConfiguration()
+                configuration.queueDepth = SnapzyCaptureConfiguration.singleFrameQueueDepth
                 configuration.scalesToFit = true
                 configuration.showsCursor = false
                 configuration.width = max(1, window.frame.width > 0 ? Int(window.frame.width * 2) : 1)
@@ -1617,6 +1618,7 @@ final class ScreenCaptureModel: ObservableObject {
     private func captureDisplay(_ display: SCDisplay, showsCursor: Bool) async throws -> CGImage {
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let configuration = SCStreamConfiguration()
+        configuration.queueDepth = SnapzyCaptureConfiguration.singleFrameQueueDepth
         configuration.showsCursor = showsCursor
         configuration.scalesToFit = true
         let (width, height) = pixelSize(for: display)

@@ -182,6 +182,10 @@ final class SingleFrameStreamCaptureSession: NSObject, @unchecked Sendable {
     }
     if let stream {
       Task {
+        // Remove the output before stopping the stream.  Leaving the output
+        // attached keeps the capture pipeline and its WindowServer surfaces
+        // alive until ScreenCaptureKit decides to tear them down.
+        try? stream.removeStreamOutput(self, type: .screen)
         try? await stream.stopCapture()
       }
     }
