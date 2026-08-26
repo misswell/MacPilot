@@ -292,6 +292,7 @@ struct BLEUnlockSettings: Codable {
     var pauseNowPlaying: Bool = false
     var useScreensaver: Bool = false
     var turnOffScreen: Bool = false
+    var screenLockHistory = ScreenLockHistory()
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled
@@ -311,6 +312,7 @@ struct BLEUnlockSettings: Codable {
         case pauseNowPlaying
         case useScreensaver
         case turnOffScreen
+        case screenLockHistory
     }
 
     init() {}
@@ -334,6 +336,7 @@ struct BLEUnlockSettings: Codable {
         pauseNowPlaying = try container.decodeIfPresent(Bool.self, forKey: .pauseNowPlaying) ?? false
         useScreensaver = try container.decodeIfPresent(Bool.self, forKey: .useScreensaver) ?? false
         turnOffScreen = try container.decodeIfPresent(Bool.self, forKey: .turnOffScreen) ?? false
+        screenLockHistory = try container.decodeIfPresent(ScreenLockHistory.self, forKey: .screenLockHistory) ?? ScreenLockHistory()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -355,6 +358,7 @@ struct BLEUnlockSettings: Codable {
         try container.encode(pauseNowPlaying, forKey: .pauseNowPlaying)
         try container.encode(useScreensaver, forKey: .useScreensaver)
         try container.encode(turnOffScreen, forKey: .turnOffScreen)
+        try container.encode(screenLockHistory, forKey: .screenLockHistory)
     }
 }
 
@@ -603,12 +607,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var systemSleep = false
     private var recoveringFromSystemSleep = false
     private var manualLock = false
+    private var pendingLockSource: ScreenLockHistorySource?
+    private var pendingLockSourceExpiresAt = Date.distantPast
     private var inScreensaver = false
     private var lastUnlockRequestAt: TimeInterval = 0
+    private var lastAutomaticUnlockRequestAt: TimeInterval = 0
     private var lastAutomaticUnlockConfirmationAt: TimeInterval = 0
     private var nowPlayingWasPlaying = false
 
     var isRecoveringFromSystemSleep: Bool { recoveringFromSystemSleep }
+    var screenLockHistory: [ScreenLockHistoryEntry] { settings.screenLockHistory.entries }
 
     // MediaRemote (private framework, loaded lazily).
     private var mediaRemoteHandle: UnsafeMutableRawPointer?
@@ -1350,10 +1358,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         manualLock = true
         cancelUnlockAttempt()
         pauseNowPlaying()
-        lockOrSaveScreen()
+        lockOrSaveScreen(source: .manual)
     }
 
-    private func lockOrSaveScreen() {
+    private func lockOrSaveScreen(source: ScreenLockHistorySource) {
+        pendingLockSource = source
+        pendingLockSourceExpiresAt = Date().addingTimeInterval(15)
         log("locking screen useScreensaver=\(settings.useScreensaver) turnOffScreen=\(settings.turnOffScreen)")
         if settings.useScreensaver {
             NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/ScreenSaverEngine.app"))
@@ -1361,6 +1371,40 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             bleLockScreenViaShortcut()
             if settings.turnOffScreen { bleSleepDisplay() }
         }
+    }
+
+    private func recordScreenLock(at date: Date) {
+        let source: ScreenLockHistorySource
+        if let pendingLockSource, date <= pendingLockSourceExpiresAt {
+            source = pendingLockSource
+        } else {
+            source = .manual
+        }
+        pendingLockSource = nil
+        pendingLockSourceExpiresAt = .distantPast
+
+        guard settings.screenLockHistory.recordLock(at: date, source: source) else {
+            log("screen lock history ignored reason=duplicate source=\(source.rawValue)")
+            return
+        }
+        log("screen lock history recorded source=\(source.rawValue) at=\(date.timeIntervalSince1970)")
+        notifyChange()
+    }
+
+    private func recordScreenUnlock(at date: Date, source: ScreenLockHistorySource) {
+        guard settings.screenLockHistory.recordUnlock(at: date, source: source) else {
+            log("screen unlock history ignored reason=unpaired-or-duplicate source=\(source.rawValue)")
+            return
+        }
+        log("screen unlock history recorded source=\(source.rawValue) at=\(date.timeIntervalSince1970)")
+        notifyChange()
+    }
+
+    func clearScreenLockHistory() {
+        guard !settings.screenLockHistory.entries.isEmpty else { return }
+        settings.screenLockHistory.clear()
+        log("screen lock history cleared")
+        notifyChange()
     }
 
     private func screenLockState() -> BLEScreenLockState {
@@ -1452,7 +1496,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         return String(format: "%.3f", age)
     }
 
-    private func confirmAutomaticUnlock(source: String) {
+    private func recentAutomaticUnlockRequestAge(at date: Date) -> TimeInterval? {
+        guard lastAutomaticUnlockRequestAt > 0 else { return nil }
+        let age = date.timeIntervalSince1970 - lastAutomaticUnlockRequestAt
+        guard age >= 0, age < 15 else { return nil }
+        return age
+    }
+
+    private func confirmAutomaticUnlock(source: String, eventDate: Date = Date()) {
         let now = Date().timeIntervalSince1970
         let state = screenLockState()
         guard BLEUnlockConfirmation.isConfirmed(screenState: state) else {
@@ -1463,12 +1514,19 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         let requestAge = lastUnlockRequestAt > 0 ? now - lastUnlockRequestAt : nil
         if now - lastAutomaticUnlockConfirmationAt < 2 {
             log("unlock confirmation already handled source=\(source) requestAge=\(formattedUnlockAge(requestAge))")
+            lastUnlockRequestAt = 0
+            lastAutomaticUnlockRequestAt = 0
             manualLock = false
             return
         }
 
         lastAutomaticUnlockConfirmationAt = now
         log("screen unlock confirmed source=\(source) screenState=unlocked requestAge=\(formattedUnlockAge(requestAge))")
+        if recentAutomaticUnlockRequestAge(at: eventDate) != nil {
+            recordScreenUnlock(at: eventDate, source: .automatic)
+        }
+        lastUnlockRequestAt = 0
+        lastAutomaticUnlockRequestAt = 0
         manualLock = false
         playNowPlaying()
         runScript("unlocked")
@@ -1529,7 +1587,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                         self.log("unlock attempt stopped deadline=\(attemptDeadline) reason=passwordUnavailable")
                         return
                     }
-                    self.lastUnlockRequestAt = Date().timeIntervalSince1970
+                    let requestTimestamp = Date().timeIntervalSince1970
+                    self.lastUnlockRequestAt = requestTimestamp
+                    self.lastAutomaticUnlockRequestAt = requestTimestamp
                     self.log("posting unlock key events deadline=\(attemptDeadline) screenState=locked accessibilityTrusted=\(AXIsProcessTrusted())")
                     self.fakeKeyStrokes(password)
                     self.log("unlock key events posted deadline=\(attemptDeadline) screenStateAfterPost=\(self.screenLockState().rawValue)")
@@ -1577,7 +1637,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             if !isScreenLocked() && settings.lockRSSI != Self.lockDisabled {
                 log("locking due to presence loss reason=\(reason)")
                 pauseNowPlaying()
-                lockOrSaveScreen()
+                lockOrSaveScreen(source: .automatic)
                 runScript(reason)
             } else {
                 log("presence loss did not lock screen alreadyLocked=\(isScreenLocked()) lockRSSIDisabled=\(settings.lockRSSI == Self.lockDisabled)")
@@ -1902,12 +1962,18 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         })
 
         let dnc = DistributedNotificationCenter.default
+        observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.recordScreenLock(at: Date())
+            }
+        })
         observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
+            let eventDate = Date()
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 guard let self else { return }
                 let now = Date().timeIntervalSince1970
                 let screenState = self.screenLockState()
-                let requestAge = self.lastUnlockRequestAt > 0 ? now - self.lastUnlockRequestAt : nil
+                let requestAge = self.recentAutomaticUnlockRequestAge(at: eventDate)
                 let confirmationAge = self.lastAutomaticUnlockConfirmationAt > 0 ? now - self.lastAutomaticUnlockConfirmationAt : nil
                 self.log("screen unlocked notification received screenState=\(screenState.rawValue) requestAge=\(self.formattedUnlockAge(requestAge)) confirmationAge=\(self.formattedUnlockAge(confirmationAge))")
 
@@ -1917,7 +1983,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 }
 
                 if let requestAge, requestAge >= 0, requestAge < 15 {
-                    self.confirmAutomaticUnlock(source: "screenIsUnlockedNotification")
+                    self.confirmAutomaticUnlock(source: "screenIsUnlockedNotification", eventDate: eventDate)
                     return
                 }
 
@@ -1927,6 +1993,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                     return
                 }
 
+                self.recordScreenUnlock(at: eventDate, source: .manual)
                 if self.settings.unlockRSSI != Self.unlockDisabled { self.runScript("intruded") }
                 self.playNowPlaying()
                 self.log("screen unlock classified as external or manual")

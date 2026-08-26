@@ -437,6 +437,10 @@ enum AppText {
         "bleNoPassword": "未设置密码", "blePasswordSet": "密码已保存",
         "bleAccessRequired": "BLE 解锁需要辅助功能权限来模拟键盘解锁并锁定屏幕。当前应用：%@", "bleBluetoothRequired": "需要蓝牙权限才能扫描 BLE 设备。",
         "bleNoDevicesFound": "未发现附近 BLE 设备。",
+        "bleScreenLockHistory": "近期锁屏记录", "bleScreenLockHistoryInfo": "记录最近的锁屏和解锁时间，最多保留 30 条。", "bleScreenLockHistoryEmpty": "暂无锁屏记录。",
+        "bleClearScreenLockHistory": "清除记录", "bleClearScreenLockHistoryTitle": "清除锁屏记录？", "bleClearScreenLockHistoryMessage": "确定清除所有近期锁屏记录吗？",
+        "bleScreenLockLockedAt": "锁屏：%@", "bleScreenLockUnlockedAt": "解锁：%@", "bleScreenLockLockSource": "锁屏来源：%@", "bleScreenLockUnlockSource": "解锁来源：%@",
+        "bleScreenLockStillLocked": "当前仍处于锁屏状态", "bleScreenLockDuration": "锁定时长：%@", "bleScreenLockAutomatic": "自动", "bleScreenLockManual": "手动", "bleHour": "小时", "bleHours": "小时",
         "inputSources": "输入法", "inputSourcesSubtitle": "按应用或浏览器网站自动切换 macOS 输入法，并显示切换提示。",
         "inputSourcesEnable": "启用输入法自动化", "inputSourcesEnabled": "输入法规则正在运行", "inputSourcesDisabled": "输入法规则已停用",
         "inputSourcesCycleNow": "切换到下一个输入法",
@@ -735,6 +739,10 @@ enum AppText {
             "bleNoPassword": "No password set", "blePasswordSet": "Password saved",
             "bleAccessRequired": "BLE Unlock needs Accessibility access to simulate keystrokes for unlocking and to lock the screen. Current app: %@", "bleBluetoothRequired": "Bluetooth permission is required to scan for BLE devices.",
             "bleNoDevicesFound": "No nearby BLE devices found.",
+            "bleScreenLockHistory": "Recent Screen Locks", "bleScreenLockHistoryInfo": "Records recent screen lock and unlock times. Keeps up to 30 entries.", "bleScreenLockHistoryEmpty": "No screen-lock records yet.",
+            "bleClearScreenLockHistory": "Clear History", "bleClearScreenLockHistoryTitle": "Clear screen-lock history?", "bleClearScreenLockHistoryMessage": "Clear all recent screen-lock records?",
+            "bleScreenLockLockedAt": "Locked: %@", "bleScreenLockUnlockedAt": "Unlocked: %@", "bleScreenLockLockSource": "Lock source: %@", "bleScreenLockUnlockSource": "Unlock source: %@",
+            "bleScreenLockStillLocked": "Still locked", "bleScreenLockDuration": "Locked for: %@", "bleScreenLockAutomatic": "Automatic", "bleScreenLockManual": "Manual", "bleHour": "hour", "bleHours": "hours",
             "inputSources": "Input Sources", "inputSourcesSubtitle": "Automatically switch macOS input sources by app or browser website, with a visual indicator.",
             "inputSourcesEnable": "Enable input source automation", "inputSourcesEnabled": "Input source rules are running", "inputSourcesDisabled": "Input source rules are paused",
             "inputSourcesCycleNow": "Switch to Next Input Source",
@@ -960,7 +968,7 @@ final class MacPilotModel: ObservableObject {
         var clipboard: ClipboardSettings
 
         init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings) {
-            version = 15
+            version = 16
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -3042,10 +3050,11 @@ struct BLEUnlockView: View {
     @State private var passwordMessage: String?
     @State private var resetFailureMessage: String?
     @State private var sortMode: DeviceSortMode = .added
+    @State private var showingHistoryClearConfirmation = false
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: 24) {
                 header
                 enableSection
                 if ble.settings.isEnabled {
@@ -3054,6 +3063,7 @@ struct BLEUnlockView: View {
                     optionsSection
                     actionsSection
                 }
+                screenLockHistorySection
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
         }
@@ -3063,6 +3073,14 @@ struct BLEUnlockView: View {
         .alert("MacPilot", isPresented: Binding(get: { passwordMessage != nil }, set: { if !$0 { passwordMessage = nil } })) {
             Button("OK", role: .cancel) { passwordMessage = nil }
         } message: { Text(passwordMessage ?? "") }
+        .alert(model.t("bleClearScreenLockHistoryTitle"), isPresented: $showingHistoryClearConfirmation) {
+            Button(model.t("cancel"), role: .cancel) { }
+            Button(model.t("bleClearScreenLockHistory"), role: .destructive) {
+                ble.clearScreenLockHistory()
+            }
+        } message: {
+            Text(model.t("bleClearScreenLockHistoryMessage"))
+        }
         .onDisappear {
             if showPicker { showPicker = false; ble.stopScanning() }
             pickingSecondary = false
@@ -3449,12 +3467,115 @@ struct BLEUnlockView: View {
         }
     }
 
+    private var screenLockHistorySection: some View {
+        SettingsCard {
+            HStack(alignment: .firstTextBaseline) {
+                Text(model.t("bleScreenLockHistory")).font(.headline)
+                Spacer()
+                if !ble.screenLockHistory.isEmpty {
+                    Button(model.t("bleClearScreenLockHistory"), role: .destructive) {
+                        showingHistoryClearConfirmation = true
+                    }
+                }
+            }
+            Text(model.t("bleScreenLockHistoryInfo"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if ble.screenLockHistory.isEmpty {
+                Text(model.t("bleScreenLockHistoryEmpty"))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(ble.screenLockHistory) { entry in
+                        screenLockHistoryRow(entry)
+                    }
+                }
+            }
+        }
+    }
+
+    private func screenLockHistoryRow(_ entry: ScreenLockHistoryEntry) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: entry.isStillLocked ? "lock.fill" : "lock.open.fill")
+                .foregroundStyle(entry.isStillLocked ? .orange : .secondary)
+                .frame(width: 20)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.t("bleScreenLockLockedAt", historyDateLabel(entry.lockedAt)))
+                    .font(.subheadline.weight(.medium))
+                Text(model.t("bleScreenLockLockSource", historySourceLabel(entry.lockSource)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let unlockedAt = entry.unlockedAt {
+                    Text(model.t("bleScreenLockUnlockedAt", historyDateLabel(unlockedAt)))
+                        .font(.subheadline)
+                    if let unlockSource = entry.unlockSource {
+                        Text(model.t("bleScreenLockUnlockSource", historySourceLabel(unlockSource)))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let duration = entry.unlockDuration {
+                        Text(model.t("bleScreenLockDuration", historyDurationLabel(duration)))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text(model.t("bleScreenLockStillLocked"))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func historySourceLabel(_ source: ScreenLockHistorySource) -> String {
+        switch source {
+        case .automatic: return model.t("bleScreenLockAutomatic")
+        case .manual: return model.t("bleScreenLockManual")
+        }
+    }
+
+    private func historyDateLabel(_ date: Date) -> String {
+        date.formatted(.dateTime.year().month().day().hour().minute().second().locale(model.language.locale))
+    }
+
+    private func historyDurationLabel(_ duration: TimeInterval) -> String {
+        localizedDurationLabel(seconds: Int(duration.rounded()))
+    }
+
+    private func localizedDurationLabel(seconds: Int) -> String {
+        let totalSeconds = max(0, seconds)
+        if totalSeconds < 60 {
+            return "\(totalSeconds) \(model.t("bleSeconds"))"
+        }
+
+        let totalMinutes = totalSeconds / 60
+        if totalMinutes < 60 {
+            return "\(totalMinutes) \(model.t(totalMinutes == 1 ? "minute" : "minutes"))"
+        }
+
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        let hourUnit = model.t(hours == 1 ? "bleHour" : "bleHours")
+        guard minutes > 0 else { return "\(hours) \(hourUnit)" }
+        let minuteUnit = model.t(minutes == 1 ? "minute" : "minutes")
+        return "\(hours) \(hourUnit) \(minutes) \(minuteUnit)"
+    }
+
     private func toggleRow(_ title: String, isOn: Binding<Bool>) -> some View {
         Toggle(title, isOn: isOn).toggleStyle(.switch).controlSize(.small)
     }
 
     private func durationLabel(_ seconds: Int) -> String {
-        seconds < 60 ? "\(seconds) \(model.t("bleSeconds"))" : "\(seconds / 60) \(model.t(seconds / 60 == 1 ? "minute" : "minutes"))"
+        localizedDurationLabel(seconds: seconds)
     }
 
     private var passwordSheet: some View {
