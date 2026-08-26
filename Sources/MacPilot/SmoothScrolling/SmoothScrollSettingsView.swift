@@ -111,19 +111,31 @@ struct SmoothScrollSettingsView: View {
                                         .truncationMode(.middle)
                                 }
                                 Spacer(minLength: 8)
-                                if !application.isRunning {
-                                    Text(model.t("smoothScrollingExcludedAppNotRunning"))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    Toggle(model.t("smoothScrollingExcludedAppReverse"), isOn: Binding(
+                                        get: { smoothScrolling.isExcludedApplicationReversed(application.id) },
+                                        set: {
+                                            smoothScrolling.setExcludedApplicationReversed(application.id, reversed: $0)
+                                        }
+                                    ))
+                                    .toggleStyle(.switch)
+
+                                    HStack(spacing: 8) {
+                                        if !application.isRunning {
+                                            Text(model.t("smoothScrollingExcludedAppNotRunning"))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Button {
+                                            smoothScrolling.setExcludedApplication(application.id, enabled: false)
+                                        } label: {
+                                            Image(systemName: "trash")
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .foregroundStyle(.red)
+                                        .help(model.t("smoothScrollingRemoveExcludedApp"))
+                                    }
                                 }
-                                Button {
-                                    smoothScrolling.setExcludedApplication(application.id, enabled: false)
-                                } label: {
-                                    Image(systemName: "trash")
-                                }
-                                .buttonStyle(.borderless)
-                                .foregroundStyle(.red)
-                                .help(model.t("smoothScrollingRemoveExcludedApp"))
                             }
                         }
                     }

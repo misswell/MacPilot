@@ -5,10 +5,11 @@ import Testing
 
 struct SmoothScrollingTests {
     @Test func excludedApplicationsDecodeAndNormalize() throws {
-        let data = Data(#"{"excludedApplicationBundleIdentifiers":["com.apple.Safari","", " com.apple.Safari ", "com.microsoft.VSCode"]}"#.utf8)
+        let data = Data(#"{"excludedApplicationBundleIdentifiers":["com.apple.Safari","", " com.apple.Safari ", "com.microsoft.VSCode"],"excludedApplicationReverseBundleIdentifiers":[" com.apple.safari ","com.apple.Terminal","com.microsoft.VSCode"]}"#.utf8)
         let settings = try JSONDecoder().decode(SmoothScrollSettings.self, from: data)
 
         #expect(settings.excludedApplicationBundleIdentifiers == ["com.apple.Safari", "com.microsoft.VSCode"])
+        #expect(settings.excludedApplicationReverseBundleIdentifiers == ["com.apple.safari", "com.microsoft.VSCode"])
     }
 
     @Test func exclusionMatcherMatchesOnlyConfiguredApplications() {
@@ -30,14 +31,39 @@ struct SmoothScrollingTests {
         #expect(model.settings.excludedApplicationBundleIdentifiers.isEmpty)
     }
 
+    @Test @MainActor func modelCanReverseAnExcludedApplicationIndependently() {
+        let model = SmoothScrollModel()
+
+        model.setExcludedApplication("com.apple.Safari", enabled: true)
+        model.setExcludedApplicationReversed(" com.apple.Safari ", reversed: true)
+
+        #expect(model.settings.excludedApplicationReverseBundleIdentifiers == ["com.apple.Safari"])
+
+        model.setExcludedApplicationReversed("com.apple.Safari", reversed: false)
+        #expect(model.settings.excludedApplicationReverseBundleIdentifiers.isEmpty)
+    }
+
+    @Test @MainActor func removingAnExcludedApplicationAlsoRemovesItsReverseSetting() {
+        let model = SmoothScrollModel()
+
+        model.setExcludedApplication("com.apple.Safari", enabled: true)
+        model.setExcludedApplicationReversed("com.apple.Safari", reversed: true)
+        model.setExcludedApplication("com.apple.Safari", enabled: false)
+
+        #expect(model.settings.excludedApplicationBundleIdentifiers.isEmpty)
+        #expect(model.settings.excludedApplicationReverseBundleIdentifiers.isEmpty)
+    }
+
     @Test func excludedApplicationSettingsRoundTripThroughCodable() throws {
         var settings = SmoothScrollSettings()
         settings.excludedApplicationBundleIdentifiers = ["com.apple.Safari", "com.microsoft.VSCode"]
+        settings.excludedApplicationReverseBundleIdentifiers = ["com.microsoft.VSCode"]
 
         let data = try JSONEncoder().encode(settings)
         let decoded = try JSONDecoder().decode(SmoothScrollSettings.self, from: data)
 
         #expect(decoded.excludedApplicationBundleIdentifiers == settings.excludedApplicationBundleIdentifiers)
+        #expect(decoded.excludedApplicationReverseBundleIdentifiers == settings.excludedApplicationReverseBundleIdentifiers)
     }
 
     @Test func settingsDecodeWithMosDefaultsAndSafeBounds() throws {
@@ -137,6 +163,25 @@ struct SmoothScrollingTests {
         #expect(!horizontal.isValid)
     }
 
+    @Test func reversingWheelEventChangesBothPassThroughAxes() throws {
+        let event = try #require(CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: 0,
+            wheel2: 0,
+            wheel3: 0
+        ))
+        event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: 4)
+        event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: -3)
+
+        _ = SmoothScrollWheelEventParser.reverse(.vertical, in: event)
+        _ = SmoothScrollWheelEventParser.reverse(.horizontal, in: event)
+
+        #expect(event.getIntegerValueField(.scrollWheelEventDeltaAxis1) == -4)
+        #expect(event.getIntegerValueField(.scrollWheelEventDeltaAxis2) == 3)
+    }
+
     @Test func smoothScrollingLocalizationIsBilingual() {
         #expect(AppText.value("smoothScrolling", language: .simplifiedChinese) == "平滑滚动")
         #expect(AppText.value("smoothScrolling", language: .english) == "Smooth Scrolling")
@@ -144,6 +189,8 @@ struct SmoothScrollingTests {
         #expect(AppText.value("smoothScrollingEnable", language: .english) == "Enable smooth scrolling")
         #expect(AppText.value("smoothScrollingExcludedApps", language: .simplifiedChinese) == "排除应用")
         #expect(AppText.value("smoothScrollingExcludedApps", language: .english) == "Excluded applications")
+        #expect(AppText.value("smoothScrollingExcludedAppReverse", language: .simplifiedChinese) == "反转方向")
+        #expect(AppText.value("smoothScrollingExcludedAppReverse", language: .english) == "Reverse direction")
     }
 
     @Test func adaptiveSpeedBoostIncreasesForFasterWheelCadence() {

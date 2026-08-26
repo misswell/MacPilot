@@ -133,6 +133,45 @@ final class SmoothScrollModel: ObservableObject {
 
         settings.excludedApplicationBundleIdentifiers = SmoothScrollApplicationExclusions
             .normalizedIdentifiers(identifiers)
+        if !enabled {
+            settings.excludedApplicationReverseBundleIdentifiers.removeAll {
+                SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+            }
+        }
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func isExcludedApplicationReversed(_ bundleIdentifier: String) -> Bool {
+        let canonicalIdentifier = SmoothScrollApplicationExclusions.canonicalIdentifier(bundleIdentifier)
+        return settings.excludedApplicationReverseBundleIdentifiers.contains {
+            SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+        }
+    }
+
+    func setExcludedApplicationReversed(_ bundleIdentifier: String, reversed: Bool) {
+        let identifier = bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !identifier.isEmpty else { return }
+        let canonicalIdentifier = SmoothScrollApplicationExclusions.canonicalIdentifier(identifier)
+        guard settings.excludedApplicationBundleIdentifiers.contains(where: {
+            SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+        }) else { return }
+
+        var reversedIdentifiers = settings.excludedApplicationReverseBundleIdentifiers
+        let wasReversed = reversedIdentifiers.contains {
+            SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+        }
+        guard wasReversed != reversed else { return }
+
+        if reversed {
+            reversedIdentifiers.append(identifier)
+        } else {
+            reversedIdentifiers.removeAll {
+                SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+            }
+        }
+        settings.excludedApplicationReverseBundleIdentifiers = SmoothScrollApplicationExclusions
+            .normalizedIdentifiers(reversedIdentifiers)
         controller.activate(settings: settings)
         persist?()
     }

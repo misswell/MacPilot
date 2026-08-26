@@ -20,8 +20,10 @@ final class SmoothScrollController {
     private var lastPhysicalWheelTime: CFTimeInterval = 0
     private var commandHeld = false
     private var excludedBundleIdentifiers: Set<String> = []
+    private var reversedExcludedBundleIdentifiers: Set<String> = []
     private var processBundleIdentifiers: [pid_t: String] = [:]
     private var excludedProcessIDs: Set<pid_t> = []
+    private var reversedExcludedProcessIDs: Set<pid_t> = []
     private var workspaceObservers: [NSObjectProtocol] = []
     private(set) var isActive = false
 
@@ -125,15 +127,22 @@ final class SmoothScrollController {
         guard event.getIntegerValueField(.eventSourceUserData) != SmoothScrollRuntime.syntheticEventMarker else {
             return Unmanaged.passUnretained(event)
         }
-        guard !SmoothScrollWheelEventParser.isRemoteSmoothed(event),
-              !SmoothScrollWheelEventParser.isTrackpadLike(event) else {
+        let targetProcessID = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
+        if shouldBypassSmoothing(for: targetProcessID) {
+            // Excluded apps do not enter the smoothing pipeline, but their
+            // independent reversal must also cover events carrying trackpad
+            // phase metadata. Keep this before the normal input classification.
+            if shouldReverseExcludedApplication(for: targetProcessID) {
+                _ = SmoothScrollWheelEventParser.reverse(.vertical, in: event)
+                _ = SmoothScrollWheelEventParser.reverse(.horizontal, in: event)
+            }
+            runtime.stop()
+            lastPhysicalWheelTime = 0
             return Unmanaged.passUnretained(event)
         }
 
-        let targetProcessID = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
-        if shouldBypassSmoothing(for: targetProcessID) {
-            runtime.stop()
-            lastPhysicalWheelTime = 0
+        guard !SmoothScrollWheelEventParser.isRemoteSmoothed(event),
+              !SmoothScrollWheelEventParser.isTrackpadLike(event) else {
             return Unmanaged.passUnretained(event)
         }
 
@@ -190,8 +199,14 @@ final class SmoothScrollController {
                 SmoothScrollApplicationExclusions.canonicalIdentifier($0)
             }
         )
+        reversedExcludedBundleIdentifiers = Set(
+            activeSettings.excludedApplicationReverseBundleIdentifiers.map {
+                SmoothScrollApplicationExclusions.canonicalIdentifier($0)
+            }
+        )
         processBundleIdentifiers.removeAll(keepingCapacity: true)
         excludedProcessIDs.removeAll(keepingCapacity: true)
+        reversedExcludedProcessIDs.removeAll(keepingCapacity: true)
 
         guard !excludedBundleIdentifiers.isEmpty else { return }
         for application in NSWorkspace.shared.runningApplications {
@@ -201,8 +216,10 @@ final class SmoothScrollController {
 
     private func clearExcludedApplicationCache() {
         excludedBundleIdentifiers.removeAll(keepingCapacity: false)
+        reversedExcludedBundleIdentifiers.removeAll(keepingCapacity: false)
         processBundleIdentifiers.removeAll(keepingCapacity: false)
         excludedProcessIDs.removeAll(keepingCapacity: false)
+        reversedExcludedProcessIDs.removeAll(keepingCapacity: false)
     }
 
     private func installWorkspaceObservers() {
@@ -241,6 +258,7 @@ final class SmoothScrollController {
             let processID = application.processIdentifier
             processBundleIdentifiers.removeValue(forKey: processID)
             excludedProcessIDs.remove(processID)
+            reversedExcludedProcessIDs.remove(processID)
             return
         }
 
@@ -258,13 +276,21 @@ final class SmoothScrollController {
         guard let bundleIdentifier = application.bundleIdentifier else {
             processBundleIdentifiers.removeValue(forKey: processID)
             excludedProcessIDs.remove(processID)
+            reversedExcludedProcessIDs.remove(processID)
             return
         }
         processBundleIdentifiers[processID] = bundleIdentifier
-        if SmoothScrollApplicationExclusions.contains(bundleIdentifier, in: excludedBundleIdentifiers) {
+        let isExcluded = SmoothScrollApplicationExclusions.contains(bundleIdentifier, in: excludedBundleIdentifiers)
+        if isExcluded {
             excludedProcessIDs.insert(processID)
         } else {
             excludedProcessIDs.remove(processID)
+        }
+        if isExcluded,
+           SmoothScrollApplicationExclusions.contains(bundleIdentifier, in: reversedExcludedBundleIdentifiers) {
+            reversedExcludedProcessIDs.insert(processID)
+        } else {
+            reversedExcludedProcessIDs.remove(processID)
         }
     }
 
@@ -278,6 +304,18 @@ final class SmoothScrollController {
         // just-launched process is covered by the workspace observer shortly;
         // until then, let the normal smoothing path continue without blocking
         // the input callback.
+        return false
+    }
+
+    private func shouldReverseExcludedApplication(for processID: pid_t) -> Bool {
+        guard processID > 0, !reversedExcludedBundleIdentifiers.isEmpty else { return false }
+        if reversedExcludedProcessIDs.contains(processID) { return true }
+        if let bundleIdentifier = processBundleIdentifiers[processID] {
+            return SmoothScrollApplicationExclusions.contains(
+                bundleIdentifier,
+                in: reversedExcludedBundleIdentifiers
+            )
+        }
         return false
     }
 

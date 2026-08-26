@@ -27,6 +27,9 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
     var adaptiveSpeedMaximum = 3.0
     var blockSmoothWhileCommandHeld = true
     var excludedApplicationBundleIdentifiers: [String] = []
+    /// Excluded applications whose original wheel direction should be reversed.
+    /// This is intentionally independent from the global smooth-scroll reversal.
+    var excludedApplicationReverseBundleIdentifiers: [String] = []
 
     var interpolationFactor: Double {
         Self.interpolationFactor(forDuration: duration)
@@ -50,6 +53,14 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
         value.excludedApplicationBundleIdentifiers = SmoothScrollApplicationExclusions.normalizedIdentifiers(
             excludedApplicationBundleIdentifiers
         )
+        let excludedIdentifiers = Set(
+            value.excludedApplicationBundleIdentifiers.map(SmoothScrollApplicationExclusions.canonicalIdentifier)
+        )
+        value.excludedApplicationReverseBundleIdentifiers = SmoothScrollApplicationExclusions.normalizedIdentifiers(
+            excludedApplicationReverseBundleIdentifiers.filter {
+                excludedIdentifiers.contains(SmoothScrollApplicationExclusions.canonicalIdentifier($0))
+            }
+        )
         return value
     }
 
@@ -72,6 +83,9 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
         blockSmoothWhileCommandHeld = try container.decodeIfPresent(Bool.self, forKey: .blockSmoothWhileCommandHeld) ?? true
         excludedApplicationBundleIdentifiers = SmoothScrollApplicationExclusions.normalizedIdentifiers(
             try container.decodeIfPresent([String].self, forKey: .excludedApplicationBundleIdentifiers) ?? []
+        )
+        excludedApplicationReverseBundleIdentifiers = SmoothScrollApplicationExclusions.normalizedIdentifiers(
+            try container.decodeIfPresent([String].self, forKey: .excludedApplicationReverseBundleIdentifiers) ?? []
         )
         self = clamped()
     }
