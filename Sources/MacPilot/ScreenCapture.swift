@@ -899,7 +899,11 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     func startPinCapture() {
-        startSelection(mode: .pinArea)
+        guard settings.screenshotEnabled else {
+            errorMessage = AppText.value("scScreenshotDisabled", language: language)
+            return
+        }
+        ensureSmartCapture().pinClipboardImage()
     }
 
     func startRecordingSelection(mode: ScreenRecordingCaptureMode) {
@@ -2653,6 +2657,11 @@ private struct SmartCaptureShortcutListEditor: View {
                 Button(AppText.value("cancel", language: appModel.language), role: .cancel) {
                     dismiss()
                 }
+                Button(AppText.value("scConfirm", language: appModel.language)) {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
             }
         }
         .padding(24)
@@ -2755,7 +2764,8 @@ private struct SmartCaptureShortcutEditor: View {
                 }
                 Spacer()
                 Button(AppText.value("cancel", language: appModel.language), role: .cancel) { dismiss() }
-                Button(AppText.value("save", language: appModel.language)) { save() }
+                Button(AppText.value("scConfirm", language: appModel.language)) { save() }
+                    .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(
                         recordedKeyCode == nil

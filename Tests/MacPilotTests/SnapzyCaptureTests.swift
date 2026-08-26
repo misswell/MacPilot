@@ -35,6 +35,42 @@ struct SnapzyCaptureTests {
         ))
     }
 
+    @Test @MainActor func pinShortcutPastesClipboardWithoutStartingSelection() {
+        var didInvokeClipboardPin = false
+        let controller = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _ in },
+            onError: { _ in },
+            screenCaptureAccessProvider: { false },
+            pinClipboardShortcutOverride: {
+                didInvokeClipboardPin = true
+            }
+        )
+        defer { controller.stop() }
+
+        controller.handleShortcutEvent(id: 12)
+
+        #expect(didInvokeClipboardPin)
+    }
+
+    @Test @MainActor func clipboardPinReaderAcceptsImagesAndRejectsText() throws {
+        let pasteboard = NSPasteboard(name: .init("MacPilotTests-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.setString("text only", forType: .string)
+        #expect(SmartCaptureClipboard.image(from: pasteboard) == nil)
+
+        let sourceImage = image(width: 4, height: 3)
+        let pngData = try #require(
+            NSBitmapImageRep(cgImage: sourceImage).representation(using: .png, properties: [:])
+        )
+        pasteboard.clearContents()
+        pasteboard.setData(pngData, forType: .png)
+
+        let pastedImage = try #require(SmartCaptureClipboard.image(from: pasteboard))
+        #expect(pastedImage.width == sourceImage.width)
+        #expect(pastedImage.height == sourceImage.height)
+    }
+
     private final class InitialTargetResolverRecorder: @unchecked Sendable {
         private let lock = NSLock()
         private var observedMainThread: Bool?

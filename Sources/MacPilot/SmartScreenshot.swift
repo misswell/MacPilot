@@ -101,9 +101,8 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
     case ocr
     case scrolling
     case objectCutout
-    /// Starts a manual area selection and immediately turns the result into
-    /// a floating pin image. This is a global shortcut, unlike the
-    /// post-selection pin shortcut below.
+    /// Pastes the current clipboard image into a floating pin window. This is
+    /// a global shortcut, unlike the post-selection pin shortcut below.
     case pin
     /// Handles the key combination while the post-selection HUD is active;
     /// it is persisted with the other screenshot shortcuts but is not
@@ -203,7 +202,6 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
 enum SmartCaptureSelectionMode: Equatable, Sendable {
     case smartElement
     case manualArea
-    case pinArea
     case applicationWindow
     case recordingArea
     case recordingApplication
@@ -452,6 +450,30 @@ enum SmartCaptureClipboard {
         // MacPilot's own screenshot copy as a new history entry.
         item.setString("", forType: .fromMaccy)
         _ = pasteboard.writeObjects([item])
+    }
+
+    /// Read only an image representation from the pasteboard.
+    ///
+    /// A pin shortcut is a clipboard-paste action, not another screenshot
+    /// selection. Text, URLs, and other pasteboard payloads are intentionally
+    /// ignored. The representation data is scoped to this call and is not
+    /// retained by the controller after the decoded image is returned.
+    static func image(from pasteboard: NSPasteboard = .general) -> CGImage? {
+        let imageTypes: [NSPasteboard.PasteboardType] = [.png, .tiff, .jpeg, .heic]
+        for item in pasteboard.pasteboardItems ?? [] {
+            for type in imageTypes {
+                guard let data = item.data(forType: type) else { continue }
+                if let image = autoreleasepool(invoking: { () -> CGImage? in
+                    guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+                        return nil
+                    }
+                    return CGImageSourceCreateImageAtIndex(source, 0, nil)
+                }) {
+                    return image
+                }
+            }
+        }
+        return nil
     }
 }
 
@@ -1086,6 +1108,10 @@ final class SmartScreenshotController {
     private let onObjectCutoutCapture: (CGImage) -> Void
     private let screenCaptureAccessProvider: @Sendable () -> Bool
     private let initialTargetResolver: @Sendable (SmartCaptureSelectionMode, CGPoint) -> CGRect?
+    /// Test seam for the clipboard-paste pin entry point. Production reads
+    /// the image from the general pasteboard; tests can verify shortcut
+    /// dispatch without creating a floating AppKit window.
+    private let pinClipboardShortcutOverride: (() -> Void)?
     /// Test seam for the launch-registration race. Production uses Carbon;
     /// tests can model a transient first registration failure without
     /// requiring a live global hot-key reservation.
@@ -1184,7 +1210,8 @@ final class SmartScreenshotController {
                 nil
             }
         },
-        shortcutRegistrationAttempt: (() -> SmartCaptureShortcutError?)? = nil
+        shortcutRegistrationAttempt: (() -> SmartCaptureShortcutError?)? = nil,
+        pinClipboardShortcutOverride: (() -> Void)? = nil
     ) {
         self.language = language
         self.onCapture = onCapture
@@ -1203,6 +1230,7 @@ final class SmartScreenshotController {
         self.onObjectCutoutCapture = onObjectCutoutCapture
         self.screenCaptureAccessProvider = screenCaptureAccessProvider
         self.initialTargetResolver = initialTargetResolver
+        self.pinClipboardShortcutOverride = pinClipboardShortcutOverride
         self.shortcutRegistrationAttemptOverride = shortcutRegistrationAttempt
     }
 
@@ -1877,7 +1905,7 @@ final class SmartScreenshotController {
         // selection all use the migrated Snapzy overlay. The remaining modes
         // keep their specialized MacPilot flows because they need a
         // post-capture editor.
-        if mode == .smartElement || mode == .manualArea || mode == .pinArea || mode == .applicationWindow ||
+        if mode == .smartElement || mode == .manualArea || mode == .applicationWindow ||
             mode == .recordingArea || mode == .recordingApplication {
             startSnapzySelection(mode: mode)
             return
@@ -2126,7 +2154,6 @@ final class SmartScreenshotController {
         let sessionID = UUID()
         let presentsPostSelectionActions = mode != .recordingArea
             && mode != .recordingApplication
-            && mode != .pinArea
         SnapzyAreaSelectionController.shared.startSelection(
             mode: snapzyMode,
             backdrops: [:],
@@ -2440,8 +2467,6 @@ final class SmartScreenshotController {
                 case .applicationWindow, .manualArea:
                     if requestedMode == .manualArea { self.onSelectionRect(result.rect) }
                     self.onCapture(crop.image)
-                case .pinArea:
-                    self.pin(image: crop.image, scaleFactor: crop.scaleFactor)
                 default:
                     self.onCapture(crop.image)
                 }
@@ -2459,6 +2484,27 @@ final class SmartScreenshotController {
         }
         pinControllers[id] = controller
         controller.show()
+    }
+
+    /// Paste the current clipboard image into a floating pin window. This is
+    /// deliberately separate from area selection: F3 is the Snipaste-style
+    /// clipboard paste shortcut, while ⌘T remains the contextual action for a
+    /// screenshot that is already selected.
+    func pinClipboardImage() {
+        if isSelecting || SnapzyAreaSelectionController.shared.isPresenting {
+            cancelSelection()
+        }
+        if let pinClipboardShortcutOverride {
+            pinClipboardShortcutOverride()
+            return
+        }
+        guard let image = SmartCaptureClipboard.image(from: .general) else {
+            onError(ScreenCaptureError.captureFailed(
+                AppText.value("scClipboardImageUnavailable", language: language())
+            ))
+            return
+        }
+        pin(image: image)
     }
 
     func presentInlineAnnotation(
@@ -2651,7 +2697,7 @@ final class SmartScreenshotController {
         case SmartCaptureCarbonHotKey.objectCutoutID:
             startSelection(mode: .objectCutout)
         case SmartCaptureCarbonHotKey.pinID:
-            startSelection(mode: .pinArea)
+            pinClipboardImage()
         default:
             break
         }
