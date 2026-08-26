@@ -54,6 +54,12 @@ final class SmoothScrollModel: ObservableObject {
         persist?()
     }
 
+    func setReverseScrollingEnabled(_ enabled: Bool) {
+        settings.reverseScrollingEnabled = enabled
+        controller.activate(settings: settings)
+        persist?()
+    }
+
     func setReverseVertical(_ enabled: Bool) {
         settings.reverseVertical = enabled
         controller.activate(settings: settings)

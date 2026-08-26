@@ -166,26 +166,43 @@ struct SmoothScrollSettingsView: View {
                 .id(applicationListRevision)
 
                 SettingsCard {
-                    Toggle(model.t("smoothScrollingVertical"), isOn: Binding(
-                        get: { smoothScrolling.settings.smoothVertical },
-                        set: { smoothScrolling.setSmoothVertical($0) }
+                    Text(model.t("smoothScrollingReverseSection")).font(.headline)
+                    Text(model.t("smoothScrollingReverseSectionHint"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Toggle(model.t("smoothScrollingReverseEnable"), isOn: Binding(
+                        get: { smoothScrolling.settings.reverseScrollingEnabled },
+                        set: { smoothScrolling.setReverseScrollingEnabled($0) }
                     ))
-                    Toggle(model.t("smoothScrollingHorizontal"), isOn: Binding(
-                        get: { smoothScrolling.settings.smoothHorizontal },
-                        set: { smoothScrolling.setSmoothHorizontal($0) }
-                    ))
+                    .toggleStyle(.switch)
                     Toggle(model.t("smoothScrollingReverseVertical"), isOn: Binding(
                         get: { smoothScrolling.settings.reverseVertical },
                         set: { smoothScrolling.setReverseVertical($0) }
                     ))
+                    .toggleStyle(.switch)
                     Toggle(model.t("smoothScrollingReverseHorizontal"), isOn: Binding(
                         get: { smoothScrolling.settings.reverseHorizontal },
                         set: { smoothScrolling.setReverseHorizontal($0) }
                     ))
+                    .toggleStyle(.switch)
+                }
+
+                SettingsCard {
+                    Toggle(model.t("smoothScrollingVertical"), isOn: Binding(
+                        get: { smoothScrolling.settings.smoothVertical },
+                        set: { smoothScrolling.setSmoothVertical($0) }
+                    ))
+                    .toggleStyle(.switch)
+                    Toggle(model.t("smoothScrollingHorizontal"), isOn: Binding(
+                        get: { smoothScrolling.settings.smoothHorizontal },
+                        set: { smoothScrolling.setSmoothHorizontal($0) }
+                    ))
+                    .toggleStyle(.switch)
                     Toggle(model.t("smoothScrollingBlockWithCommand"), isOn: Binding(
                         get: { smoothScrolling.settings.blockSmoothWhileCommandHeld },
                         set: { smoothScrolling.setBlockSmoothWhileCommandHeld($0) }
                     ))
+                    .toggleStyle(.switch)
                 }
 
                 SettingsCard {

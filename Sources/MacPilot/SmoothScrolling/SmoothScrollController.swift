@@ -36,7 +36,7 @@ final class SmoothScrollController {
         activeSettings = settings.clamped()
         refreshExcludedApplicationCache()
         let exclusionsChanged = previousExcludedBundleIdentifiers != excludedBundleIdentifiers
-        guard activeSettings.isEnabled else {
+        guard activeSettings.requiresInputTap else {
             deactivate()
             return
         }
@@ -44,33 +44,39 @@ final class SmoothScrollController {
             deactivate()
             return
         }
-        guard !isActive else {
-            if exclusionsChanged {
-                runtime.stop()
-                lastPhysicalWheelTime = 0
+        if exclusionsChanged {
+            runtime.stop()
+            lastPhysicalWheelTime = 0
+        }
+
+        if !isActive {
+            guard let tap = CGEvent.tapCreate(
+                tap: .cgAnnotatedSessionEventTap,
+                place: .tailAppendEventTap,
+                options: .defaultTap,
+                eventsOfInterest: eventMask,
+                callback: Self.eventTapCallback,
+                userInfo: Unmanaged.passUnretained(self).toOpaque()
+            ) else {
+                return
             }
+            eventTap = tap
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            runLoopSource = source
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            isActive = true
+            installWorkspaceObservers()
+        }
+
+        if activeSettings.isEnabled {
             runtime.update(settings: activeSettings)
-            return
+            runtime.start()
+        } else {
+            // Reversal-only mode still needs the event tap, but must not keep
+            // a display link or a stale smooth-scroll buffer alive.
+            runtime.stop()
         }
-        runtime.update(settings: activeSettings)
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgAnnotatedSessionEventTap,
-            place: .tailAppendEventTap,
-            options: .defaultTap,
-            eventsOfInterest: eventMask,
-            callback: Self.eventTapCallback,
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
-            return
-        }
-        eventTap = tap
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-        isActive = true
-        installWorkspaceObservers()
-        runtime.start()
     }
 
     func deactivate() {
@@ -141,16 +147,39 @@ final class SmoothScrollController {
             return Unmanaged.passUnretained(event)
         }
 
-        guard !SmoothScrollWheelEventParser.isRemoteSmoothed(event),
-              !SmoothScrollWheelEventParser.isTrackpadLike(event) else {
+        guard !SmoothScrollWheelEventParser.isRemoteSmoothed(event) else {
             return Unmanaged.passUnretained(event)
         }
 
         let settings = activeSettings
+        let vertical = SmoothScrollWheelEventParser.axis(.vertical, in: event)
+        let horizontal = SmoothScrollWheelEventParser.axis(.horizontal, in: event)
+        guard vertical.isValid || horizontal.isValid else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        // This runs before any smoothing-only guard. Reversal therefore keeps
+        // working while smoothing is disabled or temporarily blocked by ⌘.
+        if settings.shouldReverseVertical { _ = SmoothScrollWheelEventParser.reverse(.vertical, in: event) }
+        if settings.shouldReverseHorizontal { _ = SmoothScrollWheelEventParser.reverse(.horizontal, in: event) }
+
+        // Some mouse drivers set the same continuous/phase fields as a
+        // trackpad. They must bypass smoothing, but not independent reversal.
+        guard !SmoothScrollWheelEventParser.isTrackpadLike(event) else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        guard settings.isEnabled else {
+            runtime.stop()
+            lastPhysicalWheelTime = 0
+            return Unmanaged.passUnretained(event)
+        }
+
         if settings.blockSmoothWhileCommandHeld, commandHeld {
             runtime.stop()
             return Unmanaged.passUnretained(event)
         }
+
         let now = CFAbsoluteTimeGetCurrent()
         let velocityInterval = lastPhysicalWheelTime == 0 ? SmoothScrollVelocityBoost.slowInterval : now - lastPhysicalWheelTime
         let velocityBoost = SmoothScrollVelocityBoost.factor(
@@ -158,8 +187,6 @@ final class SmoothScrollController {
             enabled: settings.adaptiveSpeedEnabled,
             maximum: settings.adaptiveSpeedMaximum
         )
-        let vertical = SmoothScrollWheelEventParser.axis(.vertical, in: event)
-        let horizontal = SmoothScrollWheelEventParser.axis(.horizontal, in: event)
         let plan = SmoothScrollPlanner.plan(vertical: vertical, horizontal: horizontal, settings: settings)
         var boostedPlan = plan
         if plan.consumesAnyAxis {
@@ -169,11 +196,6 @@ final class SmoothScrollController {
         defer { lastPhysicalWheelTime = now }
 
         guard plan.consumesAnyAxis else { return Unmanaged.passUnretained(event) }
-
-        // Reversing also applies to axes that pass through untouched, matching
-        // Mos' behavior before the smooth/no-smooth split.
-        if settings.reverseVertical { _ = SmoothScrollWheelEventParser.reverse(.vertical, in: event) }
-        if settings.reverseHorizontal { _ = SmoothScrollWheelEventParser.reverse(.horizontal, in: event) }
 
         let accepted = runtime.update(
             event: event,

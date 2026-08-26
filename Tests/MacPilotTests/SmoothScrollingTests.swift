@@ -56,6 +56,7 @@ struct SmoothScrollingTests {
 
     @Test func excludedApplicationSettingsRoundTripThroughCodable() throws {
         var settings = SmoothScrollSettings()
+        settings.reverseScrollingEnabled = true
         settings.excludedApplicationBundleIdentifiers = ["com.apple.Safari", "com.microsoft.VSCode"]
         settings.excludedApplicationReverseBundleIdentifiers = ["com.microsoft.VSCode"]
 
@@ -64,6 +65,34 @@ struct SmoothScrollingTests {
 
         #expect(decoded.excludedApplicationBundleIdentifiers == settings.excludedApplicationBundleIdentifiers)
         #expect(decoded.excludedApplicationReverseBundleIdentifiers == settings.excludedApplicationReverseBundleIdentifiers)
+        #expect(decoded.reverseScrollingEnabled == settings.reverseScrollingEnabled)
+    }
+
+    @Test func legacySettingsDoNotEnableReverseWhenSmoothScrollingWasDisabled() throws {
+        let disabledData = Data(#"{"isEnabled":false,"reverseVertical":true,"reverseHorizontal":true}"#.utf8)
+        let disabledSettings = try JSONDecoder().decode(SmoothScrollSettings.self, from: disabledData)
+        #expect(!disabledSettings.reverseScrollingEnabled)
+        #expect(!disabledSettings.requiresInputTap)
+
+        let enabledData = Data(#"{"isEnabled":true,"reverseVertical":true,"reverseHorizontal":true}"#.utf8)
+        let enabledSettings = try JSONDecoder().decode(SmoothScrollSettings.self, from: enabledData)
+        #expect(enabledSettings.reverseScrollingEnabled)
+        #expect(enabledSettings.requiresInputTap)
+    }
+
+    @Test func reverseOnlyInputTapIsIndependentFromSmoothScrolling() {
+        var settings = SmoothScrollSettings()
+        #expect(!settings.requiresInputTap)
+
+        settings.reverseScrollingEnabled = true
+        settings.isEnabled = false
+        #expect(settings.requiresInputTap)
+        #expect(settings.shouldReverseVertical)
+        #expect(settings.shouldReverseHorizontal)
+
+        settings.reverseVertical = false
+        settings.reverseHorizontal = false
+        #expect(!settings.requiresInputTap)
     }
 
     @Test func settingsDecodeWithMosDefaultsAndSafeBounds() throws {
@@ -85,6 +114,7 @@ struct SmoothScrollingTests {
 
     @Test func plannerNormalizesReversesAndAppliesSpeed() {
         var settings = SmoothScrollSettings()
+        settings.reverseScrollingEnabled = true
         settings.reverseVertical = true
         settings.minimumStep = 30
         settings.speed = 2
@@ -99,6 +129,7 @@ struct SmoothScrollingTests {
 
     @Test func plannerPassesThroughDisabledAxesWhileSmoothingEnabledAxes() {
         var settings = SmoothScrollSettings()
+        settings.reverseScrollingEnabled = true
         settings.smoothVertical = true
         settings.smoothHorizontal = false
         settings.minimumStep = 10
@@ -114,6 +145,20 @@ struct SmoothScrollingTests {
         #expect(plan.horizontalTarget == 0)
         #expect(plan.passThroughHorizontal)
         #expect(!plan.shouldSuppressOriginal)
+    }
+
+    @Test func plannerLeavesDirectionUnchangedWhenReverseIsDisabled() {
+        var settings = SmoothScrollSettings()
+        settings.reverseScrollingEnabled = false
+        settings.smoothVertical = true
+        settings.minimumStep = 10
+        settings.speed = 1
+        var vertical = SmoothScrollAxisValue()
+        vertical.value = 20
+
+        let plan = SmoothScrollPlanner.plan(vertical: vertical, horizontal: SmoothScrollAxisValue(), settings: settings)
+
+        #expect(plan.verticalTarget == 20)
     }
 
     @Test func curveFilterRemovesStartupJitterWithKnownFirstFrame() {
@@ -187,6 +232,10 @@ struct SmoothScrollingTests {
         #expect(AppText.value("smoothScrolling", language: .english) == "Smooth Scrolling")
         #expect(AppText.value("smoothScrollingEnable", language: .simplifiedChinese) == "启用平滑滚动")
         #expect(AppText.value("smoothScrollingEnable", language: .english) == "Enable smooth scrolling")
+        #expect(AppText.value("smoothScrollingReverseSection", language: .simplifiedChinese) == "鼠标反向")
+        #expect(AppText.value("smoothScrollingReverseSection", language: .english) == "Mouse direction reversal")
+        #expect(AppText.value("smoothScrollingReverseEnable", language: .simplifiedChinese) == "启用鼠标反向")
+        #expect(AppText.value("smoothScrollingReverseEnable", language: .english) == "Enable mouse direction reversal")
         #expect(AppText.value("smoothScrollingExcludedApps", language: .simplifiedChinese) == "排除应用")
         #expect(AppText.value("smoothScrollingExcludedApps", language: .english) == "Excluded applications")
         #expect(AppText.value("smoothScrollingExcludedAppReverse", language: .simplifiedChinese) == "反转方向")

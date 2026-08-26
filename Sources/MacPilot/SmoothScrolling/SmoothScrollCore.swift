@@ -14,6 +14,11 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
     static let adaptiveSpeedRange: ClosedRange<Double> = 1...8
 
     var isEnabled = false
+    /// Enables the global wheel-direction reversal independently of smoothing.
+    /// Keeping this separate preserves the expected no-op behavior for a new
+    /// installation while allowing reversal to remain active when smoothing is
+    /// turned off.
+    var reverseScrollingEnabled = false
     var smoothVertical = true
     var smoothHorizontal = true
     var reverseVertical = true
@@ -30,6 +35,22 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
     /// Excluded applications whose original wheel direction should be reversed.
     /// This is intentionally independent from the global smooth-scroll reversal.
     var excludedApplicationReverseBundleIdentifiers: [String] = []
+
+    var shouldReverseVertical: Bool {
+        reverseScrollingEnabled && reverseVertical
+    }
+
+    var shouldReverseHorizontal: Bool {
+        reverseScrollingEnabled && reverseHorizontal
+    }
+
+    /// The event tap is needed for either smooth scrolling or an independent
+    /// reversal setting. Excluded-app reversal also works while smoothing is
+    /// disabled, so it keeps the tap alive on its own.
+    var requiresInputTap: Bool {
+        isEnabled || shouldReverseVertical || shouldReverseHorizontal ||
+            !excludedApplicationReverseBundleIdentifiers.isEmpty
+    }
 
     var interpolationFactor: Double {
         Self.interpolationFactor(forDuration: duration)
@@ -69,6 +90,17 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        // Before reversal was independent, its effective lifetime followed
+        // `isEnabled`. Migrate old files that have no new switch without
+        // unexpectedly reversing scrolling for users who had smoothing off.
+        if container.contains(.reverseScrollingEnabled) {
+            reverseScrollingEnabled = try container.decodeIfPresent(
+                Bool.self,
+                forKey: .reverseScrollingEnabled
+            ) ?? false
+        } else {
+            reverseScrollingEnabled = isEnabled
+        }
         smoothVertical = try container.decodeIfPresent(Bool.self, forKey: .smoothVertical) ?? true
         smoothHorizontal = try container.decodeIfPresent(Bool.self, forKey: .smoothHorizontal) ?? true
         reverseVertical = try container.decodeIfPresent(Bool.self, forKey: .reverseVertical) ?? true
@@ -222,10 +254,10 @@ enum SmoothScrollPlanner {
     ) -> SmoothScrollPlan {
         var plan = SmoothScrollPlan()
         if vertical.value != 0 {
-            plan.verticalTarget = settings.reverseVertical ? -vertical.value : vertical.value
+            plan.verticalTarget = settings.shouldReverseVertical ? -vertical.value : vertical.value
         }
         if horizontal.value != 0 {
-            plan.horizontalTarget = settings.reverseHorizontal ? -horizontal.value : horizontal.value
+            plan.horizontalTarget = settings.shouldReverseHorizontal ? -horizontal.value : horizontal.value
         }
 
         // Mos raises tiny wheel deltas to its minimum step before applying speed.
