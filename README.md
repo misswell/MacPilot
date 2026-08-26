@@ -87,6 +87,9 @@ It is derived from the scrolling pipeline of
 - Optionally accelerate more the faster the wheel is rotated, with a
   configurable acceleration limit.
 - Optionally simulate trackpad scroll/momentum phases for apps that rely on them.
+- Exclude selected applications from smoothing; their original mouse-wheel
+  events pass through unchanged. Apps can be selected while running or browsed
+  from disk.
 - Settings are persisted with the rest of `config.json`; Accessibility access is
   required because MacPilot must read and rewrite wheel events in other apps.
 

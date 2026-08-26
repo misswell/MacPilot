@@ -4,6 +4,42 @@ import Testing
 @testable import MacPilot
 
 struct SmoothScrollingTests {
+    @Test func excludedApplicationsDecodeAndNormalize() throws {
+        let data = Data(#"{"excludedApplicationBundleIdentifiers":["com.apple.Safari","", " com.apple.Safari ", "com.microsoft.VSCode"]}"#.utf8)
+        let settings = try JSONDecoder().decode(SmoothScrollSettings.self, from: data)
+
+        #expect(settings.excludedApplicationBundleIdentifiers == ["com.apple.Safari", "com.microsoft.VSCode"])
+    }
+
+    @Test func exclusionMatcherMatchesOnlyConfiguredApplications() {
+        let excluded = Set(["com.apple.safari", "com.microsoft.vscode"])
+
+        #expect(SmoothScrollApplicationExclusions.contains("com.apple.Safari", in: excluded))
+        #expect(SmoothScrollApplicationExclusions.contains("com.microsoft.VSCode", in: excluded))
+        #expect(!SmoothScrollApplicationExclusions.contains("com.apple.Terminal", in: excluded))
+        #expect(!SmoothScrollApplicationExclusions.contains(nil, in: excluded))
+    }
+
+    @Test @MainActor func modelCanAddAndRemoveExcludedApplications() {
+        let model = SmoothScrollModel()
+
+        model.setExcludedApplication(" com.apple.Safari ", enabled: true)
+        #expect(model.settings.excludedApplicationBundleIdentifiers == ["com.apple.Safari"])
+
+        model.setExcludedApplication("com.apple.Safari", enabled: false)
+        #expect(model.settings.excludedApplicationBundleIdentifiers.isEmpty)
+    }
+
+    @Test func excludedApplicationSettingsRoundTripThroughCodable() throws {
+        var settings = SmoothScrollSettings()
+        settings.excludedApplicationBundleIdentifiers = ["com.apple.Safari", "com.microsoft.VSCode"]
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(SmoothScrollSettings.self, from: data)
+
+        #expect(decoded.excludedApplicationBundleIdentifiers == settings.excludedApplicationBundleIdentifiers)
+    }
+
     @Test func settingsDecodeWithMosDefaultsAndSafeBounds() throws {
         let data = Data(#"{"minimumStep":999,"speed":0,"duration":99,"deadZone":-10}"#.utf8)
         let settings = try JSONDecoder().decode(SmoothScrollSettings.self, from: data)
@@ -106,6 +142,8 @@ struct SmoothScrollingTests {
         #expect(AppText.value("smoothScrolling", language: .english) == "Smooth Scrolling")
         #expect(AppText.value("smoothScrollingEnable", language: .simplifiedChinese) == "启用平滑滚动")
         #expect(AppText.value("smoothScrollingEnable", language: .english) == "Enable smooth scrolling")
+        #expect(AppText.value("smoothScrollingExcludedApps", language: .simplifiedChinese) == "排除应用")
+        #expect(AppText.value("smoothScrollingExcludedApps", language: .english) == "Excluded applications")
     }
 
     @Test func adaptiveSpeedBoostIncreasesForFasterWheelCadence() {

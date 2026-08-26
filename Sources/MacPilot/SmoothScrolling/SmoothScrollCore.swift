@@ -26,6 +26,7 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
     var adaptiveSpeedEnabled = false
     var adaptiveSpeedMaximum = 3.0
     var blockSmoothWhileCommandHeld = true
+    var excludedApplicationBundleIdentifiers: [String] = []
 
     var interpolationFactor: Double {
         Self.interpolationFactor(forDuration: duration)
@@ -46,6 +47,9 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
         value.duration = duration.clamped(to: Self.durationRange)
         value.deadZone = deadZone.clamped(to: Self.deadZoneRange)
         value.adaptiveSpeedMaximum = adaptiveSpeedMaximum.clamped(to: Self.adaptiveSpeedRange)
+        value.excludedApplicationBundleIdentifiers = SmoothScrollApplicationExclusions.normalizedIdentifiers(
+            excludedApplicationBundleIdentifiers
+        )
         return value
     }
 
@@ -66,6 +70,9 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
         adaptiveSpeedEnabled = try container.decodeIfPresent(Bool.self, forKey: .adaptiveSpeedEnabled) ?? false
         adaptiveSpeedMaximum = try container.decodeIfPresent(Double.self, forKey: .adaptiveSpeedMaximum) ?? 3.0
         blockSmoothWhileCommandHeld = try container.decodeIfPresent(Bool.self, forKey: .blockSmoothWhileCommandHeld) ?? true
+        excludedApplicationBundleIdentifiers = SmoothScrollApplicationExclusions.normalizedIdentifiers(
+            try container.decodeIfPresent([String].self, forKey: .excludedApplicationBundleIdentifiers) ?? []
+        )
         self = clamped()
     }
 }
@@ -73,6 +80,26 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
 private extension Double {
     func clamped(to range: ClosedRange<Double>) -> Double {
         Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+enum SmoothScrollApplicationExclusions {
+    static func canonicalIdentifier(_ identifier: String) -> String {
+        identifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    static func normalizedIdentifiers(_ identifiers: [String]) -> [String] {
+        var seen = Set<String>()
+        return identifiers.compactMap { identifier in
+            let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, seen.insert(canonicalIdentifier(trimmed)).inserted else { return nil }
+            return trimmed
+        }
+    }
+
+    static func contains(_ bundleIdentifier: String?, in excludedIdentifiers: Set<String>) -> Bool {
+        guard let bundleIdentifier else { return false }
+        return excludedIdentifiers.contains(canonicalIdentifier(bundleIdentifier))
     }
 }
 

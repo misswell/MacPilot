@@ -17,7 +17,7 @@ final class SmoothScrollModel: ObservableObject {
     }
 
     func applyLoadedSettings(_ loaded: SmoothScrollSettings) {
-        settings = loaded
+        settings = loaded.clamped()
         refreshPermissionStatus()
         if isActive {
             controller.activate(settings: settings)
@@ -110,6 +110,29 @@ final class SmoothScrollModel: ObservableObject {
 
     func setSimulatesTrackpadPhases(_ enabled: Bool) {
         settings.simulatesTrackpadPhases = enabled
+        controller.activate(settings: settings)
+        persist?()
+    }
+
+    func setExcludedApplication(_ bundleIdentifier: String, enabled: Bool) {
+        let identifier = bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !identifier.isEmpty else { return }
+        let canonicalIdentifier = SmoothScrollApplicationExclusions.canonicalIdentifier(identifier)
+
+        var identifiers = settings.excludedApplicationBundleIdentifiers
+        if enabled {
+            guard !identifiers.contains(where: {
+                SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+            }) else { return }
+            identifiers.append(identifier)
+        } else {
+            identifiers.removeAll {
+                SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+            }
+        }
+
+        settings.excludedApplicationBundleIdentifiers = SmoothScrollApplicationExclusions
+            .normalizedIdentifiers(identifiers)
         controller.activate(settings: settings)
         persist?()
     }

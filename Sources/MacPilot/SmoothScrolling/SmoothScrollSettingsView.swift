@@ -1,8 +1,63 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SmoothScrollSettingsView: View {
     @ObservedObject var smoothScrolling: SmoothScrollModel
     @EnvironmentObject private var model: MacPilotModel
+    @State private var applicationListRevision = 0
+
+    private struct ExcludedApplication: Identifiable {
+        let id: String
+        let name: String
+        let icon: NSImage?
+        let isRunning: Bool
+    }
+
+    private var excludedApplications: [ExcludedApplication] {
+        smoothScrolling.settings.excludedApplicationBundleIdentifiers.map { identifier in
+            let runningApplication = NSRunningApplication.runningApplications(
+                withBundleIdentifier: identifier
+            ).first
+            let applicationURL = runningApplication?.bundleURL
+                ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
+            let name = runningApplication?.localizedName
+                ?? applicationURL.flatMap(Self.applicationDisplayName)
+                ?? identifier
+            let icon = runningApplication?.icon
+                ?? applicationURL.map { NSWorkspace.shared.icon(forFile: $0.path) }
+            return ExcludedApplication(
+                id: identifier,
+                name: name,
+                icon: icon,
+                isRunning: runningApplication != nil
+            )
+        }
+    }
+
+    private var availableApplications: [NSRunningApplication] {
+        let excludedIdentifiers = Set(
+            smoothScrolling.settings.excludedApplicationBundleIdentifiers.map(
+                SmoothScrollApplicationExclusions.canonicalIdentifier
+            )
+        )
+        var seenIdentifiers = Set<String>()
+        return NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .filter { application in
+                guard let identifier = application.bundleIdentifier,
+                      identifier.caseInsensitiveCompare(Bundle.main.bundleIdentifier ?? "") != .orderedSame
+                else { return false }
+                let canonicalIdentifier = SmoothScrollApplicationExclusions.canonicalIdentifier(identifier)
+                return excludedIdentifiers.contains(canonicalIdentifier) == false
+                    && seenIdentifiers.insert(canonicalIdentifier).inserted
+            }
+            .sorted {
+                ($0.localizedName ?? $0.bundleIdentifier ?? "")
+                    .localizedCaseInsensitiveCompare($1.localizedName ?? $1.bundleIdentifier ?? "")
+                    == .orderedAscending
+            }
+    }
 
     var body: some View {
         ScrollView {
@@ -24,6 +79,79 @@ struct SmoothScrollSettingsView: View {
                     }
                     permissionStatus
                 }
+
+                SettingsCard {
+                    Text(model.t("smoothScrollingExcludedApps")).font(.headline)
+                    Text(model.t("smoothScrollingExcludedAppsHint"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    if excludedApplications.isEmpty {
+                        Text(model.t("smoothScrollingNoExcludedApps"))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(excludedApplications) { application in
+                            HStack(spacing: 10) {
+                                if let icon = application.icon {
+                                    Image(nsImage: icon)
+                                        .resizable()
+                                        .frame(width: 28, height: 28)
+                                } else {
+                                    Image(systemName: "app.dashed")
+                                        .frame(width: 28, height: 28)
+                                        .foregroundStyle(.secondary)
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(application.name).lineLimit(1)
+                                    Text(application.id)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Spacer(minLength: 8)
+                                if !application.isRunning {
+                                    Text(model.t("smoothScrollingExcludedAppNotRunning"))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Button {
+                                    smoothScrolling.setExcludedApplication(application.id, enabled: false)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .foregroundStyle(.red)
+                                .help(model.t("smoothScrollingRemoveExcludedApp"))
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Menu {
+                        if availableApplications.isEmpty {
+                            Text(model.t("smoothScrollingNoAvailableApps"))
+                        } else {
+                            Section(model.t("runningApps")) {
+                                ForEach(availableApplications, id: \.processIdentifier) { application in
+                                    if let identifier = application.bundleIdentifier {
+                                        Button(application.localizedName ?? identifier) {
+                                            smoothScrolling.setExcludedApplication(identifier, enabled: true)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Divider()
+                        Button(model.t("smoothScrollingBrowseExcludedApp"), action: browseForExcludedApp)
+                    } label: {
+                        Label(model.t("smoothScrollingAddExcludedApp"), systemImage: "plus")
+                    }
+                    .menuStyle(.borderlessButton)
+                }
+                .id(applicationListRevision)
 
                 SettingsCard {
                     Toggle(model.t("smoothScrollingVertical"), isOn: Binding(
@@ -89,6 +217,12 @@ struct SmoothScrollSettingsView: View {
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
         }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification)) { _ in
+            applicationListRevision &+= 1
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)) { _ in
+            applicationListRevision &+= 1
+        }
     }
 
     private var permissionStatus: some View {
@@ -127,5 +261,27 @@ struct SmoothScrollSettingsView: View {
             }
             Slider(value: value, in: range, step: step)
         }
+    }
+
+    private func browseForExcludedApp() {
+        let panel = NSOpenPanel()
+        panel.title = model.t("smoothScrollingChooseExcludedApp")
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.applicationBundle]
+        guard panel.runModal() == .OK,
+              let url = panel.url,
+              let bundle = Bundle(url: url),
+              let identifier = bundle.bundleIdentifier,
+              identifier.caseInsensitiveCompare(Bundle.main.bundleIdentifier ?? "") != .orderedSame
+        else { return }
+        smoothScrolling.setExcludedApplication(identifier, enabled: true)
+    }
+
+    private static func applicationDisplayName(at url: URL) -> String? {
+        guard let bundle = Bundle(url: url) else { return nil }
+        return (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
+            ?? url.deletingPathExtension().lastPathComponent
     }
 }

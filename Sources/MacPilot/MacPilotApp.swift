@@ -604,6 +604,15 @@ enum AppText {
         "smoothScrollingGrantAccessibility": "授权辅助功能…", "smoothScrollingOpenAccessibility": "打开辅助功能设置",
         "smoothScrollingAccessibilityReady": "辅助功能权限已就绪",
         "smoothScrollingNotConfiguredHint": "未启用时鼠标滚轮会按系统默认行为传递。",
+        "smoothScrollingExcludedApps": "排除应用",
+        "smoothScrollingExcludedAppsHint": "这些应用会保留系统原始鼠标滚动，不进行平滑处理。",
+        "smoothScrollingNoExcludedApps": "尚未排除应用",
+        "smoothScrollingNoAvailableApps": "没有可添加的运行中应用",
+        "smoothScrollingAddExcludedApp": "添加排除应用…",
+        "smoothScrollingBrowseExcludedApp": "从磁盘选择应用…",
+        "smoothScrollingChooseExcludedApp": "选择要排除的应用",
+        "smoothScrollingExcludedAppNotRunning": "未运行",
+        "smoothScrollingRemoveExcludedApp": "移除排除应用",
         "rightClickMenu": "访达右键菜单",
         "clipboard": "剪切板", "clipboardSubtitle": "记录复制历史，随时搜索、固定并重新粘贴，支持文本、图片与文件。",
         "clipboardEnable": "启用剪切板",
@@ -893,6 +902,15 @@ enum AppText {
             "smoothScrollingGrantAccessibility": "Grant Accessibility…", "smoothScrollingOpenAccessibility": "Open Accessibility Settings",
             "smoothScrollingAccessibilityReady": "Accessibility access is ready",
             "smoothScrollingNotConfiguredHint": "When disabled, mouse-wheel events pass through using the system default behavior.",
+            "smoothScrollingExcludedApps": "Excluded applications",
+            "smoothScrollingExcludedAppsHint": "These applications keep the system's original mouse-wheel behavior without smoothing.",
+            "smoothScrollingNoExcludedApps": "No excluded applications yet",
+            "smoothScrollingNoAvailableApps": "No running applications available to add",
+            "smoothScrollingAddExcludedApp": "Add excluded application…",
+            "smoothScrollingBrowseExcludedApp": "Choose an application from disk…",
+            "smoothScrollingChooseExcludedApp": "Choose an application to exclude",
+            "smoothScrollingExcludedAppNotRunning": "Not running",
+            "smoothScrollingRemoveExcludedApp": "Remove excluded application",
             "rightClickMenu": "Finder Context Menu",
             "clipboard": "Clipboard", "clipboardSubtitle": "Keeps your copy history so you can search, pin, and re-paste text, images, and files.",
             "clipboardEnable": "Enable clipboard",
@@ -942,7 +960,7 @@ final class MacPilotModel: ObservableObject {
         var clipboard: ClipboardSettings
 
         init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings) {
-            version = 14
+            version = 15
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language

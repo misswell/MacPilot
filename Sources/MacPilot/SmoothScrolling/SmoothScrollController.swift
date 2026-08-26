@@ -1,4 +1,5 @@
 @preconcurrency import ApplicationServices
+@preconcurrency import AppKit
 @preconcurrency import CoreGraphics
 import CoreVideo
 import Foundation
@@ -18,6 +19,10 @@ final class SmoothScrollController {
     private var displayLink: CVDisplayLink?
     private var lastPhysicalWheelTime: CFTimeInterval = 0
     private var commandHeld = false
+    private var excludedBundleIdentifiers: Set<String> = []
+    private var processBundleIdentifiers: [pid_t: String] = [:]
+    private var excludedProcessIDs: Set<pid_t> = []
+    private var workspaceObservers: [NSObjectProtocol] = []
     private(set) var isActive = false
 
     private let eventMask: CGEventMask = CGEventMask(
@@ -25,8 +30,11 @@ final class SmoothScrollController {
     )
 
     func activate(settings: SmoothScrollSettings) {
-        activeSettings = settings
-        guard settings.isEnabled else {
+        let previousExcludedBundleIdentifiers = excludedBundleIdentifiers
+        activeSettings = settings.clamped()
+        refreshExcludedApplicationCache()
+        let exclusionsChanged = previousExcludedBundleIdentifiers != excludedBundleIdentifiers
+        guard activeSettings.isEnabled else {
             deactivate()
             return
         }
@@ -35,10 +43,14 @@ final class SmoothScrollController {
             return
         }
         guard !isActive else {
-            runtime.update(settings: settings)
+            if exclusionsChanged {
+                runtime.stop()
+                lastPhysicalWheelTime = 0
+            }
+            runtime.update(settings: activeSettings)
             return
         }
-        runtime.update(settings: settings)
+        runtime.update(settings: activeSettings)
         guard let tap = CGEvent.tapCreate(
             tap: .cgAnnotatedSessionEventTap,
             place: .tailAppendEventTap,
@@ -55,12 +67,15 @@ final class SmoothScrollController {
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         isActive = true
+        installWorkspaceObservers()
         runtime.start()
     }
 
     func deactivate() {
         guard isActive || eventTap != nil else {
             runtime.stop()
+            removeWorkspaceObservers()
+            clearExcludedApplicationCache()
             return
         }
         isActive = false
@@ -75,6 +90,10 @@ final class SmoothScrollController {
             }
             runLoopSource = nil
         }
+        removeWorkspaceObservers()
+        clearExcludedApplicationCache()
+        commandHeld = false
+        lastPhysicalWheelTime = 0
         runtime.stop()
     }
 
@@ -108,6 +127,13 @@ final class SmoothScrollController {
         }
         guard !SmoothScrollWheelEventParser.isRemoteSmoothed(event),
               !SmoothScrollWheelEventParser.isTrackpadLike(event) else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        let targetProcessID = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
+        if shouldBypassSmoothing(for: targetProcessID) {
+            runtime.stop()
+            lastPhysicalWheelTime = 0
             return Unmanaged.passUnretained(event)
         }
 
@@ -156,6 +182,103 @@ final class SmoothScrollController {
             return Unmanaged.passUnretained(event)
         }
         return accepted ? nil : Unmanaged.passUnretained(event)
+    }
+
+    private func refreshExcludedApplicationCache() {
+        excludedBundleIdentifiers = Set(
+            activeSettings.excludedApplicationBundleIdentifiers.map {
+                SmoothScrollApplicationExclusions.canonicalIdentifier($0)
+            }
+        )
+        processBundleIdentifiers.removeAll(keepingCapacity: true)
+        excludedProcessIDs.removeAll(keepingCapacity: true)
+
+        guard !excludedBundleIdentifiers.isEmpty else { return }
+        for application in NSWorkspace.shared.runningApplications {
+            updateProcessCache(for: application)
+        }
+    }
+
+    private func clearExcludedApplicationCache() {
+        excludedBundleIdentifiers.removeAll(keepingCapacity: false)
+        processBundleIdentifiers.removeAll(keepingCapacity: false)
+        excludedProcessIDs.removeAll(keepingCapacity: false)
+    }
+
+    private func installWorkspaceObservers() {
+        guard workspaceObservers.isEmpty else { return }
+        let center = NSWorkspace.shared.notificationCenter
+        let names: [NSNotification.Name] = [
+            NSWorkspace.didLaunchApplicationNotification,
+            NSWorkspace.didTerminateApplicationNotification,
+            NSWorkspace.didActivateApplicationNotification
+        ]
+        workspaceObservers = names.map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+                    return
+                }
+                Task { @MainActor [weak self] in
+                    self?.handleWorkspaceApplicationChange(application, notificationName: name)
+                }
+            }
+        }
+    }
+
+    private func removeWorkspaceObservers() {
+        let center = NSWorkspace.shared.notificationCenter
+        for observer in workspaceObservers {
+            center.removeObserver(observer)
+        }
+        workspaceObservers.removeAll(keepingCapacity: false)
+    }
+
+    private func handleWorkspaceApplicationChange(
+        _ application: NSRunningApplication,
+        notificationName: NSNotification.Name
+    ) {
+        if notificationName == NSWorkspace.didTerminateApplicationNotification {
+            let processID = application.processIdentifier
+            processBundleIdentifiers.removeValue(forKey: processID)
+            excludedProcessIDs.remove(processID)
+            return
+        }
+
+        updateProcessCache(for: application)
+        if notificationName == NSWorkspace.didActivateApplicationNotification,
+           excludedProcessIDs.contains(application.processIdentifier) {
+            runtime.stop()
+            lastPhysicalWheelTime = 0
+        }
+    }
+
+    private func updateProcessCache(for application: NSRunningApplication) {
+        let processID = application.processIdentifier
+        guard processID > 0 else { return }
+        guard let bundleIdentifier = application.bundleIdentifier else {
+            processBundleIdentifiers.removeValue(forKey: processID)
+            excludedProcessIDs.remove(processID)
+            return
+        }
+        processBundleIdentifiers[processID] = bundleIdentifier
+        if SmoothScrollApplicationExclusions.contains(bundleIdentifier, in: excludedBundleIdentifiers) {
+            excludedProcessIDs.insert(processID)
+        } else {
+            excludedProcessIDs.remove(processID)
+        }
+    }
+
+    private func shouldBypassSmoothing(for processID: pid_t) -> Bool {
+        guard processID > 0, !excludedBundleIdentifiers.isEmpty else { return false }
+        if excludedProcessIDs.contains(processID) { return true }
+        if let bundleIdentifier = processBundleIdentifiers[processID] {
+            return SmoothScrollApplicationExclusions.contains(bundleIdentifier, in: excludedBundleIdentifiers)
+        }
+        // Never query NSWorkspace/NSRunningApplication from the event tap. A
+        // just-launched process is covered by the workspace observer shortly;
+        // until then, let the normal smoothing path continue without blocking
+        // the input callback.
+        return false
     }
 
     nonisolated fileprivate static let displayLinkCallback: CVDisplayLinkOutputCallback = { _, _, _, _, _, context in
