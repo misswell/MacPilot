@@ -19,6 +19,23 @@ private final class UploadProtocolState: @unchecked Sendable {
     }
 }
 
+private final class UploadProgressState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [ImageHostingUploadProgress] = []
+
+    func append(_ value: ImageHostingUploadProgress) {
+        lock.lock()
+        defer { lock.unlock() }
+        values.append(value)
+    }
+
+    func snapshot() -> [ImageHostingUploadProgress] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+}
+
 private final class RecordingUploadURLProtocol: URLProtocol {
     static let state = UploadProtocolState()
 
@@ -217,6 +234,36 @@ struct ImageHostingTests {
         #expect(body["branch"] as? String == "main")
         #expect(decodedContent == payload)
         #expect(snapshot.body.range(of: payload) == nil)
+    }
+
+    @Test func uploadReportsProgressThroughCompletion() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacPilot-progress-\(UUID().uuidString).png")
+        try Data("progress-image".utf8).write(to: sourceURL)
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [RecordingUploadURLProtocol.self]
+        let settings = ImageHostingSettings(
+            isEnabled: true,
+            provider: .github,
+            repositoryOwner: "octo",
+            repositoryName: "images"
+        )
+        let progress = UploadProgressState()
+        _ = try await ImageHostingUploadClient(
+            session: URLSession(configuration: sessionConfiguration)
+        ).upload(
+            fileURL: sourceURL,
+            configuration: settings,
+            credential: "github-secret",
+            onProgress: { progress.append($0) }
+        )
+
+        let events = progress.snapshot()
+        #expect(events.first == .uploading(fraction: 0))
+        #expect(events.contains(.uploading(fraction: 1)))
+        #expect(events.contains(.finalizing))
     }
 
     @Test func giteeUploadUsesGiteeAPIAndAuthenticationScheme() async throws {

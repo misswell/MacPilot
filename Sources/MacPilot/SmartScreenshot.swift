@@ -1092,6 +1092,214 @@ private func smartShortcutCarbonEventHandler(
 }
 
 @MainActor
+final class ImageHostingUploadHUD {
+    static let shared = ImageHostingUploadHUD()
+
+    private var panel: NSPanel?
+    private var titleLabel: NSTextField?
+    private var detailLabel: NSTextField?
+    private var progressIndicator: NSProgressIndicator?
+    private var dismissTask: Task<Void, Never>?
+    private(set) var isUploading = false
+
+    @discardableResult
+    func begin(language: AppLanguage) -> Bool {
+        guard !isUploading else { return false }
+        dismissTask?.cancel()
+        dismissTask = nil
+        isUploading = true
+
+        let panel = makePanelIfNeeded()
+        resizePanel(height: 98)
+        titleLabel?.stringValue = AppText.value("scImageHostingUploading", language: language)
+        detailLabel?.stringValue = AppText.value("scImageHostingPreparing", language: language)
+        progressIndicator?.isHidden = false
+        progressIndicator?.doubleValue = 0
+        panel.alphaValue = 1
+        position(panel)
+        panel.orderFrontRegardless()
+        return true
+    }
+
+    /// Creates a sendable bridge from the URLSession worker to the main-actor
+    /// HUD without capturing the non-Sendable language enum in that worker.
+    static func makeProgressHandler(language: AppLanguage) -> @Sendable (ImageHostingUploadProgress) -> Void {
+        let languageRawValue = language.rawValue
+        return { progress in
+            Task { @MainActor in
+                let language = AppLanguage(rawValue: languageRawValue) ?? .system
+                ImageHostingUploadHUD.shared.update(progress, language: language)
+            }
+        }
+    }
+
+    func update(_ progress: ImageHostingUploadProgress, language: AppLanguage) {
+        guard isUploading else { return }
+        progressIndicator?.isHidden = false
+        progressIndicator?.doubleValue = progress.fraction
+
+        switch progress {
+        case .preparing:
+            detailLabel?.stringValue = AppText.value("scImageHostingPreparing", language: language)
+        case .uploading(let fraction):
+            let percent = Int((max(0, min(1, fraction)) * 100).rounded())
+            detailLabel?.stringValue = AppText.value(
+                "scImageHostingUploadProgress",
+                language: language,
+                percent
+            )
+        case .finalizing:
+            detailLabel?.stringValue = AppText.value("scImageHostingFinalizing", language: language)
+        }
+    }
+
+    func succeed(url: URL, language: AppLanguage) {
+        guard isUploading else { return }
+        isUploading = false
+        titleLabel?.stringValue = AppText.value("scImageHostingUploadSuccess", language: language)
+        detailLabel?.stringValue = AppText.value(
+            "scImageHostingUploadSuccessMessage",
+            language: language,
+            url.absoluteString
+        )
+        progressIndicator?.isHidden = false
+        progressIndicator?.doubleValue = 1
+        resizePanel(height: 126)
+        scheduleDismiss(after: 3)
+    }
+
+    func fail(error: Error, language: AppLanguage) {
+        guard isUploading else { return }
+        isUploading = false
+        titleLabel?.stringValue = AppText.value("scImageHostingUploadFailed", language: language)
+        detailLabel?.stringValue = AppText.value(
+            "scImageHostingUploadFailureMessage",
+            language: language,
+            ImageHostingUploadHUD.localizedError(error, language: language)
+        )
+        progressIndicator?.isHidden = true
+        resizePanel(height: 126)
+        scheduleDismiss(after: 6)
+    }
+
+    private func makePanelIfNeeded() -> NSPanel {
+        if let panel { return panel }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 98),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = true
+        panel.isReleasedWhenClosed = false
+
+        let effectView = NSVisualEffectView()
+        effectView.material = .hudWindow
+        effectView.blendingMode = .withinWindow
+        effectView.state = .active
+        effectView.wantsLayer = true
+        effectView.layer?.cornerRadius = 14
+        effectView.layer?.masksToBounds = true
+
+        let titleLabel = NSTextField(labelWithString: "")
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = .labelColor
+        titleLabel.alignment = .center
+
+        let detailLabel = NSTextField(labelWithString: "")
+        detailLabel.font = .systemFont(ofSize: 12)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.alignment = .center
+        detailLabel.lineBreakMode = .byCharWrapping
+        detailLabel.maximumNumberOfLines = 3
+
+        let progressIndicator = NSProgressIndicator()
+        progressIndicator.style = .bar
+        progressIndicator.controlSize = .small
+        progressIndicator.isIndeterminate = false
+        progressIndicator.minValue = 0
+        progressIndicator.maxValue = 1
+
+        let stack = NSStackView(views: [titleLabel, detailLabel, progressIndicator])
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = 7
+        stack.edgeInsets = NSEdgeInsets(top: 14, left: 18, bottom: 14, right: 18)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        effectView.addSubview(stack)
+        panel.contentView = effectView
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: effectView.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
+            progressIndicator.heightAnchor.constraint(equalToConstant: 8),
+        ])
+
+        self.panel = panel
+        self.titleLabel = titleLabel
+        self.detailLabel = detailLabel
+        self.progressIndicator = progressIndicator
+        return panel
+    }
+
+    private func position(_ panel: NSPanel) {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            panel.center()
+            return
+        }
+        let visibleFrame = screen.visibleFrame
+        panel.setFrameOrigin(NSPoint(
+            x: visibleFrame.midX - panel.frame.width / 2,
+            y: visibleFrame.maxY - panel.frame.height - 42
+        ))
+    }
+
+    private func resizePanel(height: CGFloat) {
+        guard let panel else { return }
+        guard abs(panel.frame.height - height) > 0.5 else {
+            position(panel)
+            return
+        }
+        panel.setContentSize(NSSize(width: panel.frame.width, height: height))
+        position(panel)
+    }
+
+    private func scheduleDismiss(after seconds: Int) {
+        dismissTask?.cancel()
+        dismissTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(seconds))
+            } catch {
+                return
+            }
+            self?.dismiss()
+        }
+    }
+
+    private func dismiss() {
+        dismissTask?.cancel()
+        dismissTask = nil
+        panel?.orderOut(nil)
+    }
+
+    private static func localizedError(_ error: Error, language: AppLanguage) -> String {
+        if let error = error as? ImageHostingError {
+            return error.localizedDescription(language: language)
+        }
+        return error.localizedDescription
+    }
+}
+
+@MainActor
 final class SmartScreenshotController {
     nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     private let language: () -> AppLanguage
@@ -2493,11 +2701,22 @@ final class SmartScreenshotController {
     /// streams that file so the upload never retains a second full image Data
     /// buffer on the main actor.
     private func uploadImageToCloud(_ image: CGImage) {
+        let language = language()
+        guard ImageHostingUploadHUD.shared.begin(language: language) else {
+            onError(ImageHostingError.uploadInProgress)
+            return
+        }
+        let progressHandler = ImageHostingUploadHUD.makeProgressHandler(language: language)
         Task { @MainActor [weak self] in
             do {
-                let result = try await ImageHostingUploadCoordinator.upload(image: image)
+                let result = try await ImageHostingUploadCoordinator.upload(
+                    image: image,
+                    onProgress: progressHandler
+                )
                 ImageHostingClipboard.copy(urls: [result.publicURL])
+                ImageHostingUploadHUD.shared.succeed(url: result.publicURL, language: language)
             } catch {
+                ImageHostingUploadHUD.shared.fail(error: error, language: language)
                 self?.onError(error)
             }
         }
@@ -4641,21 +4860,25 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
 
     private func uploadImage() {
         let image = self.image
-        Task { @MainActor [weak self] in
+        let language = self.language
+        guard ImageHostingUploadHUD.shared.begin(language: language) else {
+            showMessage(
+                title: AppText.value("scImageHostingUploadFailed", language: language),
+                message: ImageHostingError.uploadInProgress.localizedDescription(language: language)
+            )
+            return
+        }
+        let progressHandler = ImageHostingUploadHUD.makeProgressHandler(language: language)
+        Task { @MainActor in
             do {
-                let result = try await ImageHostingUploadCoordinator.upload(image: image)
+                let result = try await ImageHostingUploadCoordinator.upload(
+                    image: image,
+                    onProgress: progressHandler
+                )
                 ImageHostingClipboard.copy(urls: [result.publicURL])
-                self?.showMessage(
-                    title: AppText.value("scImageHostingUploadSuccess", language: self?.language ?? .system),
-                    message: result.publicURL.absoluteString
-                )
+                ImageHostingUploadHUD.shared.succeed(url: result.publicURL, language: language)
             } catch {
-                let detail = (error as? ImageHostingError)?.localizedDescription(language: self?.language ?? .system)
-                    ?? error.localizedDescription
-                self?.showMessage(
-                    title: AppText.value("scImageHostingUploadFailed", language: self?.language ?? .system),
-                    message: detail
-                )
+                ImageHostingUploadHUD.shared.fail(error: error, language: language)
             }
         }
     }

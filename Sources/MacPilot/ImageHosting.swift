@@ -167,6 +167,7 @@ enum ImageHostingError: LocalizedError, Equatable, Sendable {
     case notConfigured
     case invalidRepository
     case missingCredential
+    case uploadInProgress
     case fileUnavailable
     case unsupportedFile
     case encodingFailed
@@ -187,6 +188,8 @@ enum ImageHostingError: LocalizedError, Equatable, Sendable {
             return AppText.value("scImageHostingInvalidRepository", language: language)
         case .missingCredential:
             return AppText.value("scImageHostingMissingCredential", language: language)
+        case .uploadInProgress:
+            return AppText.value("scImageHostingUploadInProgress", language: language)
         case .fileUnavailable:
             return AppText.value("scImageHostingFileUnavailable", language: language)
         case .unsupportedFile:
@@ -208,6 +211,23 @@ enum ImageHostingError: LocalizedError, Equatable, Sendable {
 struct CloudUploadResult: Sendable {
     let publicURL: URL
     let key: String
+}
+
+enum ImageHostingUploadProgress: Equatable, Sendable {
+    case preparing
+    case uploading(fraction: Double)
+    case finalizing
+
+    var fraction: Double {
+        switch self {
+        case .preparing:
+            return 0
+        case .uploading(let fraction):
+            return max(0, min(1, fraction))
+        case .finalizing:
+            return 1
+        }
+    }
 }
 
 @MainActor
@@ -272,10 +292,15 @@ enum ImageHostingUploadFile {
 /// cleanup and disk-backed upload behavior.
 @MainActor
 enum ImageHostingUploadCoordinator {
-    static func upload(image: CGImage) async throws -> CloudUploadResult {
+    static func upload(
+        image: CGImage,
+        onProgress: @escaping @Sendable (ImageHostingUploadProgress) -> Void = { _ in }
+    ) async throws -> CloudUploadResult {
+        onProgress(.preparing)
         let fileURL = try await ImageHostingUploadFile.writePNG(image: image)
         defer { try? FileManager.default.removeItem(at: fileURL) }
-        return try await CloudManager.shared.upload(fileURL: fileURL)
+        onProgress(.uploading(fraction: 0))
+        return try await CloudManager.shared.upload(fileURL: fileURL, onProgress: onProgress)
     }
 }
 
@@ -379,6 +404,144 @@ enum ImageHostingResponseParser {
     }
 }
 
+/// Bridges a file-backed URLSession upload task to async/await while polling
+/// the task's byte counters for progress. The request body remains on disk;
+/// this object only coordinates the task and its completion continuation.
+private final class ImageHostingFileUploadOperation: @unchecked Sendable {
+    private let session: URLSession
+    private let request: URLRequest
+    private let bodyURL: URL
+    private let onProgress: @Sendable (Double) -> Void
+    private let lock = NSLock()
+    private var task: URLSessionUploadTask?
+    private var continuation: CheckedContinuation<(Data, URLResponse), Error>?
+    private var progressTask: Task<Void, Never>?
+    private var isFinished = false
+
+    init(
+        session: URLSession,
+        request: URLRequest,
+        bodyURL: URL,
+        onProgress: @escaping @Sendable (Double) -> Void
+    ) {
+        self.session = session
+        self.request = request
+        self.bodyURL = bodyURL
+        self.onProgress = onProgress
+    }
+
+    func run() async throws -> (Data, URLResponse) {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, URLResponse), Error>) in
+                start(continuation: continuation)
+            }
+        } onCancel: {
+            cancel()
+        }
+    }
+
+    private func start(continuation: CheckedContinuation<(Data, URLResponse), Error>) {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.continuation = continuation
+        let wasCancelled = Task.isCancelled
+        lock.unlock()
+
+        if wasCancelled {
+            cancel()
+            return
+        }
+
+        let uploadTask = session.uploadTask(with: request, fromFile: bodyURL) { [weak self] data, response, error in
+            self?.finish(data: data, response: response, error: error)
+        }
+
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            uploadTask.cancel()
+            return
+        }
+        task = uploadTask
+        progressTask = Task { [weak self] in
+            await self?.monitorProgress()
+        }
+        lock.unlock()
+
+        onProgress(0)
+        uploadTask.resume()
+    }
+
+    private func monitorProgress() async {
+        while !Task.isCancelled {
+            guard let fraction = currentFraction() else { return }
+            onProgress(fraction)
+            if fraction >= 1 { return }
+            do {
+                try await Task.sleep(for: .milliseconds(80))
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func currentFraction() -> Double? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isFinished, let task else { return nil }
+        let expected = task.countOfBytesExpectedToSend
+        guard expected > 0 else { return 0 }
+        return max(0, min(1, Double(task.countOfBytesSent) / Double(expected)))
+    }
+
+    private func finish(data: Data?, response: URLResponse?, error: Error?) {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isFinished = true
+        let continuation = self.continuation
+        self.continuation = nil
+        let progressTask = self.progressTask
+        self.progressTask = nil
+        lock.unlock()
+
+        progressTask?.cancel()
+        if let error {
+            continuation?.resume(throwing: error)
+        } else if let data, let response {
+            onProgress(1)
+            continuation?.resume(returning: (data, response))
+        } else {
+            continuation?.resume(throwing: ImageHostingError.invalidResponse)
+        }
+    }
+
+    private func cancel() {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isFinished = true
+        let task = self.task
+        let continuation = self.continuation
+        self.continuation = nil
+        let progressTask = self.progressTask
+        self.progressTask = nil
+        lock.unlock()
+
+        task?.cancel()
+        progressTask?.cancel()
+        continuation?.resume(throwing: CancellationError())
+    }
+}
+
 /// Streams a local image through the JSON Base64 field required by the
 /// Contents APIs. Only a small source chunk and its encoded counterpart are
 /// resident at a time; the full image is never assembled as Data.
@@ -392,7 +555,8 @@ struct ImageHostingUploadClient: @unchecked Sendable {
     func upload(
         fileURL: URL,
         configuration: ImageHostingSettings,
-        credential: String?
+        credential: String?,
+        onProgress: @escaping @Sendable (ImageHostingUploadProgress) -> Void = { _ in }
     ) async throws -> CloudUploadResult {
         guard configuration.isEnabled else { throw ImageHostingError.notConfigured }
         guard configuration.isRepositoryValid else { throw ImageHostingError.invalidRepository }
@@ -434,11 +598,21 @@ struct ImageHostingUploadClient: @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.upload(for: request, fromFile: bodyURL)
+            (data, response) = try await ImageHostingFileUploadOperation(
+                session: session,
+                request: request,
+                bodyURL: bodyURL,
+                onProgress: { fraction in
+                    onProgress(.uploading(fraction: fraction))
+                }
+            ).run()
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ImageHostingError.requestFailed(error.localizedDescription)
         }
 
+        onProgress(.finalizing)
         try validate(response: response, body: data)
         let fallbackURL = rawURL(
             provider: configuration.provider,
@@ -681,7 +855,10 @@ final class CloudManager: ObservableObject {
         return removed
     }
 
-    func upload(fileURL: URL) async throws -> CloudUploadResult {
+    func upload(
+        fileURL: URL,
+        onProgress: @escaping @Sendable (ImageHostingUploadProgress) -> Void = { _ in }
+    ) async throws -> CloudUploadResult {
         let configuration = settings
         guard configuration.isConfigured else {
             let error = ImageHostingError.notConfigured
@@ -694,7 +871,8 @@ final class CloudManager: ObservableObject {
                 try await ImageHostingUploadClient().upload(
                     fileURL: fileURL,
                     configuration: configuration,
-                    credential: credential
+                    credential: credential,
+                    onProgress: onProgress
                 )
             }.value
             hasCredential = ImageHostingCredentialStore.load(for: configuration.provider) != nil
