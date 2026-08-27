@@ -253,6 +253,27 @@ struct SnapzyCaptureTests {
         #expect(SnapzyAreaSelectionController.shared.isPresenting)
     }
 
+    @Test @MainActor func activeSelectionPanelUsesOneCombinedPresentationStep() throws {
+        _ = NSApplication.shared
+        guard !NSScreen.screens.isEmpty else { return }
+
+        let controller = SnapzyAreaSelectionController.shared
+        controller.cancelSelection()
+        defer { controller.cancelSelection() }
+
+        _ = controller.startSelection { _ in }
+        let pointer = NSEvent.mouseLocation
+        let activeWindow = controller.testWindows.first(where: { $0.frame.contains(pointer) })
+            ?? controller.testWindows.first
+        let events = try #require(activeWindow?.testPresentationEvents)
+
+        // Showing the active panel with separate orderFront + makeKey calls
+        // creates an extra WindowServer composition step in the shortcut's
+        // first run-loop turn and is the source of the initial screen flash.
+        #expect(events.first == "makeKeyAndOrderFront")
+        #expect(!events.contains("orderFrontRegardless"))
+    }
+
     @Test @MainActor func postSelectionToolbarStaysAnchoredToTheSelectedFrame() throws {
         _ = NSApplication.shared
         guard let screen = NSScreen.main else { return }
@@ -460,6 +481,44 @@ struct SnapzyCaptureTests {
             showsActions: false,
             actionHandler: { _ in }
         )
+        #expect(window.overlayView.testSnapshotLayer.contents == nil)
+    }
+
+    @Test @MainActor func lateBackdropDoesNotSwapTheVisibleResultState() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main, let displayID = screen.displayID else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+
+        let selectionRect = CGRect(
+            x: screen.frame.minX + 100,
+            y: screen.frame.minY + 100,
+            width: 160,
+            height: 120
+        )
+        window.overlayView.showSelectionResult(
+            screenRect: selectionRect,
+            showsActions: true,
+            actionHandler: { _ in }
+        )
+
+        window.overlayView.applyBackdrop(
+            AreaSelectionBackdrop(
+                displayID: displayID,
+                image: image(width: 320, height: 240),
+                scaleFactor: 1
+            )
+        )
+
+        // A capture that finishes after the quick drag must not replace the
+        // already-visible result frame. That full-screen layer swap is the
+        // remaining shortcut-start flash.
+        #expect(window.overlayView.testSnapshotLayer.contents == nil)
+
+        // The deferred frame is still available for the next selection once
+        // the result state has been dismissed at a stable transition point.
+        window.overlayView.hideSelectionResult()
         #expect(window.overlayView.testSnapshotLayer.contents != nil)
     }
 

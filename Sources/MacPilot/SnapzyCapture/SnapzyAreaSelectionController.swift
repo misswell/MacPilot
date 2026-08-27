@@ -46,6 +46,10 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
 
     var isPresenting: Bool { !windows.isEmpty }
 
+    #if DEBUG
+      var testWindows: [AreaSelectionWindow] { windows }
+    #endif
+
     @discardableResult
     func startSelection(
         mode: SelectionMode = .screenshot,
@@ -111,15 +115,16 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             }
         }
 
-        for window in windows {
-            window.orderFrontRegardless()
-        }
         let pointer = NSEvent.mouseLocation
         let activeWindow = windows.first(where: { $0.frame.contains(pointer) }) ?? windows.first
-        // Every panel is already ordered above.  Only transfer key status here;
-        // ordering the active panel a second time is the last remaining source
-        // of a visible shortcut-start flash on some macOS window servers.
-        activeWindow?.makeKey()
+        // Order the non-active display panels first, then present the panel
+        // under the pointer with one combined order+key operation. Keeping
+        // those operations together avoids a WindowServer composition frame
+        // where the shortcut overlay is visible but not yet the key window.
+        for window in windows where window !== activeWindow {
+            window.orderFrontRegardless()
+        }
+        activeWindow?.makeKeyAndOrderFront(nil)
         activeWindow?.activateKeyboardInputIfNeeded()
         NSCursor.crosshair.set()
         return sessionID

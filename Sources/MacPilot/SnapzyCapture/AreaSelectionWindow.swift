@@ -38,6 +38,25 @@ final class AreaSelectionWindow: NSPanel {
   private let targetScreen: NSScreen
   private var receivesKeyboardInput = false
 
+  #if DEBUG
+    private(set) var testPresentationEvents: [String] = []
+
+    override func orderFrontRegardless() {
+      testPresentationEvents.append("orderFrontRegardless")
+      super.orderFrontRegardless()
+    }
+
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+      testPresentationEvents.append("makeKeyAndOrderFront")
+      super.makeKeyAndOrderFront(sender)
+    }
+
+    override func makeKey() {
+      testPresentationEvents.append("makeKey")
+      super.makeKey()
+    }
+  #endif
+
   /// Initialize window for a screen
   /// - Parameters:
   ///   - screen: The screen this window covers
@@ -819,6 +838,9 @@ final class AreaSelectionOverlayView: NSView {
   /// Switches the overlay from the drag state to PixPin's post-selection
   /// state.  The backdrop and dim mask stay in place, while the crosshair and
   /// magnifier are replaced by a blue border, resize handles and action bars.
+  /// A backdrop that arrives after the drag is kept pending until this result
+  /// state is dismissed, so the full-display layer never swaps underneath a
+  /// visible selection result.
   func showSelectionResult(
     screenRect: CGRect,
     showsActions: Bool,
@@ -832,10 +854,6 @@ final class AreaSelectionOverlayView: NSView {
     finalizedSelectionDrag = nil
     finalizedSelectionRect = convertToLocalRect(screenRect).intersection(bounds)
     pendingSelectionStartPoint = nil
-    if let pendingBackdrop {
-      self.pendingBackdrop = nil
-      installBackdrop(pendingBackdrop)
-    }
     hideMagnifier()
     hideSizeIndicator()
     crosshairIndicatorLayer.isHidden = true
@@ -972,8 +990,23 @@ final class AreaSelectionOverlayView: NSView {
     selectionBorderLayer.isHidden = true
     dimLayer.mask = nil
     insideSelectionOverlayLayer.isHidden = true
+    // A backdrop that arrived while the result toolbar was visible must not
+    // be installed from `applyBackdrop` in that visible state: swapping a
+    // full-display layer behind the toolbar causes the shortcut-start flash.
+    // The next selection is a stable point at which the frozen frame can be
+    // installed before interaction resumes.
+    installPendingBackdropIfPossible()
     refreshInteractionState()
     refreshActiveCursor()
+  }
+
+  private func installPendingBackdropIfPossible() {
+    guard !isSelecting,
+          finalizedSelectionDrag == nil,
+          !isShowingSelectionActions,
+          let pendingBackdrop else { return }
+    self.pendingBackdrop = nil
+    installBackdrop(pendingBackdrop)
   }
 
   private func removeSelectionActionBars() {
@@ -1299,7 +1332,7 @@ final class AreaSelectionOverlayView: NSView {
   }
 
   func applyBackdrop(_ backdrop: AreaSelectionBackdrop, animated: Bool = false) {
-    if isSelecting || finalizedSelectionDrag != nil {
+    if isSelecting || finalizedSelectionDrag != nil || isShowingSelectionActions {
       pendingBackdrop = backdrop
       return
     }
