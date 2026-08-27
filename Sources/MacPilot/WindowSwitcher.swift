@@ -155,9 +155,23 @@ enum WindowSwitcherActivationRouting {
         // MacPilot's own windows are part of the inventory, so the app itself
         // must follow the same activation path as every other application.
         guard applicationProcessID > 0,
-              let fallbackID = candidateWindowIDs.first else { return nil }
-        guard candidateWindowIDs.count > 1 else { return fallbackID }
-        return focusedWindowID ?? fallbackID
+              let firstCandidateID = candidateWindowIDs.first else { return nil }
+        // A single window is unambiguous. For multiple windows, a transient
+        // WindowServer order is not evidence that a particular window was
+        // activated; only an authoritative focused-window ID may promote it.
+        guard candidateWindowIDs.count > 1 else { return firstCandidateID }
+        guard let focusedWindowID,
+              candidateWindowIDs.contains(focusedWindowID) else { return nil }
+        return focusedWindowID
+    }
+
+    static func newlyObservedWindowID(
+        applicationProcessID: pid_t,
+        candidateWindowIDs: [String],
+        newlyObservedWindowIDs: Set<String>
+    ) -> String? {
+        guard applicationProcessID > 0 else { return nil }
+        return candidateWindowIDs.first(where: newlyObservedWindowIDs.contains)
     }
 }
 
@@ -239,6 +253,17 @@ private enum WindowSwitcherWindowIdentityMatching {
             result.append((previous: candidate.previousIndex, current: candidate.currentIndex))
         }
         return result
+    }
+
+    static func recreatedCurrentIDs(
+        previous: [WindowSwitcherWindowIdentity],
+        current: [WindowSwitcherWindowIdentity]
+    ) -> Set<String> {
+        Set(matches(previous: previous, current: current).compactMap { match in
+            let previousWindow = previous[match.previous]
+            let currentWindow = current[match.current]
+            return previousWindow.id == currentWindow.id ? nil : currentWindow.id
+        })
     }
 
     private static func frameDistance(_ lhs: CGRect?, _ rhs: CGRect?) -> CGFloat {
@@ -984,6 +1009,21 @@ private func windowSwitcherEventTapCallback(
     return handled ? nil : Unmanaged.passUnretained(event)
 }
 
+private func windowSwitcherFocusedWindowCallback(
+    _ observer: AXObserver,
+    _ element: AXUIElement,
+    _ notification: CFString,
+    _ refcon: UnsafeMutableRawPointer?
+) {
+    guard let refcon else { return }
+    var processID: pid_t = 0
+    AXUIElementGetPid(element, &processID)
+    let owner = Unmanaged<WindowSwitcherModel>.fromOpaque(refcon).takeUnretainedValue()
+    Task { @MainActor in
+        owner.handleFocusedWindowChanged(processID)
+    }
+}
+
 // MARK: - Runtime model
 
 private struct WindowSwitcherPendingSession {
@@ -1079,7 +1119,11 @@ private struct WindowSwitcherInventoryRefresh: Sendable {
 }
 
 private enum WindowSwitcherFocusedWindowResolver {
-    static func resolve(processID: pid_t, candidates: [WindowSwitcherItem]) -> String? {
+    static func resolve(
+        processID: pid_t,
+        candidates: [WindowSwitcherItem],
+        fallbackWindowID: String?
+    ) -> String? {
         let appElement = AXUIElementCreateApplication(processID)
         AXUIElementSetMessagingTimeout(appElement, 0.1)
         var focusedWindowValue: CFTypeRef?
@@ -1087,10 +1131,10 @@ private enum WindowSwitcherFocusedWindowResolver {
             appElement,
             kAXFocusedWindowAttribute as CFString,
             &focusedWindowValue
-        ) == .success else { return candidates.first?.id }
+        ) == .success else { return fallbackWindowID }
         guard let focusedWindowValue,
               CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID() else {
-            return candidates.first?.id
+            return fallbackWindowID
         }
         let focusedWindow = focusedWindowValue as! AXUIElement
         AXUIElementSetMessagingTimeout(focusedWindow, 0.1)
@@ -1121,7 +1165,7 @@ private enum WindowSwitcherFocusedWindowResolver {
         let hasSize = sizeValue.map {
             CFGetTypeID($0) == AXValueGetTypeID() && AXValueGetValue($0 as! AXValue, .cgSize, &size)
         } ?? false
-        guard hasPosition, hasSize else { return candidates.first?.id }
+        guard hasPosition, hasSize else { return fallbackWindowID }
         let frame = CGRect(origin: position, size: size)
         return candidates
             .compactMap { item -> (WindowSwitcherItem, CGFloat)? in
@@ -1129,7 +1173,7 @@ private enum WindowSwitcherFocusedWindowResolver {
                 return (item, frameDistance(frame, itemFrame))
             }
             .min { $0.1 < $1.1 }?
-            .0.id ?? candidates.first?.id
+            .0.id ?? fallbackWindowID
     }
 
     private static func frameDistance(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
@@ -1194,6 +1238,7 @@ final class WindowSwitcherModel: ObservableObject {
     private var eventTapSource: CFRunLoopSource?
     private var eventTapContext: WindowSwitcherEventTapContext?
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var focusObservers: [pid_t: AXObserver] = [:]
     private var manualDismissTask: Task<Void, Never>?
     private var panelController: WindowSwitcherPanelController?
     private var mouseSelectionEnabled = true
@@ -1222,6 +1267,8 @@ final class WindowSwitcherModel: ObservableObject {
     func applyLoadedSettings(_ settings: WindowSwitcherSettings) {
         self.settings = settings
         cachedWindows = []
+        previousSnapshotWindowIDs.removeAll(keepingCapacity: false)
+        removeFocusObservers()
         if !settings.showThumbnails || settings.showIconsOnly {
             cancelThumbnailRefresh()
             clearThumbnailCache()
@@ -1300,8 +1347,10 @@ final class WindowSwitcherModel: ObservableObject {
         cancelThumbnailRefresh()
         removeEventTap()
         removeWorkspaceObservers()
+        removeFocusObservers()
         clearThumbnailCache()
         cachedWindows.removeAll(keepingCapacity: false)
+        previousSnapshotWindowIDs.removeAll(keepingCapacity: false)
         recentWindowIDs.removeAll(keepingCapacity: false)
         inventorySignature = nil
         _ = updatePanelContents([], selectedIndex: nil)
@@ -1360,13 +1409,21 @@ final class WindowSwitcherModel: ObservableObject {
             ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         )
         refreshEventTap()
-        if hasAccessibilityPermission { requestInventoryRefresh(priority: .userInitiated) }
+        if hasAccessibilityPermission {
+            requestInventoryRefresh(priority: .userInitiated)
+        } else {
+            removeFocusObservers()
+        }
     }
 
     func refreshPermissionStatus() {
         hasAccessibilityPermission = AXIsProcessTrusted()
         refreshEventTap()
-        if hasAccessibilityPermission { requestInventoryRefresh(priority: .utility) }
+        if hasAccessibilityPermission {
+            requestInventoryRefresh(priority: .utility)
+        } else {
+            removeFocusObservers()
+        }
     }
 
     func openAccessibilitySettings() {
@@ -1494,7 +1551,6 @@ final class WindowSwitcherModel: ObservableObject {
         guard isRuntimeActive else { return false }
         guard !isShowing else { return true }
         let startedAt = CFAbsoluteTimeGetCurrent()
-        promoteFrontmostWindow(in: cachedWindows)
         let snapshot = orderedForSession(cachedWindows)
         DiagnosticLog.write(
             "WindowSwitcher",
@@ -1677,6 +1733,8 @@ final class WindowSwitcherModel: ObservableObject {
 
     private func scheduleFocus(_ item: WindowSwitcherItem) {
         focusTask?.cancel()
+        focusedWindowResolutionTask?.cancel()
+        focusedWindowResolutionTask = nil
         let targetProcessID = item.processID
         guard targetProcessID > 0 else { return }
         noteWindowActivation(item.id)
@@ -1738,11 +1796,15 @@ final class WindowSwitcherModel: ObservableObject {
         activationConfirmTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(800))
             guard !Task.isCancelled, let self else { return }
-            guard let candidate = self.activationCandidate,
-                  let frontmost = NSWorkspace.shared.frontmostApplication,
-                  candidate.processIdentifier == frontmost.processIdentifier else { return }
+            guard let candidate = self.activationCandidate else { return }
+            guard let frontmost = NSWorkspace.shared.frontmostApplication,
+                  candidate.processIdentifier == frontmost.processIdentifier else {
+                self.activationCandidate = nil
+                return
+            }
             DiagnosticLog.write("WindowSwitcher", "Confirmed foreground: \(candidate.localizedName ?? "?")")
             self.noteApplicationActivation(candidate)
+            self.activationCandidate = nil
         }
     }
 
@@ -1752,56 +1814,117 @@ final class WindowSwitcherModel: ObservableObject {
         workspaceObservers.removeAll(keepingCapacity: false)
     }
 
-    private func noteApplicationActivation(_ application: NSRunningApplication?) {
-        guard let processID = application?.processIdentifier else { return }
+    fileprivate func handleFocusedWindowChanged(_ processID: pid_t) {
+        guard isRuntimeActive,
+              !isShowing,
+              processID > 0,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == processID,
+              activationCandidate?.processIdentifier != processID else { return }
         let candidates = cachedWindows.filter { $0.processID == processID }
-        guard let promotedWindowID = WindowSwitcherActivationRouting.promotedWindowID(
-            applicationProcessID: processID,
-            candidateWindowIDs: candidates.map(\.id),
-            // WindowServer returns windows front-to-back. Use that cheap hint
-            // immediately and correct it asynchronously for apps whose AX
-            // ordering differs.
-            focusedWindowID: candidates.first?.id
-        ) else { return }
-        noteWindowActivation(promotedWindowID)
-        if candidates.count > 1 {
-            DiagnosticLog.write(
-                "WindowSwitcher",
-                "Promoting window \(promotedWindowID) for \(application?.localizedName ?? "?")"
+        guard !candidates.isEmpty else {
+            requestInventoryRefresh(priority: .utility)
+            return
+        }
+        guard candidates.count > 1 else {
+            noteWindowActivation(candidates[0].id)
+            return
+        }
+        scheduleFocusedWindowCorrection(
+            processID: processID,
+            candidates: candidates,
+            fallbackWindowID: nil,
+            applicationName: candidates[0].appName
+        )
+    }
+
+    private func updateFocusObservers(for items: [WindowSwitcherItem]) {
+        guard hasAccessibilityPermission else {
+            removeFocusObservers()
+            return
+        }
+        let processIDs = Set(items.map(\.processID).filter { $0 > 0 })
+        for processID in Array(focusObservers.keys) where !processIDs.contains(processID) {
+            removeFocusObserver(processID)
+        }
+
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        for processID in processIDs where focusObservers[processID] == nil {
+            var observer: AXObserver?
+            guard AXObserverCreate(processID, windowSwitcherFocusedWindowCallback, &observer) == .success,
+                  let observer else { continue }
+            let application = AXUIElementCreateApplication(processID)
+            let focusedResult = AXObserverAddNotification(
+                observer,
+                application,
+                kAXFocusedWindowChangedNotification as CFString,
+                refcon
             )
-            Self.activationLogger.info(
-                "Promoting \(application?.localizedName ?? "?") window \(promotedWindowID, privacy: .public)"
+            let mainResult = AXObserverAddNotification(
+                observer,
+                application,
+                kAXMainWindowChangedNotification as CFString,
+                refcon
             )
-            scheduleFocusedWindowCorrection(
-                processID: processID,
-                candidates: candidates,
-                fallbackWindowID: promotedWindowID,
-                applicationName: application?.localizedName ?? "?"
-            )
+            guard focusedResult == .success || mainResult == .success else { continue }
+            CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+            focusObservers[processID] = observer
         }
     }
 
-    /// The frontmost window is always the first MRU item. This also catches
-    /// windows created by an already-running application: the workspace may
-    /// report the application activation before the new window enters the
-    /// inventory, so the next inventory snapshot is the authoritative point
-    /// where we resolve the focused window.
-    private func promoteFrontmostWindow(in items: [WindowSwitcherItem]) {
+    private func removeFocusObserver(_ processID: pid_t) {
+        guard let observer = focusObservers.removeValue(forKey: processID) else { return }
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+    }
+
+    private func removeFocusObservers() {
+        for processID in Array(focusObservers.keys) {
+            removeFocusObserver(processID)
+        }
+    }
+
+    private func noteApplicationActivation(_ application: NSRunningApplication?) {
+        guard let processID = application?.processIdentifier else { return }
+        let candidates = cachedWindows.filter { $0.processID == processID }
+        guard !candidates.isEmpty else { return }
+        if candidates.count == 1 {
+            noteWindowActivation(candidates[0].id)
+            return
+        }
+
+        // Application activation identifies the process, not its window. Do
+        // not use the transient WindowServer order as a guess: resolve the
+        // focused AX window first, then record exactly that window.
+        scheduleFocusedWindowCorrection(
+            processID: processID,
+            candidates: candidates,
+            fallbackWindowID: nil,
+            applicationName: application?.localizedName ?? "?"
+        )
+    }
+
+    /// A newly created window in the already-frontmost application is an
+    /// activation signal even when the workspace activation notification was
+    /// emitted before that window entered the inventory. Existing windows are
+    /// deliberately excluded so content/input refreshes cannot rewrite MRU.
+    private func promoteNewFrontmostWindow(
+        in items: [WindowSwitcherItem],
+        newlyObservedWindowIDs: Set<String>
+    ) {
         guard !isShowing,
+              !newlyObservedWindowIDs.isEmpty,
               let application = NSWorkspace.shared.frontmostApplication else { return }
         let candidates = items.filter { $0.processID == application.processIdentifier }
-        guard let promotedWindowID = WindowSwitcherActivationRouting.promotedWindowID(
+        guard let promotedWindowID = WindowSwitcherActivationRouting.newlyObservedWindowID(
             applicationProcessID: application.processIdentifier,
             candidateWindowIDs: candidates.map(\.id),
-            // WindowServer snapshots are front-to-back. AX only corrects the
-            // cheap synchronous hint below, outside the shortcut hot path.
-            focusedWindowID: candidates.first?.id
+            newlyObservedWindowIDs: newlyObservedWindowIDs
         ) else { return }
         noteWindowActivation(promotedWindowID)
-        if candidates.count > 1 {
+        let newlyObservedCandidates = candidates.filter { newlyObservedWindowIDs.contains($0.id) }
+        if newlyObservedCandidates.count > 1 {
             scheduleFocusedWindowCorrection(
                 processID: application.processIdentifier,
-                candidates: candidates,
+                candidates: newlyObservedCandidates,
                 fallbackWindowID: promotedWindowID,
                 applicationName: application.localizedName ?? "?"
             )
@@ -1811,7 +1934,7 @@ final class WindowSwitcherModel: ObservableObject {
     private func scheduleFocusedWindowCorrection(
         processID: pid_t,
         candidates: [WindowSwitcherItem],
-        fallbackWindowID: String,
+        fallbackWindowID: String?,
         applicationName: String
     ) {
         focusedWindowResolutionTask?.cancel()
@@ -1819,7 +1942,8 @@ final class WindowSwitcherModel: ObservableObject {
             let focusedWindowID = await Task.detached(priority: .utility) {
                 WindowSwitcherFocusedWindowResolver.resolve(
                     processID: processID,
-                    candidates: candidates
+                    candidates: candidates,
+                    fallbackWindowID: fallbackWindowID
                 )
             }.value
             guard !Task.isCancelled,
@@ -1850,29 +1974,41 @@ final class WindowSwitcherModel: ObservableObject {
     /// Newly appearing windows (just launched apps, or windows that reappeared
     /// in a refreshed snapshot) are recorded after already-known recency. A
     /// refresh must never outrank a window the user just activated.
+    @discardableResult
     private func recordNewWindows(
         _ snapshot: [WindowSwitcherItem],
         previousWindows: [WindowSwitcherItem]
-    ) {
+    ) -> Set<String> {
         let currentIDs = Set(snapshot.map(\.id))
-        let newIDs = currentIDs.subtracting(previousSnapshotWindowIDs)
-        if !newIDs.isEmpty {
-            if newIDs.count <= 8 {
+        let observedIDs = currentIDs.subtracting(previousSnapshotWindowIDs)
+        let previousIdentities = previousWindows.map(\.windowIdentity)
+        let snapshotIdentities = snapshot.map(\.windowIdentity)
+        let recreatedIDs = WindowSwitcherWindowIdentityMatching.recreatedCurrentIDs(
+            previous: previousIdentities,
+            current: snapshotIdentities
+        )
+        let newIDs = observedIDs.subtracting(recreatedIDs)
+        if !observedIDs.isEmpty {
+            if !newIDs.isEmpty, newIDs.count <= 8 {
                 let names = snapshot.filter { newIDs.contains($0.id) }.map(\.appName)
                 DiagnosticLog.write("WindowSwitcher", "Recording newly observed windows after existing recency: \(names.joined(separator: ", "))")
                 Self.windowSwitcherLogger.info("Recording newly observed windows after existing recency: \(names.joined(separator: ", "))")
-            } else {
-                DiagnosticLog.write("WindowSwitcher", "Recording \(newIDs.count) newly observed windows after existing recency")
-                Self.windowSwitcherLogger.info("Recording \(newIDs.count) newly observed windows after existing recency")
+            } else if !newIDs.isEmpty {
+                DiagnosticLog.write("WindowSwitcher", "Recording \(newIDs.count) newly observed windows after existing recency (\(recreatedIDs.count) recreated)")
+                Self.windowSwitcherLogger.info("Recording \(newIDs.count) newly observed windows after existing recency (\(recreatedIDs.count) recreated)")
+            }
+            if !recreatedIDs.isEmpty {
+                Self.windowSwitcherLogger.info("Rebound \(recreatedIDs.count) recreated window surface(s) without changing MRU")
             }
             recentWindowIDs = WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
                 recentIDs: recentWindowIDs,
                 previousIDs: previousSnapshotWindowIDs,
-                previousWindows: previousWindows.map(\.windowIdentity),
-                snapshotWindows: snapshot.map(\.windowIdentity)
+                previousWindows: previousIdentities,
+                snapshotWindows: snapshotIdentities
             )
         }
         previousSnapshotWindowIDs = currentIDs
+        return newIDs
     }
 
     private func orderedForSession(_ items: [WindowSwitcherItem]) -> [WindowSwitcherItem] {
@@ -1964,8 +2100,15 @@ final class WindowSwitcherModel: ObservableObject {
                     }
                     self.cachedWindows = snapshot
                     self.restoreCachedPreviews(to: snapshot)
-                    self.recordNewWindows(snapshot, previousWindows: previousWindows)
-                    self.promoteFrontmostWindow(in: snapshot)
+                    self.updateFocusObservers(for: snapshot)
+                    let newlyObservedWindowIDs = self.recordNewWindows(
+                        snapshot,
+                        previousWindows: previousWindows
+                    )
+                    self.promoteNewFrontmostWindow(
+                        in: snapshot,
+                        newlyObservedWindowIDs: newlyObservedWindowIDs
+                    )
                 }
                 if let pending = self.pendingSession {
                     self.pendingSession = nil

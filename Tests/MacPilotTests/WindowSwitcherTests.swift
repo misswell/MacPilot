@@ -198,6 +198,29 @@ struct WindowSwitcherTests {
         ) == "window-macpilot")
     }
 
+    @Test func missingFocusedWindowDoesNotPromoteAnExistingMultiWindowApplication() {
+        #expect(WindowSwitcherActivationRouting.promotedWindowID(
+            applicationProcessID: 100,
+            candidateWindowIDs: ["browser-a1", "browser-a2"],
+            focusedWindowID: nil
+        ) == nil)
+    }
+
+    @Test func inventoryPromotionOnlyConsidersNewlyObservedWindows() {
+        let candidates = ["browser-a1", "browser-a2"]
+
+        #expect(WindowSwitcherActivationRouting.newlyObservedWindowID(
+            applicationProcessID: 100,
+            candidateWindowIDs: candidates,
+            newlyObservedWindowIDs: []
+        ) == nil)
+        #expect(WindowSwitcherActivationRouting.newlyObservedWindowID(
+            applicationProcessID: 100,
+            candidateWindowIDs: candidates,
+            newlyObservedWindowIDs: ["browser-a2"]
+        ) == "browser-a2")
+    }
+
     @Test func previewingIdeaWindowDoesNotPromoteItBeforeCommit() {
         let recentIDs = ["zed", "idea-secondary", "idea-primary"]
 
@@ -209,6 +232,100 @@ struct WindowSwitcherTests {
             recentIDs: recentIDs,
             windowID: "idea-primary"
         ) == ["idea-primary", "zed", "idea-secondary"])
+    }
+
+    @Test func editingTheActiveWindowDoesNotChangeCommittedWindowOrder() {
+        let initialOrder = ["text-b1", "browser-a1", "browser-a2"]
+        let afterSelection = WindowSwitcherRecentWindowIDs.afterCommittedSelection(
+            recentIDs: initialOrder,
+            windowID: "browser-a1"
+        )
+        #expect(afterSelection == ["browser-a1", "text-b1", "browser-a2"])
+
+        let afterRefresh = WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
+            recentIDs: afterSelection,
+            previousIDs: Set(initialOrder),
+            // WindowServer may report a different order after content/input
+            // activity, but no window was activated or created.
+            snapshotIDs: ["browser-a2", "browser-a1", "text-b1"]
+        )
+        #expect(afterRefresh == afterSelection)
+    }
+
+    @Test func editingTheActiveWindowDoesNotChangeOrderAfterIdentityRefresh() {
+        let frame = CGRect(x: 40, y: 80, width: 900, height: 640)
+        let initialOrder = ["text-b1", "browser-a1", "browser-a2"]
+        let afterSelection = WindowSwitcherRecentWindowIDs.afterCommittedSelection(
+            recentIDs: initialOrder,
+            windowID: "browser-a1"
+        )
+        let previousWindows = [
+            WindowSwitcherWindowIdentity(
+                id: "text-b1",
+                processID: 20,
+                windowNumber: 20,
+                title: "Notes",
+                frame: frame
+            ),
+            WindowSwitcherWindowIdentity(
+                id: "browser-a1",
+                processID: 10,
+                windowNumber: 10,
+                title: "Form",
+                frame: frame
+            ),
+            WindowSwitcherWindowIdentity(
+                id: "browser-a2",
+                processID: 10,
+                windowNumber: 11,
+                title: "Dashboard",
+                frame: frame
+            )
+        ]
+        let refreshedWindows = [
+            WindowSwitcherWindowIdentity(
+                id: "browser-a2",
+                processID: 10,
+                windowNumber: 11,
+                title: "Dashboard",
+                frame: frame
+            ),
+            WindowSwitcherWindowIdentity(
+                id: "browser-a1",
+                processID: 10,
+                windowNumber: 10,
+                title: "Form — edited",
+                frame: frame
+            ),
+            WindowSwitcherWindowIdentity(
+                id: "text-b1",
+                processID: 20,
+                windowNumber: 20,
+                title: "Notes",
+                frame: frame
+            )
+        ]
+
+        let afterRefresh = WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
+            recentIDs: afterSelection,
+            previousIDs: Set(initialOrder),
+            previousWindows: previousWindows,
+            snapshotWindows: refreshedWindows
+        )
+
+        #expect(afterRefresh == afterSelection)
+    }
+
+    @Test func activatingAnotherWindowInTheSameApplicationMovesOnlyThatWindowToFront() {
+        let afterFirstSelection = WindowSwitcherRecentWindowIDs.afterCommittedSelection(
+            recentIDs: ["text-b1", "browser-a1", "browser-a2"],
+            windowID: "browser-a1"
+        )
+
+        #expect(WindowSwitcherRecentWindowIDs.afterCommittedSelection(
+            recentIDs: afterFirstSelection,
+            windowID: "browser-a2"
+        ) == ["browser-a2", "browser-a1", "text-b1"])
     }
 
     @Test func newlySeenWindowsDoNotDisplaceCommittedRecency() {
