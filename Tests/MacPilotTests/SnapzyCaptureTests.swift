@@ -704,4 +704,58 @@ struct SnapzyCaptureTests {
 
         window.overlayView.handleLivePassthroughMouseUp(atScreenPoint: end)
     }
+
+    @Test @MainActor func smartElementRecognitionCannotOverwriteManualDragFrame() async throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+
+        let elementRect = CGRect(
+            x: screen.frame.minX + 420,
+            y: screen.frame.minY + 300,
+            width: 120,
+            height: 90
+        )
+        window.overlayView.setElementTargetResolver { _ in elementRect }
+        window.overlayView.setInteractionMode(.smartElement)
+        window.overlayView.setLivePassthroughInputEnabled(true)
+
+        let start = CGPoint(
+            x: screen.frame.minX + 100,
+            y: screen.frame.minY + 100
+        )
+        let end = CGPoint(
+            x: screen.frame.minX + 220,
+            y: screen.frame.minY + 180
+        )
+
+        // Finish the initial delayed hover resolution so the mouse-down below
+        // schedules the same-element follow-up that used to race the drag.
+        window.overlayView.handleLivePassthroughMouseMoved(atScreenPoint: start)
+        try await Task.sleep(for: .milliseconds(120))
+
+        window.overlayView.handleLivePassthroughMouseDown(atScreenPoint: start)
+        window.overlayView.handleLivePassthroughMouseDragged(atScreenPoint: end)
+
+        let expectedRect = CGRect(
+            x: start.x - screen.frame.minX,
+            y: start.y - screen.frame.minY,
+            width: end.x - start.x,
+            height: end.y - start.y
+        )
+        window.overlayView.renderManualSelection(
+            screenRect: CGRect(x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y),
+            currentScreenPoint: end
+        )
+        #expect(window.overlayView.testSelectionBorderPathBounds == expectedRect)
+
+        // The pending AX follow-up must not replace the manual frame with the
+        // earlier element preview after the drag has crossed its threshold.
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(window.overlayView.testSelectionBorderPathBounds == expectedRect)
+
+        window.overlayView.handleLivePassthroughMouseUp(atScreenPoint: end)
+    }
 }

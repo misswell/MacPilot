@@ -306,6 +306,10 @@ final class AreaSelectionOverlayView: NSView {
   private var lastElementHoverPoint: CGPoint?
   private var pendingElementHoverWork: DispatchWorkItem?
   private var elementHoverFollowUpDepth = 0
+  /// Generation used to invalidate already queued AX hover callbacks. A
+  /// cancelled DispatchWorkItem may still be delivered by GCD, so cancellation
+  /// alone is not enough when a smart-element drag becomes a manual drag.
+  private var elementHoverGeneration: UInt = 0
   /// Smart-element mode keeps the AX hover preview, but once the pointer
   /// moves far enough it must behave like a normal frame drag so F1 can still
   /// draw an arbitrary rectangle.  A small movement threshold keeps a pure
@@ -736,8 +740,7 @@ final class AreaSelectionOverlayView: NSView {
     removeEmbeddedAnnotationEditor()
     hoveredWindowCandidate = nil
     hoveredElementRect = nil
-    pendingElementHoverWork?.cancel()
-    pendingElementHoverWork = nil
+    invalidatePendingElementHoverWork()
     lastElementHoverPoint = nil
     elementHoverFollowUpDepth = 0
     smartElementDragStart = nil
@@ -847,6 +850,8 @@ final class AreaSelectionOverlayView: NSView {
     actionHandler: @escaping (AreaSelectionAction) -> Void
   ) {
     removeEmbeddedAnnotationEditor()
+    invalidatePendingElementHoverWork()
+    hoveredElementRect = nil
     isSelecting = false
     selectionEnabled = false
     isShowingSelectionActions = true
@@ -1571,6 +1576,10 @@ final class AreaSelectionOverlayView: NSView {
     var testCursorProxyLayer: CALayer {
       cursorProxyLayer
     }
+
+    var testSelectionBorderPathBounds: CGRect? {
+      selectionBorderLayer.path?.boundingBox
+    }
   #endif
 
   /// Initialize crosshair at current mouse position (called on activation)
@@ -2219,7 +2228,7 @@ final class AreaSelectionOverlayView: NSView {
       hoveredWindowCandidate = nil
       if !isSelecting {
         refreshElementHover()
-      } else {
+      } else if !smartElementDidDrag {
         updateElementSelectionLayers()
       }
     case .applicationWindow:
@@ -2297,9 +2306,13 @@ final class AreaSelectionOverlayView: NSView {
     guard immediately || isSelecting else {
       guard lastElementHoverPoint != screenPoint else { return }
       lastElementHoverPoint = screenPoint
-      pendingElementHoverWork?.cancel()
+      invalidatePendingElementHoverWork()
+      let generation = elementHoverGeneration
       let work = DispatchWorkItem { [weak self] in
-        guard let self else { return }
+        guard let self,
+              self.elementHoverGeneration == generation,
+              !self.smartElementDidDrag,
+              !self.isShowingSelectionActions else { return }
         self.pendingElementHoverWork = nil
         self.resolveElementHover(at: screenPoint, using: elementTargetResolver)
       }
@@ -2307,15 +2320,23 @@ final class AreaSelectionOverlayView: NSView {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
       return
     }
+    invalidatePendingElementHoverWork()
+    resolveElementHover(at: screenPoint, using: elementTargetResolver)
+  }
+
+  private func invalidatePendingElementHoverWork() {
+    elementHoverGeneration &+= 1
     pendingElementHoverWork?.cancel()
     pendingElementHoverWork = nil
-    resolveElementHover(at: screenPoint, using: elementTargetResolver)
   }
 
   private func resolveElementHover(
     at screenPoint: CGPoint,
     using resolver: @escaping (CGPoint) -> CGRect?
   ) {
+    guard interactionMode == .smartElement,
+          !smartElementDidDrag,
+          !isShowingSelectionActions else { return }
     let previous = hoveredElementRect
     let resolved = resolver(screenPoint)?.standardized
     hoveredElementRect = resolved.flatMap { $0.isEmpty ? nil : $0 }
@@ -2329,12 +2350,18 @@ final class AreaSelectionOverlayView: NSView {
        resolved == previous,
        elementHoverFollowUpDepth < 2 {
       elementHoverFollowUpDepth += 1
+      invalidatePendingElementHoverWork()
+      let generation = elementHoverGeneration
       let work = DispatchWorkItem { [weak self] in
-        guard let self, self.interactionMode == .smartElement, self.selectionEnabled else { return }
+        guard let self,
+              self.elementHoverGeneration == generation,
+              self.interactionMode == .smartElement,
+              self.selectionEnabled,
+              !self.smartElementDidDrag,
+              !self.isShowingSelectionActions else { return }
         self.pendingElementHoverWork = nil
         self.resolveElementHover(at: screenPoint, using: resolver)
       }
-      pendingElementHoverWork?.cancel()
       pendingElementHoverWork = work
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
     } else if resolved != previous {
@@ -2614,6 +2641,9 @@ final class AreaSelectionOverlayView: NSView {
         let dy = point.y - dragStart.y
         if hypot(dx, dy) >= Self.smartElementDragThreshold {
           smartElementDidDrag = true
+          invalidatePendingElementHoverWork()
+          hoveredElementRect = nil
+          elementHoverFollowUpDepth = 0
           delegate?.overlayView(self, manualSelectionBeganAt: dragStart)
         }
       }
@@ -2648,6 +2678,11 @@ final class AreaSelectionOverlayView: NSView {
       guard isSelecting, smartElementDragActive else { return }
       isSelecting = false
       let didDrag = smartElementDidDrag
+      if didDrag {
+        invalidatePendingElementHoverWork()
+        hoveredElementRect = nil
+        elementHoverFollowUpDepth = 0
+      }
       smartElementDragStart = nil
       smartElementDragActive = false
       smartElementDidDrag = false
