@@ -23,7 +23,7 @@ private final class RecordingUploadURLProtocol: URLProtocol {
     static let state = UploadProtocolState()
 
     override class func canInit(with request: URLRequest) -> Bool {
-        request.url?.host == "upload.example.test"
+        request.url?.host == "api.github.com" || request.url?.host == "gitee.com"
     }
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest {
@@ -34,25 +34,29 @@ private final class RecordingUploadURLProtocol: URLProtocol {
         let body = readBody()
         Self.state.record(request: request, body: body)
 
-        guard let url = request.url,
-              let response = HTTPURLResponse(
-                  url: url,
-                  statusCode: 200,
-                  httpVersion: nil,
-                  headerFields: ["Content-Type": "application/json"]
-              ) else {
-            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
             return
         }
 
+        let isFailure = url.path.contains("MacPilot-failure-")
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: isFailure ? 403 : 201,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+
         let responseBody: Data
-        if request.url?.path.hasPrefix("/failure-") == true {
-            responseBody = Data(#"{"success":false,"message":"quota exceeded"}"#.utf8)
-        } else if request.url?.path.hasPrefix("/piclist-") == true {
-            responseBody = Data(#"{"success":true,"result":["https://img.example.com/test.png"]}"#.utf8)
+        if isFailure {
+            responseBody = Data(#"{"message":"permission denied"}"#.utf8)
+        } else if url.path.contains("MacPilot-fallback-") {
+            responseBody = Data(#"{}"#.utf8)
+        } else if url.path.hasPrefix("/api/v5/") {
+            responseBody = Data(#"{"content":{"download_url":"https://gitee.com/octo/images/raw/main/screenshots/test.png"}}"#.utf8)
         } else {
-            responseBody = Data(#"{"result":["https://img.example.com/test.png"]}"#.utf8)
+            responseBody = Data(#"{"content":{"download_url":"https://raw.githubusercontent.com/octo/images/main/screenshots/test.png"}}"#.utf8)
         }
         client?.urlProtocol(self, didLoad: responseBody)
         client?.urlProtocolDidFinishLoading(self)
@@ -77,142 +81,245 @@ private final class RecordingUploadURLProtocol: URLProtocol {
 }
 
 struct ImageHostingTests {
-    @Test func imageHostingDefaultsToDisabledPicListLocalServer() {
+    @Test func imageHostingDefaultsToDisabledGitHub() {
         let settings = ImageHostingSettings()
 
         #expect(settings.isEnabled == false)
-        #expect(settings.uploadAfterCapture == false)
-        #expect(settings.provider == .picListServer)
-        #expect(settings.endpoint == "http://127.0.0.1:36677/upload")
-        #expect(settings.isEndpointValid)
+        #expect(settings.provider == .github)
+        #expect(settings.branch == "main")
+        #expect(settings.directory == "screenshots")
+        #expect(settings.isRepositoryValid == false)
+        #expect(settings.isConfigured == false)
     }
 
     @Test func imageHostingSettingsClampUnsafeValues() {
         let settings = ImageHostingSettings(
-            endpoint: "not a URL",
-            fileFieldName: "   ",
+            repositoryOwner: "  octo  ",
+            repositoryName: " images ",
+            branch: "main",
             timeoutSeconds: 0
         )
 
-        #expect(settings.fileFieldName == "files")
+        #expect(settings.repositoryOwner == "octo")
+        #expect(settings.repositoryName == "images")
         #expect(settings.timeoutSeconds == 5)
-        #expect(settings.isEndpointValid == false)
+        #expect(settings.isRepositoryValid)
     }
 
-    @Test func imageHostingSettingsDecodeWithoutNewFieldsUsesSafeDefaults() throws {
-        let settings = try JSONDecoder().decode(
-            ImageHostingSettings.self,
-            from: Data("{}".utf8)
+    @Test func imageHostingSettingsRejectPathTraversal() {
+        let settings = ImageHostingSettings(
+            isEnabled: true,
+            repositoryOwner: "octo",
+            repositoryName: "images",
+            branch: "feature/../private",
+            directory: "screenshots/../private"
         )
 
-        #expect(settings == ImageHostingSettings())
+        #expect(settings.isRepositoryValid == false)
+        #expect(settings.normalizedDirectory == "screenshots/private")
+
+        let validBranchSettings = ImageHostingSettings(
+            isEnabled: true,
+            repositoryOwner: "octo",
+            repositoryName: "images",
+            branch: "feature/screenshots",
+            directory: "screenshots"
+        )
+        #expect(validBranchSettings.isRepositoryValid)
     }
 
-    @Test func picListRequestSendsOnlyTheDiskPath() throws {
-        let fileURL = URL(fileURLWithPath: "/tmp/MacPilot screenshot.png")
-        let endpoint = try #require(URL(string: "http://127.0.0.1:36677/upload"))
-        let request = ImageHostingRequestFactory.picListRequest(
-            endpoint: endpoint,
-            fileURL: fileURL,
-            credential: "server-secret",
+    @Test func legacyImageHostingConfigurationFallsBackWithoutBreakingConfigLoad() throws {
+        let data = Data(#"{"isEnabled":true,"provider":"picListServer","endpoint":"http://127.0.0.1:36677/upload","uploadAfterCapture":true}"#.utf8)
+        let settings = try JSONDecoder().decode(ImageHostingSettings.self, from: data)
+
+        #expect(settings.provider == .github)
+        #expect(settings.isEnabled)
+        #expect(settings.repositoryOwner.isEmpty)
+        #expect(settings.repositoryName.isEmpty)
+        #expect(settings.isConfigured == false)
+    }
+
+    @Test func contentAPIRequestUsesProviderSpecificURLAndAuthentication() throws {
+        let githubRequest = ImageHostingRequestFactory.contentAPIRequest(
+            provider: .github,
+            owner: "octo",
+            repository: "images",
+            remotePath: "screenshots/test image.png",
+            credential: "github-secret",
             timeoutInterval: 30
         )
+        #expect(githubRequest.httpMethod == "PUT")
+        #expect(githubRequest.url?.absoluteString == "https://api.github.com/repos/octo/images/contents/screenshots/test%20image.png")
+        #expect(githubRequest.value(forHTTPHeaderField: "Authorization") == "Bearer github-secret")
+        #expect(githubRequest.value(forHTTPHeaderField: "X-GitHub-Api-Version") == "2022-11-28")
 
-        #expect(request.httpMethod == "POST")
-        #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
-        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer server-secret")
-        #expect(request.value(forHTTPHeaderField: "X-PicGo-Secret") == "server-secret")
-        #expect(URLComponents(url: try #require(request.url), resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "key" })?.value == "server-secret")
-        let body = try #require(request.httpBody)
-        let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: [String]])
-        #expect(object["list"] == [fileURL.path])
+        let giteeRequest = ImageHostingRequestFactory.contentAPIRequest(
+            provider: .gitee,
+            owner: "octo",
+            repository: "images",
+            remotePath: "screenshots/test.png",
+            credential: "gitee-secret",
+            timeoutInterval: 30
+        )
+        #expect(giteeRequest.url?.path == "/api/v5/repos/octo/images/contents/screenshots/test.png")
+        #expect(giteeRequest.value(forHTTPHeaderField: "Authorization") == "token gitee-secret")
     }
 
-    @Test func customMultipartUploadStreamsFileWithExpectedFormData() async throws {
+    @Test func remotePathUsesConfiguredDirectoryAndFreshUploadID() throws {
+        let settings = ImageHostingSettings(
+            repositoryOwner: "octo",
+            repositoryName: "images",
+            directory: "screenshots"
+        )
+        let fileURL = URL(fileURLWithPath: "/tmp/My screenshot.png")
+        let uploadID = try #require(UUID(uuidString: "01234567-89AB-CDEF-0123-456789ABCDEF"))
+        let path = settings.remotePath(for: fileURL, uploadID: uploadID)
+
+        #expect(path == "screenshots/My screenshot-0123456789AB.png")
+    }
+
+    @Test func githubUploadStreamsBase64ContentAndUsesReturnedRawURL() async throws {
         let sourceURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MacPilot-image-hosting-test-\(UUID().uuidString).png")
+            .appendingPathComponent("MacPilot-github-\(UUID().uuidString).png")
         let payload = Data("test-image-payload".utf8)
         try payload.write(to: sourceURL)
         defer { try? FileManager.default.removeItem(at: sourceURL) }
 
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [RecordingUploadURLProtocol.self]
-        let session = URLSession(configuration: sessionConfiguration)
-        let endpointPath = "/upload-\(UUID().uuidString)"
         let settings = ImageHostingSettings(
             isEnabled: true,
-            provider: .customMultipart,
-            endpoint: "https://upload.example.test\(endpointPath)",
-            fileFieldName: "image"
+            provider: .github,
+            repositoryOwner: "octo",
+            repositoryName: "images",
+            branch: "main",
+            directory: "screenshots"
         )
-
-        let result = try await ImageHostingUploadClient(session: session).upload(
-            fileURL: sourceURL,
-            configuration: settings,
-            credential: "multipart-secret"
-        )
-
-        let snapshot = try #require(RecordingUploadURLProtocol.state.snapshot(forPath: endpointPath))
-        let contentType = try #require(snapshot.request.value(forHTTPHeaderField: "Content-Type"))
-        let bodyText = try #require(String(data: snapshot.body, encoding: .utf8))
-
-        #expect(result.publicURL.absoluteString == "https://img.example.com/test.png")
-        #expect(snapshot.request.httpMethod == "POST")
-        #expect(contentType.hasPrefix("multipart/form-data; boundary=MacPilotBoundary-"))
-        #expect(snapshot.request.value(forHTTPHeaderField: "Authorization") == "Bearer multipart-secret")
-        #expect(bodyText.contains("name=\"image\"; filename=\"\(sourceURL.lastPathComponent)\""))
-        #expect(bodyText.contains("Content-Type: image/png"))
-        #expect(bodyText.contains("test-image-payload"))
-        #expect(bodyText.hasSuffix("\r\n"))
-    }
-
-    @Test func picListUploadSendsTheDiskPathAndParsesTheServerResult() async throws {
-        let sourceURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MacPilot-piclist-test-\(UUID().uuidString).png")
-        try Data("test-image-payload".utf8).write(to: sourceURL)
-        defer { try? FileManager.default.removeItem(at: sourceURL) }
-
-        let sessionConfiguration = URLSessionConfiguration.ephemeral
-        sessionConfiguration.protocolClasses = [RecordingUploadURLProtocol.self]
-        let endpointPath = "/piclist-\(UUID().uuidString)"
-        let settings = ImageHostingSettings(
-            isEnabled: true,
-            provider: .picListServer,
-            endpoint: "https://upload.example.test\(endpointPath)"
-        )
-
         let result = try await ImageHostingUploadClient(
             session: URLSession(configuration: sessionConfiguration)
         ).upload(
             fileURL: sourceURL,
             configuration: settings,
-            credential: "piclist-secret"
+            credential: "github-secret"
         )
 
-        let snapshot = try #require(RecordingUploadURLProtocol.state.snapshot(forPath: endpointPath))
-        let requestURL = try #require(snapshot.request.url)
-        let queryItems = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        let body = try #require(JSONSerialization.jsonObject(with: snapshot.body) as? [String: [String]])
+        let snapshotPath = "/repos/octo/images/contents/\(result.key)"
+        let snapshot = try #require(RecordingUploadURLProtocol.state.snapshot(forPath: snapshotPath))
+        let body = try #require(JSONSerialization.jsonObject(with: snapshot.body) as? [String: Any])
+        let encodedContent = try #require(body["content"] as? String)
+        let decodedContent = try #require(Data(base64Encoded: encodedContent))
 
-        #expect(result.publicURL.absoluteString == "https://img.example.com/test.png")
-        #expect(queryItems.first(where: { $0.name == "key" })?.value == "piclist-secret")
-        #expect(body["list"] == [sourceURL.path])
-        #expect(snapshot.body.range(of: Data("test-image-payload".utf8)) == nil)
+        #expect(result.publicURL.absoluteString == "https://raw.githubusercontent.com/octo/images/main/screenshots/test.png")
+        #expect(result.key.hasPrefix("screenshots/MacPilot-github-"))
+        #expect(snapshot.request.httpMethod == "PUT")
+        #expect(snapshot.request.url?.path.hasPrefix("/repos/octo/images/contents/screenshots/") == true)
+        #expect(snapshot.request.value(forHTTPHeaderField: "Authorization") == "Bearer github-secret")
+        #expect(body["branch"] as? String == "main")
+        #expect(decodedContent == payload)
+        #expect(snapshot.body.range(of: payload) == nil)
     }
 
-    @Test func uploadTreatsSuccessFalseAsAnError() async throws {
+    @Test func giteeUploadUsesGiteeAPIAndAuthenticationScheme() async throws {
         let sourceURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MacPilot-image-hosting-failure-\(UUID().uuidString).png")
-        try Data("test-image-payload".utf8).write(to: sourceURL)
+            .appendingPathComponent("MacPilot-gitee-\(UUID().uuidString).png")
+        try Data("gitee-image".utf8).write(to: sourceURL)
         defer { try? FileManager.default.removeItem(at: sourceURL) }
 
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [RecordingUploadURLProtocol.self]
-        let endpointPath = "/failure-\(UUID().uuidString)"
         let settings = ImageHostingSettings(
             isEnabled: true,
-            provider: .picListServer,
-            endpoint: "https://upload.example.test\(endpointPath)"
+            provider: .gitee,
+            repositoryOwner: "octo",
+            repositoryName: "images"
+        )
+        let result = try await ImageHostingUploadClient(
+            session: URLSession(configuration: sessionConfiguration)
+        ).upload(
+            fileURL: sourceURL,
+            configuration: settings,
+            credential: "gitee-secret"
+        )
+
+        let snapshotPath = "/api/v5/repos/octo/images/contents/\(result.key)"
+        let snapshot = try #require(RecordingUploadURLProtocol.state.snapshot(forPath: snapshotPath))
+        #expect(snapshot.request.value(forHTTPHeaderField: "Authorization") == "token gitee-secret")
+        #expect(result.publicURL.host == "gitee.com")
+    }
+
+    @Test func successfulUploadFallsBackToProviderRawURLWhenResponseOmitsIt() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacPilot-fallback-\(UUID().uuidString).png")
+        try Data("fallback-image".utf8).write(to: sourceURL)
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [RecordingUploadURLProtocol.self]
+        let settings = ImageHostingSettings(
+            isEnabled: true,
+            provider: .github,
+            repositoryOwner: "octo",
+            repositoryName: "images"
+        )
+        let result = try await ImageHostingUploadClient(
+            session: URLSession(configuration: sessionConfiguration)
+        ).upload(
+            fileURL: sourceURL,
+            configuration: settings,
+            credential: "github-secret"
+        )
+
+        #expect(result.publicURL.host == "raw.githubusercontent.com")
+        #expect(result.publicURL.path.hasPrefix("/octo/images/main/screenshots/"))
+    }
+
+    @Test func uploadRequiresTokenAndRejectsNonImageFiles() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacPilot-text-\(UUID().uuidString).txt")
+        try Data("not an image".utf8).write(to: sourceURL)
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+        let settings = ImageHostingSettings(
+            isEnabled: true,
+            repositoryOwner: "octo",
+            repositoryName: "images"
+        )
+
+        do {
+            _ = try await ImageHostingUploadClient().upload(
+                fileURL: sourceURL,
+                configuration: settings,
+                credential: nil
+            )
+            Issue.record("an upload without a token should fail")
+        } catch let error as ImageHostingError {
+            #expect(error == .missingCredential)
+        }
+
+        do {
+            _ = try await ImageHostingUploadClient().upload(
+                fileURL: sourceURL,
+                configuration: settings,
+                credential: "github-secret"
+            )
+            Issue.record("a non-image upload should fail")
+        } catch let error as ImageHostingError {
+            #expect(error == .unsupportedFile)
+        }
+    }
+
+    @Test func uploadReportsRepositoryPermissionErrors() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacPilot-failure-\(UUID().uuidString).png")
+        try Data("failure-image".utf8).write(to: sourceURL)
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [RecordingUploadURLProtocol.self]
+        let settings = ImageHostingSettings(
+            isEnabled: true,
+            repositoryOwner: "octo",
+            repositoryName: "images"
         )
 
         do {
@@ -221,73 +328,25 @@ struct ImageHostingTests {
             ).upload(
                 fileURL: sourceURL,
                 configuration: settings,
-                credential: nil
+                credential: "github-secret"
             )
-            Issue.record("an unsuccessful PicList response should fail the upload")
+            Issue.record("a rejected repository upload should fail")
         } catch let error as ImageHostingError {
-            #expect(error == .serverRejected(statusCode: 200, message: "quota exceeded"))
-        } catch {
-            Issue.record("unexpected upload error: \(error.localizedDescription)")
+            #expect(error == .serverRejected(statusCode: 403, message: "permission denied"))
         }
     }
 
-    @Test func picListUploadRejectsAResponseWithoutSuccessFlag() async throws {
-        let sourceURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MacPilot-piclist-invalid-response-\(UUID().uuidString).png")
-        try Data("test-image-payload".utf8).write(to: sourceURL)
-        defer { try? FileManager.default.removeItem(at: sourceURL) }
-
-        let sessionConfiguration = URLSessionConfiguration.ephemeral
-        sessionConfiguration.protocolClasses = [RecordingUploadURLProtocol.self]
-        let endpointPath = "/missing-success-\(UUID().uuidString)"
-        let settings = ImageHostingSettings(
-            isEnabled: true,
-            provider: .picListServer,
-            endpoint: "https://upload.example.test\(endpointPath)"
-        )
-
-        do {
-            _ = try await ImageHostingUploadClient(
-                session: URLSession(configuration: sessionConfiguration)
-            ).upload(
-                fileURL: sourceURL,
-                configuration: settings,
-                credential: nil
-            )
-            Issue.record("a PicList response without success should fail the upload")
-        } catch let error as ImageHostingError {
-            #expect(error == .invalidResponse)
-        } catch {
-            Issue.record("unexpected upload error: \(error.localizedDescription)")
-        }
-    }
-
-    @Test func imageHostingResponseReadsPicListImageURL() throws {
+    @Test func imageHostingResponseParserReadsContentDownloadURL() throws {
         let payload = Data(
-            #"{"success":true,"result":["https://img.example.com/a.png"],"items":[{"imgUrl":"https://img.example.com/a.png"}]}"#.utf8
+            #"{"content":{"download_url":"https://raw.githubusercontent.com/octo/images/main/a.png","html_url":"https://github.com/octo/images/blob/main/a.png"}}"#.utf8
         )
 
-        let url = try #require(
-            ImageHostingResponseParser.publicURL(from: payload, prefix: "")
-        )
-        #expect(url.absoluteString == "https://img.example.com/a.png")
+        let url = try #require(ImageHostingResponseParser.publicURL(from: payload))
+        #expect(url.absoluteString == "https://raw.githubusercontent.com/octo/images/main/a.png")
     }
 
-    @Test func imageHostingResponseResolvesRelativeURLWithConfiguredPrefix() throws {
-        let payload = Data(#"{"url":"/images/a.png"}"#.utf8)
-
-        let url = try #require(
-            ImageHostingResponseParser.publicURL(
-                from: payload,
-                prefix: "https://img.example.com/"
-            )
-        )
-        #expect(url.absoluteString == "https://img.example.com/images/a.png")
-    }
-
-    @Test func imageHostingResponseRejectsAResponseWithoutPublicURL() {
-        let payload = Data(#"{"success":false,"message":"upload failed"}"#.utf8)
-
-        #expect(ImageHostingResponseParser.publicURL(from: payload, prefix: "") == nil)
+    @Test func imageHostingResponseParserRejectsResponseWithoutPublicURL() {
+        let payload = Data(#"{"message":"created"}"#.utf8)
+        #expect(ImageHostingResponseParser.publicURL(from: payload) == nil)
     }
 }

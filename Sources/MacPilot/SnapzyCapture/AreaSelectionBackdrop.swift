@@ -38,6 +38,7 @@ nonisolated enum AreaSelectionAction: Equatable, Sendable {
   case annotateTool(AreaSelectionAnnotationTool)
   case ocr
   case pin
+  case upload
   case cancel
 }
 

@@ -74,6 +74,12 @@ final class AreaSelectionActionBar: NSView {
       .init(imageName: "pin", tooltip: "置顶", action: .pin, separatorAfter: false),
       .init(imageName: "square.and.arrow.down", tooltip: "保存截图", action: .save, separatorAfter: false),
       .init(imageName: "square.on.square", tooltip: "复制图片", action: .copy, separatorAfter: false),
+      .init(
+        imageName: "icloud.and.arrow.up",
+        tooltip: AppText.value("scImageHostingUpload", language: .system),
+        action: .upload,
+        separatorAfter: false
+      ),
       .init(imageName: "xmark", tooltip: "关闭", action: .cancel, separatorAfter: false),
       .init(imageName: "ellipsis", tooltip: "更多操作", action: .more, separatorAfter: false),
     ]
@@ -99,10 +105,10 @@ final class AreaSelectionActionBar: NSView {
   }
 
   override var intrinsicContentSize: NSSize {
-    // Compact PixPin-style bar: 12pt grip + thirteen 28pt cells, one
+    // Compact PixPin-style bar: 12pt grip + fourteen 28pt cells, one
     // separator, and stack spacing. Keeping this stable makes the bar
     // placement around a moving selection cheap.
-    let width: CGFloat = 426
+    let width: CGFloat = 456
     return NSSize(width: width, height: 38)
   }
 

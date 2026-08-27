@@ -2412,6 +2412,8 @@ final class SmartScreenshotController {
                     self.onCapture(crop.image)
                 case .copy:
                     SmartCaptureClipboard.copy(image: crop.image)
+                case .upload:
+                    self.uploadImageToCloud(crop.image)
                 case .newSelection, .adjustSelection, .more:
                     break
                 case .annotate:
@@ -2484,6 +2486,21 @@ final class SmartScreenshotController {
         }
         pinControllers[id] = controller
         controller.show()
+    }
+
+    /// Uploads only after the user explicitly selected the toolbar action.
+    /// The crop is encoded to a temporary file first, then the network client
+    /// streams that file so the upload never retains a second full image Data
+    /// buffer on the main actor.
+    private func uploadImageToCloud(_ image: CGImage) {
+        Task { @MainActor [weak self] in
+            do {
+                let result = try await ImageHostingUploadCoordinator.upload(image: image)
+                ImageHostingClipboard.copy(urls: [result.publicURL])
+            } catch {
+                self?.onError(error)
+            }
+        }
     }
 
     /// Paste the current clipboard image into a floating pin window. This is
@@ -4598,6 +4615,7 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
             onCopy: { [weak self] in self?.copyImage() },
             onOCR: { [weak self] in self?.recognizeText() },
             onAnnotate: { [weak self] in self?.openAnnotation() },
+            onUpload: { [weak self] in self?.uploadImage() },
             onClose: { [weak self] in self?.close() }
         )
     }
@@ -4618,6 +4636,27 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             self?.showMessage(title: AppText.value("scOCRCopied", language: self?.language ?? .system), message: text)
+        }
+    }
+
+    private func uploadImage() {
+        let image = self.image
+        Task { @MainActor [weak self] in
+            do {
+                let result = try await ImageHostingUploadCoordinator.upload(image: image)
+                ImageHostingClipboard.copy(urls: [result.publicURL])
+                self?.showMessage(
+                    title: AppText.value("scImageHostingUploadSuccess", language: self?.language ?? .system),
+                    message: result.publicURL.absoluteString
+                )
+            } catch {
+                let detail = (error as? ImageHostingError)?.localizedDescription(language: self?.language ?? .system)
+                    ?? error.localizedDescription
+                self?.showMessage(
+                    title: AppText.value("scImageHostingUploadFailed", language: self?.language ?? .system),
+                    message: detail
+                )
+            }
         }
     }
 
@@ -4674,6 +4713,7 @@ private final class SmartPinImageView: NSView {
     private let onCopy: () -> Void
     private let onOCR: () -> Void
     private let onAnnotate: () -> Void
+    private let onUpload: () -> Void
     private let onClose: () -> Void
     private var dragOffset: CGPoint?
 
@@ -4683,6 +4723,7 @@ private final class SmartPinImageView: NSView {
         onCopy: @escaping () -> Void,
         onOCR: @escaping () -> Void,
         onAnnotate: @escaping () -> Void,
+        onUpload: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
         self.image = image
@@ -4690,6 +4731,7 @@ private final class SmartPinImageView: NSView {
         self.onCopy = onCopy
         self.onOCR = onOCR
         self.onAnnotate = onAnnotate
+        self.onUpload = onUpload
         self.onClose = onClose
         super.init(frame: .zero)
         setAccessibilityElement(true)
@@ -4741,6 +4783,7 @@ private final class SmartPinImageView: NSView {
         menu.addItem(menuItem("scCopy", action: #selector(copyRequested)))
         menu.addItem(menuItem("scOCR", action: #selector(ocrRequested)))
         menu.addItem(menuItem("scAnnotate", action: #selector(annotateRequested)))
+        menu.addItem(menuItem("scImageHostingUpload", action: #selector(uploadRequested)))
         menu.addItem(.separator())
         menu.addItem(menuItem("scClose", action: #selector(closeRequested)))
         return menu
@@ -4759,6 +4802,7 @@ private final class SmartPinImageView: NSView {
     @objc private func copyRequested() { onCopy() }
     @objc private func ocrRequested() { onOCR() }
     @objc private func annotateRequested() { onAnnotate() }
+    @objc private func uploadRequested() { onUpload() }
     @objc private func closeRequested() { onClose() }
 }
 

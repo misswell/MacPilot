@@ -27,7 +27,6 @@ final class QuickAccessActionShortcutStore: ObservableObject {
     .copy: ShortcutConfig(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(cmdKey)),
     .saveOrOpen: ShortcutConfig(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(cmdKey)),
     .edit: ShortcutConfig(keyCode: UInt32(kVK_ANSI_E), modifiers: UInt32(cmdKey)),
-    .uploadToCloud: ShortcutConfig(keyCode: UInt32(kVK_ANSI_U), modifiers: UInt32(cmdKey)),
     .pinToScreen: ShortcutConfig(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(cmdKey)),
     .delete: ShortcutConfig(keyCode: UInt32(kVK_Delete), modifiers: UInt32(cmdKey)),
     .dismiss: ShortcutConfig(keyCode: UInt32(kVK_ANSI_W), modifiers: UInt32(cmdKey)),

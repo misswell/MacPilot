@@ -20,15 +20,11 @@ struct QuickAccessCardView: View {
   @ObservedObject private var actionShortcuts = QuickAccessActionShortcutStore.shared
   @ObservedObject private var trackpadSwipeModeStore = QuickAccessTrackpadSwipeModeStore.shared
   @ObservedObject private var swipeActionStore = QuickAccessSwipeActionStore.shared
-  @ObservedObject private var cloudManager = CloudManager.shared
   @State private var isHovering = false
   @State private var isDragging = false
   @State private var isSwiping = false
   @State private var isDismissing = false
   @State private var swipeOffset: CGFloat = 0
-  @State private var isCloudUploading = false
-  @State private var cloudUploadProgress: Double = 0
-  @State private var cloudUploadError: String?
   @Environment(\.accessibilityReduceMotion) var reduceMotion
 
   private let cornerRadius: CGFloat = 16
@@ -64,12 +60,6 @@ struct QuickAccessCardView: View {
           .transition(.opacity)
       }
 
-      // Cloud upload progress overlay
-      if isCloudUploading {
-        QuickAccessProgressView(state: .processing(progress: cloudUploadProgress))
-          .transition(.opacity)
-      }
-
       // Hover overlay with staggered buttons (hidden while swiping so it does not
       // visually fight the swipe gesture).
       if isHovering && !isSwiping && canPerformCardActions && hasVisibleOverlayActions {
@@ -77,7 +67,7 @@ struct QuickAccessCardView: View {
           .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.95)))
       }
 
-      // Corner buttons (only visible on hover, hidden during cloud upload and swipe).
+      // Corner buttons (only visible on hover and hidden during swipe).
       if isHovering && !isSwiping && canPerformCardActions && !cornerOverlayActions.isEmpty {
         cornerButtons
       }
@@ -152,17 +142,6 @@ struct QuickAccessCardView: View {
       performAction(trigger.action)
     }
     .animation(QuickAccessAnimations.hoverOverlay, value: isHovering)
-    .alert(
-      L10n.AnnotateUI.uploadToCloud,
-      isPresented: Binding(
-        get: { cloudUploadError != nil },
-        set: { if !$0 { cloudUploadError = nil } }
-      )
-    ) {
-      Button(L10n.Common.ok, role: .cancel) { cloudUploadError = nil }
-    } message: {
-      Text(cloudUploadError ?? "")
-    }
   }
 
   // MARK: - Computed Properties
@@ -195,23 +174,8 @@ struct QuickAccessCardView: View {
     isTempFile ? L10n.Common.deleteAction : L10n.Common.moveToTrash
   }
 
-  private var alreadyUploadedToCloud: Bool {
-    item.cloudURL != nil && !item.isCloudStale
-  }
-
-  private var cloudActionTitle: String {
-    if alreadyUploadedToCloud {
-      return L10n.AnnotateUI.uploadedToCloud
-    }
-    return item.isCloudStale ? L10n.AnnotateUI.reuploadToCloud : L10n.AnnotateUI.uploadToCloud
-  }
-
-  private var cloudActionIcon: String {
-    alreadyUploadedToCloud ? "checkmark.icloud" : "icloud.and.arrow.up"
-  }
-
   private var canPerformCardActions: Bool {
-    item.processingState == .idle && !isCloudUploading
+    item.processingState == .idle
   }
 
   private var cardShape: RoundedRectangle {
@@ -355,8 +319,6 @@ struct QuickAccessCardView: View {
       return deleteActionTitle
     case .edit:
       return editActionTitle
-    case .uploadToCloud:
-      return cloudActionTitle
     case .pinToScreen:
       return item.isPinned ? L10n.PreferencesQuickAccess.unpinAction : L10n.PreferencesQuickAccess.pinToScreenAction
     }
@@ -379,8 +341,6 @@ struct QuickAccessCardView: View {
     switch action {
     case .saveOrOpen:
       return isTempFile ? "square.and.arrow.down" : "folder"
-    case .uploadToCloud:
-      return cloudActionIcon
     case .pinToScreen:
       return item.isPinned ? "pin.fill" : "pin"
     default:
@@ -399,8 +359,6 @@ struct QuickAccessCardView: View {
       return true
     case .saveOrOpen:
       return true
-    case .uploadToCloud:
-      return shouldShowCloudButton
     case .delete:
       return true
     }
@@ -410,8 +368,6 @@ struct QuickAccessCardView: View {
     switch action {
     case .pinToScreen:
       return !item.isVideo
-    case .uploadToCloud:
-      return shouldShowCloudButton && !alreadyUploadedToCloud && !isCloudUploading
     case .copy, .saveOrOpen, .dismiss, .delete, .edit:
       return true
     }
@@ -431,8 +387,6 @@ struct QuickAccessCardView: View {
       deleteItem()
     case .edit:
       handleDoubleClick()
-    case .uploadToCloud:
-      uploadToCloud()
     case .pinToScreen:
       guard !item.isVideo else { return }
       manager.togglePin(id: item.id)
@@ -663,98 +617,6 @@ struct QuickAccessCardView: View {
     return entries
   }
 
-  // MARK: - Cloud Upload
-
-  /// Whether to show the cloud upload button
-  private var shouldShowCloudButton: Bool {
-    cloudManager.isConfigured
-  }
-
-  /// Upload the current item to cloud storage
-  private func uploadToCloud() {
-    guard !isCloudUploading, !alreadyUploadedToCloud else {
-      DiagnosticLogger.shared.log(
-        .debug,
-        .cloud,
-        "Quick access cloud upload skipped",
-        context: [
-          "fileName": item.url.lastPathComponent,
-          "isUploading": isCloudUploading ? "true" : "false",
-          "alreadyUploaded": alreadyUploadedToCloud ? "true" : "false",
-        ]
-      )
-      return
-    }
-
-    isCloudUploading = true
-    cloudUploadProgress = 0
-    manager.pauseCountdownForActivity(item.id)
-    let uploadStartTime = Date()
-    DiagnosticLogger.shared.log(
-      .info,
-      .cloud,
-      "Quick access cloud upload started",
-      context: [
-        "fileName": item.url.lastPathComponent,
-      ]
-    )
-
-    // Animate to 80% quickly to show activity
-    withAnimation(.easeOut(duration: 0.4)) {
-      cloudUploadProgress = 0.8
-    }
-
-    Task {
-      defer {
-        manager.resumeCountdownForActivity(item.id)
-      }
-
-      do {
-        let fileAccess = SandboxFileAccessManager.shared.beginAccessingURL(item.url)
-        defer { fileAccess.stop() }
-
-        // Always upload with a fresh key (new URL avoids CDN cache)
-        let result = try await cloudManager.upload(fileURL: item.url)
-
-        // Update item with new cloud URL and key
-        manager.setCloudURL(id: item.id, url: result.publicURL, key: result.key)
-
-        // Auto-copy cloud link
-        ImageHostingClipboard.copy(urls: [result.publicURL])
-
-        // Ensure minimum visual duration (~600ms total)
-        let elapsed = Date().timeIntervalSince(uploadStartTime)
-        let remainingDelay = max(0, 0.6 - elapsed)
-
-        withAnimation(.easeIn(duration: 0.15)) {
-          cloudUploadProgress = 1.0
-        }
-
-        if remainingDelay > 0 {
-          try? await Task.sleep(nanoseconds: UInt64(remainingDelay * 1_000_000_000))
-        }
-
-        isCloudUploading = false
-        SoundManager.play("Pop")
-        DiagnosticLogger.shared.log(
-          .info,
-          .cloud,
-          "Quick access cloud upload completed",
-          context: ["fileName": item.url.lastPathComponent]
-        )
-      } catch {
-        isCloudUploading = false
-        cloudUploadProgress = 0
-        cloudUploadError = error.localizedDescription
-        DiagnosticLogger.shared.logError(
-          .cloud,
-          error,
-          "Quick access cloud upload failed",
-          context: ["fileName": item.url.lastPathComponent]
-        )
-      }
-    }
-  }
 }
 
 // MARK: - Context Menu
