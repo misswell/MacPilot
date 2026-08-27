@@ -2304,7 +2304,7 @@ final class SmartScreenshotController {
                 showCursor: false,
                 excludeDesktopIcons: false,
                 excludeDesktopWidgets: false,
-                excludeOwnApplication: true,
+                excludeOwnApplication: SnapzyCaptureApplicationVisibilityPolicy.excludesOwnApplicationFromDisplaySnapshot,
                 prefetchedContentTask: applicationConfiguration?.prefetchedContentTask
             )
         }

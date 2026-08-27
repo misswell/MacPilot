@@ -88,6 +88,16 @@ enum CaptureOverlayShortcutSettings {
     static let recordingApplicationCaptureShortcut: CaptureOverlayShortcut? = nil
 }
 
+/// Visibility policy for the frozen display used by interactive screenshots.
+///
+/// `AreaSelectionWindow` marks the temporary selection panels as non-shareable,
+/// so the display capture can include the user's other MacPilot windows without
+/// capturing the selection overlay itself. Application-window hit testing keeps
+/// its own filtering policy separately in `AreaSelectionApplicationConfiguration`.
+enum SnapzyCaptureApplicationVisibilityPolicy {
+    static let excludesOwnApplicationFromDisplaySnapshot = false
+}
+
 @MainActor
 enum ScreenshotLastAreaStore {
     static func save(_ rect: CGRect) {

@@ -8,6 +8,10 @@ import Testing
 
 /// Geometry coverage for the source-migrated Snapzy frozen-display pipeline.
 struct SnapzyCaptureTests {
+    @Test func interactiveDisplayCaptureIncludesMacPilotWindows() {
+        #expect(!SnapzyCaptureApplicationVisibilityPolicy.excludesOwnApplicationFromDisplaySnapshot)
+    }
+
     @Test @MainActor func singleFrameCaptureConfigurationKeepsOnlyOneQueuedFrame() {
         let configuration = SnapzyCaptureConfiguration.display(
             width: 1_920,
