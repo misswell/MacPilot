@@ -28,6 +28,7 @@ struct QuickAccessCardView: View {
   @State private var swipeOffset: CGFloat = 0
   @State private var isCloudUploading = false
   @State private var cloudUploadProgress: Double = 0
+  @State private var cloudUploadError: String?
   @Environment(\.accessibilityReduceMotion) var reduceMotion
 
   private let cornerRadius: CGFloat = 16
@@ -151,6 +152,17 @@ struct QuickAccessCardView: View {
       performAction(trigger.action)
     }
     .animation(QuickAccessAnimations.hoverOverlay, value: isHovering)
+    .alert(
+      L10n.AnnotateUI.uploadToCloud,
+      isPresented: Binding(
+        get: { cloudUploadError != nil },
+        set: { if !$0 { cloudUploadError = nil } }
+      )
+    ) {
+      Button(L10n.Common.ok, role: .cancel) { cloudUploadError = nil }
+    } message: {
+      Text(cloudUploadError ?? "")
+    }
   }
 
   // MARK: - Computed Properties
@@ -678,14 +690,12 @@ struct QuickAccessCardView: View {
     cloudUploadProgress = 0
     manager.pauseCountdownForActivity(item.id)
     let uploadStartTime = Date()
-    let oldCloudKey = item.cloudKey  // Save old key for cleanup
     DiagnosticLogger.shared.log(
       .info,
       .cloud,
       "Quick access cloud upload started",
       context: [
         "fileName": item.url.lastPathComponent,
-        "hasOldCloudKey": oldCloudKey == nil ? "false" : "true",
       ]
     )
 
@@ -706,24 +716,11 @@ struct QuickAccessCardView: View {
         // Always upload with a fresh key (new URL avoids CDN cache)
         let result = try await cloudManager.upload(fileURL: item.url)
 
-        // Delete old cloud file in background (no garbage)
-        if let oldKey = oldCloudKey {
-          Task.detached(priority: .utility) {
-            do {
-              try await CloudManager.shared.deleteByKey(key: oldKey)
-            } catch {
-              DiagnosticLogger.shared.logError(.cloud, error, "Quick access old cloud object cleanup failed")
-            }
-          }
-        }
-
         // Update item with new cloud URL and key
         manager.setCloudURL(id: item.id, url: result.publicURL, key: result.key)
 
         // Auto-copy cloud link
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(result.publicURL.absoluteString, forType: .string)
+        ImageHostingClipboard.copy(urls: [result.publicURL])
 
         // Ensure minimum visual duration (~600ms total)
         let elapsed = Date().timeIntervalSince(uploadStartTime)
@@ -748,6 +745,7 @@ struct QuickAccessCardView: View {
       } catch {
         isCloudUploading = false
         cloudUploadProgress = 0
+        cloudUploadError = error.localizedDescription
         DiagnosticLogger.shared.logError(
           .cloud,
           error,

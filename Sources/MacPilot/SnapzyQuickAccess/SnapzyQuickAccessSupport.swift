@@ -644,25 +644,6 @@ enum CaptureOutputNaming {
     }
 }
 
-// MARK: - CloudManager (no-op seam; MacPilot has no cloud upload)
-
-struct CloudUploadResult {
-    let publicURL: URL
-    let key: String
-}
-
-@MainActor
-final class CloudManager: ObservableObject {
-    static let shared = CloudManager()
-    var isConfigured: Bool { false }
-
-    func upload(fileURL: URL) async throws -> CloudUploadResult {
-        throw ScreenCaptureError.captureFailed("cloudUnavailable")
-    }
-
-    func deleteByKey(key: String) async throws {}
-}
-
 // MARK: - Size (Snapzy design-system radii used by the pin window)
 
 enum Size {

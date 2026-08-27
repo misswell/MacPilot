@@ -73,6 +73,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
     var copyAfterCapture: Bool
     var showQuickAccess: Bool
     var pinAfterCapture: Bool
+    var imageHosting: ImageHostingSettings
 
     init(
         isEnabled: Bool = false,
@@ -103,6 +104,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         copyAfterCapture: Bool = true,
         showQuickAccess: Bool = true,
         pinAfterCapture: Bool = false,
+        imageHosting: ImageHostingSettings = ImageHostingSettings(),
         migrateLegacyScreenshotShortcuts: Bool = false
     ) {
         self.isEnabled = isEnabled
@@ -142,6 +144,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.copyAfterCapture = copyAfterCapture
         self.showQuickAccess = showQuickAccess
         self.pinAfterCapture = pinAfterCapture
+        self.imageHosting = imageHosting
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -150,7 +153,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         case maxRetentionDays, captureAllDisplays, showsCursor, smartCaptureEnabled
         case smartCaptureShortcut, areaCaptureShortcut, repeatAreaCaptureShortcut, applicationWindowCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut, pinCaptureShortcut, postSelectionPinShortcut
         case screenshotEnabled
-        case copyAfterCapture, showQuickAccess, pinAfterCapture
+        case copyAfterCapture, showQuickAccess, pinAfterCapture, imageHosting
     }
 
     init(from decoder: Decoder) throws {
@@ -184,6 +187,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
             copyAfterCapture: try c.decodeIfPresent(Bool.self, forKey: .copyAfterCapture) ?? true,
             showQuickAccess: try c.decodeIfPresent(Bool.self, forKey: .showQuickAccess) ?? true,
             pinAfterCapture: try c.decodeIfPresent(Bool.self, forKey: .pinAfterCapture) ?? false,
+            imageHosting: try c.decodeIfPresent(ImageHostingSettings.self, forKey: .imageHosting) ?? ImageHostingSettings(),
             migrateLegacyScreenshotShortcuts: true
         )
     }
@@ -506,6 +510,7 @@ final class ScreenCaptureModel: ObservableObject {
     private var captureTask: Task<Void, Never>?
     private var permissionPollTask: Task<Void, Never>?
     private var diskUsageRevision = 0
+    private var automaticImageHostingUploadGeneration: UInt = 0
     private let lastAreaDefaultsKey = "MacPilot.smartCapture.lastArea"
     private var smartCapture: SmartScreenshotController?
 
@@ -603,6 +608,7 @@ final class ScreenCaptureModel: ObservableObject {
     func applyLoadedSettings(_ newSettings: ScreenCaptureSettings) {
         isLoading = true
         settings = newSettings
+        CloudManager.shared.apply(settings: newSettings.imageHosting)
         if let smartCapture {
             smartCapture.updateShortcutBinding(newSettings.smartCaptureShortcut)
             smartCapture.updateAdditionalShortcutBindings([
@@ -628,6 +634,7 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     func activateFromConfiguration() {
+        CloudManager.shared.apply(settings: settings.imageHosting)
         captureHistory = SmartCaptureHistoryStore.load()
         Task { await refreshDiskUsage() }
         updateSmartCaptureRuntime()
@@ -717,6 +724,37 @@ final class ScreenCaptureModel: ObservableObject {
 
     func setPinAfterCapture(_ value: Bool) {
         updateSettings { $0.pinAfterCapture = value }
+    }
+
+    func setImageHostingEnabled(_ value: Bool) {
+        updateSettings { $0.imageHosting.isEnabled = value }
+        if !value {
+            automaticImageHostingUploadGeneration &+= 1
+        }
+    }
+
+    func setImageHostingUploadAfterCapture(_ value: Bool) {
+        updateSettings { $0.imageHosting.uploadAfterCapture = value }
+        if !value {
+            automaticImageHostingUploadGeneration &+= 1
+        }
+    }
+
+    func setImageHostingProvider(_ value: ImageHostingProvider) {
+        updateSettings { $0.imageHosting.provider = value }
+    }
+
+    func setImageHostingEndpoint(_ value: String) {
+        updateSettings { $0.imageHosting.endpoint = value }
+    }
+
+    func setImageHostingFileFieldName(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        updateSettings { $0.imageHosting.fileFieldName = trimmed.isEmpty ? "files" : trimmed }
+    }
+
+    func setImageHostingPublicURLPrefix(_ value: String) {
+        updateSettings { $0.imageHosting.publicURLPrefix = value }
     }
 
     func setSmartCaptureEnabled(_ value: Bool) {
@@ -1253,6 +1291,63 @@ final class ScreenCaptureModel: ObservableObject {
             if pinAfterCapture {
                 _ = await QuickAccessManager.shared.pinScreenshot(url: saved.url)
             }
+            if self.settings.imageHosting.uploadAfterCapture {
+                self.startAutomaticImageHostingUpload(
+                    for: [saved.url],
+                    quickAccessItemID: quickAccessPreviewID
+                )
+            }
+        }
+    }
+
+    /// Starts an upload only after the capture has been persisted.  The task
+    /// receives file URLs instead of CGImages, so the upload path never keeps a
+    /// full-resolution screenshot alive in memory.
+    private func startAutomaticImageHostingUpload(
+        for urls: [URL],
+        quickAccessItemID: UUID? = nil
+    ) {
+        guard settings.imageHosting.isEnabled, !urls.isEmpty else { return }
+        automaticImageHostingUploadGeneration &+= 1
+        let generation = automaticImageHostingUploadGeneration
+        if let quickAccessItemID {
+            QuickAccessManager.shared.pauseCountdownForActivity(quickAccessItemID)
+        }
+        Task { [weak self] in
+            defer {
+                if let quickAccessItemID {
+                    QuickAccessManager.shared.resumeCountdownForActivity(quickAccessItemID)
+                }
+            }
+            guard let self else { return }
+            var uploadedURLs: [URL] = []
+            for url in urls {
+                do {
+                    let result = try await CloudManager.shared.upload(fileURL: url)
+                    uploadedURLs.append(result.publicURL)
+                    if let quickAccessItemID {
+                        QuickAccessManager.shared.setCloudURL(
+                            id: quickAccessItemID,
+                            url: result.publicURL,
+                            key: result.key
+                        )
+                    }
+                } catch {
+                    if generation == self.automaticImageHostingUploadGeneration {
+                        ImageHostingClipboard.copy(urls: uploadedURLs)
+                    }
+                    let errorDescription = (error as? ImageHostingError)?.localizedDescription(language: self.language)
+                        ?? error.localizedDescription
+                    self.errorMessage = AppText.value(
+                        "scImageHostingUploadFailed",
+                        language: self.language,
+                        arguments: [errorDescription]
+                    )
+                    return
+                }
+            }
+            guard generation == self.automaticImageHostingUploadGeneration else { return }
+            ImageHostingClipboard.copy(urls: uploadedURLs)
         }
     }
 
@@ -1429,6 +1524,7 @@ final class ScreenCaptureModel: ObservableObject {
     private func updateSettings(_ mutate: (inout ScreenCaptureSettings) -> Void) {
         guard !isLoading else { return }
         mutate(&settings)
+        CloudManager.shared.apply(settings: settings.imageHosting)
         persist?()
     }
 
@@ -1573,6 +1669,9 @@ final class ScreenCaptureModel: ObservableObject {
                 diskUsageRevision += 1
                 errorMessage = nil
                 isPermissionError = false
+                if settings.imageHosting.uploadAfterCapture {
+                    startAutomaticImageHostingUpload(for: saved.map(\.url))
+                }
             }
             await cleanupOldScreenshots()
         } catch {
@@ -1713,6 +1812,7 @@ struct ScreenCaptureView: View {
     @EnvironmentObject private var appModel: MacPilotModel
     @ObservedObject var capture: ScreenCaptureModel
     @ObservedObject var recording: ScreenRecordingModel
+    @ObservedObject private var cloudManager = CloudManager.shared
     @Binding var openShortcutEditor: Bool
     @State private var showingFolderPicker = false
     @State private var showingSmartShortcutEditor = false
@@ -1720,6 +1820,8 @@ struct ScreenCaptureView: View {
     @State private var showingRecordingShortcutEditor = false
     @State private var editingShortcutKind: ScreenCaptureShortcutKind = .smartElement
     @State private var resetFailureMessage: String?
+    @State private var imageHostingCredential = ""
+    @State private var imageHostingCredentialMessage: String?
 
     init(
         capture: ScreenCaptureModel,
@@ -1741,11 +1843,12 @@ struct ScreenCaptureView: View {
             }
             .padding(.horizontal, 36)
             .padding(.top, 34)
-            .padding(.bottom, 22)
+            .padding(.bottom, 24)
 
             ScrollView {
-                VStack(spacing: 16) {
+                VStack(spacing: 24) {
                     smartCaptureCard
+                    imageHostingCard
                     recordingCard
                     outputCard
                     scheduleCard
@@ -1876,6 +1979,193 @@ struct ScreenCaptureView: View {
                 .strokeBorder(.primary.opacity(0.07))
         )
         .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
+    }
+
+    private var imageHostingCard: some View {
+        SettingsCard {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 13)
+                        .fill(Color.orange.opacity(0.13))
+                    Image(systemName: "icloud.and.arrow.up")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.orange)
+                }
+                .frame(width: 52, height: 52)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(t("scImageHosting"))
+                        .font(.headline)
+                    Text(t("scImageHostingHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Toggle(t("scImageHostingEnable"), isOn: Binding(
+                get: { capture.settings.imageHosting.isEnabled },
+                set: { capture.setImageHostingEnabled($0) }
+            ))
+            .toggleStyle(.switch)
+
+            Toggle(t("scImageHostingAutoUpload"), isOn: Binding(
+                get: { capture.settings.imageHosting.uploadAfterCapture },
+                set: { capture.setImageHostingUploadAfterCapture($0) }
+            ))
+            .toggleStyle(.switch)
+            .disabled(!capture.settings.imageHosting.isEnabled)
+
+            if capture.settings.imageHosting.isEnabled {
+                Divider()
+
+                Picker(t("scImageHostingProvider"), selection: Binding(
+                    get: { capture.settings.imageHosting.provider },
+                    set: { capture.setImageHostingProvider($0) }
+                )) {
+                    ForEach(ImageHostingProvider.allCases) { provider in
+                        Text(t(provider.titleKey)).tag(provider)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(t("scImageHostingEndpoint"))
+                        .font(.headline)
+                    TextField(
+                        t("scImageHostingEndpointPlaceholder"),
+                        text: Binding(
+                            get: { capture.settings.imageHosting.endpoint },
+                            set: { capture.setImageHostingEndpoint($0) }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    Text(t("scImageHostingEndpointHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if !capture.settings.imageHosting.isEndpointValid {
+                        Label(t("scImageHostingInvalidEndpoint"), systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(.orange.opacity(0.35))
+                            )
+                    }
+                }
+
+                if capture.settings.imageHosting.provider == .customMultipart {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(t("scImageHostingField"))
+                            .font(.headline)
+                        TextField(
+                            t("scImageHostingFieldPlaceholder"),
+                            text: Binding(
+                                get: { capture.settings.imageHosting.fileFieldName },
+                                set: { capture.setImageHostingFileFieldName($0) }
+                            )
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        Text(t("scImageHostingFieldHint"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Text(t("scImageHostingURLPrefix"))
+                            .font(.headline)
+                        TextField(
+                            t("scImageHostingURLPrefixPlaceholder"),
+                            text: Binding(
+                                get: { capture.settings.imageHosting.publicURLPrefix },
+                                set: { capture.setImageHostingPublicURLPrefix($0) }
+                            )
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        Text(t("scImageHostingURLPrefixHint"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(t("scImageHostingToken"))
+                        .font(.headline)
+                    HStack(spacing: 8) {
+                        SecureField(t("scImageHostingTokenPlaceholder"), text: $imageHostingCredential)
+                            .textFieldStyle(.roundedBorder)
+                        Button(t("scImageHostingTokenSave")) {
+                            if cloudManager.storeCredential(imageHostingCredential) {
+                                imageHostingCredential = ""
+                                imageHostingCredentialMessage = nil
+                            } else {
+                                imageHostingCredentialMessage = t("scImageHostingCredentialSaveFailed")
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(imageHostingCredential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    HStack(spacing: 8) {
+                        Label(
+                            cloudManager.hasCredential
+                                ? t("scImageHostingTokenStored")
+                                : t("scImageHostingTokenNotStored"),
+                            systemImage: cloudManager.hasCredential ? "checkmark.seal.fill" : "key"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(cloudManager.hasCredential ? .green : .secondary)
+                        if cloudManager.hasCredential {
+                            Button(t("scImageHostingTokenClear")) {
+                                if !cloudManager.clearCredential() {
+                                    imageHostingCredentialMessage = t("scImageHostingCredentialSaveFailed")
+                                }
+                            }
+                            .buttonStyle(.link)
+                        }
+                    }
+                    if let imageHostingCredentialMessage {
+                        Text(imageHostingCredentialMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(.orange.opacity(0.35))
+                            )
+                    }
+                }
+
+                Text(t("scImageHostingConfiguredHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let lastError = cloudManager.lastError {
+                    Label(
+                        t("scImageHostingLastError", lastError),
+                        systemImage: "xmark.octagon.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(.orange.opacity(0.35))
+                    )
+                }
+
+                if capture.settings.imageHosting.provider == .picListServer,
+                   let releaseURL = URL(string: "https://github.com/Kuingsmile/PicList/releases") {
+                    Link(t("scImageHostingOpenPicList"), destination: releaseURL)
+                        .font(.caption)
+                }
+            }
+        }
+        .onAppear {
+            cloudManager.apply(settings: capture.settings.imageHosting)
+        }
     }
 
     private var recordingCard: some View {
