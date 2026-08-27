@@ -769,6 +769,20 @@ struct ScreenCaptureTests {
         #expect(redPixelCount(thick) > redPixelCount(thin))
     }
 
+    @Test func smartAnnotationPreviewLineWidthMatchesRenderedScale() {
+        let style = SmartAnnotationStyle(lineWidth: 3)
+        let imageWidth: CGFloat = 1_920
+        let displayWidth: CGFloat = 900
+        let renderedWidth = SmartAnnotationRenderer.renderedLineWidth(style, outputWidth: imageWidth)
+        let previewWidth = SmartAnnotationRenderer.previewLineWidth(
+            style,
+            imageWidth: imageWidth,
+            displayWidth: displayWidth
+        )
+
+        #expect(abs(previewWidth - renderedWidth * displayWidth / imageWidth) < 0.001)
+    }
+
     @Test func smartAnnotationHistorySupportsUndoAndRedo() {
         var history = SmartAnnotationHistory()
         let rectangle = SmartAnnotation.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2))

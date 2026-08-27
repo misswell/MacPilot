@@ -5727,12 +5727,19 @@ struct SmartAnnotationEditor: View {
 
     private func drawAnnotations(context: inout GraphicsContext, in rect: CGRect) {
         for item in model.styledAnnotations {
-            draw(item.annotation, style: item.style, context: &context, in: rect)
+            draw(
+                item.annotation,
+                style: item.style,
+                lineWidth: previewLineWidth(for: item.style, in: rect),
+                context: &context,
+                in: rect
+            )
         }
     }
 
     private func drawDraft(context: inout GraphicsContext, in rect: CGRect) {
         guard let start = dragStart, let end = dragCurrent else { return }
+        let lineWidth = previewLineWidth(for: model.currentStyle, in: rect)
         switch model.tool {
         case .rectangle, .filledRectangle, .ellipse, .blur, .crop:
             let value = CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
@@ -5744,19 +5751,19 @@ struct SmartAnnotationEditor: View {
                 context.stroke(
                     Path(value),
                     with: .color(.red.opacity(model.currentStyle.opacity)),
-                    lineWidth: model.currentStyle.lineWidth
+                    lineWidth: lineWidth
                 )
             } else if model.tool == .ellipse {
                 context.stroke(
                     Path(ellipseIn: value),
                     with: .color(.red.opacity(model.currentStyle.opacity)),
-                    lineWidth: model.currentStyle.lineWidth
+                    lineWidth: lineWidth
                 )
             } else {
                 context.stroke(
                     Path(value),
                     with: .color(.red.opacity(model.currentStyle.opacity)),
-                    lineWidth: model.currentStyle.lineWidth
+                    lineWidth: lineWidth
                 )
             }
         case .spotlight:
@@ -5768,12 +5775,32 @@ struct SmartAnnotationEditor: View {
             context.stroke(
                 Path(value),
                 with: .color(.red.opacity(model.currentStyle.opacity)),
-                lineWidth: model.currentStyle.lineWidth
+                lineWidth: lineWidth
             )
-        case .arrow, .line, .highlighter:
-            drawLineLike(model.tool, from: start, to: end, style: model.currentStyle, context: &context)
+        case .arrow:
+            drawArrow(
+                from: start,
+                to: end,
+                style: model.currentStyle,
+                lineWidth: lineWidth,
+                context: &context
+            )
+        case .line, .highlighter:
+            drawLineLike(
+                model.tool,
+                from: start,
+                to: end,
+                style: model.currentStyle,
+                lineWidth: lineWidth,
+                context: &context
+            )
         case .pencil:
-            drawPencil(dragPoints + [end], style: model.currentStyle, context: &context)
+            drawPencil(
+                dragPoints + [end],
+                style: model.currentStyle,
+                lineWidth: lineWidth,
+                context: &context
+            )
         case .counter:
             drawCounter(model.nextCounter, at: end, style: model.currentStyle, context: &context)
         case .text, .watermark:
@@ -5784,23 +5811,37 @@ struct SmartAnnotationEditor: View {
     private func draw(
         _ annotation: SmartAnnotation,
         style: SmartAnnotationStyle,
+        lineWidth: CGFloat,
         context: inout GraphicsContext,
         in rect: CGRect
     ) {
         switch annotation {
         case .rectangle(let value):
             let denormalized = denormalized(value, in: rect)
-            context.stroke(Path(denormalized), with: .color(.red.opacity(style.opacity)), lineWidth: style.lineWidth)
+            context.stroke(Path(denormalized), with: .color(.red.opacity(style.opacity)), lineWidth: lineWidth)
         case .filledRectangle(let value):
             let denormalized = denormalized(value, in: rect)
             context.fill(Path(denormalized), with: .color(.red.opacity(0.35 * style.opacity)))
-            context.stroke(Path(denormalized), with: .color(.red.opacity(style.opacity)), lineWidth: style.lineWidth)
+            context.stroke(Path(denormalized), with: .color(.red.opacity(style.opacity)), lineWidth: lineWidth)
         case .ellipse(let value):
-            context.stroke(Path(ellipseIn: denormalized(value, in: rect)), with: .color(.red.opacity(style.opacity)), lineWidth: style.lineWidth)
+            context.stroke(Path(ellipseIn: denormalized(value, in: rect)), with: .color(.red.opacity(style.opacity)), lineWidth: lineWidth)
         case .arrow(let start, let end):
-            drawArrow(from: denormalized(start, in: rect), to: denormalized(end, in: rect), style: style, context: &context)
+            drawArrow(
+                from: denormalized(start, in: rect),
+                to: denormalized(end, in: rect),
+                style: style,
+                lineWidth: lineWidth,
+                context: &context
+            )
         case .line(let start, let end):
-            drawLineLike(.line, from: denormalized(start, in: rect), to: denormalized(end, in: rect), style: style, context: &context)
+            drawLineLike(
+                .line,
+                from: denormalized(start, in: rect),
+                to: denormalized(end, in: rect),
+                style: style,
+                lineWidth: lineWidth,
+                context: &context
+            )
         case .blur(let value):
             let denormalized = denormalized(value, in: rect)
             context.fill(Path(denormalized), with: .color(.gray.opacity(0.35 * style.opacity)))
@@ -5812,9 +5853,21 @@ struct SmartAnnotationEditor: View {
         case .counter(let value, let point):
             drawCounter(value, at: denormalized(point, in: rect), style: style, context: &context)
         case .highlighter(let start, let end):
-            drawLineLike(.highlighter, from: denormalized(start, in: rect), to: denormalized(end, in: rect), style: style, context: &context)
+            drawLineLike(
+                .highlighter,
+                from: denormalized(start, in: rect),
+                to: denormalized(end, in: rect),
+                style: style,
+                lineWidth: lineWidth,
+                context: &context
+            )
         case .pencil(let points):
-            drawPencil(points.map { denormalized($0, in: rect) }, style: style, context: &context)
+            drawPencil(
+                points.map { denormalized($0, in: rect) },
+                style: style,
+                lineWidth: lineWidth,
+                context: &context
+            )
         case .text(let text, let point):
             context.draw(
                 Text(text).font(.system(size: 18 * max(0.75, min(1.5, style.lineWidth / 3)), weight: .bold))
@@ -5847,22 +5900,27 @@ struct SmartAnnotationEditor: View {
         from start: CGPoint,
         to end: CGPoint,
         style: SmartAnnotationStyle,
+        lineWidth: CGFloat,
         context: inout GraphicsContext
     ) {
         var path = Path()
         path.move(to: start)
         path.addLine(to: end)
         let color: Color = tool == .highlighter ? .yellow.opacity(style.opacity) : .red.opacity(style.opacity)
-        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: style.lineWidth, lineCap: .round))
-        if tool == .arrow { drawArrow(from: start, to: end, style: style, context: &context) }
+        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
     }
 
-    private func drawPencil(_ points: [CGPoint], style: SmartAnnotationStyle, context: inout GraphicsContext) {
+    private func drawPencil(
+        _ points: [CGPoint],
+        style: SmartAnnotationStyle,
+        lineWidth: CGFloat,
+        context: inout GraphicsContext
+    ) {
         guard let first = points.first, points.count > 1 else { return }
         var path = Path()
         path.move(to: first)
         for point in points.dropFirst() { path.addLine(to: point) }
-        context.stroke(path, with: .color(.red.opacity(style.opacity)), style: StrokeStyle(lineWidth: style.lineWidth, lineCap: .round, lineJoin: .round))
+        context.stroke(path, with: .color(.red.opacity(style.opacity)), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
     }
 
     private func drawCounter(_ value: Int, at point: CGPoint, style: SmartAnnotationStyle, context: inout GraphicsContext) {
@@ -5872,13 +5930,27 @@ struct SmartAnnotationEditor: View {
         context.draw(Text(String(value)).font(.system(size: 13 * max(0.75, style.lineWidth / 3), weight: .bold)).foregroundColor(.white.opacity(style.opacity)), at: point, anchor: .center)
     }
 
-    private func drawArrow(from start: CGPoint, to end: CGPoint, style: SmartAnnotationStyle, context: inout GraphicsContext) {
+    private func drawArrow(
+        from start: CGPoint,
+        to end: CGPoint,
+        style: SmartAnnotationStyle,
+        lineWidth: CGFloat,
+        context: inout GraphicsContext
+    ) {
         var path = Path(); path.move(to: start); path.addLine(to: end)
         let angle = atan2(end.y - start.y, end.x - start.x)
         let head: CGFloat = 14
         path.move(to: end); path.addLine(to: CGPoint(x: end.x - head * cos(angle - .pi / 6), y: end.y - head * sin(angle - .pi / 6)))
         path.move(to: end); path.addLine(to: CGPoint(x: end.x - head * cos(angle + .pi / 6), y: end.y - head * sin(angle + .pi / 6)))
-        context.stroke(path, with: .color(.red.opacity(style.opacity)), style: StrokeStyle(lineWidth: style.lineWidth, lineCap: .round, lineJoin: .round))
+        context.stroke(path, with: .color(.red.opacity(style.opacity)), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
+    }
+
+    private func previewLineWidth(for style: SmartAnnotationStyle, in rect: CGRect) -> CGFloat {
+        SmartAnnotationRenderer.previewLineWidth(
+            style,
+            imageWidth: CGFloat(image.width),
+            displayWidth: rect.width
+        )
     }
 }
 
@@ -6056,8 +6128,22 @@ enum SmartAnnotationRenderer {
         values.map { point($0, in: bounds, canvas: canvas) }
     }
 
+    static func renderedLineWidth(_ style: SmartAnnotationStyle, outputWidth: CGFloat) -> CGFloat {
+        max(1, style.lineWidth * max(1, outputWidth / 350))
+    }
+
+    static func previewLineWidth(
+        _ style: SmartAnnotationStyle,
+        imageWidth: CGFloat,
+        displayWidth: CGFloat
+    ) -> CGFloat {
+        guard imageWidth > 0, displayWidth > 0 else { return style.lineWidth }
+        let renderedWidth = renderedLineWidth(style, outputWidth: imageWidth)
+        return renderedWidth * displayWidth / imageWidth
+    }
+
     private static func scaledLineWidth(_ style: SmartAnnotationStyle, in bounds: CGRect) -> CGFloat {
-        max(1, style.lineWidth * max(1, bounds.width / 350))
+        renderedLineWidth(style, outputWidth: bounds.width)
     }
 
     private static func color(_ color: NSColor, opacity: CGFloat) -> CGColor {
@@ -6071,11 +6157,12 @@ enum SmartAnnotationRenderer {
         bounds: CGRect,
         canvas: CGRect
     ) {
+        let lineWidth = scaledLineWidth(style, in: bounds)
         switch annotation {
         case .rectangle(let value):
             context.saveGState()
             context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-            context.setLineWidth(scaledLineWidth(style, in: bounds))
+            context.setLineWidth(lineWidth)
             context.stroke(rect(value, in: bounds, canvas: canvas))
             context.restoreGState()
         case .filledRectangle(let value):
@@ -6084,13 +6171,13 @@ enum SmartAnnotationRenderer {
             context.setFillColor(color(.systemRed, opacity: style.opacity * 0.35))
             context.fill(target)
             context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-            context.setLineWidth(scaledLineWidth(style, in: bounds))
+            context.setLineWidth(lineWidth)
             context.stroke(target)
             context.restoreGState()
         case .ellipse(let value):
             context.saveGState()
             context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-            context.setLineWidth(scaledLineWidth(style, in: bounds))
+            context.setLineWidth(lineWidth)
             context.strokeEllipse(in: rect(value, in: bounds, canvas: canvas))
             context.restoreGState()
         case .arrow(let start, let end):
@@ -6099,14 +6186,16 @@ enum SmartAnnotationRenderer {
                 to: point(end, in: bounds, canvas: canvas),
                 in: context,
                 width: bounds.width,
-                style: style
+                style: style,
+                lineWidth: lineWidth
             )
         case .line(let start, let end):
             drawLine(
                 from: point(start, in: bounds, canvas: canvas),
                 to: point(end, in: bounds, canvas: canvas),
                 in: context,
-                style: style
+                style: style,
+                lineWidth: lineWidth
             )
         case .blur(let value):
             applyBlur(to: context, rect: rect(value, in: bounds, canvas: canvas), bounds: bounds, style: style)
@@ -6118,7 +6207,7 @@ enum SmartAnnotationRenderer {
             context.addRect(target)
             context.drawPath(using: .eoFill)
             context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-            context.setLineWidth(scaledLineWidth(style, in: bounds))
+            context.setLineWidth(lineWidth)
             context.stroke(target)
             context.restoreGState()
         case .counter(let value, let location):
@@ -6132,7 +6221,7 @@ enum SmartAnnotationRenderer {
         case .highlighter(let start, let end):
             context.saveGState()
             context.setStrokeColor(color(.systemYellow, opacity: style.opacity))
-            context.setLineWidth(scaledLineWidth(style, in: bounds))
+            context.setLineWidth(lineWidth)
             context.setLineCap(.round)
             context.move(to: point(start, in: bounds, canvas: canvas))
             context.addLine(to: point(end, in: bounds, canvas: canvas))
@@ -6143,7 +6232,7 @@ enum SmartAnnotationRenderer {
             guard let first = values.first, values.count > 1 else { return }
             context.saveGState()
             context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-            context.setLineWidth(scaledLineWidth(style, in: bounds))
+            context.setLineWidth(lineWidth)
             context.setLineCap(.round)
             context.setLineJoin(.round)
             context.move(to: first)
@@ -6178,11 +6267,12 @@ enum SmartAnnotationRenderer {
         from start: CGPoint,
         to end: CGPoint,
         in context: CGContext,
-        style: SmartAnnotationStyle
+        style: SmartAnnotationStyle,
+        lineWidth: CGFloat
     ) {
         context.saveGState()
         context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-        context.setLineWidth(scaledLineWidth(style, in: CGRect(x: 0, y: 0, width: context.boundingBoxOfClipPath.width, height: context.boundingBoxOfClipPath.height)))
+        context.setLineWidth(lineWidth)
         context.setLineCap(.round)
         context.move(to: start)
         context.addLine(to: end)
@@ -6195,13 +6285,14 @@ enum SmartAnnotationRenderer {
         to end: CGPoint,
         in context: CGContext,
         width: CGFloat,
-        style: SmartAnnotationStyle
+        style: SmartAnnotationStyle,
+        lineWidth: CGFloat
     ) {
         let angle = atan2(end.y - start.y, end.x - start.x)
         let head = max(14, width / 45)
         context.saveGState()
         context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-        context.setLineWidth(scaledLineWidth(style, in: CGRect(x: 0, y: 0, width: width, height: width)))
+        context.setLineWidth(lineWidth)
         context.setLineCap(.round)
         context.move(to: start)
         context.addLine(to: end)
