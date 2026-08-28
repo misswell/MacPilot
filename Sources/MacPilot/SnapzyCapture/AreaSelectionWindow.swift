@@ -2314,14 +2314,23 @@ final class AreaSelectionOverlayView: NSView {
               !self.smartElementDidDrag,
               !self.isShowingSelectionActions else { return }
         self.pendingElementHoverWork = nil
-        self.resolveElementHover(at: screenPoint, using: elementTargetResolver)
+        self.resolveElementHover(
+          at: screenPoint,
+          using: elementTargetResolver,
+          expectedGeneration: generation
+        )
       }
       pendingElementHoverWork = work
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
       return
     }
     invalidatePendingElementHoverWork()
-    resolveElementHover(at: screenPoint, using: elementTargetResolver)
+    let generation = elementHoverGeneration
+    resolveElementHover(
+      at: screenPoint,
+      using: elementTargetResolver,
+      expectedGeneration: generation
+    )
   }
 
   private func invalidatePendingElementHoverWork() {
@@ -2332,13 +2341,25 @@ final class AreaSelectionOverlayView: NSView {
 
   private func resolveElementHover(
     at screenPoint: CGPoint,
-    using resolver: @escaping (CGPoint) -> CGRect?
+    using resolver: @escaping (CGPoint) -> CGRect?,
+    expectedGeneration: UInt
   ) {
-    guard interactionMode == .smartElement,
+    guard elementHoverGeneration == expectedGeneration,
+          interactionMode == .smartElement,
           !smartElementDidDrag,
           !isShowingSelectionActions else { return }
     let previous = hoveredElementRect
     let resolved = resolver(screenPoint)?.standardized
+
+    // AX hit-testing can synchronously pump the main run loop. Pointer events
+    // may therefore begin a manual drag while the resolver is still running.
+    // Re-check ownership immediately before committing the result so an
+    // in-flight recognition cannot restore its stale border after the drag
+    // invalidated its generation.
+    guard elementHoverGeneration == expectedGeneration,
+          interactionMode == .smartElement,
+          !smartElementDidDrag,
+          !isShowingSelectionActions else { return }
     hoveredElementRect = resolved.flatMap { $0.isEmpty ? nil : $0 }
     lastElementHoverPoint = screenPoint
     updateElementSelectionLayers()
@@ -2360,7 +2381,11 @@ final class AreaSelectionOverlayView: NSView {
               !self.smartElementDidDrag,
               !self.isShowingSelectionActions else { return }
         self.pendingElementHoverWork = nil
-        self.resolveElementHover(at: screenPoint, using: resolver)
+        self.resolveElementHover(
+          at: screenPoint,
+          using: resolver,
+          expectedGeneration: generation
+        )
       }
       pendingElementHoverWork = work
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)

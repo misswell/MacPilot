@@ -758,4 +758,61 @@ struct SnapzyCaptureTests {
 
         window.overlayView.handleLivePassthroughMouseUp(atScreenPoint: end)
     }
+
+    @Test @MainActor func inFlightSmartElementRecognitionCannotCommitAfterManualDragBegins() async throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+
+        let start = CGPoint(
+            x: screen.frame.minX + 100,
+            y: screen.frame.minY + 100
+        )
+        let end = CGPoint(
+            x: screen.frame.minX + 220,
+            y: screen.frame.minY + 180
+        )
+        let staleElementRect = CGRect(
+            x: screen.frame.minX + 420,
+            y: screen.frame.minY + 300,
+            width: 120,
+            height: 90
+        )
+        let expectedRect = CGRect(
+            x: start.x - screen.frame.minX,
+            y: start.y - screen.frame.minY,
+            width: end.x - start.x,
+            height: end.y - start.y
+        )
+        var beganManualDragDuringRecognition = false
+
+        window.overlayView.setElementTargetResolver { _ in
+            if !beganManualDragDuringRecognition {
+                beganManualDragDuringRecognition = true
+                window.overlayView.handleLivePassthroughMouseDown(atScreenPoint: start)
+                window.overlayView.handleLivePassthroughMouseDragged(atScreenPoint: end)
+                window.overlayView.renderManualSelection(
+                    screenRect: CGRect(
+                        x: start.x,
+                        y: start.y,
+                        width: end.x - start.x,
+                        height: end.y - start.y
+                    ),
+                    currentScreenPoint: end
+                )
+            }
+            return staleElementRect
+        }
+        window.overlayView.setInteractionMode(.smartElement)
+        window.overlayView.setLivePassthroughInputEnabled(true)
+
+        window.overlayView.handleLivePassthroughMouseMoved(atScreenPoint: start)
+        try await Task.sleep(for: .milliseconds(120))
+
+        #expect(beganManualDragDuringRecognition)
+        #expect(window.overlayView.testSelectionBorderPathBounds == expectedRect)
+        window.overlayView.handleLivePassthroughMouseUp(atScreenPoint: end)
+    }
 }
