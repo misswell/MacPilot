@@ -32,15 +32,15 @@ struct BLEWakeRecoveryTests {
     }
 
     @Test func unlockAttemptPlanRetriesAfterARealDisplayWake() {
-        #expect(BLEUnlockAttemptPlan.standard.deadlines == [0.5, 1, 2, 4, 8, 12])
+        #expect(BLEUnlockAttemptPlan.standard.deadlines == [2, 5, 9, 14, 20])
         #expect(BLEUnlockAttemptPlan.standard.deadlines == BLEUnlockAttemptPlan.standard.deadlines.sorted())
     }
 
     @Test func unlockAttemptRetriesWhileTheScreenRemainsLocked() {
         var progress = BLEUnlockAttemptProgress(plan: .standard)
 
-        #expect(progress.nextAction(screenState: .locked) == .postPassword(deadline: 0.5))
-        #expect(progress.nextAction(screenState: .locked) == .postPassword(deadline: 1))
+        #expect(progress.nextAction(screenState: .locked) == .postPassword(deadline: 2))
+        #expect(progress.nextAction(screenState: .locked) == .postPassword(deadline: 5))
         #expect(progress.nextAction(screenState: .unlocked) == .confirmed)
     }
 
@@ -54,7 +54,46 @@ struct BLEWakeRecoveryTests {
         var progress = BLEUnlockAttemptProgress(plan: .standard)
 
         #expect(progress.nextAction(screenState: .unknown) == .stateUnavailable)
-        #expect(progress.nextAction(screenState: .locked) == .postPassword(deadline: 1))
+        #expect(progress.nextAction(screenState: .locked) == .postPassword(deadline: 5))
+    }
+
+    @Test func missingLockFlagMeansUnlockedForTheCurrentCompletedSession() {
+        #expect(BLEScreenLockStateResolver.resolve(
+            locked: nil,
+            loginDone: true,
+            sessionUserName: "guofeng",
+            currentUserName: "guofeng"
+        ) == .unlocked)
+    }
+
+    @Test func missingLockFlagRemainsUnknownForAnotherOrIncompleteSession() {
+        #expect(BLEScreenLockStateResolver.resolve(
+            locked: nil,
+            loginDone: true,
+            sessionUserName: "another-user",
+            currentUserName: "guofeng"
+        ) == .unknown)
+        #expect(BLEScreenLockStateResolver.resolve(
+            locked: nil,
+            loginDone: false,
+            sessionUserName: "guofeng",
+            currentUserName: "guofeng"
+        ) == .unknown)
+    }
+
+    @Test func explicitLockFlagWinsDuringSessionTransitions() {
+        #expect(BLEScreenLockStateResolver.resolve(
+            locked: true,
+            loginDone: true,
+            sessionUserName: "guofeng",
+            currentUserName: "guofeng"
+        ) == .locked)
+        #expect(BLEScreenLockStateResolver.resolve(
+            locked: false,
+            loginDone: false,
+            sessionUserName: nil,
+            currentUserName: "guofeng"
+        ) == .unlocked)
     }
 
     @MainActor

@@ -413,7 +413,7 @@ struct BLEUnlockAttemptPlan: Equatable {
     let deadlines: [TimeInterval]
 
     static let standard = BLEUnlockAttemptPlan(
-        deadlines: [0.5, 1, 2, 4, 8, 12]
+        deadlines: [2, 5, 9, 14, 20]
     )
 }
 
@@ -426,6 +426,23 @@ enum BLEScreenLockState: String, Equatable {
 enum BLEUnlockConfirmation {
     static func isConfirmed(screenState: BLEScreenLockState) -> Bool {
         screenState == .unlocked
+    }
+}
+
+enum BLEScreenLockStateResolver {
+    static func resolve(
+        locked: Bool?,
+        loginDone: Bool?,
+        sessionUserName: String?,
+        currentUserName: String
+    ) -> BLEScreenLockState {
+        if let locked {
+            return locked ? .locked : .unlocked
+        }
+        if loginDone == true, sessionUserName == currentUserName {
+            return .unlocked
+        }
+        return .unknown
     }
 }
 
@@ -1407,17 +1424,22 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         notifyChange()
     }
 
+    private func sessionBoolean(_ value: Any?) -> Bool? {
+        if let value = value as? NSNumber { return value.boolValue }
+        if let value = value as? Int { return value != 0 }
+        return nil
+    }
+
     private func screenLockState() -> BLEScreenLockState {
         guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any] else {
             return .unknown
         }
-        if let locked = dict["CGSSessionScreenIsLocked"] as? NSNumber {
-            return locked.boolValue ? .locked : .unlocked
-        }
-        if let locked = dict["CGSSessionScreenIsLocked"] as? Int {
-            return locked == 1 ? .locked : .unlocked
-        }
-        return .unknown
+        return BLEScreenLockStateResolver.resolve(
+            locked: sessionBoolean(dict["CGSSessionScreenIsLocked"]),
+            loginDone: sessionBoolean(dict["kCGSessionLoginDoneKey"]),
+            sessionUserName: dict["kCGSSessionUserNameKey"] as? String,
+            currentUserName: NSUserName()
+        )
     }
 
     func isScreenLocked() -> Bool {
@@ -1591,7 +1613,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                     self.lastUnlockRequestAt = requestTimestamp
                     self.lastAutomaticUnlockRequestAt = requestTimestamp
                     self.log("posting unlock key events deadline=\(attemptDeadline) screenState=locked accessibilityTrusted=\(AXIsProcessTrusted())")
-                    self.fakeKeyStrokes(password)
+                    await self.fakeKeyStrokes(password)
                     self.log("unlock key events posted deadline=\(attemptDeadline) screenStateAfterPost=\(self.screenLockState().rawValue)")
                 }
                 previousDeadline = deadline
@@ -1646,7 +1668,30 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         }
     }
 
-    private func fakeKeyStrokes(_ string: String) {
+    private func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags = []) {
+        let src = CGEventSource(stateID: .hidSystemState)
+        let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true)
+        down?.flags = flags
+        down?.post(tap: .cghidEventTap)
+        let up = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false)
+        up?.flags = flags
+        up?.post(tap: .cghidEventTap)
+    }
+
+    private func fakeKeyStrokes(_ string: String) async {
+        log("preparing password field for key events")
+
+        // The lock UI can recreate its secure text field while wake services
+        // (Touch ID, Auto Unlock, and avatar transitions) are still settling.
+        // Normalize any surviving text before every retry so a late attempt
+        // cannot append a second password to a partially handled first one.
+        postKey(0x00, flags: .maskCommand) // Command-A
+        try? await Task.sleep(for: .milliseconds(80))
+        guard !Task.isCancelled else { return }
+        postKey(0x33) // Delete
+        try? await Task.sleep(for: .milliseconds(120))
+        guard !Task.isCancelled else { return }
+
         log("posting password key events")
         let src = CGEventSource(stateID: .hidSystemState)
         let per = 20
@@ -1662,11 +1707,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             let down = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: true)
             down?.keyboardSetUnicodeString(stringLength: len, unicodeString: buffer)
             down?.post(tap: .cghidEventTap)
-            CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: false)?.post(tap: .cghidEventTap)
+            let up = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: false)
+            up?.keyboardSetUnicodeString(stringLength: len, unicodeString: buffer)
+            up?.post(tap: .cghidEventTap)
             buffer.deallocate()
+            try? await Task.sleep(for: .milliseconds(30))
+            guard !Task.isCancelled else { return }
         }
-        CGEvent(keyboardEventSource: src, virtualKey: 52, keyDown: true)?.post(tap: .cghidEventTap)
-        CGEvent(keyboardEventSource: src, virtualKey: 52, keyDown: false)?.post(tap: .cghidEventTap)
+        try? await Task.sleep(for: .milliseconds(180))
+        guard !Task.isCancelled else { return }
+        postKey(0x24) // Return
     }
 
     // MARK: Keychain password
