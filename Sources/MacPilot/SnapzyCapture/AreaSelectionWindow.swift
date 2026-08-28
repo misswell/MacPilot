@@ -306,6 +306,10 @@ final class AreaSelectionOverlayView: NSView {
   private var lastElementHoverPoint: CGPoint?
   private var pendingElementHoverWork: DispatchWorkItem?
   private var elementHoverFollowUpDepth = 0
+  /// Smart capture presents its panel before the first AX hit-test completes.
+  /// Keep the dim layer hidden during that gap; otherwise its nil mask paints
+  /// a full-screen dark frame immediately before the target cutout appears.
+  private var isAwaitingInitialSmartElementTarget = false
   /// Generation used to invalidate already queued AX hover callbacks. A
   /// cancelled DispatchWorkItem may still be delivered by GCD, so cancellation
   /// alone is not enough when a smart-element drag becomes a manual drag.
@@ -743,6 +747,7 @@ final class AreaSelectionOverlayView: NSView {
     invalidatePendingElementHoverWork()
     lastElementHoverPoint = nil
     elementHoverFollowUpDepth = 0
+    isAwaitingInitialSmartElementTarget = interactionMode == .smartElement
     smartElementDragStart = nil
     smartElementDragActive = false
     smartElementDidDrag = false
@@ -781,6 +786,7 @@ final class AreaSelectionOverlayView: NSView {
     dimLayer.backgroundColor = showSelectionAreaOverlay ? dimColor.cgColor : nil
     dimLayer.mask = nil
     dimLayer.frame = bounds
+    dimLayer.isHidden = isLivePassthroughInput || isAwaitingInitialSmartElementTarget
     insideSelectionOverlayLayer.isHidden = true
     insideOverlayIsDark = true
     didLogMissingLumaData = false
@@ -1580,6 +1586,14 @@ final class AreaSelectionOverlayView: NSView {
     var testSelectionBorderPathBounds: CGRect? {
       selectionBorderLayer.path?.boundingBox
     }
+
+    var testDimLayerIsHidden: Bool {
+      dimLayer.isHidden
+    }
+
+    var testDimLayerHasMask: Bool {
+      dimLayer.mask != nil
+    }
   #endif
 
   /// Initialize crosshair at current mouse position (called on activation)
@@ -2147,6 +2161,11 @@ final class AreaSelectionOverlayView: NSView {
         updateInsideOverlayAppearance(for: localRect)
         insideSelectionOverlayLayer.isHidden = false
       }
+      if !isLivePassthroughInput {
+        // A fast drag can beat the initial AX target query. Reveal only after
+        // this first valid manual cutout exists, never as an empty dark layer.
+        dimLayer.isHidden = false
+      }
       if showsCurrentPointer {
         updateSizeIndicator(for: localRect, measuredSize: screenRect.size)
       } else {
@@ -2361,6 +2380,9 @@ final class AreaSelectionOverlayView: NSView {
           !smartElementDidDrag,
           !isShowingSelectionActions else { return }
     hoveredElementRect = resolved.flatMap { $0.isEmpty ? nil : $0 }
+    if hoveredElementRect != nil {
+      isAwaitingInitialSmartElementTarget = false
+    }
     lastElementHoverPoint = screenPoint
     updateElementSelectionLayers()
 
@@ -2468,6 +2490,12 @@ final class AreaSelectionOverlayView: NSView {
         updateInsideOverlayAppearance(for: localRect)
         insideSelectionOverlayLayer.isHidden = false
       }
+    }
+    if !isAwaitingInitialSmartElementTarget, !isLivePassthroughInput {
+      // The target mask/path is already installed in this disabled-animation
+      // transaction, so revealing the layer cannot expose a full-screen dim
+      // frame to WindowServer.
+      dimLayer.isHidden = false
     }
     CATransaction.commit()
     updateModeHint()
@@ -2666,6 +2694,7 @@ final class AreaSelectionOverlayView: NSView {
         let dy = point.y - dragStart.y
         if hypot(dx, dy) >= Self.smartElementDragThreshold {
           smartElementDidDrag = true
+          isAwaitingInitialSmartElementTarget = false
           invalidatePendingElementHoverWork()
           hoveredElementRect = nil
           elementHoverFollowUpDepth = 0

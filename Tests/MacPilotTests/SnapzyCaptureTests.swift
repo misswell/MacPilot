@@ -815,4 +815,34 @@ struct SnapzyCaptureTests {
         #expect(window.overlayView.testSelectionBorderPathBounds == expectedRect)
         window.overlayView.handleLivePassthroughMouseUp(atScreenPoint: end)
     }
+
+    @Test @MainActor func smartElementStartupNeverPresentsAFullScreenDimFrame() async throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+
+        let target = CGRect(
+            x: screen.frame.minX + 160,
+            y: screen.frame.minY + 140,
+            width: 480,
+            height: 320
+        )
+        window.overlayView.setElementTargetResolver { _ in target }
+        window.overlayView.setInteractionMode(.smartElement)
+
+        // The panel is presented before the delayed AX query runs. Its first
+        // composited frame must stay transparent instead of dimming the whole
+        // display with a nil mask.
+        #expect(window.overlayView.testDimLayerIsHidden)
+        #expect(!window.overlayView.testDimLayerHasMask)
+
+        try await Task.sleep(for: .milliseconds(120))
+
+        // Recognition reveals the dim layer only after its target cutout has
+        // been installed, so WindowServer never sees a full-screen dark frame.
+        #expect(!window.overlayView.testDimLayerIsHidden)
+        #expect(window.overlayView.testDimLayerHasMask)
+    }
 }
