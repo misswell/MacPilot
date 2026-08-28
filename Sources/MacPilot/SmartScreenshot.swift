@@ -5248,9 +5248,21 @@ final class SmartAnnotationModel: ObservableObject {
         }
     }
 
+    func setLineWidth(_ value: CGFloat) {
+        updateCurrentStyle { style in
+            style.lineWidth = min(48, max(1, value))
+        }
+    }
+
     func adjustOpacity(by delta: CGFloat) {
         updateCurrentStyle { style in
             style.opacity = min(1, max(0.05, style.opacity + delta))
+        }
+    }
+
+    func setOpacity(_ value: CGFloat) {
+        updateCurrentStyle { style in
+            style.opacity = min(1, max(0.05, value))
         }
     }
 
@@ -5564,15 +5576,7 @@ struct SmartAnnotationEditor: View {
                     model.removeAll()
                 }
             }
-            Text(AppText.value(
-                "scAnnotationStyleValue",
-                language: language,
-                Int(model.currentStyle.lineWidth.rounded()),
-                Int((model.currentStyle.opacity * 100).rounded())
-            ))
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .help(AppText.value("scAnnotationWheelHint", language: language))
+            annotationStyleControls
             Spacer(minLength: 0)
             Button(AppText.value("scCancel", language: language), action: onCancel)
                 .keyboardShortcut(.cancelAction)
@@ -5580,6 +5584,59 @@ struct SmartAnnotationEditor: View {
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
         }
+    }
+
+    private var annotationStyleControls: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Text(AppText.value("scAnnotationLineWidth", language: language))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "line.3.horizontal")
+                    .foregroundStyle(.secondary)
+                Slider(value: lineWidthBinding, in: 1...48, step: 1)
+                    .frame(width: 78)
+                Text("(Int(model.currentStyle.lineWidth.rounded()))")
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 24, alignment: .trailing)
+            }
+            .help(AppText.value("scAnnotationLineWidth", language: language))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(AppText.value("scAnnotationLineWidth", language: language))
+            .accessibilityValue(Text("(Int(model.currentStyle.lineWidth.rounded()))"))
+
+            HStack(spacing: 4) {
+                Text(AppText.value("scAnnotationOpacity", language: language))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "circle.lefthalf.filled")
+                    .foregroundStyle(.secondary)
+                Slider(value: opacityBinding, in: 0.05...1, step: 0.05)
+                    .frame(width: 78)
+                Text("(Int((model.currentStyle.opacity * 100).rounded()))%")
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 38, alignment: .trailing)
+            }
+            .help(AppText.value("scAnnotationOpacity", language: language))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(AppText.value("scAnnotationOpacity", language: language))
+            .accessibilityValue(Text("(Int((model.currentStyle.opacity * 100).rounded()))%"))
+        }
+        .help(AppText.value("scAnnotationWheelHint", language: language))
+    }
+
+    private var lineWidthBinding: Binding<Double> {
+        Binding(
+            get: { Double(model.currentStyle.lineWidth) },
+            set: { model.setLineWidth(CGFloat($0)) }
+        )
+    }
+
+    private var opacityBinding: Binding<Double> {
+        Binding(
+            get: { Double(model.currentStyle.opacity) },
+            set: { model.setOpacity(CGFloat($0)) }
+        )
     }
 
     private func annotationCanvas(in availableSize: CGSize) -> some View {
