@@ -141,6 +141,12 @@ struct SoftwareUpdateTests {
         ])
     }
 
+    @Test func githubProjectLinkUsesCanonicalRepository() {
+        #expect(AppIdentity.githubURL.absoluteString == "https://github.com/misswell/MacPilot")
+        #expect(AppText.value("githubProjectLink", language: .simplifiedChinese, AppIdentity.githubRepository) == "github.com/misswell/MacPilot")
+        #expect(AppText.value("githubProjectLink", language: .english, AppIdentity.githubRepository) == "github.com/misswell/MacPilot")
+    }
+
     @Test func reportsAnUpdateOnlyForANewerVersion() throws {
         let release = SoftwareRelease(
             version: try #require(SoftwareVersion("2.0.0")),

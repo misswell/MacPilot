@@ -389,7 +389,7 @@ enum AppText {
         "startAtLoginHint": "登录 Mac 后自动在后台启动 MacPilot。",
         "showApp": "显示 MacPilot", "quitApp": "退出 MacPilot", "enabledStatus": "MacPilot：已启用",
         "disabledStatus": "MacPilot：已停用", "disableApp": "停用 MacPilot", "enableApp": "启用 MacPilot",
-        "loginError": "无法更新登录启动项：%@", "aboutAutomation": "自动化", "manageRules": "管理应用规则和界面偏好。",
+        "loginError": "无法更新登录启动项：%@", "aboutAutomation": "自动化", "manageRules": "管理应用规则和界面偏好。", "githubProject": "GitHub 项目", "githubProjectDescription": "在 GitHub 查看 MacPilot 的源代码、版本发布和问题反馈。", "githubProjectLink": "github.com/%@",
         "quitsIn": "将在 %d 分钟后退出"
         , "launch": "启动", "launchSubtitle": "在登录后按设定延迟启动应用。", "launchApps": "启动应用",
         "addLaunchApp": "添加启动应用", "addLaunchRule": "添加启动规则", "editLaunchRule": "编辑启动规则",
@@ -695,7 +695,7 @@ enum AppText {
             "systemLanguage": "System Language", "english": "English", "simplifiedChinese": "Simplified Chinese", "checkNow": "Check now",
             "startAtLogin": "Start at Login", "startAtLoginHint": "Launch MacPilot automatically in the background when you log in.", "showApp": "Show MacPilot", "quitApp": "Quit MacPilot", "enabledStatus": "MacPilot: Enabled",
             "disabledStatus": "MacPilot: Disabled", "disableApp": "Disable MacPilot", "enableApp": "Enable MacPilot",
-            "loginError": "Couldn’t update the login item: %@", "aboutAutomation": "AUTOMATION", "manageRules": "Manage app rules and interface preferences.",
+            "loginError": "Couldn’t update the login item: %@", "aboutAutomation": "AUTOMATION", "manageRules": "Manage app rules and interface preferences.", "githubProject": "GitHub Project", "githubProjectDescription": "View MacPilot’s source code, releases, and issue tracker on GitHub.", "githubProjectLink": "github.com/%@",
             "quitsIn": "Quits in %d min",
             "launch": "Launch", "launchSubtitle": "Launch apps after their configured delay following login.", "launchApps": "LAUNCH APPS",
             "addLaunchApp": "Add launch app", "addLaunchRule": "Add launch rule", "editLaunchRule": "Edit launch rule",
@@ -3757,6 +3757,18 @@ struct SettingsView: View {
                 }
                 SettingsCard {
                     SoftwareUpdateSettingsView(updater: model.updater, language: model.language)
+                }
+                SettingsCard {
+                    Text(model.t("githubProject")).font(.headline)
+                    Text(model.t("githubProjectDescription"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Link(destination: AppIdentity.githubURL) {
+                        Label(
+                            model.t("githubProjectLink", AppIdentity.githubRepository),
+                            systemImage: "chevron.left.forwardslash.chevron.right"
+                        )
+                    }
                 }
                 SettingsCard {
                     Text(model.t("language")).font(.headline)

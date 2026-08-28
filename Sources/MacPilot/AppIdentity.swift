@@ -20,6 +20,7 @@ enum AppIdentity {
     static let bundleIdentifier = "com.misswell.macpilot"
     static let legacyBundleIdentifier = "com.misswell.octopilot"
     static let githubRepository = "misswell/MacPilot"
+    static let githubURL = URL(string: "https://github.com/\(githubRepository)")!
 
     static let appBundleName = "MacPilot.app"
     static let legacyAppBundleName = "OctoPilot.app"
