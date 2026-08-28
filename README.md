@@ -17,15 +17,17 @@ You can pick a running app or browse for an `.app` bundle, reorder rules, pause 
 
 ## BLE Unlock
 
-MacPilot can also lock and unlock your Mac by proximity of a Bluetooth Low Energy device - an iPhone, Apple Watch, or any BLE device that periodically advertises from a **static MAC address**.
+MacPilot can also lock and unlock your Mac by proximity of up to two Bluetooth Low Energy devices - an iPhone, Apple Watch, or any BLE device that periodically advertises from a **static MAC address**.
 
 Open **BLE Unlock** from the sidebar (or the menu-bar menu) and:
 
 - Scan for nearby devices and pick yours. Devices are shown with name, resolved MAC address, and live RSSI.
+- Add an optional second device and choose whether **either device** or **both devices** must be nearby to keep the Mac unlocked.
 - Set **Unlock RSSI** (unlock when the device is close) and **Lock RSSI** (lock when it moves away). Either can be disabled independently.
 - Set a **Delay to Lock** (grace period before locking when the device leaves) and a **No-Signal Timeout** (lock when signal is lost).
 - Optionally: wake the display on proximity, wake without unlocking, pause "Now Playing" while locked, use the screen saver to lock, turn off the screen on lock, or switch to **Passive Mode** to avoid interfering with other Bluetooth devices.
 - Use **Lock Screen Now** to lock immediately; it unlocks once the device leaves and returns.
+- Review recent lock and unlock events in the built-in screen-lock history.
 - Your login password is stored securely in **Keychain** and is only used to type it on the lock screen. Set or update it with **Set Password…**.
 
 Bluetooth and Accessibility access are required. Devices whose BLE MAC address rotates (most non-Apple devices) cannot be tracked reliably.
@@ -41,6 +43,22 @@ The **Input Sources** sidebar brings the core Input Source Pro workflow into Mac
 
 This feature is an independent implementation using macOS Carbon, Accessibility, Core Graphics, and IOKit APIs; it does not bundle Input Source Pro source code or third-party dependencies.
 
+## Clipboard History
+
+Clipboard History keeps recent copied content available from a searchable panel:
+
+- Press `⌘⇧V` to open it, then use search, arrow keys, Return, or number/letter shortcuts to paste or copy an item.
+- Pin important items, remove individual entries, clear unpinned history, and configure the history limit.
+- Text, images, URLs, and other supported pasteboard content are deduplicated and persisted across launches.
+
+## Window Switcher
+
+The **Window Switcher** provides fast keyboard navigation across application windows:
+
+- Press `⌥Tab` to open it, hold Option to keep cycling, use Shift for reverse order, and release Option to focus the selected window; Escape cancels.
+- Show application icons, window titles, and optional previews; include minimized or hidden windows when needed.
+- Merge multiple windows from selected applications into one switcher card without changing the applications' actual windows.
+
 ## Screenshot Capture
 
 The **Screenshot** sidebar adds Snapzy-style capture and quick actions to MacPilot:
@@ -48,10 +66,32 @@ The **Screenshot** sidebar adds Snapzy-style capture and quick actions to MacPil
 - Press the global shortcut (default `F1`) to enter smart-element capture. The selector highlights the element under the pointer after a short debounce, and keeps the highlight stable while moving between elements.
 - Area, application window, fullscreen, current window, area + annotate, OCR, scrolling screenshot, and object-cutout entry points are also available from the Screenshot settings page.
 - Area and application-window selections remain in a PixPin-style editing state with eight resize handles, a size badge, and a floating toolbar; move or resize the selection before copying, saving, annotating, running OCR, pinning, or cancelling.
-- After capture, MacPilot can copy the image to the clipboard, show a quick-access preview card, pin it on screen, run OCR, open the annotation editor, or reveal the file in Finder.
+- Annotate directly on the current capture with shapes, arrows, lines, pencil/highlighter strokes, blur, spotlight, counters, text, watermarks, and crop; adjust line width and opacity with the toolbar or mouse wheel.
+- After capture, MacPilot can copy the image to the clipboard, show a quick-access preview card, pin it on screen, run OCR, open the annotation editor, upload it manually to GitHub or Gitee, or reveal the file in Finder.
+- Explicit image uploads show progress and success/error feedback, then copy the public image URL to the clipboard.
 - Screenshot shortcuts are configurable in Settings and can be edited per entry point.
 
 Any feature can be toggled on or off from its Settings page. Disabled features do not register global shortcuts, do not start background monitoring or scheduled work, and disappear from the menu-bar menu. For example, turning off **Enable screenshot capture** removes the screenshot entry from the top menu entirely and stops all screenshot-related idle resources.
+
+## Finder Context Menu
+
+MacPilot includes a Finder Sync extension that adds configurable actions to Finder's context menu:
+
+- **Copy Path** copies the paths of selected files and folders.
+- Open selected items with configured applications.
+- Open a terminal, delete items directly, hide or unhide items, and send items with AirDrop.
+- Create configured file types from Finder's blank-area menu and open configured common directories.
+- Enable, disable, and reorder actions, applications, new-file types, and common directories independently.
+
+## Performance and Resource Usage
+
+MacPilot is built with native Swift/SwiftUI and macOS system APIs, without a bundled cross-platform runtime. Its long-lived data paths are designed to keep memory bounded:
+
+- Clipboard images and content larger than 64 KB are stored as files under Application Support. The history model keeps only type, filename, and size metadata, and reads the content on demand.
+- Screenshot copies use a file-backed, lazy pasteboard provider. PNG data is generated only when another app requests it, then released after the request.
+- Window-switcher previews are downscaled to at most 256×160 pixels, prefetch at most 30 windows, and are pruned when the window inventory changes. Disabling thumbnails cancels capture work and clears the thumbnail cache.
+- Quick Access shows at most five cards at once; dismissing an item releases its associated panel and annotation session resources.
+- Disabled features do not keep global event taps, monitors, timers, or scheduled work running. Diagnostic file I/O runs on a utility queue and log data is retained for one hour.
 
 ## Storage Compression
 
@@ -94,73 +134,17 @@ It is derived from the scrolling pipeline of
 - Settings are persisted with the rest of `config.json`; Accessibility access is
   required because MacPilot must read and rewrite wheel events in other apps.
 
-## Build the app
+## Permissions and Configuration
 
-```sh
-./Scripts/build-app.sh
-open MacPilot.app
-```
+MacPilot stores rules and preferences in `~/Library/Application Support/MacPilot/config.json`. Updating the app preserves this file, and compatible settings are migrated automatically.
 
-The built app is `MacPilot.app` in the project root. The Close Windows action requires Accessibility access in System Settings, and selecting that mode immediately triggers the system permission prompt. Whether a target app removes its Dock icon after its windows close is controlled by that app.
+- **Accessibility** is needed for global keyboard shortcuts, window switching, input-source automation, smooth scrolling, BLE screen control, and actions that operate in other apps.
+- **Screen Recording** is needed for screenshots, window previews, and Picture-in-Picture capture. If it is unavailable, window previews fall back to application icons.
+- **Bluetooth** is needed for BLE Unlock. The login password is stored in the macOS Keychain and is never written to the configuration file.
+- Features can be disabled independently; disabled features stop their event monitors, timers, scheduled work, and other runtime resources.
 
-When a Developer ID identity is available, release builds and local builds use the same explicit designated requirement (bundle identifier and Apple trust chain). The requirement deliberately does not include the signing certificate's Team ID, because the local Apple Development and release Developer ID certificates may belong to different teams on a development Mac. A local build automatically uses the installed Apple Development identity; if no stable identity is available, the script warns and falls back to ad-hoc signing. The first build after migrating from an older ad-hoc/default-signed app may need permissions granted once again; subsequent development and release builds can share the same Screen Recording and Accessibility authorization.
+If MacPilot remains untrusted after an update even though it is enabled in the Accessibility list, toggle the permission off and on again. The permission alert also provides **Reset Permission and Quit** to refresh the Accessibility authorization before reopening the app.
 
-If MacPilot remains untrusted after an update even though it is enabled in the Accessibility list, toggling the switch may leave the old signing record in place. The permission alert offers **Reset Permission and Quit**, which runs `tccutil reset Accessibility com.misswell.macpilot` for you and exits MacPilot. Reopen the app and grant access again. Runtime rules check access silently and do not repeatedly request it in the background.
+## Download
 
-## Distribution
-
-If no stable signing identity is installed, local builds fall back to ad-hoc signing. To produce a distributable, notarized build you need an Apple Developer account and a Developer ID Application certificate.
-
-### Prerequisites
-
-1. A **Developer ID Application** certificate (create it in the Apple Developer portal, then import its `.p12` into your keychain).
-2. An **app-specific password** for notarization (appleid.apple.com → Sign-In and Security → App-Specific Passwords).
-3. Your **Team ID** (10 characters, from the Developer portal).
-
-### Local distribution
-
-```sh
-export MACPILOT_DEVELOPER_ID="Developer ID Application: Your Name (TEAMID)"
-export MACPILOT_APPLE_ID="you@example.com"
-export MACPILOT_APPLE_PASSWORD="app-specific-password"
-export MACPILOT_TEAM_ID="TEAMID"
-./Scripts/distribute-app.sh
-```
-
-This builds, signs with Developer ID + Hardened Runtime, submits to Apple for notarization, staples the ticket, and produces `MacPilot.app` + `MacPilot-<version>-macos.zip` that open without Gatekeeper warnings. After a successful distribution, older `MacPilot-*-macos.zip` and `OctoPilot-*.zip` archives in the selected output directory are removed, leaving only the newly created archive.
-
-### Bridge release for the rename
-
-Before the first release with the new Bundle ID, publish one bridge release using the old app identity. The bridge keeps `OctoPilot.app`, `com.misswell.octopilot`, and the `OctoPilot-<version>-macos.zip` archive name, while its visible app name is `MacPilot`:
-
-```sh
-MACPILOT_BRIDGE=1 \
-MACPILOT_VERSION=1.1.20 \
-MACPILOT_OUTPUT_DIR="$PWD/bridge-artifacts" \
-./Scripts/distribute-app.sh
-```
-
-Publish that archive without renaming it. Older OctoPilot versions can update to this bridge, and the bridge can then validate and install a later MacPilot release. When that automatic transition starts from an existing `OctoPilot.app`, the updater replaces the bundle in place, so the filesystem path may keep its old filename even though the installed Bundle ID and visible name are `MacPilot`. Use `./Scripts/build-app.sh` for local testing; the script applies the same shared designated requirement used by distribution builds.
-
-### GitHub Releases
-
-Pushing a tag like `v1.1.0` runs the `dist` job, which signs and notarizes automatically. The one-time bridge tag `v1.1.20` publishes the legacy `OctoPilot.app` identity; later tags publish the normal `MacPilot.app` identity. Configure these repository secrets:
-
-- `APPLE_CERTIFICATE_P12` — base64-encoded `.p12` of your Developer ID Application certificate
-- `APPLE_CERTIFICATE_PASSWORD` — password for that `.p12`
-- `APPLE_DEVELOPER_ID` — `Developer ID Application: Your Name (TEAMID)`
-- `APPLE_ID` — your Apple ID
-- `APPLE_APP_SPECIFIC_PASSWORD` — app-specific password
-- `APPLE_TEAM_ID` — your Team ID
-
-## GitHub Actions
-
-The macOS workflow builds, packages, verifies, and uploads the app on pushes to `main` and pull requests. Each commit after the latest version tag automatically increments the patch version: commits after `v1.0.0` build as `1.0.1`, `1.0.2`, and so on. A new tag becomes the next version baseline.
-
-Branch builds use `MACPILOT_ALLOW_UNSTABLE_SIGNING=1` so ordinary pushes can complete without requiring release certificates. Pushing a version tag such as `v1.1.0` runs the `dist` job, which imports the Developer ID certificate, signs with Hardened Runtime, notarizes with Apple, staples the ticket, verifies the signature, and creates a GitHub Release with a zipped `MacPilot.app` archive.
-
-## Renaming and migration
-
-MacPilot uses bundle identifier `com.misswell.macpilot`. It reads compatible configuration from the former `OctoPilot` and `OctoQuit` support directories, and migrates an existing BLE unlock password from the former Keychain service without exposing it. macOS Accessibility, Bluetooth, Screen Recording, and login-item permissions are tied to the app identity, so existing installations must grant those permissions again after the identity change.
-
-Before publishing the first release with the new bundle identifier and `MacPilot.app` bundle name, publish one bridge release that still has the old identity. Older OctoPilot releases cannot validate a new Bundle ID or archive layout, while the bridge updater can validate both names.
+Download the latest notarized release from [GitHub Releases](https://github.com/misswell/MacPilot/releases/latest). Choose the **Apple Silicon (arm64)** package for Apple silicon Macs or the **Intel (x86_64)** package for Intel Macs.
