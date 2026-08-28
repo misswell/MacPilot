@@ -749,6 +749,11 @@ struct ScreenCaptureTests {
         #expect(model.currentStyle.opacity == 0.65)
     }
 
+    @Test func smartAnnotationEditorDisplaysStyleValuesInsteadOfSourceExpressions() {
+        #expect(SmartAnnotationEditor.lineWidthDisplayText(for: 18) == "18")
+        #expect(SmartAnnotationEditor.opacityDisplayText(for: 0.65) == "65%")
+    }
+
     @Test func smartAnnotationRendererHonorsLineWidthAndOpacity() throws {
         let source = try #require(makeTestImage(width: 200, height: 120, color: .white))
         let annotation = SmartAnnotation.rectangle(CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5))

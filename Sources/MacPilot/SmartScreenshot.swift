@@ -5596,14 +5596,14 @@ struct SmartAnnotationEditor: View {
                     .foregroundStyle(.secondary)
                 Slider(value: lineWidthBinding, in: 1...48, step: 1)
                     .frame(width: 78)
-                Text("(Int(model.currentStyle.lineWidth.rounded()))")
+                Text(Self.lineWidthDisplayText(for: model.currentStyle.lineWidth))
                     .font(.caption.monospacedDigit())
                     .frame(width: 24, alignment: .trailing)
             }
             .help(AppText.value("scAnnotationLineWidth", language: language))
             .accessibilityElement(children: .combine)
             .accessibilityLabel(AppText.value("scAnnotationLineWidth", language: language))
-            .accessibilityValue(Text("(Int(model.currentStyle.lineWidth.rounded()))"))
+            .accessibilityValue(Text(Self.lineWidthDisplayText(for: model.currentStyle.lineWidth)))
 
             HStack(spacing: 4) {
                 Text(AppText.value("scAnnotationOpacity", language: language))
@@ -5613,14 +5613,14 @@ struct SmartAnnotationEditor: View {
                     .foregroundStyle(.secondary)
                 Slider(value: opacityBinding, in: 0.05...1, step: 0.05)
                     .frame(width: 78)
-                Text("(Int((model.currentStyle.opacity * 100).rounded()))%")
+                Text(Self.opacityDisplayText(for: model.currentStyle.opacity))
                     .font(.caption.monospacedDigit())
                     .frame(width: 38, alignment: .trailing)
             }
             .help(AppText.value("scAnnotationOpacity", language: language))
             .accessibilityElement(children: .combine)
             .accessibilityLabel(AppText.value("scAnnotationOpacity", language: language))
-            .accessibilityValue(Text("(Int((model.currentStyle.opacity * 100).rounded()))%"))
+            .accessibilityValue(Text(Self.opacityDisplayText(for: model.currentStyle.opacity)))
         }
         .help(AppText.value("scAnnotationWheelHint", language: language))
     }
@@ -5637,6 +5637,14 @@ struct SmartAnnotationEditor: View {
             get: { Double(model.currentStyle.opacity) },
             set: { model.setOpacity(CGFloat($0)) }
         )
+    }
+
+    nonisolated static func lineWidthDisplayText(for width: CGFloat) -> String {
+        "\(Int(width.rounded()))"
+    }
+
+    nonisolated static func opacityDisplayText(for opacity: CGFloat) -> String {
+        "\(Int((opacity * 100).rounded()))%"
     }
 
     private func annotationCanvas(in availableSize: CGSize) -> some View {
