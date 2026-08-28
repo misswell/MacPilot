@@ -17,7 +17,6 @@ struct GeneralSettingsTabView: View {
     @AppLog(category: "settings-general")
     private var logger
 
-    @AppStorage(Key.showMenuBarExtra, store: .group) private var showMenuBarExtra = true
     @EnvironmentObject var store: AppState
     @ObservedObject private var bookmarkManager = AppState.shared.bookmarkManager
 
@@ -53,10 +52,6 @@ struct GeneralSettingsTabView: View {
                         }
                     )) {
                         Text(appLocalized: "Enable MacPilot Finder extension")
-                    }
-
-                    Toggle(isOn: $showMenuBarExtra) {
-                        Text(appLocalized: "Show icon in menu bar")
                     }
 
                     Text(appLocalized: "Enable MacPilot Finder extension to show its actions in Finder context menus")

@@ -46,15 +46,14 @@ final class ActionEntity {
 
     // 预定义动作的工厂方法（默认开启复制、终端和删除）
     static func createDefaultActions() -> [ActionEntity] {
-        return [
-            ActionEntity(id: "copy-path", name: "Copy Path", icon: "doc.on.doc", isEnabled: true, sortOrder: 0),
-            ActionEntity(id: "copy-file-path", name: "Copy File Path", icon: "doc.on.doc", isEnabled: true, sortOrder: 1),
-            ActionEntity(id: "copy-folder-path", name: "Copy Folder Path", icon: "folder", isEnabled: true, sortOrder: 2),
-            ActionEntity(id: "open-terminal", name: "Open Terminal", icon: "terminal", isEnabled: true, sortOrder: 3),
-            ActionEntity(id: "delete-direct", name: "Delete Direct", icon: "trash", isEnabled: true, sortOrder: 4),
-            ActionEntity(id: "hide", name: "Hide", icon: "eye.slash", isEnabled: false, sortOrder: 5),
-            ActionEntity(id: "unhide", name: "Unhide", icon: "eye", isEnabled: false, sortOrder: 6),
-            ActionEntity(id: "airdrop", name: "AirDrop", icon: "paperplane", isEnabled: false, sortOrder: 7),
-        ]
+        RCAction.all.map { action in
+            ActionEntity(
+                id: action.id,
+                name: action.name,
+                icon: action.icon,
+                isEnabled: action.enabled,
+                sortOrder: action.idx
+            )
+        }
     }
 }

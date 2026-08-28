@@ -203,16 +203,16 @@ struct RCAction: RCBase {
 extension RCAction {
 
     static let copyPath = RCAction(id: "copy-path", name: "Copy Path", enabled: true, idx: 0, icon: "doc.on.doc")
-    static let copyFilePath = RCAction(id: "copy-file-path", name: "Copy File Path", enabled: true, idx: 1, icon: "doc.on.doc")
-    static let copyFolderPath = RCAction(id: "copy-folder-path", name: "Copy Folder Path", enabled: true, idx: 2, icon: "folder")
-    static let openTerminal = RCAction(id: "open-terminal", name: "Open Terminal", enabled: true, idx: 3, icon: "terminal")
-    static let deleteDirect = RCAction(id: "delete-direct", name: "Delete Direct", enabled: true, idx: 4, icon: "trash")
-    static let hideFileDir = RCAction(id: "hide", name: "Hide", enabled: false, idx: 5, icon: "eye.slash")
-    static let unhideFileDir = RCAction(id: "unhide", name: "Unhide", enabled: false, idx: 6, icon: "eye")
-    static let airdrop = RCAction(id: "airdrop", name: "AirDrop", enabled: false, idx: 7, icon: "paperplane")
+    static let openTerminal = RCAction(id: "open-terminal", name: "Open Terminal", enabled: true, idx: 1, icon: "terminal")
+    static let deleteDirect = RCAction(id: "delete-direct", name: "Delete Direct", enabled: true, idx: 2, icon: "trash")
+    static let hideFileDir = RCAction(id: "hide", name: "Hide", enabled: false, idx: 3, icon: "eye.slash")
+    static let unhideFileDir = RCAction(id: "unhide", name: "Unhide", enabled: false, idx: 4, icon: "eye")
+    static let airdrop = RCAction(id: "airdrop", name: "AirDrop", enabled: false, idx: 5, icon: "paperplane")
+
+    static let retiredActionIDs: Set<String> = ["copy-file-path", "copy-folder-path"]
 
     static let all: [RCAction] = [
-        .copyPath, .copyFilePath, .copyFolderPath, .openTerminal,
+        .copyPath, .openTerminal,
         .deleteDirect, .hideFileDir, .unhideFileDir, .airdrop,
     ]
 }

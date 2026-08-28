@@ -28,8 +28,6 @@ enum AppLocalization {
         "MacPilot (loading...)": "MacPilot（加载中…）",
         "No items": "暂无可用菜单项",
         "Copy Path": "复制路径",
-        "Copy File Path": "复制文件路径",
-        "Copy Folder Path": "复制文件夹路径",
         "Open Terminal": "打开终端",
         "Delete Direct": "直接删除",
         "Hide": "隐藏",
@@ -76,7 +74,6 @@ enum AppLocalization {
         "Separate multiple arguments with semicolons (;)": "多个参数之间用分号 (;) 分隔",
         "Settings Management": "设置管理",
         "Settings": "设置",
-        "Show icon in menu bar": "在菜单栏显示图标",
         "System Settings: Select MacPilot in the list to enable the Finder context menu": "系统设置：在列表中选择 MacPilot 以启用 Finder 右键菜单",
         "Template": "模板",
         "The current version is already up to date.": "当前已是最新版本。",
@@ -187,8 +184,6 @@ enum AppLocalization {
         let key: String
         switch id {
         case "copy-path": key = "Copy Path"
-        case "copy-file-path": key = "Copy File Path"
-        case "copy-folder-path": key = "Copy Folder Path"
         case "open-terminal": key = "Open Terminal"
         case "delete-direct": key = "Delete Direct"
         case "hide": key = "Hide"

@@ -35,9 +35,6 @@ class AppState: ObservableObject {
     // 常用文件夹总开关（默认关闭）
     @AppStorage("showCommonDirs") var showCommonDirs: Bool = false
 
-    // 菜单栏显示
-    @AppStorage(Key.showMenuBarExtra) var showMenuBar: Bool = true
-
     // SwiftData ModelContext（lazy 复用单个实例）
     private lazy var modelContext = ModelContext(SharedDataManager.sharedModelContainer)
 
@@ -238,7 +235,7 @@ class AppState: ObservableObject {
         let actionDescriptor = FetchDescriptor<ActionEntity>(sortBy: [SortDescriptor(\.sortOrder)])
         var needSaveActions = false
         if let actionEntities = try? context.fetch(actionDescriptor) {
-            actions = actionEntities.map { entity in
+            let loadedActions = actionEntities.map { entity in
                 RCAction(
                     id: entity.id,
                     name: entity.name,
@@ -247,6 +244,11 @@ class AppState: ObservableObject {
                     icon: entity.icon
                 )
             }
+
+            // Remove actions retired from the product while keeping every
+            // other action's enabled state and order intact.
+            actions = loadedActions.filter { !RCAction.retiredActionIDs.contains($0.id) }
+            needSaveActions = actions.count != loadedActions.count
 
             // Add actions introduced by newer releases without resetting the
             // user's enabled state or custom order for existing actions.

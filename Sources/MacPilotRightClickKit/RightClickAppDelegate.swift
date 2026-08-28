@@ -393,10 +393,6 @@ public final class RightClickMenuCoordinator {
         switch rcitem.id {
         case "copy-path":
             copyPath(target)
-        case "copy-file-path":
-            copyFilePath(target)
-        case "copy-folder-path":
-            copyFolderPath(target)
         case "open-terminal":
             openTerminal(target)
         case "delete-direct":
@@ -594,47 +590,14 @@ public final class RightClickMenuCoordinator {
     }
 
     func copyPath(_ target: [String]) {
-        copyPaths(target, kind: .all)
-    }
-
-    func copyFilePath(_ target: [String]) {
-        copyPaths(target, kind: .files)
-    }
-
-    func copyFolderPath(_ target: [String]) {
-        copyPaths(target, kind: .folders)
-    }
-
-    private enum PathCopyKind: Equatable {
-        case all
-        case files
-        case folders
-    }
-
-    private func copyPaths(_ target: [String], kind: PathCopyKind) {
         let paths = target.compactMap { rawPath -> String? in
             let path = rawPath.removingPercentEncoding ?? rawPath
             guard !path.isEmpty else { return nil }
-
-            guard kind != .all else { return path }
-
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
-                return nil
-            }
-
-            switch kind {
-            case .all:
-                return path
-            case .files:
-                return isDirectory.boolValue ? nil : path
-            case .folders:
-                return isDirectory.boolValue ? path : nil
-            }
+            return path
         }
 
         guard !paths.isEmpty else {
-            logger.warning("No matching paths to copy for requested kind")
+            logger.warning("No paths to copy")
             return
         }
 
