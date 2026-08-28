@@ -15,11 +15,15 @@ typealias AreaSelectionResultCompletion = (AreaSelectionResult?) -> Void
 /// capture layer stays independent from SwiftUI/AppKit implementation types.
 nonisolated enum AreaSelectionAnnotationTool: String, Equatable, Sendable {
   case rectangle
+  case ellipse
   case arrow
+  case line
   case pencil
+  case highlighter
   case text
   case counter
   case blur
+  case eraser
   case crop
 }
 
@@ -40,6 +44,13 @@ nonisolated enum AreaSelectionAction: Equatable, Sendable {
   case pin
   case upload
   case cancel
+  /// Side-bar toggles (iShot's 圆角截图 / 阴影或边框). Non-terminal: the
+  /// selection stays on screen and the style is applied to the final output.
+  case toggleRoundedCorners
+  case toggleShadow
+  /// Re-grabs the selected region from the live screen and refreshes the
+  /// frozen backdrop (iShot's 刷新截图). Non-terminal.
+  case refreshCapture
 }
 
 nonisolated enum AreaSelectionInteractionMode {

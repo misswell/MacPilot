@@ -13,12 +13,28 @@ import Foundation
 import SwiftUI
 
 enum SnapzyInlineAnnotationShortcutRouting {
+    /// While a chrome-less annotation session is live, every terminal action
+    /// (pin/copy/save/ocr) commits the session instead of hitting the HUD.
     static func shouldCommitInlineAnnotation(
         action: AreaSelectionAction,
         hasInlineAnnotationEditor: Bool
     ) -> Bool {
-        hasInlineAnnotationEditor && action == .pin
+        hasInlineAnnotationEditor && Self.terminalActions.contains(action)
     }
+
+    static let terminalActions: [AreaSelectionAction] = [
+        .pin, .copy, .save, .ocr, .upload, .capture,
+    ]
+}
+
+/// Output post-processing applied when the capture is committed (iShot's
+/// 圆角截图 / 阴影或边框 side-bar toggles).
+nonisolated struct SmartCaptureOutputStyle: Equatable, Sendable {
+    var roundedCorners: Bool
+    var cornerRadius: CGFloat
+    var shadow: Bool
+
+    static let inactive = SmartCaptureOutputStyle(roundedCorners: false, cornerRadius: 0, shadow: false)
 }
 
 @MainActor
@@ -37,8 +53,26 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
     private var manualRect: CGRect?
     private var postSelectionPinShortcut = ScreenCaptureShortcutKind.postSelectionPin.defaultBinding
     private var sessionID = UUID()
-    private var inlineAnnotationCompleteHandler: (() -> Void)?
-    private var inlineAnnotationPinHandler: (() -> Void)?
+    private var inlineAnnotationModel: SmartAnnotationModel?
+    private var inlineAnnotationImage: CGImage?
+    private var inlineAnnotationScaleFactor: CGFloat = 1
+    private var inlineAnnotationActionHandler: ((CGImage, AreaSelectionAction) -> Void)?
+    private var inlineAnnotationCancelHandler: (() -> Void)?
+    private(set) var isRoundedCornersEnabled = false
+    private(set) var isShadowEnabled = false
+    static let defaultOutputCornerRadius: CGFloat = 12
+
+    var outputStyle: SmartCaptureOutputStyle {
+        SmartCaptureOutputStyle(
+            roundedCorners: isRoundedCornersEnabled,
+            cornerRadius: isRoundedCornersEnabled ? Self.defaultOutputCornerRadius : 0,
+            shadow: isShadowEnabled
+        )
+    }
+
+    var hasInlineAnnotationSession: Bool {
+        inlineAnnotationModel != nil
+    }
 
     private override init() {
         super.init()
@@ -75,8 +109,9 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         selectedWindow = nil
         manualStart = nil
         manualRect = nil
-        inlineAnnotationCompleteHandler = nil
-        inlineAnnotationPinHandler = nil
+        clearInlineAnnotationSession()
+        isRoundedCornersEnabled = false
+        isShadowEnabled = false
         sessionID = requestedSessionID ?? UUID()
 
         let sessionID = self.sessionID
@@ -134,6 +169,14 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         self.sessionID == sessionID && !windows.isEmpty
     }
 
+    /// 刷新截图 support: temporarily hides every selection panel so a fresh
+    /// capture cannot include the overlay itself.
+    func setPanelsHiddenForRefresh(_ hidden: Bool) {
+        for window in windows {
+            window.setPanelHiddenForRefresh(hidden)
+        }
+    }
+
     func updateBackdrops(
         _ backdrops: [CGDirectDisplayID: AreaSelectionBackdrop],
         for sessionID: UUID
@@ -157,8 +200,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         selectedWindow = nil
         manualStart = nil
         manualRect = nil
-        inlineAnnotationCompleteHandler = nil
-        inlineAnnotationPinHandler = nil
+        clearInlineAnnotationSession()
         sessionID = UUID()
         for window in oldWindows {
             window.overlayView.clearBackdrop()
@@ -183,8 +225,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         selectedWindow = nil
         manualStart = nil
         manualRect = nil
-        inlineAnnotationCompleteHandler = nil
-        inlineAnnotationPinHandler = nil
+        clearInlineAnnotationSession()
         sessionID = UUID()
         for window in oldWindows {
             window.overlayView.hideSelectionResult()
@@ -210,8 +251,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         windows.removeAll(keepingCapacity: false)
         manualStart = nil
         manualRect = nil
-        inlineAnnotationCompleteHandler = nil
-        inlineAnnotationPinHandler = nil
+        clearInlineAnnotationSession()
         for window in currentWindows {
             // A committed selection follows a different teardown path from
             // cancel/dismiss. Clear the layer contents and the cached luma
@@ -314,9 +354,17 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         }
         if action == .more {
             // Adjustment is performed directly by dragging the frame/handles;
-            // the More button is intentionally a non-terminal affordance until
-            // its menu is implemented. Both actions must leave the selection
-            // and toolbar visible.
+            // the More button opens its own menu and never tears down the HUD.
+            return
+        }
+        if action == .toggleRoundedCorners {
+            isRoundedCornersEnabled.toggle()
+            syncOutputStyleToggles()
+            return
+        }
+        if action == .toggleShadow {
+            isShadowEnabled.toggle()
+            syncOutputStyleToggles()
             return
         }
         guard let actionHandler else {
@@ -324,6 +372,13 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             return
         }
         actionHandler(selectedResult, action)
+    }
+
+    private func syncOutputStyleToggles() {
+        selectedWindow?.overlayView.syncOutputStyleToggles(
+            roundedCorners: isRoundedCornersEnabled,
+            shadow: isShadowEnabled
+        )
     }
 
     func areaSelectionWindow(_ window: AreaSelectionWindow, didChangeSelectionRect rect: CGRect) {
@@ -336,16 +391,18 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         selectionPreview?(updated)
     }
 
-    /// Installs the annotation editor directly over the selected frame.  The
-    /// editor is an NSView hosted by the existing full-screen selection panel;
-    /// no second centered annotation window is created.
+    /// Installs the chrome-less annotation editor directly over the selected
+    /// frame (iShot-style in-place editing).  The blue border, resize handles,
+    /// coordinate bubble and the HUD toolbar stay visible; the toolbar's tool
+    /// buttons switch tools on the live model and its action buttons route the
+    /// rendered image through `onAction`.  No second window is created.
     @discardableResult
-    func presentInlineAnnotationEditor(
+    func presentInlineAnnotationSession(
         image: CGImage,
+        scaleFactor: CGFloat,
         language: AppLanguage,
         initialTool: AreaSelectionAnnotationTool,
-        onComplete: @escaping (CGImage) -> Void,
-        onPin: @escaping (CGImage) -> Void,
+        onAction: @escaping (CGImage, AreaSelectionAction) -> Void,
         onCancel: @escaping () -> Void
     ) -> Bool {
         guard let selectedWindow, let selectedResult else { return false }
@@ -354,53 +411,81 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             in: selectedWindow.frame
         )
         let model = SmartAnnotationModel(initialTool: initialTool.smartAnnotationTool)
-        inlineAnnotationCompleteHandler = { [weak self, model] in
-            guard let self,
-                  let rendered = SmartAnnotationRenderer.render(
-                      image: image,
-                      annotations: model.annotations,
-                      styles: model.styledAnnotations.map(\.style)
-                  ) else { return }
-            self.inlineAnnotationCompleteHandler = nil
-            self.inlineAnnotationPinHandler = nil
-            self.dismissSelection()
-            onComplete(rendered)
-        }
-        inlineAnnotationPinHandler = { [weak self, model] in
-            guard let self,
-                  let rendered = SmartAnnotationRenderer.render(
-                      image: image,
-                      annotations: model.annotations,
-                      styles: model.styledAnnotations.map(\.style)
-                  ) else { return }
-            self.inlineAnnotationCompleteHandler = nil
-            self.inlineAnnotationPinHandler = nil
-            self.dismissSelection()
-            onPin(rendered)
-        }
+        inlineAnnotationModel = model
+        inlineAnnotationImage = image
+        inlineAnnotationScaleFactor = scaleFactor
+        inlineAnnotationActionHandler = onAction
+        inlineAnnotationCancelHandler = onCancel
+
         let editor = NSHostingView(rootView: SmartAnnotationEditor(
             image: image,
             language: language,
             model: model,
             embedded: true,
+            showsToolbar: false,
             embeddedToolbarPlacement: toolbarPlacement,
             embeddedCanvasSize: selectedResult.rect.size,
             onCancel: { [weak self] in
-                self?.inlineAnnotationCompleteHandler = nil
-                self?.inlineAnnotationPinHandler = nil
-                self?.dismissSelection()
-                onCancel()
+                self?.commitInlineAnnotation(as: .cancel)
             },
             onComplete: { [weak self] in
-                self?.inlineAnnotationCompleteHandler?()
+                self?.commitInlineAnnotation(as: .save)
             }
         ))
         selectedWindow.overlayView.showEmbeddedAnnotationEditor(
             editor,
             screenRect: selectedResult.rect,
-            toolbarPlacement: toolbarPlacement
+            toolbarPlacement: toolbarPlacement,
+            showsToolbar: false
         )
+        selectedWindow.overlayView.attachAnnotationSession(model: model) { [weak self] action in
+            self?.commitInlineAnnotation(as: action)
+        }
         return true
+    }
+
+    private func clearInlineAnnotationSession() {
+        inlineAnnotationModel = nil
+        inlineAnnotationImage = nil
+        inlineAnnotationScaleFactor = 1
+        inlineAnnotationActionHandler = nil
+        inlineAnnotationCancelHandler = nil
+    }
+
+    /// Renders the live annotations and routes the final image through the
+    /// capture coordinator for the requested action.  Non-terminal actions
+    /// (toggles/refresh) are ignored here — they never end the session.
+    func commitInlineAnnotation(as action: AreaSelectionAction) {
+        guard let model = inlineAnnotationModel else { return }
+        switch action {
+        case .cancel:
+            let onCancel = inlineAnnotationCancelHandler
+            clearInlineAnnotationSession()
+            dismissSelection()
+            onCancel?()
+            return
+        case .toggleRoundedCorners, .toggleShadow, .refreshCapture,
+             .newSelection, .adjustSelection, .more, .annotate, .annotateTool:
+            return
+        default:
+            break
+        }
+        guard let image = inlineAnnotationImage,
+              let rendered = SmartAnnotationRenderer.render(
+                  image: image,
+                  annotations: model.annotations,
+                  styles: model.styledAnnotations.map(\.style)
+              )
+        else { return }
+        let output = SmartCaptureOutputStyling.apply(
+            to: rendered,
+            style: outputStyle,
+            scaleFactor: inlineAnnotationScaleFactor
+        )
+        let handler = inlineAnnotationActionHandler
+        clearInlineAnnotationSession()
+        dismissSelection()
+        handler?(output, action)
     }
 
     func areaSelectionWindowDidCancel(_: AreaSelectionWindow) {
@@ -413,22 +498,25 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
 
     func areaSelectionWindow(_ window: AreaSelectionWindow, didReceiveKeyEvent event: NSEvent) -> Bool {
         if event.keyCode == 53 {
-            // Notify the capture coordinator so it can resume Quick Access
-            // and release the frozen display session.  `cancelSelection()`
-            // is intentionally silent because it is also used while starting
-            // a replacement session.
-            complete(nil)
+            if hasInlineAnnotationSession {
+                // Esc during the in-place session discards the annotations and
+                // tears the capture down through the cancel path.
+                commitInlineAnnotation(as: .cancel)
+            } else {
+                // Notify the capture coordinator so it can resume Quick Access
+                // and release the frozen display session.  `cancelSelection()`
+                // is intentionally silent because it is also used while starting
+                // a replacement session.
+                complete(nil)
+            }
             return true
         }
         let eventModifiers = InputSourceShortcutModifiers(event.modifierFlags)
         if !event.isARepeat,
            event.keyCode == postSelectionPinShortcut.keyCode,
            eventModifiers == postSelectionPinShortcut.modifiers {
-            if SnapzyInlineAnnotationShortcutRouting.shouldCommitInlineAnnotation(
-                action: .pin,
-                hasInlineAnnotationEditor: inlineAnnotationPinHandler != nil
-            ) {
-                inlineAnnotationPinHandler?()
+            if hasInlineAnnotationSession {
+                commitInlineAnnotation(as: .pin)
             } else if selectedResult != nil {
                 areaSelectionWindow(window, didRequestAction: .pin)
             }
@@ -437,11 +525,16 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         guard let selectedResult else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if event.keyCode == 8, modifiers == [.command] || modifiers == [.control] {
-            areaSelectionWindow(window, didRequestAction: .copy)
+            commitOrRequest(.copy, window: window)
             return true
         }
         if event.keyCode == 1, modifiers == [.command] || modifiers == [.control] {
-            areaSelectionWindow(window, didRequestAction: .save)
+            commitOrRequest(.save, window: window)
+            return true
+        }
+        if hasInlineAnnotationSession, [123, 124, 125, 126].contains(event.keyCode) {
+            // Arrow keys nudge the text caret while typing; never move the
+            // frame underneath a live annotation session.
             return true
         }
         if [123, 124, 125, 126].contains(event.keyCode) {
@@ -476,10 +569,22 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             return true
         }
         if event.keyCode == 36, modifiers.isEmpty {
-            areaSelectionWindow(window, didRequestAction: .copy)
+            // Enter confirms the session like the classic editor's Done button;
+            // without a live session it keeps the historical copy action.
+            commitOrRequest(hasInlineAnnotationSession ? .save : .copy, window: window)
             return true
         }
         return false
+    }
+
+    /// Routes a terminal action through the inline session commit when one is
+    /// live, otherwise to the post-selection action pipeline.
+    private func commitOrRequest(_ action: AreaSelectionAction, window: AreaSelectionWindow) {
+        if hasInlineAnnotationSession {
+            commitInlineAnnotation(as: action)
+        } else {
+            areaSelectionWindow(window, didRequestAction: action)
+        }
     }
 
     func areaSelectionWindowDidRequestDisplayActivation(_ window: AreaSelectionWindow) {

@@ -24,19 +24,33 @@ struct SnapzyCaptureTests {
         #expect(configuration.queueDepth == SnapzyCaptureConfiguration.singleFrameQueueDepth)
     }
 
-    @Test func pinShortcutCommitsTheInlineAnnotationEditorBeforePinning() {
-        #expect(SnapzyInlineAnnotationShortcutRouting.shouldCommitInlineAnnotation(
-            action: .pin,
-            hasInlineAnnotationEditor: true
-        ))
+    @Test func terminalActionsCommitTheInlineAnnotationSession() {
+        // While the chrome-less session is live every terminal action commits:
+        // pin, copy, save, OCR and upload all render and route the image.
+        for action: AreaSelectionAction in [.pin, .copy, .save, .ocr, .upload, .capture] {
+            #expect(
+                SnapzyInlineAnnotationShortcutRouting.shouldCommitInlineAnnotation(
+                    action: action,
+                    hasInlineAnnotationEditor: true
+                ),
+                "expected \(action) to commit the live session"
+            )
+        }
+        // Without a live session nothing is intercepted.
         #expect(!SnapzyInlineAnnotationShortcutRouting.shouldCommitInlineAnnotation(
             action: .pin,
             hasInlineAnnotationEditor: false
         ))
-        #expect(!SnapzyInlineAnnotationShortcutRouting.shouldCommitInlineAnnotation(
-            action: .copy,
-            hasInlineAnnotationEditor: true
-        ))
+        // Non-terminal HUD actions never end the session.
+        for action: AreaSelectionAction in [.toggleRoundedCorners, .toggleShadow, .refreshCapture, .newSelection] {
+            #expect(
+                !SnapzyInlineAnnotationShortcutRouting.shouldCommitInlineAnnotation(
+                    action: action,
+                    hasInlineAnnotationEditor: true
+                ),
+                "expected \(action) to keep the session alive"
+            )
+        }
     }
 
     @Test @MainActor func pinShortcutPastesClipboardWithoutStartingSelection() {
@@ -322,7 +336,9 @@ struct SnapzyCaptureTests {
         }
 
         let rectangleButton = try #require(
-            buttons(in: bar).first(where: { $0.toolTip == "矩形标注" })
+            buttons(in: bar).first(where: {
+                $0.toolTip == AppText.value("scAnnotationRectangle", language: .system)
+            })
         )
         rectangleButton.performClick(nil)
 
@@ -844,5 +860,177 @@ struct SnapzyCaptureTests {
         // been installed, so WindowServer never sees a full-screen dark frame.
         #expect(!window.overlayView.testDimLayerIsHidden)
         #expect(window.overlayView.testDimLayerHasMask)
+    }
+
+    // MARK: - iShot-style in-place annotation session
+
+    @Test @MainActor func chromelessAnnotationSessionKeepsTheFrameVisualsAndTheHUDToolbar() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+        let selectionRect = CGRect(
+            x: screen.frame.minX + 140,
+            y: screen.frame.minY + 180,
+            width: 320,
+            height: 200
+        )
+        window.overlayView.showSelectionResult(
+            screenRect: selectionRect,
+            showsActions: true,
+            actionHandler: { _ in }
+        )
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        let editor = NSHostingView(rootView: SmartAnnotationEditor(
+            image: image(width: 320, height: 200),
+            language: .simplifiedChinese,
+            model: model,
+            embedded: true,
+            showsToolbar: false,
+            embeddedCanvasSize: selectionRect.size,
+            onCancel: {},
+            onComplete: {}
+        ))
+        window.overlayView.showEmbeddedAnnotationEditor(
+            editor,
+            screenRect: selectionRect,
+            toolbarPlacement: .above,
+            showsToolbar: false
+        )
+        window.overlayView.attachAnnotationSession(model: model) { _ in }
+
+        let localSelection = CGRect(
+            x: selectionRect.minX - screen.frame.minX,
+            y: selectionRect.minY - screen.frame.minY,
+            width: selectionRect.width,
+            height: selectionRect.height
+        )
+        // The canvas sits exactly over the selected frame…
+        #expect(editor.frame == localSelection)
+        // …the HUD toolbar stays mounted for tool switching and commits…
+        #expect(window.overlayView.subviews.contains { $0 is AreaSelectionActionBar })
+        // …and the selection border remains visible, matching iShot.
+        #expect(window.overlayView.testSelectionBorderPathBounds != nil)
+        #expect(window.overlayView.isAnnotationSessionActive)
+    }
+
+    @Test @MainActor func annotationSessionToolbarSwitchesToolsWithoutEndingTheSession() throws {
+        _ = NSApplication.shared
+        var committedActions: [AreaSelectionAction] = []
+        var startedSessions: [AreaSelectionAction] = []
+        let bar = AreaSelectionActionBar { action in
+            startedSessions.append(action)
+        }
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        bar.bindAnnotationSession(.init(model: model) { action in
+            committedActions.append(action)
+        })
+
+        func buttons(in view: NSView) -> [NSButton] {
+            view.subviews.flatMap { subview in
+                (subview as? NSButton).map { [$0] } ?? buttons(in: subview)
+            }
+        }
+
+        // A tool press with a live session switches the model's tool; the
+        // capture pipeline is never asked to start another session.
+        let textButton = try #require(
+            buttons(in: bar).first(where: {
+                $0.toolTip == AppText.value("scAnnotationText", language: .system)
+            })
+        )
+        textButton.performClick(nil)
+        #expect(model.tool == .text)
+        #expect(startedSessions.isEmpty)
+        #expect(committedActions.isEmpty)
+
+        // Action presses route through the session commit, not the HUD start.
+        let saveButton = try #require(
+            buttons(in: bar).first(where: {
+                $0.toolTip == AppText.value("scToolSave", language: .system)
+            })
+        )
+        saveButton.performClick(nil)
+        #expect(committedActions == [.save])
+        #expect(startedSessions.isEmpty)
+    }
+
+    @Test @MainActor func bindingTheSessionRevealsTheEraserAndUndoControls() throws {
+        let bar = AreaSelectionActionBar { _ in }
+
+        func buttons(in view: NSView) -> [NSButton] {
+            view.subviews.flatMap { subview in
+                (subview as? NSButton).map { [$0] } ?? buttons(in: subview)
+            }
+        }
+
+        let eraserTooltip = AppText.value("scAnnotationEraser", language: .system)
+        let undoTooltip = AppText.value("scUndo", language: .system)
+        let eraserBefore = buttons(in: bar).first(where: { $0.toolTip == eraserTooltip })
+        #expect(eraserBefore?.isHidden ?? true)
+
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        bar.bindAnnotationSession(.init(model: model) { _ in })
+
+        let eraser = try #require(buttons(in: bar).first(where: { $0.toolTip == eraserTooltip }))
+        let undo = try #require(buttons(in: bar).first(where: { $0.toolTip == undoTooltip }))
+        #expect(!eraser.isHidden)
+        #expect(!undo.isHidden)
+        #expect(!undo.isEnabled)
+
+        model.append(.rectangle(CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3)))
+        // The bar observes the model through RunLoop.main; pump it so the
+        // objectWillChange delivery lands before the assertion.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        #expect(undo.isEnabled)
+    }
+
+    @Test @MainActor func eraserRemovesTheAnnotationUnderThePointerAsOneUndoableStep() {
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        model.append(.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.3, height: 0.3)))
+        model.append(.rectangle(CGRect(x: 0.4, y: 0.4, width: 0.3, height: 0.3)))
+        #expect(model.annotations.count == 2)
+
+        model.removeAnnotation(at: 0)
+        #expect(model.annotations.count == 1)
+
+        // The eraser stroke is a single undo step, like iShot.
+        model.undo()
+        #expect(model.annotations.count == 2)
+    }
+
+    @Test @MainActor func removingTheLastCounterResetsTheSequence() {
+        let model = SmartAnnotationModel(initialTool: .counter)
+        let counter = model.nextCounter
+        model.append(.counter(counter, CGPoint(x: 0.5, y: 0.5)))
+        #expect(model.nextCounter == counter + 1)
+
+        model.removeAnnotation(at: 0)
+        #expect(model.nextCounter == 1)
+    }
+
+    @Test func roundedCornerOutputKeepsTheCanvasSizeWhileShadowExpandsIt() throws {
+        let source = image(width: 40, height: 30)
+
+        let rounded = try #require(SmartCaptureOutputStyling.roundedCorners(source, radius: 8))
+        #expect(rounded.width == source.width)
+        #expect(rounded.height == source.height)
+
+        let styled = SmartCaptureOutputStyling.apply(
+            to: source,
+            style: SmartCaptureOutputStyle(roundedCorners: true, cornerRadius: 6, shadow: true),
+            scaleFactor: 2
+        )
+        // The 18pt shadow padding at 2× expands the canvas on both axes.
+        #expect(styled.width == source.width + 72)
+        #expect(styled.height == source.height + 72)
+
+        let untouched = SmartCaptureOutputStyling.apply(
+            to: source,
+            style: .inactive,
+            scaleFactor: 2
+        )
+        #expect(untouched == source)
     }
 }

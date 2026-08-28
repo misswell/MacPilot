@@ -2499,6 +2499,10 @@ final class SmartScreenshotController {
             QuickAccessManager.shared.resumeAfterCapture()
             return
         }
+        if action == .refreshCapture {
+            performSnapzyRefreshCapture(sessionID: sessionID)
+            return
+        }
         guard let frozenSession = snapzyFrozenSession else {
             pendingSnapzyAction = (result, action, requestedMode, sessionID)
             return
@@ -2510,6 +2514,43 @@ final class SmartScreenshotController {
             sessionID: sessionID,
             frozenSession: frozenSession
         )
+    }
+
+    /// 刷新截图 (iShot): hides the panels, re-grabs the covered displays and
+    /// swaps the frozen backdrop so the selection shows live pixels again.
+    private func performSnapzyRefreshCapture(sessionID: UUID) {
+        guard snapzySessionID == sessionID,
+              let frozenSession = snapzyFrozenSession else { return }
+        let controller = SnapzyAreaSelectionController.shared
+        guard !controller.hasInlineAnnotationSession else { return }
+        let displayIDs = frozenSession.displayIDs
+        guard !displayIDs.isEmpty else { return }
+        controller.setPanelsHiddenForRefresh(true)
+        Task { @MainActor [weak self] in
+            defer { controller.setPanelsHiddenForRefresh(false) }
+            do {
+                // Let WindowServer composite the panels away before grabbing,
+                // otherwise the fresh backdrop includes the overlay itself.
+                try await Task.sleep(for: .milliseconds(120))
+                let snapshots = try await SnapzyScreenCaptureManager.shared.captureDisplaySnapshots(
+                    displayIDs: displayIDs,
+                    showCursor: false,
+                    excludeDesktopIcons: false,
+                    excludeDesktopWidgets: false,
+                    excludeOwnApplication: SnapzyCaptureApplicationVisibilityPolicy.excludesOwnApplicationFromDisplaySnapshot,
+                    prefetchedContentTask: nil
+                )
+                guard !snapshots.isEmpty,
+                      let self,
+                      self.snapzySessionID == sessionID else { return }
+                frozenSession.replaceSnapshots(Array(snapshots.values))
+                controller.updateBackdrops(frozenSession.backdrops, for: sessionID)
+            } catch {
+                // Keep the previous frozen frame; surface the failure.
+                guard let self, self.snapzySessionID == sessionID else { return }
+                self.onError(error)
+            }
+        }
     }
 
     private func resetSnapzyPreparationState(invalidateFrozenSession: Bool = true) {
@@ -2543,10 +2584,10 @@ final class SmartScreenshotController {
             annotationTool = nil
         }
 
-        // Annotation stays inside the selected frame.  Keep the frozen
-        // selection panel alive until the crop is ready, then install the
-        // editor as a child of that same panel rather than opening a centered
-        // annotation window.
+        // Annotation stays inside the selected frame (iShot-style in-place
+        // editing).  Keep the frozen selection panel alive until the crop is
+        // ready, then install the chrome-less editor over that same frame;
+        // the HUD toolbar owns tool switching and the commit buttons.
         resetSnapzyPreparationState(invalidateFrozenSession: false)
         if let annotationTool {
             Task { [weak self] in
@@ -2562,21 +2603,20 @@ final class SmartScreenshotController {
                     if requestedMode == .manualArea {
                         self.onSelectionRect(result.rect)
                     }
-                    let presented = SnapzyAreaSelectionController.shared.presentInlineAnnotationEditor(
+                    let presented = SnapzyAreaSelectionController.shared.presentInlineAnnotationSession(
                         image: crop.image,
+                        scaleFactor: crop.scaleFactor,
                         language: self.language(),
                         initialTool: annotationTool,
-                        onComplete: { [weak self] annotated in
+                        onAction: { [weak self] rendered, committedAction in
                             guard let self else { return }
                             self.resetSnapzyPreparationState()
                             QuickAccessManager.shared.resumeAfterCapture()
-                            self.onCapture(annotated)
-                        },
-                        onPin: { [weak self] annotated in
-                            guard let self else { return }
-                            self.resetSnapzyPreparationState()
-                            QuickAccessManager.shared.resumeAfterCapture()
-                            self.pin(image: annotated, scaleFactor: crop.scaleFactor)
+                            self.deliverAnnotatedCapture(
+                                rendered,
+                                scaleFactor: crop.scaleFactor,
+                                action: committedAction
+                            )
                         },
                         onCancel: { [weak self] in
                             self?.resetSnapzyPreparationState()
@@ -2605,7 +2645,7 @@ final class SmartScreenshotController {
         Task { [weak self] in
             defer { frozenSession.invalidate() }
             do {
-                let crop: FrozenAreaCropResult
+                var crop: FrozenAreaCropResult
                 if result.spansMultipleDisplays {
                     crop = try frozenSession.cropCompositeImage(for: result)
                 } else {
@@ -2615,6 +2655,17 @@ final class SmartScreenshotController {
                 if requestedMode == .manualArea {
                     self.onSelectionRect(result.rect)
                 }
+                // Side-bar output style (圆角/阴影) applies to the delivered
+                // image only, never to the frozen backdrop.
+                crop = FrozenAreaCropResult(
+                    image: SmartCaptureOutputStyling.apply(
+                        to: crop.image,
+                        style: SnapzyAreaSelectionController.shared.outputStyle,
+                        scaleFactor: crop.scaleFactor
+                    ),
+                    scaleFactor: crop.scaleFactor,
+                    screenRect: crop.screenRect
+                )
                 switch action {
                 case .capture, .save:
                     self.onCapture(crop.image)
@@ -2622,7 +2673,8 @@ final class SmartScreenshotController {
                     SmartCaptureClipboard.copy(image: crop.image)
                 case .upload:
                     self.uploadImageToCloud(crop.image)
-                case .newSelection, .adjustSelection, .more:
+                case .newSelection, .adjustSelection, .more,
+                     .toggleRoundedCorners, .toggleShadow, .refreshCapture:
                     break
                 case .annotate:
                     self.onAreaAnnotateCapture(crop.image, result.rect, .rectangle)
@@ -2638,6 +2690,29 @@ final class SmartScreenshotController {
             } catch {
                 self?.onError(error)
             }
+        }
+    }
+
+    /// Routes a committed (already rendered + styled) annotation session image
+    /// to the pipeline matching the toolbar button the user pressed.
+    private func deliverAnnotatedCapture(
+        _ image: CGImage,
+        scaleFactor: CGFloat,
+        action: AreaSelectionAction
+    ) {
+        switch action {
+        case .capture, .save:
+            onCapture(image)
+        case .copy:
+            SmartCaptureClipboard.copy(image: image)
+        case .upload:
+            uploadImageToCloud(image)
+        case .ocr:
+            onOCRCapture(image)
+        case .pin:
+            pin(image: image, scaleFactor: scaleFactor)
+        default:
+            break
         }
     }
 
@@ -5064,6 +5139,7 @@ enum SmartAnnotationTool: String, CaseIterable, Identifiable {
     case pencil
     case text
     case watermark
+    case eraser
     case crop
 
     var id: String { rawValue }
@@ -5085,6 +5161,7 @@ enum SmartAnnotationTool: String, CaseIterable, Identifiable {
         case .pencil: return "pencil"
         case .text: return "textformat"
         case .watermark: return "text.badge.plus"
+        case .eraser: return "eraser"
         case .crop: return "crop"
         }
     }
@@ -5103,6 +5180,7 @@ enum SmartAnnotationTool: String, CaseIterable, Identifiable {
         case .pencil: return "scAnnotationPencil"
         case .text: return "scAnnotationText"
         case .watermark: return "scAnnotationWatermark"
+        case .eraser: return "scAnnotationEraser"
         case .crop: return "scAnnotationCrop"
         }
     }
@@ -5116,11 +5194,15 @@ extension AreaSelectionAnnotationTool {
     var smartAnnotationTool: SmartAnnotationTool {
         switch self {
         case .rectangle: return .rectangle
+        case .ellipse: return .ellipse
         case .arrow: return .arrow
+        case .line: return .line
         case .pencil: return .pencil
+        case .highlighter: return .highlighter
         case .text: return .text
         case .counter: return .counter
         case .blur: return .blur
+        case .eraser: return .eraser
         case .crop: return .crop
         }
     }
@@ -5628,6 +5710,30 @@ final class SmartAnnotationModel: ObservableObject {
         updateCanRedo()
     }
 
+    /// Eraser support: deletes the annotation at `index` as a single undoable
+    /// step. Removing the last counter resets the sequence, mirroring
+    /// `removeAll()`.
+    func removeAnnotation(at index: Int) {
+        guard annotations.indices.contains(index) else { return }
+        commitActiveMutation()
+        recordUndoPoint()
+        let wasCounter: Bool
+        if case .counter = annotations[index] { wasCounter = true } else { wasCounter = false }
+        annotations.remove(at: index)
+        if annotationStyles.indices.contains(index) {
+            annotationStyles.remove(at: index)
+        }
+        if wasCounter, !annotations.contains(where: { annotation in
+            if case .counter = annotation { return true } else { return false }
+        }) {
+            nextCounter = 1
+        }
+        if selectedIndex == index {
+            selectedIndex = nil
+        }
+        updateCanRedo()
+    }
+
     private func updateCurrentStyle(_ update: (inout SmartAnnotationStyle) -> Void) {
         var updated = currentStyle
         update(&updated)
@@ -5781,6 +5887,10 @@ struct SmartAnnotationEditor: View {
     let language: AppLanguage
     @ObservedObject var model: SmartAnnotationModel
     let embedded: Bool
+    /// iShot-style in-place editing: the capture HUD's own toolbar owns the
+    /// tool/style controls, so the editor renders the bare canvas only.
+    /// `true` keeps the classic editor chrome (standalone windows).
+    var showsToolbar: Bool
     let embeddedToolbarPlacement: SmartAnnotationToolbarPlacement
     let embeddedCanvasSize: CGSize?
     var embeddedCanvasHorizontalOffset: CGFloat
@@ -5798,12 +5908,14 @@ struct SmartAnnotationEditor: View {
     @State private var editingOriginal: SmartAnnotation?
     @State private var editingOriginalBounds: CGRect?
     @State private var editingHandle: SmartAnnotationResizeHandle?
+    @FocusState private var inlineTextFocused: Bool
 
     init(
         image: CGImage,
         language: AppLanguage,
         model: SmartAnnotationModel,
         embedded: Bool = false,
+        showsToolbar: Bool = true,
         embeddedToolbarPlacement: SmartAnnotationToolbarPlacement = .above,
         embeddedCanvasSize: CGSize? = nil,
         embeddedCanvasHorizontalOffset: CGFloat = 0,
@@ -5814,11 +5926,17 @@ struct SmartAnnotationEditor: View {
         self.language = language
         self.model = model
         self.embedded = embedded
+        self.showsToolbar = showsToolbar
         self.embeddedToolbarPlacement = embeddedToolbarPlacement
         self.embeddedCanvasSize = embeddedCanvasSize
         self.embeddedCanvasHorizontalOffset = embeddedCanvasHorizontalOffset
         self.onCancel = onCancel
         self.onComplete = onComplete
+    }
+
+    /// Vertical space the embedded chrome adds above/below the canvas.
+    static func embeddedChromeExtent(showsToolbar: Bool) -> CGFloat {
+        showsToolbar ? embeddedToolbarExtent : 0
     }
 
     static func toolbarPlacement(
@@ -5844,28 +5962,6 @@ struct SmartAnnotationEditor: View {
                 standaloneEditorBody
             }
         }
-        .sheet(isPresented: $showingTextEntry) {
-            VStack(spacing: 16) {
-                Text(AppText.value(
-                    pendingTextTool == .watermark ? "scAnnotationWatermarkTitle" : "scAnnotationTextTitle",
-                    language: language
-                )).font(.headline)
-                TextField(AppText.value("scText", language: language), text: $pendingText).textFieldStyle(.roundedBorder)
-                HStack {
-                    Button(AppText.value("scCancel", language: language)) { showingTextEntry = false }
-                    Button(AppText.value("scAdd", language: language)) {
-                        if !pendingText.isEmpty {
-                            let annotation: SmartAnnotation = pendingTextTool == .watermark
-                                ? .watermark(pendingText, textPoint)
-                                : .text(pendingText, textPoint)
-                            model.append(annotation)
-                        }
-                        pendingText = ""
-                        showingTextEntry = false
-                    }.buttonStyle(.borderedProminent)
-                }
-            }.padding(24).frame(width: 360)
-        }
     }
 
     private var standaloneEditorBody: some View {
@@ -5886,6 +5982,11 @@ struct SmartAnnotationEditor: View {
         let canvas = annotationCanvas(in: canvasSize)
             .frame(width: canvasSize.width, height: canvasSize.height)
         let positionedCanvas = canvas.offset(x: embeddedCanvasHorizontalOffset)
+        guard showsToolbar else {
+            // Chrome-less in-place mode: the canvas sits exactly over the
+            // selected frame and the capture HUD's toolbar owns the controls.
+            return AnyView(positionedCanvas)
+        }
         let toolbarMinimumWidth = embeddedCanvasSize.map {
             max($0.width, Self.embeddedToolbarMinimumWidth)
         } ?? Self.embeddedToolbarMinimumWidth
@@ -5895,7 +5996,7 @@ struct SmartAnnotationEditor: View {
             .padding(6)
             .frame(minWidth: toolbarMinimumWidth)
 
-        return Group {
+        return AnyView(Group {
             if embeddedCanvasSize != nil {
                 if embeddedToolbarPlacement == .above {
                     VStack(spacing: Self.embeddedToolbarGap) {
@@ -5916,7 +6017,7 @@ struct SmartAnnotationEditor: View {
                         }
                 }
             }
-        }
+        })
     }
 
     private var annotationToolbar: some View {
@@ -6106,9 +6207,13 @@ struct SmartAnnotationEditor: View {
                 }
                 .allowsHitTesting(false)
             }
+            .overlay(alignment: .topLeading) {
+                inlineTextEditorCapsule(in: fitted)
+            }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { value in
+                    guard !showingTextEntry else { return }
                     guard fitted.contains(value.location) || editingIndex != nil else { return }
                     let location = clamped(value.location, to: fitted)
                     if dragStart == nil {
@@ -6141,6 +6246,12 @@ struct SmartAnnotationEditor: View {
                     }
                 }
                 .onEnded { value in
+                    if showingTextEntry {
+                        // Clicking elsewhere while the inline text field is up
+                        // commits the text, matching iShot's text tool.
+                        commitInlineText()
+                        return
+                    }
                     let location = clamped(value.location, to: fitted)
                     if editingIndex != nil {
                         finishAnnotationEdit(at: normalized(location, in: fitted))
@@ -6341,6 +6452,12 @@ struct SmartAnnotationEditor: View {
             if points.count > 1 { model.append(.pencil(points)) }
         case .counter:
             model.append(.counter(model.nextCounter, normalized(end, in: fitted)))
+        case .eraser:
+            // iShot-style eraser: a click deletes the annotation under the
+            // pointer as one undoable step.
+            if let index = model.selectAnnotation(at: normalized(end, in: fitted), tolerance: 0.03) {
+                model.removeAnnotation(at: index)
+            }
         case .text:
             textPoint = normalized(end, in: fitted)
             pendingTextTool = .text
@@ -6357,6 +6474,53 @@ struct SmartAnnotationEditor: View {
         dragStart = nil
         dragCurrent = nil
         dragPoints.removeAll(keepingCapacity: true)
+    }
+
+    /// iShot-style in-place text entry: a white capsule at the click point.
+    /// Enter (or clicking elsewhere) commits the text; Esc cancels.
+    @ViewBuilder
+    private func inlineTextEditorCapsule(in fitted: CGRect) -> some View {
+        if showingTextEntry {
+            let anchor = denormalized(textPoint, in: fitted)
+            TextField(AppText.value("scText", language: language), text: $pendingText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15, weight: .medium))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(minWidth: 96, alignment: .leading)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .shadow(color: Color.black.opacity(0.28), radius: 3, y: 1)
+                .offset(x: anchor.x, y: anchor.y - 17)
+                .focused($inlineTextFocused)
+                .onSubmit(commitInlineText)
+                .onExitCommand { cancelInlineText() }
+                .onChange(of: showingTextEntry) { _, isActive in
+                    guard isActive else { return }
+                    pendingText = ""
+                    DispatchQueue.main.async {
+                        inlineTextFocused = true
+                    }
+                }
+        }
+    }
+
+    private func commitInlineText() {
+        guard showingTextEntry else { return }
+        if !pendingText.isEmpty {
+            let annotation: SmartAnnotation = pendingTextTool == .watermark
+                ? .watermark(pendingText, textPoint)
+                : .text(pendingText, textPoint)
+            model.append(annotation)
+        }
+        pendingText = ""
+        inlineTextFocused = false
+        showingTextEntry = false
+    }
+
+    private func cancelInlineText() {
+        pendingText = ""
+        inlineTextFocused = false
+        showingTextEntry = false
     }
 
     private func normalized(_ point: CGPoint, in rect: CGRect) -> CGPoint {
@@ -6485,6 +6649,8 @@ struct SmartAnnotationEditor: View {
             drawCounter(model.nextCounter, at: end, style: model.currentStyle, context: &context)
         case .text, .watermark:
             break
+        case .eraser:
+            break
         }
     }
 
@@ -6584,11 +6750,11 @@ struct SmartAnnotationEditor: View {
                 context: &context
             )
         case .text(let text, let point):
-            context.draw(
-                Text(text).font(.system(size: 18 * max(0.75, min(1.5, style.lineWidth / 3)), weight: .bold))
-                    .foregroundColor(style.color.swiftUIColor.opacity(style.opacity)),
+            drawTextBubble(
+                text,
                 at: denormalized(point, in: rect),
-                anchor: .topLeading
+                style: style,
+                context: &context
             )
         case .watermark(let text, let point):
             context.draw(
@@ -6604,6 +6770,43 @@ struct SmartAnnotationEditor: View {
 
     private func denormalized(_ value: CGRect, in rect: CGRect) -> CGRect {
         CGRect(x: rect.minX + value.minX * rect.width, y: rect.minY + value.minY * rect.height, width: value.width * rect.width, height: value.height * rect.height)
+    }
+
+    /// Canvas-preview twin of the renderer's white text bubble: text renders
+    /// on a white capsule so the preview matches the committed output.
+    private func drawTextBubble(
+        _ text: String,
+        at point: CGPoint,
+        style: SmartAnnotationStyle,
+        context: inout GraphicsContext
+    ) {
+        let fontSize = 18 * max(0.75, min(1.5, style.lineWidth / 3))
+        let resolved = context.resolve(
+            Text(text).font(.system(size: fontSize, weight: .bold))
+        )
+        let measured = resolved.measure(in: CGSize(width: 10_000, height: 10_000))
+        let paddingH: CGFloat = 9
+        let paddingV: CGFloat = 5
+        let bubble = CGRect(
+            x: point.x - paddingH,
+            y: point.y - paddingV,
+            width: measured.width + paddingH * 2,
+            height: measured.height + paddingV * 2
+        )
+        context.fill(
+            Path(roundedRect: bubble, cornerRadius: bubble.height * 0.4, style: .continuous),
+            with: .color(.white.opacity(style.opacity))
+        )
+        context.draw(
+            Text(text).font(.system(size: fontSize, weight: .bold))
+                .foregroundColor(style.color.swiftUIColor.opacity(style.opacity)),
+            in: CGRect(
+                x: bubble.minX + paddingH,
+                y: bubble.minY + paddingV,
+                width: measured.width,
+                height: measured.height
+            )
+        )
     }
 
     private func denormalized(_ point: CGPoint, in rect: CGRect) -> CGPoint {
@@ -7110,6 +7313,24 @@ enum SmartAnnotationRenderer {
         ]
         let size = (text as NSString).size(withAttributes: attributes)
         let originY = counter ? point.y - size.height / 2 : point.y - size.height
+        if !watermark, !counter {
+            // iShot-style text lives on a white capsule so it stays legible
+            // on any backdrop; the canvas preview draws the same bubble.
+            let paddingH: CGFloat = 9
+            let paddingV: CGFloat = 5
+            let bubble = CGRect(
+                x: point.x - paddingH,
+                y: originY - paddingV,
+                width: size.width + paddingH * 2,
+                height: size.height + paddingV * 2
+            )
+            NSColor.white.withAlphaComponent(style.opacity).setFill()
+            NSBezierPath(
+                roundedRect: bubble,
+                xRadius: bubble.height * 0.4,
+                yRadius: bubble.height * 0.4
+            ).fill()
+        }
         (text as NSString).draw(at: CGPoint(x: point.x, y: originY), withAttributes: attributes)
         NSGraphicsContext.restoreGraphicsState()
     }

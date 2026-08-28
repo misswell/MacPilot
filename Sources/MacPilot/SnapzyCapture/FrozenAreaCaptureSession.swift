@@ -109,6 +109,16 @@ nonisolated final class FrozenAreaCaptureSession {
     snapshots[snapshot.displayID] = snapshot
   }
 
+  /// 刷新截图 support: swaps in freshly captured snapshots for the displays
+  /// they cover, leaving displays that were not recaptured untouched.
+  func replaceSnapshots(_ newSnapshots: [FrozenDisplaySnapshot]) {
+    var updated = snapshots
+    for snapshot in newSnapshots {
+      updated[snapshot.displayID] = snapshot
+    }
+    snapshots = updated
+  }
+
   func backdrop(for displayID: CGDirectDisplayID) -> AreaSelectionBackdrop? {
     guard let snapshot = snapshots[displayID] else { return nil }
     return AreaSelectionBackdrop(

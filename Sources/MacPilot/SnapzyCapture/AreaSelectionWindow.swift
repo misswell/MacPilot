@@ -125,6 +125,16 @@ final class AreaSelectionWindow: NSPanel {
     overlayView.selectionMode = mode
   }
 
+  /// Hides/shows the panel without tearing the session down. Used by the
+  /// 刷新截图 command so a fresh capture does not include the overlay itself.
+  func setPanelHiddenForRefresh(_ hidden: Bool) {
+    if hidden {
+      orderOut(nil)
+    } else {
+      orderFrontRegardless()
+    }
+  }
+
   /// Switch between window-event input (default) and live-passthrough input.
   /// Passthrough makes the panel hit-transparent (clear background — fully transparent
   /// pixels are not hit-testable). This is REQUIRED for hover persistence: any hittable
@@ -299,6 +309,10 @@ final class AreaSelectionOverlayView: NSView {
   private var finalizedSelectionDrag: FinalizedSelectionDrag?
   private var isShowingSelectionActions = false
   private(set) var isSelectionAdjustmentActive = false
+  /// True while the chrome-less iShot-style annotation session covers the
+  /// frame: the border/handles/bubble stay visible, the HUD toolbar commits,
+  /// and the overlay swallows frame-drag gestures so the canvas stays aligned.
+  private(set) var isAnnotationSessionActive = false
   private var embeddedAnnotationView: NSView?
   private var windowSelectionSnapshot: WindowSelectionSnapshot?
   private var hoveredWindowCandidate: WindowSelectionCandidate?
@@ -875,6 +889,9 @@ final class AreaSelectionOverlayView: NSView {
     if showsActions {
       let actionBar = AreaSelectionActionBar(onAction: actionHandler)
       let sideBar = AreaSelectionSideActionBar(onAction: actionHandler)
+      actionBar.layoutDidChange = { [weak self] in
+        self?.positionSelectionActionBars()
+      }
       actionBar.layer?.zPosition = 100
       sideBar.layer?.zPosition = 100
       selectionActionBar = actionBar
@@ -909,14 +926,16 @@ final class AreaSelectionOverlayView: NSView {
     refreshActiveCursor()
   }
 
-  /// Adds a SwiftUI editor as a child of this full-screen overlay.  The canvas
-  /// stays aligned with the selected frame while the toolbar is laid out as a
-  /// sibling immediately above or below it, matching PixPin/Snipaste's
-  /// in-place editing behavior without covering the captured pixels.
+  /// Adds a SwiftUI editor as a child of this full-screen overlay.  In the
+  /// iShot-style in-place flow (`showsToolbar: false`) the canvas sits exactly
+  /// over the selected frame while the blue border, handles, coordinate bubble
+  /// and the bottom HUD toolbar stay visible — the toolbar owns the tool and
+  /// style controls and the commit buttons.
   func showEmbeddedAnnotationEditor(
     _ editorView: NSView,
     screenRect: CGRect,
-    toolbarPlacement: SmartAnnotationToolbarPlacement = .above
+    toolbarPlacement: SmartAnnotationToolbarPlacement = .above,
+    showsToolbar: Bool = true
   ) {
     guard finalizedSelectionRect != nil else { return }
     isSelecting = false
@@ -928,13 +947,24 @@ final class AreaSelectionOverlayView: NSView {
     pendingSelectionStartPoint = nil
     hideMagnifier()
     hideSizeIndicator()
-    removeSelectionActionBars()
-    selectionBorderLayer.isHidden = true
-    for handle in selectionHandleLayers { handle.isHidden = true }
-    selectionDimensionBackgroundLayer.isHidden = true
-    selectionDimensionTextLayer.isHidden = true
+
+    if showsToolbar {
+      // Legacy chrome: the editor carries its own toolbar, so the frame
+      // visuals and the HUD toolbar get out of the way.
+      removeSelectionActionBars()
+      selectionBorderLayer.isHidden = true
+      for handle in selectionHandleLayers { handle.isHidden = true }
+      selectionDimensionBackgroundLayer.isHidden = true
+      selectionDimensionTextLayer.isHidden = true
+    } else {
+      updateFinalizedSelectionVisuals()
+    }
 
     removeEmbeddedAnnotationEditor()
+    if !showsToolbar {
+      // Set after the removal above, which clears the flag as a side effect.
+      isAnnotationSessionActive = true
+    }
     let selectionFrame = finalizedSelectionRect ?? .zero
     editorView.autoresizingMask = []
     editorView.wantsLayer = true
@@ -945,42 +975,71 @@ final class AreaSelectionOverlayView: NSView {
     editorView.frame = selectionFrame
     editorView.layoutSubtreeIfNeeded()
 
-    let fittingSize = editorView.fittingSize
-    let editorWidth = max(
-      selectionFrame.width,
-      max(0, fittingSize.width),
-      SmartAnnotationEditor.embeddedToolbarMinimumWidth
-    )
-    let editorHeight = max(
-      selectionFrame.height + SmartAnnotationEditor.embeddedToolbarExtent,
-      max(0, fittingSize.height)
-    )
-    let editorX = max(
-      8,
-      min(bounds.width - editorWidth - 8, selectionFrame.midX - editorWidth / 2)
-    )
-    if let hostingView = editorView as? NSHostingView<SmartAnnotationEditor> {
-      var rootView = hostingView.rootView
-      if rootView.embeddedCanvasSize != nil {
-        let centeredCanvasX = editorX + (editorWidth - selectionFrame.width) / 2
-        rootView.embeddedCanvasHorizontalOffset = selectionFrame.minX - centeredCanvasX
-        hostingView.rootView = rootView
-        editorView.layoutSubtreeIfNeeded()
+    if showsToolbar {
+      let fittingSize = editorView.fittingSize
+      let editorWidth = max(
+        selectionFrame.width,
+        max(0, fittingSize.width),
+        SmartAnnotationEditor.embeddedToolbarMinimumWidth
+      )
+      let editorHeight = max(
+        selectionFrame.height + SmartAnnotationEditor.embeddedToolbarExtent,
+        max(0, fittingSize.height)
+      )
+      let editorX = max(
+        8,
+        min(bounds.width - editorWidth - 8, selectionFrame.midX - editorWidth / 2)
+      )
+      if let hostingView = editorView as? NSHostingView<SmartAnnotationEditor> {
+        var rootView = hostingView.rootView
+        if rootView.embeddedCanvasSize != nil {
+          let centeredCanvasX = editorX + (editorWidth - selectionFrame.width) / 2
+          rootView.embeddedCanvasHorizontalOffset = selectionFrame.minX - centeredCanvasX
+          hostingView.rootView = rootView
+          editorView.layoutSubtreeIfNeeded()
+        }
       }
+      let editorY: CGFloat = switch toolbarPlacement {
+      case .above:
+        selectionFrame.minY
+      case .below:
+        selectionFrame.maxY - editorHeight
+      }
+      editorView.frame = CGRect(
+        x: editorX,
+        y: editorY,
+        width: editorWidth,
+        height: editorHeight
+      )
+    } else {
+      // Chrome-less: the editor never moves relative to the frame.
+      if let hostingView = editorView as? NSHostingView<SmartAnnotationEditor> {
+        var rootView = hostingView.rootView
+        rootView.embeddedCanvasHorizontalOffset = 0
+        hostingView.rootView = rootView
+      }
+      editorView.frame = selectionFrame
+      editorView.layoutSubtreeIfNeeded()
     }
-    let editorY: CGFloat = switch toolbarPlacement {
-    case .above:
-      selectionFrame.minY
-    case .below:
-      selectionFrame.maxY - editorHeight
-    }
-    editorView.frame = CGRect(
-      x: editorX,
-      y: editorY,
-      width: editorWidth,
-      height: editorHeight
-    )
     refreshActiveCursor()
+  }
+
+  /// Hands the live annotation model to the bottom HUD toolbar so its tool
+  /// buttons switch tools in place and its action buttons commit the session.
+  func attachAnnotationSession(
+    model: SmartAnnotationModel,
+    commit: @escaping (AreaSelectionAction) -> Void
+  ) {
+    selectionActionBar?.bindAnnotationSession(
+      AreaSelectionActionBar.AnnotationBinding(model: model, commit: commit)
+    )
+    positionSelectionActionBars()
+  }
+
+  /// Mirrors the output-style toggle states into the side bar's round
+  /// buttons (圆角截图 / 阴影或边框).
+  func syncOutputStyleToggles(roundedCorners: Bool, shadow: Bool) {
+    selectionSideActionBar?.setToggleStates(roundedCorners: roundedCorners, shadow: shadow)
   }
 
   func hideSelectionResult() {
@@ -1021,6 +1080,7 @@ final class AreaSelectionOverlayView: NSView {
   }
 
   private func removeSelectionActionBars() {
+    selectionActionBar?.bindAnnotationSession(nil)
     selectionActionBar?.removeFromSuperview()
     selectionSideActionBar?.removeFromSuperview()
     selectionActionBar = nil
@@ -1030,6 +1090,7 @@ final class AreaSelectionOverlayView: NSView {
   private func removeEmbeddedAnnotationEditor() {
     embeddedAnnotationView?.removeFromSuperview()
     embeddedAnnotationView = nil
+    isAnnotationSessionActive = false
   }
 
   private func updateFinalizedSelectionVisuals() {
@@ -1076,27 +1137,32 @@ final class AreaSelectionOverlayView: NSView {
       handleLayer.isHidden = false
     }
 
-    let text = "\(Int(localRect.width.rounded())) × \(Int(localRect.height.rounded())) px"
+    let originX = Int(localRect.minX)
+    let originY = Int(bounds.height - localRect.maxY)
+    let text = "\(originX),\(originY) \(Int(localRect.width.rounded())) × \(Int(localRect.height.rounded())) px"
     let attributes: [NSAttributedString.Key: Any] = [
       .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
       .foregroundColor: NSColor.white,
     ]
     let measured = text.size(withAttributes: attributes)
-    let labelRect = CGRect(
-      x: localRect.midX - (measured.width + 24) / 2,
-      y: localRect.maxY + 12,
-      width: measured.width + 24,
+    let bubbleRect = CGRect(
+      x: localRect.minX,
+      y: localRect.maxY + 8,
+      width: measured.width + 20,
       height: measured.height + 10
     )
+    let inset: CGFloat = 6
     let clampedLabelRect = CGRect(
-      x: max(6, min(bounds.width - labelRect.width - 6, labelRect.minX)),
-      y: min(bounds.height - labelRect.height - 6, max(6, labelRect.minY)),
-      width: labelRect.width,
-      height: labelRect.height
+      x: max(inset, min(bounds.width - bubbleRect.width - inset, bubbleRect.minX)),
+      y: bubbleRect.maxY > bounds.height - inset
+        ? max(inset, localRect.minY - bubbleRect.height - inset)
+        : bubbleRect.minY,
+      width: bubbleRect.width,
+      height: bubbleRect.height
     )
     selectionDimensionBackgroundLayer.frame = clampedLabelRect
     updateTextLayerScales()
-    selectionDimensionTextLayer.frame = clampedLabelRect.insetBy(dx: 12, dy: 5)
+    selectionDimensionTextLayer.frame = clampedLabelRect.insetBy(dx: 10, dy: 5)
     selectionDimensionTextLayer.string = text
     selectionDimensionBackgroundLayer.isHidden = false
     selectionDimensionTextLayer.isHidden = false
@@ -1910,46 +1976,48 @@ final class AreaSelectionOverlayView: NSView {
     return true
   }
 
+  /// iShot-style live bubble: "x,y W×H px" anchored above the selection's
+  /// top-left corner (single line, left-aligned) instead of the size-only
+  /// label that used to trail the pointer.
   private func updateSizeIndicator(for rect: CGRect, measuredSize: CGSize? = nil) {
     let displayedSize = measuredSize ?? rect.size
-    let sizeText = "\(Int(displayedSize.width))\n\(Int(displayedSize.height))"
+    let originX = Int(rect.minX)
+    let originY = Int(bounds.height - rect.maxY)
+    let text = "\(originX),\(originY) \(Int(displayedSize.width.rounded())) × \(Int(displayedSize.height.rounded())) px"
+    updateCoordinateBubbleText(text)
+    positionBubbleAboveTopLeft(of: rect)
+  }
+
+  /// Shared text update for the single coordinate bubble layer pair; re-raster
+  /// guarded by comparing the last rendered string.
+  private func updateCoordinateBubbleText(_ text: String) {
     let attributes = coordinateTextAttributes
-    let textSize: CGSize
-    // Assigning `CATextLayer.string` re-rasterizes the text even when unchanged, and
-    // this runs per pointer tick — so measure and re-assign only on actual changes.
-    let textChanged = sizeText != lastSizeIndicatorText
+    let textChanged = text != lastSizeIndicatorText
     if textChanged {
-      textSize = multiLineTextSize(sizeText, attributes: attributes)
-      lastSizeIndicatorText = sizeText
-      lastSizeIndicatorTextSize = textSize
-    } else {
-      textSize = lastSizeIndicatorTextSize
+      lastSizeIndicatorTextSize = multiLineTextSize(text, attributes: attributes)
+      lastSizeIndicatorText = text
+      sizeIndicatorTextLayer.string = text
     }
+  }
 
-    let point = currentMousePosition
-    let offset: CGFloat = 12
-    var textRect = CGRect(
-      x: point.x + offset,
-      y: point.y - textSize.height - 4,
-      width: textSize.width,
-      height: textSize.height
+  private func positionBubbleAboveTopLeft(of rect: CGRect) {
+    let size = lastSizeIndicatorTextSize
+    let inset: CGFloat = 6
+    var bubbleRect = CGRect(
+      x: rect.minX,
+      y: rect.maxY + inset,
+      width: size.width + 16,
+      height: size.height + 8
     )
-
-    if textRect.maxX > bounds.maxX {
-      textRect.origin.x = point.x - textSize.width - offset
+    if bubbleRect.maxY > bounds.height - inset {
+      bubbleRect.origin.y = max(inset, rect.minY - bubbleRect.height - inset)
     }
-    if textRect.minY < bounds.minY {
-      textRect.origin.y = point.y + offset
-    }
+    bubbleRect.origin.x = max(inset, min(bounds.width - bubbleRect.width - inset, bubbleRect.minX))
 
     updateTextLayerScales()
-    sizeIndicatorBackgroundLayer.frame = textRect.insetBy(dx: -4, dy: -2)
+    sizeIndicatorBackgroundLayer.frame = bubbleRect
     sizeIndicatorBackgroundLayer.isHidden = false
-
-    if textChanged {
-      sizeIndicatorTextLayer.string = sizeText
-    }
-    sizeIndicatorTextLayer.frame = textRect
+    sizeIndicatorTextLayer.frame = bubbleRect.insetBy(dx: 8, dy: 4)
     sizeIndicatorTextLayer.isHidden = false
   }
 
@@ -2537,7 +2605,7 @@ final class AreaSelectionOverlayView: NSView {
   }
 
   override func rightMouseDown(with _: NSEvent) {
-    guard !isLivePassthroughInput else { return }
+    guard !isLivePassthroughInput, !isAnnotationSessionActive else { return }
     delegate?.overlayViewDidCancel(self)
   }
 
@@ -2579,6 +2647,12 @@ final class AreaSelectionOverlayView: NSView {
 
   private func handlePrimaryMouseDown(at point: CGPoint, clickCount: Int = 1) {
     currentMousePosition = point
+    if isAnnotationSessionActive {
+      // The canvas owns frame interactions during the in-place annotation
+      // session; the overlay must not start reselect/move gestures underneath
+      // it when the pointer lands on the border or handles.
+      return
+    }
     if let areaWindow = window as? AreaSelectionWindow {
       DiagnosticLogger.shared.log(
         .debug,
@@ -2656,6 +2730,7 @@ final class AreaSelectionOverlayView: NSView {
 
   private func handlePrimaryMouseDragged(at point: CGPoint) {
     currentMousePosition = point
+    if isAnnotationSessionActive { return }
     if isShowingSelectionActions {
       guard let drag = finalizedSelectionDrag else { return }
       let updatedRect: CGRect
@@ -2713,6 +2788,7 @@ final class AreaSelectionOverlayView: NSView {
 
   private func handlePrimaryMouseUp(at point: CGPoint) {
     currentMousePosition = point
+    if isAnnotationSessionActive { return }
     if isShowingSelectionActions {
       finalizedSelectionDrag = nil
       return
