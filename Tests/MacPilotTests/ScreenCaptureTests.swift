@@ -749,6 +749,62 @@ struct ScreenCaptureTests {
         #expect(model.currentStyle.opacity == 0.65)
     }
 
+    @Test @MainActor func smartAnnotationModelSelectsExistingObjectsAndUpdatesTheirStyle() {
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        let rectangle = SmartAnnotation.rectangle(CGRect(x: 0.2, y: 0.2, width: 0.35, height: 0.25))
+        model.append(rectangle)
+
+        #expect(model.selectAnnotation(at: CGPoint(x: 0.3, y: 0.3)) == 0)
+        model.setColor(.blue)
+        model.setFillEnabled(true)
+        model.setLineStyle(.dashed)
+
+        #expect(model.selectedIndex == 0)
+        #expect(model.currentStyle.color == .blue)
+        #expect(model.styledAnnotations[0].style.fillEnabled)
+        #expect(model.styledAnnotations[0].style.lineStyle == .dashed)
+    }
+
+    @Test @MainActor func smartAnnotationModelRecordsMoveAndResizeAsOneUndoableEdit() {
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        let original = SmartAnnotation.rectangle(CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.2))
+        model.append(original)
+
+        model.beginEditing(at: 0)
+        let moved = original.translated(by: CGPoint(x: 0.1, y: 0.05))
+        let resized = moved.resized(
+            from: moved.normalizedBounds,
+            to: CGRect(x: 0.3, y: 0.25, width: 0.4, height: 0.3)
+        )
+        model.updateAnnotation(at: 0, to: resized)
+        model.endEditing()
+
+        #expect(model.annotations[0] == resized)
+        model.undo()
+        #expect(model.annotations[0] == original)
+        model.redo()
+        #expect(model.annotations[0] == resized)
+    }
+
+    @Test func smartAnnotationGeometryHitTestsAndResizesLineObjects() {
+        let arrow = SmartAnnotation.arrow(CGPoint(x: 0.2, y: 0.2), CGPoint(x: 0.8, y: 0.8))
+        #expect(arrow.hitTest(CGPoint(x: 0.5, y: 0.5), tolerance: 0.02))
+        #expect(!arrow.hitTest(CGPoint(x: 0.5, y: 0.7), tolerance: 0.02))
+
+        let resized = arrow.resized(
+            from: arrow.normalizedBounds,
+            to: CGRect(x: 0.1, y: 0.2, width: 0.8, height: 0.4)
+        )
+        guard case .arrow(let start, let end) = resized else {
+            Issue.record("Expected the resized annotation to remain an arrow")
+            return
+        }
+        #expect(abs(start.x - 0.1) < 0.001)
+        #expect(abs(start.y - 0.2) < 0.001)
+        #expect(abs(end.x - 0.9) < 0.001)
+        #expect(abs(end.y - 0.6) < 0.001)
+    }
+
     @Test func smartAnnotationEditorDisplaysStyleValuesInsteadOfSourceExpressions() {
         #expect(SmartAnnotationEditor.lineWidthDisplayText(for: 18) == "18")
         #expect(SmartAnnotationEditor.opacityDisplayText(for: 0.65) == "65%")

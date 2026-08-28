@@ -5126,21 +5126,102 @@ extension AreaSelectionAnnotationTool {
     }
 }
 
+struct SmartAnnotationColor: Equatable, Hashable, Sendable {
+    var red: Double
+    var green: Double
+    var blue: Double
+
+    init(red: Double, green: Double, blue: Double) {
+        self.red = min(1, max(0, red))
+        self.green = min(1, max(0, green))
+        self.blue = min(1, max(0, blue))
+    }
+
+    init(_ color: NSColor) {
+        let rgb = color.usingColorSpace(.deviceRGB) ?? NSColor.systemRed
+        self.init(
+            red: Double(rgb.redComponent),
+            green: Double(rgb.greenComponent),
+            blue: Double(rgb.blueComponent)
+        )
+    }
+
+    var nsColor: NSColor {
+        NSColor(
+            calibratedRed: CGFloat(red),
+            green: CGFloat(green),
+            blue: CGFloat(blue),
+            alpha: 1
+        )
+    }
+
+    var swiftUIColor: Color {
+        Color(red: red, green: green, blue: blue)
+    }
+
+    static let red = Self(red: 0.95, green: 0.16, blue: 0.18)
+    static let orange = Self(red: 0.96, green: 0.49, blue: 0.08)
+    static let yellow = Self(red: 0.98, green: 0.79, blue: 0.08)
+    static let green = Self(red: 0.18, green: 0.72, blue: 0.38)
+    static let blue = Self(red: 0.16, green: 0.42, blue: 0.95)
+    static let purple = Self(red: 0.58, green: 0.32, blue: 0.91)
+    static let white = Self(red: 1, green: 1, blue: 1)
+    static let black = Self(red: 0, green: 0, blue: 0)
+
+    static let presets: [Self] = [
+        .red, .orange, .yellow, .green, .blue, .purple, .white, .black
+    ]
+}
+
+enum SmartAnnotationLineStyle: String, CaseIterable, Identifiable, Hashable, Sendable {
+    case solid
+    case dashed
+    case dotted
+
+    var id: String { rawValue }
+
+    var titleKey: String {
+        switch self {
+        case .solid: return "scAnnotationLineSolid"
+        case .dashed: return "scAnnotationLineDashed"
+        case .dotted: return "scAnnotationLineDotted"
+        }
+    }
+
+    func title(language: AppLanguage) -> String {
+        AppText.value(titleKey, language: language)
+    }
+}
+
 struct SmartAnnotationStyle: Equatable, Sendable {
     var lineWidth: CGFloat
     var opacity: CGFloat
+    var color: SmartAnnotationColor
+    var fillEnabled: Bool
+    var lineStyle: SmartAnnotationLineStyle
 
-    init(lineWidth: CGFloat = 3, opacity: CGFloat = 1) {
+    init(
+        lineWidth: CGFloat = 3,
+        opacity: CGFloat = 1,
+        color: SmartAnnotationColor = .red,
+        fillEnabled: Bool = false,
+        lineStyle: SmartAnnotationLineStyle = .solid
+    ) {
         self.lineWidth = min(48, max(1, lineWidth))
         self.opacity = min(1, max(0.05, opacity))
+        self.color = color
+        self.fillEnabled = fillEnabled
+        self.lineStyle = lineStyle
     }
 
     static func `default`(for tool: SmartAnnotationTool) -> Self {
         switch tool {
         case .highlighter:
-            return Self(lineWidth: 14, opacity: 0.45)
+            return Self(lineWidth: 14, opacity: 0.45, color: .yellow)
         case .watermark:
-            return Self(lineWidth: 3, opacity: 0.76)
+            return Self(lineWidth: 3, opacity: 0.76, color: .white)
+        case .filledRectangle:
+            return Self(fillEnabled: true)
         default:
             return Self()
         }
@@ -5166,6 +5247,176 @@ enum SmartAnnotation: Equatable {
 struct SmartAnnotationRenderItem: Equatable {
     let annotation: SmartAnnotation
     let style: SmartAnnotationStyle
+}
+
+enum SmartAnnotationResizeHandle: String, CaseIterable, Equatable, Sendable {
+    case topLeft
+    case top
+    case topRight
+    case right
+    case bottomRight
+    case bottom
+    case bottomLeft
+    case left
+
+    var changesLeftEdge: Bool {
+        switch self {
+        case .topLeft, .left, .bottomLeft: return true
+        default: return false
+        }
+    }
+
+    var changesRightEdge: Bool {
+        switch self {
+        case .topRight, .right, .bottomRight: return true
+        default: return false
+        }
+    }
+
+    var changesTopEdge: Bool {
+        switch self {
+        case .topLeft, .top, .topRight: return true
+        default: return false
+        }
+    }
+
+    var changesBottomEdge: Bool {
+        switch self {
+        case .bottomLeft, .bottom, .bottomRight: return true
+        default: return false
+        }
+    }
+}
+
+extension SmartAnnotation {
+    var tool: SmartAnnotationTool {
+        switch self {
+        case .rectangle: return .rectangle
+        case .filledRectangle: return .filledRectangle
+        case .ellipse: return .ellipse
+        case .arrow: return .arrow
+        case .line: return .line
+        case .blur: return .blur
+        case .spotlight: return .spotlight
+        case .counter: return .counter
+        case .highlighter: return .highlighter
+        case .pencil: return .pencil
+        case .text: return .text
+        case .watermark: return .watermark
+        case .crop: return .crop
+        }
+    }
+
+    /// Returns the normalized bounds used by the in-place editor.  Keeping
+    /// every object in one coordinate space makes selection, movement, resize
+    /// handles, preview rendering, and final export agree on the same pixels.
+    var normalizedBounds: CGRect {
+        switch self {
+        case .rectangle(let value), .filledRectangle(let value), .ellipse(let value),
+             .blur(let value), .spotlight(let value), .crop(let value):
+            return value.standardized
+        case .arrow(let start, let end), .line(let start, let end), .highlighter(let start, let end):
+            return CGRect(
+                x: min(start.x, end.x),
+                y: min(start.y, end.y),
+                width: abs(end.x - start.x),
+                height: abs(end.y - start.y)
+            ).standardized
+        case .counter(_, let point):
+            let radius: CGFloat = 0.035
+            return CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
+        case .text(_, let point), .watermark(_, let point):
+            return CGRect(x: point.x, y: point.y, width: 0.24, height: 0.1)
+        case .pencil(let points):
+            guard let first = points.first else { return .zero }
+            let result = points.dropFirst().reduce(
+                CGRect(origin: first, size: .zero)
+            ) { current, point in
+                current.union(CGRect(origin: point, size: .zero))
+            }
+            return result.insetBy(dx: -0.012, dy: -0.012).standardized
+        }
+    }
+
+    func hitTest(_ point: CGPoint, tolerance: CGFloat = 0.018) -> Bool {
+        switch self {
+        case .arrow(let start, let end), .line(let start, let end), .highlighter(let start, let end):
+            return Self.distance(from: point, to: start, end: end) <= tolerance
+        case .pencil(let points):
+            return zip(points, points.dropFirst()).contains {
+                Self.distance(from: point, to: $0, end: $1) <= tolerance
+            }
+        case .counter(_, let center):
+            return hypot(point.x - center.x, point.y - center.y) <= 0.05 + tolerance
+        default:
+            return normalizedBounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+        }
+    }
+
+    func translated(by delta: CGPoint) -> Self {
+        func move(_ point: CGPoint) -> CGPoint {
+            CGPoint(x: point.x + delta.x, y: point.y + delta.y)
+        }
+        switch self {
+        case .rectangle(let value): return .rectangle(value.offsetBy(dx: delta.x, dy: delta.y))
+        case .filledRectangle(let value): return .filledRectangle(value.offsetBy(dx: delta.x, dy: delta.y))
+        case .ellipse(let value): return .ellipse(value.offsetBy(dx: delta.x, dy: delta.y))
+        case .arrow(let start, let end): return .arrow(move(start), move(end))
+        case .line(let start, let end): return .line(move(start), move(end))
+        case .blur(let value): return .blur(value.offsetBy(dx: delta.x, dy: delta.y))
+        case .spotlight(let value): return .spotlight(value.offsetBy(dx: delta.x, dy: delta.y))
+        case .counter(let value, let point): return .counter(value, move(point))
+        case .highlighter(let start, let end): return .highlighter(move(start), move(end))
+        case .pencil(let points): return .pencil(points.map(move))
+        case .text(let text, let point): return .text(text, move(point))
+        case .watermark(let text, let point): return .watermark(text, move(point))
+        case .crop(let value): return .crop(value.offsetBy(dx: delta.x, dy: delta.y))
+        }
+    }
+
+    func resized(from sourceBounds: CGRect, to targetBounds: CGRect) -> Self {
+        let source = sourceBounds.standardized
+        let target = targetBounds.standardized
+        func map(_ point: CGPoint) -> CGPoint {
+            let x = source.width > 0
+                ? (point.x - source.minX) / source.width
+                : 0.5
+            let y = source.height > 0
+                ? (point.y - source.minY) / source.height
+                : 0.5
+            return CGPoint(
+                x: target.minX + x * target.width,
+                y: target.minY + y * target.height
+            )
+        }
+        switch self {
+        case .rectangle: return .rectangle(target)
+        case .filledRectangle: return .filledRectangle(target)
+        case .ellipse: return .ellipse(target)
+        case .blur: return .blur(target)
+        case .spotlight: return .spotlight(target)
+        case .crop: return .crop(target)
+        case .arrow(let start, let end): return .arrow(map(start), map(end))
+        case .line(let start, let end): return .line(map(start), map(end))
+        case .counter(let value, let point): return .counter(value, map(point))
+        case .highlighter(let start, let end): return .highlighter(map(start), map(end))
+        case .pencil(let points): return .pencil(points.map(map))
+        case .text(let text, let point): return .text(text, map(point))
+        case .watermark(let text, let point): return .watermark(text, map(point))
+        }
+    }
+
+    private static func distance(from point: CGPoint, to start: CGPoint, end: CGPoint) -> CGFloat {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let lengthSquared = dx * dx + dy * dy
+        guard lengthSquared > 0 else {
+            return hypot(point.x - start.x, point.y - start.y)
+        }
+        let projection = max(0, min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared))
+        let closest = CGPoint(x: start.x + projection * dx, y: start.y + projection * dy)
+        return hypot(point.x - closest.x, point.y - closest.y)
+    }
 }
 
 /// A small value-type history seam used by the annotation editor and tests.
@@ -5205,9 +5456,17 @@ final class SmartAnnotationModel: ObservableObject {
     @Published private(set) var annotations: [SmartAnnotation] = []
     @Published private(set) var canRedo = false
     @Published private(set) var currentStyle = SmartAnnotationStyle.default(for: .rectangle)
+    @Published private(set) var selectedIndex: Int?
     private var annotationStyles: [SmartAnnotationStyle] = []
-    private var redoAnnotations: [(annotation: SmartAnnotation, style: SmartAnnotationStyle)] = []
     private var stylesByTool: [SmartAnnotationTool: SmartAnnotationStyle] = [:]
+    private struct Document: Equatable {
+        let annotations: [SmartAnnotation]
+        let styles: [SmartAnnotationStyle]
+        let nextCounter: Int
+    }
+    private var undoDocuments: [Document] = []
+    private var redoDocuments: [Document] = []
+    private var activeMutationDocument: Document?
     private(set) var nextCounter = 1
 
     init(initialTool: SmartAnnotationTool = .rectangle) {
@@ -5224,7 +5483,7 @@ final class SmartAnnotationModel: ObservableObject {
                 annotation: annotation,
                 style: annotationStyles.indices.contains(index)
                     ? annotationStyles[index]
-                    : SmartAnnotationStyle.default(for: Self.tool(for: annotation))
+                    : SmartAnnotationStyle.default(for: annotation.tool)
             )
         }
     }
@@ -5232,14 +5491,61 @@ final class SmartAnnotationModel: ObservableObject {
     func style(at index: Int) -> SmartAnnotationStyle {
         guard annotations.indices.contains(index) else { return .default(for: tool) }
         guard annotationStyles.indices.contains(index) else {
-            return .default(for: Self.tool(for: annotations[index]))
+            return .default(for: annotations[index].tool)
         }
         return annotationStyles[index]
     }
 
     func selectTool(_ tool: SmartAnnotationTool) {
         self.tool = tool
+        selectedIndex = nil
         currentStyle = stylesByTool[tool] ?? .default(for: tool)
+    }
+
+    func selectAnnotation(_ index: Int?) {
+        guard let index, annotations.indices.contains(index) else {
+            selectedIndex = nil
+            currentStyle = stylesByTool[tool] ?? .default(for: tool)
+            return
+        }
+        selectedIndex = index
+        tool = annotations[index].tool
+        currentStyle = style(at: index)
+    }
+
+    @discardableResult
+    func selectAnnotation(at point: CGPoint, tolerance: CGFloat = 0.018) -> Int? {
+        let index = annotations.indices.reversed().first {
+            annotations[$0].hitTest(point, tolerance: tolerance)
+        }
+        selectAnnotation(index)
+        return index
+    }
+
+    func beginEditing(at index: Int) {
+        guard annotations.indices.contains(index) else { return }
+        selectAnnotation(index)
+        if activeMutationDocument == nil {
+            activeMutationDocument = document
+        }
+    }
+
+    func updateAnnotation(at index: Int, to annotation: SmartAnnotation) {
+        guard annotations.indices.contains(index) else { return }
+        if activeMutationDocument == nil {
+            activeMutationDocument = document
+        }
+        annotations[index] = annotation
+    }
+
+    func endEditing() {
+        commitActiveMutation()
+    }
+
+    func cancelEditing() {
+        guard let activeMutationDocument else { return }
+        apply(activeMutationDocument)
+        self.activeMutationDocument = nil
     }
 
     func adjustLineWidth(by delta: CGFloat) {
@@ -5266,60 +5572,104 @@ final class SmartAnnotationModel: ObservableObject {
         }
     }
 
+    func setColor(_ color: SmartAnnotationColor) {
+        updateCurrentStyle { style in
+            style.color = color
+        }
+    }
+
+    func setFillEnabled(_ enabled: Bool) {
+        updateCurrentStyle { style in
+            style.fillEnabled = enabled
+        }
+    }
+
+    func setLineStyle(_ lineStyle: SmartAnnotationLineStyle) {
+        updateCurrentStyle { style in
+            style.lineStyle = lineStyle
+        }
+    }
+
     func append(_ annotation: SmartAnnotation) {
+        commitActiveMutation()
+        recordUndoPoint()
         annotations.append(annotation)
         annotationStyles.append(currentStyle)
-        redoAnnotations.removeAll(keepingCapacity: true)
-        canRedo = false
         if case .counter = annotation { nextCounter += 1 }
+        selectedIndex = annotations.indices.last
+        currentStyle = annotationStyles.last ?? currentStyle
+        updateCanRedo()
     }
 
     func undo() {
-        guard let annotation = annotations.popLast(), let style = annotationStyles.popLast() else { return }
-        redoAnnotations.append((annotation, style))
-        canRedo = true
-        if case .counter = annotation { nextCounter = max(1, nextCounter - 1) }
+        commitActiveMutation()
+        guard let previous = undoDocuments.popLast() else { return }
+        redoDocuments.append(document)
+        apply(previous)
+        updateCanRedo()
     }
 
     func redo() {
-        guard let item = redoAnnotations.popLast() else { return }
-        annotations.append(item.annotation)
-        annotationStyles.append(item.style)
-        canRedo = !redoAnnotations.isEmpty
-        if case .counter = item.annotation { nextCounter += 1 }
+        commitActiveMutation()
+        guard let next = redoDocuments.popLast() else { return }
+        undoDocuments.append(document)
+        apply(next)
+        updateCanRedo()
     }
 
     func removeAll() {
+        commitActiveMutation()
+        guard !annotations.isEmpty else { return }
+        recordUndoPoint()
         annotations.removeAll(keepingCapacity: true)
         annotationStyles.removeAll(keepingCapacity: true)
-        redoAnnotations.removeAll(keepingCapacity: true)
-        canRedo = false
+        selectedIndex = nil
         nextCounter = 1
+        updateCanRedo()
     }
 
     private func updateCurrentStyle(_ update: (inout SmartAnnotationStyle) -> Void) {
         var updated = currentStyle
         update(&updated)
         currentStyle = updated
-        stylesByTool[tool] = updated
+        if let selectedIndex, annotationStyles.indices.contains(selectedIndex) {
+            annotationStyles[selectedIndex] = updated
+        } else {
+            stylesByTool[tool] = updated
+        }
     }
 
-    private static func tool(for annotation: SmartAnnotation) -> SmartAnnotationTool {
-        switch annotation {
-        case .rectangle: return .rectangle
-        case .filledRectangle: return .filledRectangle
-        case .ellipse: return .ellipse
-        case .arrow: return .arrow
-        case .line: return .line
-        case .blur: return .blur
-        case .spotlight: return .spotlight
-        case .counter: return .counter
-        case .highlighter: return .highlighter
-        case .pencil: return .pencil
-        case .text: return .text
-        case .watermark: return .watermark
-        case .crop: return .crop
-        }
+    private var document: Document {
+        Document(
+            annotations: annotations,
+            styles: annotationStyles,
+            nextCounter: nextCounter
+        )
+    }
+
+    private func recordUndoPoint() {
+        undoDocuments.append(document)
+        redoDocuments.removeAll(keepingCapacity: true)
+    }
+
+    private func commitActiveMutation() {
+        guard let activeMutationDocument else { return }
+        self.activeMutationDocument = nil
+        guard activeMutationDocument != document else { return }
+        undoDocuments.append(activeMutationDocument)
+        redoDocuments.removeAll(keepingCapacity: true)
+    }
+
+    private func apply(_ document: Document) {
+        annotations = document.annotations
+        annotationStyles = document.styles
+        nextCounter = document.nextCounter
+        selectedIndex = nil
+        currentStyle = stylesByTool[tool] ?? .default(for: tool)
+    }
+
+    private func updateCanRedo() {
+        canRedo = !redoDocuments.isEmpty
     }
 }
 
@@ -5443,6 +5793,11 @@ struct SmartAnnotationEditor: View {
     @State private var pendingText = ""
     @State private var textPoint = CGPoint.zero
     @State private var pendingTextTool: SmartAnnotationTool = .text
+    @State private var editingIndex: Int?
+    @State private var editingStart: CGPoint?
+    @State private var editingOriginal: SmartAnnotation?
+    @State private var editingOriginalBounds: CGRect?
+    @State private var editingHandle: SmartAnnotationResizeHandle?
 
     init(
         image: CGImage,
@@ -5588,6 +5943,11 @@ struct SmartAnnotationEditor: View {
 
     private var annotationStyleControls: some View {
         HStack(spacing: 8) {
+            annotationColorControls
+
+            Divider()
+                .frame(height: 22)
+
             HStack(spacing: 4) {
                 Text(AppText.value("scAnnotationLineWidth", language: language))
                     .font(.caption)
@@ -5621,8 +5981,70 @@ struct SmartAnnotationEditor: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(AppText.value("scAnnotationOpacity", language: language))
             .accessibilityValue(Text(Self.opacityDisplayText(for: model.currentStyle.opacity)))
+
+            Toggle(
+                AppText.value("scAnnotationFill", language: language),
+                isOn: fillBinding
+            )
+            .toggleStyle(.checkbox)
+            .font(.caption)
+
+            Menu {
+                ForEach(SmartAnnotationLineStyle.allCases) { lineStyle in
+                    Button {
+                        model.setLineStyle(lineStyle)
+                    } label: {
+                        HStack {
+                            Text(lineStyle.title(language: language))
+                            if model.currentStyle.lineStyle == lineStyle {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Label(
+                    model.currentStyle.lineStyle.title(language: language),
+                    systemImage: "line.3.horizontal"
+                )
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help(AppText.value("scAnnotationLineStyle", language: language))
         }
         .help(AppText.value("scAnnotationWheelHint", language: language))
+    }
+
+    private var annotationColorControls: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(SmartAnnotationColor.presets.enumerated()), id: \.offset) { _, color in
+                Button {
+                    model.setColor(color)
+                } label: {
+                    Circle()
+                        .fill(color.swiftUIColor)
+                        .frame(width: 15, height: 15)
+                        .overlay {
+                            Circle()
+                                .stroke(
+                                    model.currentStyle.color == color ? Color.accentColor : Color.white.opacity(0.55),
+                                    lineWidth: model.currentStyle.color == color ? 2 : 1
+                                )
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(AppText.value("scAnnotationColor", language: language))
+            }
+
+            ColorPicker(
+                AppText.value("scAnnotationColor", language: language),
+                selection: colorBinding,
+                supportsOpacity: false
+            )
+            .labelsHidden()
+            .frame(width: 22)
+            .help(AppText.value("scAnnotationColor", language: language))
+        }
     }
 
     private var lineWidthBinding: Binding<Double> {
@@ -5636,6 +6058,20 @@ struct SmartAnnotationEditor: View {
         Binding(
             get: { Double(model.currentStyle.opacity) },
             set: { model.setOpacity(CGFloat($0)) }
+        )
+    }
+
+    private var colorBinding: Binding<Color> {
+        Binding(
+            get: { model.currentStyle.color.swiftUIColor },
+            set: { model.setColor(SmartAnnotationColor(NSColor($0))) }
+        )
+    }
+
+    private var fillBinding: Binding<Bool> {
+        Binding(
+            get: { model.currentStyle.fillEnabled },
+            set: { model.setFillEnabled($0) }
         )
     }
 
@@ -5673,15 +6109,45 @@ struct SmartAnnotationEditor: View {
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { value in
-                    guard fitted.contains(value.location) else { return }
+                    guard fitted.contains(value.location) || editingIndex != nil else { return }
+                    let location = clamped(value.location, to: fitted)
                     if dragStart == nil {
-                        dragStart = value.startLocation
-                        dragPoints = [value.startLocation]
+                        dragStart = location
+                        dragPoints = [location]
+                        let normalizedPoint = normalized(location, in: fitted)
+                        if let index = model.selectAnnotation(at: normalizedPoint, tolerance: 0.022),
+                           model.annotations.indices.contains(index) {
+                            let original = model.annotations[index]
+                            editingIndex = index
+                            editingStart = normalizedPoint
+                            editingOriginal = original
+                            editingOriginalBounds = original.normalizedBounds
+                            editingHandle = resizeHandle(
+                                at: location,
+                                bounds: original.normalizedBounds,
+                                in: fitted
+                            )
+                            model.beginEditing(at: index)
+                            dragCurrent = location
+                            return
+                        }
+                        model.selectAnnotation(nil)
                     }
-                    dragCurrent = value.location
-                    dragPoints.append(value.location)
+                    dragCurrent = location
+                    if editingIndex != nil {
+                        updateAnnotationEdit(at: normalized(location, in: fitted))
+                    } else {
+                        dragPoints.append(location)
+                    }
                 }
-                .onEnded { value in finishDrag(value.location, fitted: fitted) })
+                .onEnded { value in
+                    let location = clamped(value.location, to: fitted)
+                    if editingIndex != nil {
+                        finishAnnotationEdit(at: normalized(location, in: fitted))
+                    } else {
+                        finishDrag(location, fitted: fitted)
+                    }
+                })
         }
     }
 
@@ -5723,6 +6189,117 @@ struct SmartAnnotationEditor: View {
         let scale = min(available.width / imageSize.width, available.height / imageSize.height)
         let size = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
         return CGRect(x: (available.width - size.width) / 2, y: (available.height - size.height) / 2, width: size.width, height: size.height)
+    }
+
+    private func clamped(_ point: CGPoint, to rect: CGRect) -> CGPoint {
+        CGPoint(
+            x: min(rect.maxX, max(rect.minX, point.x)),
+            y: min(rect.maxY, max(rect.minY, point.y))
+        )
+    }
+
+    private func resizeHandle(
+        at point: CGPoint,
+        bounds: CGRect,
+        in fitted: CGRect
+    ) -> SmartAnnotationResizeHandle? {
+        let displayBounds = denormalized(bounds, in: fitted)
+        let candidates = SmartAnnotationResizeHandle.allCases
+        let threshold = max(12, min(18, min(displayBounds.width, displayBounds.height) * 0.18))
+        return candidates.first {
+            let center = handlePoint($0, in: displayBounds)
+            return hypot(point.x - center.x, point.y - center.y) <= threshold
+        }
+    }
+
+    private func handlePoint(_ handle: SmartAnnotationResizeHandle, in rect: CGRect) -> CGPoint {
+        switch handle {
+        case .topLeft: return CGPoint(x: rect.minX, y: rect.minY)
+        case .top: return CGPoint(x: rect.midX, y: rect.minY)
+        case .topRight: return CGPoint(x: rect.maxX, y: rect.minY)
+        case .right: return CGPoint(x: rect.maxX, y: rect.midY)
+        case .bottomRight: return CGPoint(x: rect.maxX, y: rect.maxY)
+        case .bottom: return CGPoint(x: rect.midX, y: rect.maxY)
+        case .bottomLeft: return CGPoint(x: rect.minX, y: rect.maxY)
+        case .left: return CGPoint(x: rect.minX, y: rect.midY)
+        }
+    }
+
+    private func updateAnnotationEdit(at point: CGPoint) {
+        guard let editingIndex,
+              let editingStart,
+              let editingOriginal,
+              let editingOriginalBounds else { return }
+
+        let targetBounds: CGRect
+        if let editingHandle {
+            targetBounds = resizedBounds(
+                editingOriginalBounds,
+                handle: editingHandle,
+                delta: CGPoint(
+                    x: point.x - editingStart.x,
+                    y: point.y - editingStart.y
+                )
+            )
+        } else {
+            let delta = CGPoint(
+                x: point.x - editingStart.x,
+                y: point.y - editingStart.y
+            )
+            let proposed = editingOriginalBounds.offsetBy(dx: delta.x, dy: delta.y)
+            targetBounds = constrainedBounds(proposed)
+        }
+        model.updateAnnotation(
+            at: editingIndex,
+            to: editingOriginal.resized(from: editingOriginalBounds, to: targetBounds)
+        )
+    }
+
+    private func finishAnnotationEdit(at point: CGPoint) {
+        updateAnnotationEdit(at: point)
+        model.endEditing()
+        editingIndex = nil
+        editingStart = nil
+        editingOriginal = nil
+        editingOriginalBounds = nil
+        editingHandle = nil
+        resetDrag()
+    }
+
+    private func constrainedBounds(_ value: CGRect, minimum: CGFloat = 0.01) -> CGRect {
+        var rect = value.standardized
+        rect.size.width = max(minimum, min(1, rect.width))
+        rect.size.height = max(minimum, min(1, rect.height))
+        rect.origin.x = min(1 - rect.width, max(0, rect.minX))
+        rect.origin.y = min(1 - rect.height, max(0, rect.minY))
+        return rect
+    }
+
+    private func resizedBounds(
+        _ source: CGRect,
+        handle: SmartAnnotationResizeHandle,
+        delta: CGPoint
+    ) -> CGRect {
+        let minimum: CGFloat = 0.01
+        var minX = source.minX
+        var maxX = source.maxX
+        var minY = source.minY
+        var maxY = source.maxY
+
+        if handle.changesLeftEdge { minX += delta.x }
+        if handle.changesRightEdge { maxX += delta.x }
+        if handle.changesTopEdge { minY += delta.y }
+        if handle.changesBottomEdge { maxY += delta.y }
+
+        if handle.changesLeftEdge { minX = min(minX, maxX - minimum) }
+        if handle.changesRightEdge { maxX = max(maxX, minX + minimum) }
+        if handle.changesTopEdge { minY = min(minY, maxY - minimum) }
+        if handle.changesBottomEdge { maxY = max(maxY, minY + minimum) }
+
+        return constrainedBounds(
+            CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY),
+            minimum: minimum
+        )
     }
 
     private func finishDrag(_ end: CGPoint, fitted: CGRect) {
@@ -5800,35 +6377,73 @@ struct SmartAnnotationEditor: View {
                 in: rect
             )
         }
+        if let selectedIndex = model.selectedIndex,
+           model.annotations.indices.contains(selectedIndex) {
+            drawSelectionOverlay(
+                for: model.annotations[selectedIndex].normalizedBounds,
+                in: rect,
+                context: &context
+            )
+        }
+    }
+
+    private func drawSelectionOverlay(
+        for normalizedBounds: CGRect,
+        in rect: CGRect,
+        context: inout GraphicsContext
+    ) {
+        let selectionRect = denormalized(normalizedBounds, in: rect)
+            .insetBy(dx: -3, dy: -3)
+        context.stroke(
+            Path(selectionRect),
+            with: .color(.accentColor),
+            style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+        )
+        for handle in SmartAnnotationResizeHandle.allCases {
+            let center = handlePoint(handle, in: denormalized(normalizedBounds, in: rect))
+            let handleRect = CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10)
+            context.fill(Path(ellipseIn: handleRect), with: .color(.white))
+            context.stroke(
+                Path(ellipseIn: handleRect),
+                with: .color(.accentColor),
+                lineWidth: 1.5
+            )
+        }
     }
 
     private func drawDraft(context: inout GraphicsContext, in rect: CGRect) {
-        guard let start = dragStart, let end = dragCurrent else { return }
-        let lineWidth = previewLineWidth(for: model.currentStyle, in: rect)
+        guard editingIndex == nil,
+              let start = dragStart,
+              let end = dragCurrent else { return }
+        let style = model.currentStyle
+        let lineWidth = previewLineWidth(for: style, in: rect)
+        let annotationColor = style.color.swiftUIColor
         switch model.tool {
         case .rectangle, .filledRectangle, .ellipse, .blur, .crop:
             let value = CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
-            if model.tool == .filledRectangle {
-                context.fill(
-                    Path(value),
-                    with: .color(.red.opacity(0.35 * model.currentStyle.opacity))
-                )
-                context.stroke(
-                    Path(value),
-                    with: .color(.red.opacity(model.currentStyle.opacity)),
-                    lineWidth: lineWidth
-                )
-            } else if model.tool == .ellipse {
+            if model.tool == .ellipse {
+                if style.fillEnabled {
+                    context.fill(
+                        Path(ellipseIn: value),
+                        with: .color(annotationColor.opacity(0.35 * style.opacity))
+                    )
+                }
                 context.stroke(
                     Path(ellipseIn: value),
-                    with: .color(.red.opacity(model.currentStyle.opacity)),
-                    lineWidth: lineWidth
+                    with: .color(annotationColor.opacity(style.opacity)),
+                    style: strokeStyle(for: style, lineWidth: lineWidth)
                 )
             } else {
+                if style.fillEnabled {
+                    context.fill(
+                        Path(value),
+                        with: .color(annotationColor.opacity(0.35 * style.opacity))
+                    )
+                }
                 context.stroke(
                     Path(value),
-                    with: .color(.red.opacity(model.currentStyle.opacity)),
-                    lineWidth: lineWidth
+                    with: .color(annotationColor.opacity(style.opacity)),
+                    style: strokeStyle(for: style, lineWidth: lineWidth)
                 )
             }
         case .spotlight:
@@ -5836,11 +6451,11 @@ struct SmartAnnotationEditor: View {
             var mask = Path()
             mask.addRect(rect)
             mask.addRect(value)
-            context.fill(mask, with: .color(.black.opacity(0.35 * model.currentStyle.opacity)), style: FillStyle(eoFill: true))
+            context.fill(mask, with: .color(.black.opacity(0.35 * style.opacity)), style: FillStyle(eoFill: true))
             context.stroke(
                 Path(value),
-                with: .color(.red.opacity(model.currentStyle.opacity)),
-                lineWidth: lineWidth
+                with: .color(annotationColor.opacity(style.opacity)),
+                style: strokeStyle(for: style, lineWidth: lineWidth)
             )
         case .arrow:
             drawArrow(
@@ -5883,13 +6498,43 @@ struct SmartAnnotationEditor: View {
         switch annotation {
         case .rectangle(let value):
             let denormalized = denormalized(value, in: rect)
-            context.stroke(Path(denormalized), with: .color(.red.opacity(style.opacity)), lineWidth: lineWidth)
+            if style.fillEnabled {
+                context.fill(
+                    Path(denormalized),
+                    with: .color(style.color.swiftUIColor.opacity(0.35 * style.opacity))
+                )
+            }
+            context.stroke(
+                Path(denormalized),
+                with: .color(style.color.swiftUIColor.opacity(style.opacity)),
+                style: strokeStyle(for: style, lineWidth: lineWidth)
+            )
         case .filledRectangle(let value):
             let denormalized = denormalized(value, in: rect)
-            context.fill(Path(denormalized), with: .color(.red.opacity(0.35 * style.opacity)))
-            context.stroke(Path(denormalized), with: .color(.red.opacity(style.opacity)), lineWidth: lineWidth)
+            if style.fillEnabled {
+                context.fill(
+                    Path(denormalized),
+                    with: .color(style.color.swiftUIColor.opacity(0.35 * style.opacity))
+                )
+            }
+            context.stroke(
+                Path(denormalized),
+                with: .color(style.color.swiftUIColor.opacity(style.opacity)),
+                style: strokeStyle(for: style, lineWidth: lineWidth)
+            )
         case .ellipse(let value):
-            context.stroke(Path(ellipseIn: denormalized(value, in: rect)), with: .color(.red.opacity(style.opacity)), lineWidth: lineWidth)
+            let ellipse = denormalized(value, in: rect)
+            if style.fillEnabled {
+                context.fill(
+                    Path(ellipseIn: ellipse),
+                    with: .color(style.color.swiftUIColor.opacity(0.35 * style.opacity))
+                )
+            }
+            context.stroke(
+                Path(ellipseIn: ellipse),
+                with: .color(style.color.swiftUIColor.opacity(style.opacity)),
+                style: strokeStyle(for: style, lineWidth: lineWidth)
+            )
         case .arrow(let start, let end):
             drawArrow(
                 from: denormalized(start, in: rect),
@@ -5915,6 +6560,11 @@ struct SmartAnnotationEditor: View {
             mask.addRect(rect)
             mask.addRect(denormalized(value, in: rect))
             context.fill(mask, with: .color(.black.opacity(0.35 * style.opacity)), style: FillStyle(eoFill: true))
+            context.stroke(
+                Path(denormalized(value, in: rect)),
+                with: .color(style.color.swiftUIColor.opacity(style.opacity)),
+                style: strokeStyle(for: style, lineWidth: lineWidth)
+            )
         case .counter(let value, let point):
             drawCounter(value, at: denormalized(point, in: rect), style: style, context: &context)
         case .highlighter(let start, let end):
@@ -5936,14 +6586,14 @@ struct SmartAnnotationEditor: View {
         case .text(let text, let point):
             context.draw(
                 Text(text).font(.system(size: 18 * max(0.75, min(1.5, style.lineWidth / 3)), weight: .bold))
-                    .foregroundColor(.red.opacity(style.opacity)),
+                    .foregroundColor(style.color.swiftUIColor.opacity(style.opacity)),
                 at: denormalized(point, in: rect),
                 anchor: .topLeading
             )
         case .watermark(let text, let point):
             context.draw(
                 Text(text).font(.system(size: 16 * max(0.75, min(1.5, style.lineWidth / 3)), weight: .medium))
-                    .foregroundColor(.white.opacity(style.opacity)),
+                    .foregroundColor(style.color.swiftUIColor.opacity(style.opacity)),
                 at: denormalized(point, in: rect),
                 anchor: .topLeading
             )
@@ -5971,8 +6621,8 @@ struct SmartAnnotationEditor: View {
         var path = Path()
         path.move(to: start)
         path.addLine(to: end)
-        let color: Color = tool == .highlighter ? .yellow.opacity(style.opacity) : .red.opacity(style.opacity)
-        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+        let color = style.color.swiftUIColor.opacity(style.opacity)
+        context.stroke(path, with: .color(color), style: strokeStyle(for: style, lineWidth: lineWidth))
     }
 
     private func drawPencil(
@@ -5985,13 +6635,17 @@ struct SmartAnnotationEditor: View {
         var path = Path()
         path.move(to: first)
         for point in points.dropFirst() { path.addLine(to: point) }
-        context.stroke(path, with: .color(.red.opacity(style.opacity)), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
+        context.stroke(
+            path,
+            with: .color(style.color.swiftUIColor.opacity(style.opacity)),
+            style: strokeStyle(for: style, lineWidth: lineWidth)
+        )
     }
 
     private func drawCounter(_ value: Int, at point: CGPoint, style: SmartAnnotationStyle, context: inout GraphicsContext) {
         let radius: CGFloat = 14 * max(0.75, style.lineWidth / 3)
         let circle = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
-        context.fill(Path(ellipseIn: circle), with: .color(.red.opacity(style.opacity)))
+        context.fill(Path(ellipseIn: circle), with: .color(style.color.swiftUIColor.opacity(style.opacity)))
         context.draw(Text(String(value)).font(.system(size: 13 * max(0.75, style.lineWidth / 3), weight: .bold)).foregroundColor(.white.opacity(style.opacity)), at: point, anchor: .center)
     }
 
@@ -6007,7 +6661,26 @@ struct SmartAnnotationEditor: View {
         let head: CGFloat = 14
         path.move(to: end); path.addLine(to: CGPoint(x: end.x - head * cos(angle - .pi / 6), y: end.y - head * sin(angle - .pi / 6)))
         path.move(to: end); path.addLine(to: CGPoint(x: end.x - head * cos(angle + .pi / 6), y: end.y - head * sin(angle + .pi / 6)))
-        context.stroke(path, with: .color(.red.opacity(style.opacity)), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
+        context.stroke(
+            path,
+            with: .color(style.color.swiftUIColor.opacity(style.opacity)),
+            style: strokeStyle(for: style, lineWidth: lineWidth)
+        )
+    }
+
+    private func strokeStyle(for style: SmartAnnotationStyle, lineWidth: CGFloat) -> StrokeStyle {
+        let dash: [CGFloat]
+        switch style.lineStyle {
+        case .solid: dash = []
+        case .dashed: dash = [lineWidth * 4, lineWidth * 3]
+        case .dotted: dash = [lineWidth, lineWidth * 2.5]
+        }
+        return StrokeStyle(
+            lineWidth: lineWidth,
+            lineCap: .round,
+            lineJoin: .round,
+            dash: dash
+        )
     }
 
     private func previewLineWidth(for style: SmartAnnotationStyle, in rect: CGRect) -> CGFloat {
@@ -6215,6 +6888,28 @@ enum SmartAnnotationRenderer {
         color.withAlphaComponent(color.alphaComponent * opacity).cgColor
     }
 
+    private static func color(_ color: SmartAnnotationColor, opacity: CGFloat) -> CGColor {
+        color.nsColor.withAlphaComponent(opacity).cgColor
+    }
+
+    private static func applyStrokeStyle(
+        _ context: CGContext,
+        style: SmartAnnotationStyle,
+        lineWidth: CGFloat
+    ) {
+        context.setLineWidth(lineWidth)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        switch style.lineStyle {
+        case .solid:
+            context.setLineDash(phase: 0, lengths: [])
+        case .dashed:
+            context.setLineDash(phase: 0, lengths: [lineWidth * 4, lineWidth * 3])
+        case .dotted:
+            context.setLineDash(phase: 0, lengths: [lineWidth, lineWidth * 2.5])
+        }
+    }
+
     private static func draw(
         _ annotation: SmartAnnotation,
         style: SmartAnnotationStyle,
@@ -6225,25 +6920,37 @@ enum SmartAnnotationRenderer {
         let lineWidth = scaledLineWidth(style, in: bounds)
         switch annotation {
         case .rectangle(let value):
+            let target = rect(value, in: bounds, canvas: canvas)
             context.saveGState()
-            context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-            context.setLineWidth(lineWidth)
-            context.stroke(rect(value, in: bounds, canvas: canvas))
+            if style.fillEnabled {
+                context.setFillColor(color(style.color, opacity: style.opacity * 0.35))
+                context.fill(target)
+            }
+            context.setStrokeColor(color(style.color, opacity: style.opacity))
+            applyStrokeStyle(context, style: style, lineWidth: lineWidth)
+            context.stroke(target)
             context.restoreGState()
         case .filledRectangle(let value):
             let target = rect(value, in: bounds, canvas: canvas)
             context.saveGState()
-            context.setFillColor(color(.systemRed, opacity: style.opacity * 0.35))
-            context.fill(target)
-            context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-            context.setLineWidth(lineWidth)
+            if style.fillEnabled {
+                context.setFillColor(color(style.color, opacity: style.opacity * 0.35))
+                context.fill(target)
+            }
+            context.setStrokeColor(color(style.color, opacity: style.opacity))
+            applyStrokeStyle(context, style: style, lineWidth: lineWidth)
             context.stroke(target)
             context.restoreGState()
         case .ellipse(let value):
+            let target = rect(value, in: bounds, canvas: canvas)
             context.saveGState()
-            context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-            context.setLineWidth(lineWidth)
-            context.strokeEllipse(in: rect(value, in: bounds, canvas: canvas))
+            if style.fillEnabled {
+                context.setFillColor(color(style.color, opacity: style.opacity * 0.35))
+                context.fillEllipse(in: target)
+            }
+            context.setStrokeColor(color(style.color, opacity: style.opacity))
+            applyStrokeStyle(context, style: style, lineWidth: lineWidth)
+            context.strokeEllipse(in: target)
             context.restoreGState()
         case .arrow(let start, let end):
             drawArrow(
@@ -6267,12 +6974,12 @@ enum SmartAnnotationRenderer {
         case .spotlight(let value):
             let target = rect(value, in: bounds, canvas: canvas)
             context.saveGState()
-            context.setFillColor(color(.black, opacity: style.opacity * 0.46))
+            context.setFillColor(color(NSColor.black, opacity: style.opacity * 0.46))
             context.addRect(bounds)
             context.addRect(target)
             context.drawPath(using: .eoFill)
-            context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-            context.setLineWidth(lineWidth)
+            context.setStrokeColor(color(style.color, opacity: style.opacity))
+            applyStrokeStyle(context, style: style, lineWidth: lineWidth)
             context.stroke(target)
             context.restoreGState()
         case .counter(let value, let location):
@@ -6285,9 +6992,8 @@ enum SmartAnnotationRenderer {
             )
         case .highlighter(let start, let end):
             context.saveGState()
-            context.setStrokeColor(color(.systemYellow, opacity: style.opacity))
-            context.setLineWidth(lineWidth)
-            context.setLineCap(.round)
+            context.setStrokeColor(color(style.color, opacity: style.opacity))
+            applyStrokeStyle(context, style: style, lineWidth: lineWidth)
             context.move(to: point(start, in: bounds, canvas: canvas))
             context.addLine(to: point(end, in: bounds, canvas: canvas))
             context.strokePath()
@@ -6296,10 +7002,8 @@ enum SmartAnnotationRenderer {
             let values = points(values, in: bounds, canvas: canvas)
             guard let first = values.first, values.count > 1 else { return }
             context.saveGState()
-            context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-            context.setLineWidth(lineWidth)
-            context.setLineCap(.round)
-            context.setLineJoin(.round)
+            context.setStrokeColor(color(style.color, opacity: style.opacity))
+            applyStrokeStyle(context, style: style, lineWidth: lineWidth)
             context.move(to: first)
             for value in values.dropFirst() { context.addLine(to: value) }
             context.strokePath()
@@ -6309,7 +7013,7 @@ enum SmartAnnotationRenderer {
                 text,
                 at: point(location, in: bounds, canvas: canvas),
                 in: context,
-                color: .systemRed,
+                color: style.color.nsColor,
                 width: bounds.width,
                 style: style
             )
@@ -6318,7 +7022,7 @@ enum SmartAnnotationRenderer {
                 text,
                 at: point(location, in: bounds, canvas: canvas),
                 in: context,
-                color: .white,
+                color: style.color.nsColor,
                 width: bounds.width,
                 style: style,
                 watermark: true
@@ -6336,9 +7040,8 @@ enum SmartAnnotationRenderer {
         lineWidth: CGFloat
     ) {
         context.saveGState()
-        context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-        context.setLineWidth(lineWidth)
-        context.setLineCap(.round)
+        context.setStrokeColor(color(style.color, opacity: style.opacity))
+        applyStrokeStyle(context, style: style, lineWidth: lineWidth)
         context.move(to: start)
         context.addLine(to: end)
         context.strokePath()
@@ -6356,9 +7059,8 @@ enum SmartAnnotationRenderer {
         let angle = atan2(end.y - start.y, end.x - start.x)
         let head = max(14, width / 45)
         context.saveGState()
-        context.setStrokeColor(color(.systemRed, opacity: style.opacity))
-        context.setLineWidth(lineWidth)
-        context.setLineCap(.round)
+        context.setStrokeColor(color(style.color, opacity: style.opacity))
+        applyStrokeStyle(context, style: style, lineWidth: lineWidth)
         context.move(to: start)
         context.addLine(to: end)
         context.move(to: end)
@@ -6378,7 +7080,7 @@ enum SmartAnnotationRenderer {
     ) {
         let radius = max(14, width / 55) * max(0.75, style.lineWidth / 3)
         context.saveGState()
-        context.setFillColor(color(.systemRed, opacity: style.opacity))
+        context.setFillColor(color(style.color, opacity: style.opacity))
         context.fillEllipse(in: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
         drawText(String(value), at: point, in: context, color: .white, width: width, style: style, counter: true)
         context.restoreGState()
