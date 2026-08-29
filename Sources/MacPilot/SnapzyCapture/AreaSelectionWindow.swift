@@ -1195,27 +1195,16 @@ final class AreaSelectionOverlayView: NSView {
 
   private func positionSelectionActionBars() {
     guard let rect = finalizedSelectionRect else { return }
-    let actionSize = selectionActionBar?.intrinsicContentSize ?? .zero
-    if let selectionActionBar {
-      let gap: CGFloat = 18
-      var y = rect.minY - actionSize.height - gap
-      if y < 8 { y = rect.maxY + gap }
-      let x = max(8, min(bounds.width - actionSize.width - 8, rect.midX - actionSize.width / 2))
-      selectionActionBar.frame = CGRect(x: x, y: y, width: actionSize.width, height: actionSize.height)
-    }
-
-    if let selectionSideActionBar {
-      let sideSize = selectionSideActionBar.intrinsicContentSize
-      let gap: CGFloat = 20
-      let x: CGFloat
-      if rect.maxX + gap + sideSize.width <= bounds.maxX - 8 {
-        x = rect.maxX + gap
-      } else {
-        x = max(8, rect.minX - gap - sideSize.width)
-      }
-      let y = max(8, min(bounds.height - sideSize.height - 8, rect.midY - sideSize.height / 2))
-      selectionSideActionBar.frame = CGRect(x: x, y: y, width: sideSize.width, height: sideSize.height)
-    }
+    // 统一走纯布局求解器：横栏与侧栏永不相交，且都完整落在屏幕内
+    // （小选区时两者不再打架）。
+    let result = AreaSelectionBarLayout.resolve(
+      selectionRect: rect,
+      barSize: selectionActionBar?.intrinsicContentSize ?? .zero,
+      sideSize: selectionSideActionBar?.intrinsicContentSize ?? .zero,
+      bounds: bounds.size
+    )
+    selectionActionBar?.frame = result.barFrame
+    selectionSideActionBar?.frame = result.sideFrame
   }
 
   func activatePendingSelectionIfNeeded() {

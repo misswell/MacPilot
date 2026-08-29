@@ -40,6 +40,7 @@ final class AreaSelectionActionBar: NSView {
   private var modelCancellable: AnyCancellable?
 
   private let rootStack = NSStackView()
+  private var primaryRow: NSStackView?
   private var optionsRow: NSView?
   private var undoButton: NSButton?
   private var eraserButton: NSButton?
@@ -133,12 +134,17 @@ final class AreaSelectionActionBar: NSView {
     let height: CGFloat = optionsVisible
       ? Self.primaryRowHeight + 4 + Self.optionsRowHeight
       : Self.primaryRowHeight
-    return NSSize(width: Self.primaryRowWidth, height: height)
+    // 宽度跟随实际内容：空闲时橡皮/撤销隐藏，标注会话中它们出现，
+    // 固定宽度会导致标注模式下内容溢出、空闲时右侧留白。
+    let insets = rootStack.edgeInsets
+    let primaryWidth = primaryRow?.fittingSize.width ?? 0
+    let optionsWidth = optionsVisible ? (optionsRow?.fittingSize.width ?? 0) : 0
+    let width = max(primaryWidth, optionsWidth) + insets.left + insets.right
+    return NSSize(width: max(240, width), height: height)
   }
 
   private static let primaryRowHeight: CGFloat = 38
   private static let optionsRowHeight: CGFloat = 34
-  private static let primaryRowWidth: CGFloat = 496
 
   // MARK: - Annotation Session Binding
 
@@ -174,7 +180,10 @@ final class AreaSelectionActionBar: NSView {
     let row = NSStackView()
     row.orientation = .horizontal
     row.alignment = .centerY
-    row.spacing = 2
+    // 按钮之间保持统一间距；隐藏的橡皮/撤销必须真正脱离布局，否则空闲时
+    // 会在马赛克和分隔线之间留下一个大空洞（NSStackView 默认不脱离）。
+    row.spacing = 4
+    row.detachesHiddenViews = true
 
     let grip = NSImageView(
       image: NSImage(
@@ -189,16 +198,14 @@ final class AreaSelectionActionBar: NSView {
     row.addArrangedSubview(grip)
     grip.widthAnchor.constraint(equalToConstant: 12).isActive = true
     grip.heightAnchor.constraint(equalToConstant: 18).isActive = true
-    row.setCustomSpacing(6, after: grip)
 
     // Tool groups with sub-tool menus (iShot's ▾ affordance).
     makeToolGroup(.shape, in: row)
     makeToolGroup(.pencil, in: row)
     makeToolGroup(.arrow, in: row)
-    row.addArrangedSubview(makeSingleToolButton("textformat", titleKey: "scAnnotationText", tool: .text, tag: BarTag.text))
+    row.addArrangedSubview(makeSingleToolButton("t.square", titleKey: "scAnnotationText", tool: .text, tag: BarTag.text))
     row.addArrangedSubview(makeSingleToolButton("1.circle", titleKey: "scAnnotationCounter", tool: .counter, tag: BarTag.counter))
     row.addArrangedSubview(makeSingleToolButton("circle.lefthalf.filled", titleKey: "scAnnotationBlur", tool: .blur, tag: BarTag.mosaic))
-    row.setCustomSpacing(6, after: row.arrangedSubviews.last ?? row)
 
     let eraser = makeSingleToolButton("eraser", titleKey: "scAnnotationEraser", tool: .eraser, tag: BarTag.eraser)
     eraser.isHidden = true
@@ -210,7 +217,6 @@ final class AreaSelectionActionBar: NSView {
     undo.isHidden = true
     row.addArrangedSubview(undo)
     undoButton = undo
-    row.setCustomSpacing(6, after: undo)
 
     let separator = NSBox()
     separator.boxType = .separator
@@ -218,7 +224,6 @@ final class AreaSelectionActionBar: NSView {
     row.addArrangedSubview(separator)
     separator.widthAnchor.constraint(equalToConstant: 1).isActive = true
     separator.heightAnchor.constraint(equalToConstant: 20).isActive = true
-    row.setCustomSpacing(6, after: separator)
 
     row.addArrangedSubview(makeActionButton("text.viewfinder", titleKey: "scToolOCR", tag: BarTag.ocr))
     row.addArrangedSubview(makeActionButton("pin", titleKey: "scPin", tag: BarTag.pin))
@@ -228,6 +233,7 @@ final class AreaSelectionActionBar: NSView {
     row.addArrangedSubview(makeMoreButton())
 
     row.translatesAutoresizingMaskIntoConstraints = false
+    primaryRow = row
     return row
   }
 
@@ -996,5 +1002,90 @@ final class AreaSelectionSideActionBar: NSView {
 
   @objc private func buttonPressed(_ sender: NSButton) {
     onAction(actionsByTag[sender.tag] ?? .capture)
+  }
+}
+
+// MARK: - Post-selection HUD Layout
+
+/// 纯函数布局：解析底部横栏与右侧竖栏围绕选区的位置，保证
+/// ① 两者永不相交（小选区防打架）；② 两者都完整落在屏幕内。
+/// 侧栏优先放选区右侧，放不下换左侧，再不行贴屏幕右缘；
+/// 横栏优先放选区下方，放不下换上方；与侧栏相交时先横向避让，
+/// 再换垂直侧，最后取第一个不相交的候选位。
+nonisolated enum AreaSelectionBarLayout {
+  struct Result: Equatable {
+    var barFrame: CGRect
+    var sideFrame: CGRect
+  }
+
+  static let gap: CGFloat = 16
+  static let edgeMargin: CGFloat = 8
+
+  static func resolve(
+    selectionRect: CGRect,
+    barSize: CGSize,
+    sideSize: CGSize,
+    bounds: CGSize
+  ) -> Result {
+    let maxBarX = max(edgeMargin, bounds.width - barSize.width - edgeMargin)
+    let maxSideX = max(edgeMargin, bounds.width - sideSize.width - edgeMargin)
+    let maxSideY = max(edgeMargin, bounds.height - sideSize.height - edgeMargin)
+    let maxBarY = max(edgeMargin, bounds.height - barSize.height - edgeMargin)
+
+    // --- 侧栏：右 → 左 → 贴屏幕右缘；垂直居中并夹回屏幕。
+    var sideFrame = CGRect(
+      x: min(maxSideX, selectionRect.maxX + gap),
+      y: min(maxSideY, max(edgeMargin, selectionRect.midY - sideSize.height / 2)),
+      width: sideSize.width,
+      height: sideSize.height
+    )
+    if sideFrame.minX < edgeMargin {
+      sideFrame.origin.x = max(
+        edgeMargin,
+        min(maxSideX, selectionRect.minX - gap - sideSize.width)
+      )
+    }
+    if sideFrame.minX < edgeMargin, maxSideX > edgeMargin {
+      sideFrame.origin.x = maxSideX
+    }
+
+    // --- 横栏：下 → 上 → 空间更大的一侧；水平以选区为中心并夹回屏幕。
+    let spaceBelow = selectionRect.minY - edgeMargin
+    let spaceAbove = bounds.height - edgeMargin - selectionRect.maxY
+    let preferBelow = spaceBelow >= barSize.height || spaceBelow >= spaceAbove
+    var barY: CGFloat = preferBelow
+      ? selectionRect.minY - gap - barSize.height
+      : selectionRect.maxY + gap
+    barY = min(maxBarY, max(edgeMargin, barY))
+    var barFrame = CGRect(
+      x: min(maxBarX, max(edgeMargin, selectionRect.midX - barSize.width / 2)),
+      y: barY,
+      width: barSize.width,
+      height: barSize.height
+    )
+
+    // --- 防打架：与侧栏相交时依次尝试横向避让与换垂直侧。
+    if barFrame.intersects(sideFrame) {
+      let clampedLeftX = min(maxBarX, max(edgeMargin, sideFrame.minX - gap - barSize.width))
+      let clampedRightX = min(maxBarX, max(edgeMargin, sideFrame.maxX + gap))
+      let flippedY = preferBelow
+        ? selectionRect.maxY + gap
+        : selectionRect.minY - gap - barSize.height
+      let flippedYClamped = min(maxBarY, max(edgeMargin, flippedY))
+      let candidates: [CGRect] = [
+        CGRect(x: clampedLeftX, y: barFrame.minY, width: barSize.width, height: barSize.height),
+        CGRect(x: clampedRightX, y: barFrame.minY, width: barSize.width, height: barSize.height),
+        CGRect(x: barFrame.minX, y: flippedYClamped, width: barSize.width, height: barSize.height),
+        CGRect(x: clampedLeftX, y: flippedYClamped, width: barSize.width, height: barSize.height),
+        CGRect(x: clampedRightX, y: flippedYClamped, width: barSize.width, height: barSize.height),
+      ]
+      // 仍不相交的候选里优先保持初始垂直侧（离选区更近的一侧）。
+      if let resolved = candidates.first(where: { !$0.intersects(sideFrame) }) {
+        barFrame = resolved
+      }
+      // 所有候选都被侧栏挡住（极端小屏）时，保持居中夹边的结果。
+    }
+
+    return Result(barFrame: barFrame, sideFrame: sideFrame)
   }
 }

@@ -5512,7 +5512,7 @@ enum SmartAnnotationTool: String, CaseIterable, Identifiable {
         case .counter: return "3.circle"
         case .highlighter: return "highlighter"
         case .pencil: return "pencil"
-        case .text: return "textformat"
+        case .text: return "t.square"
         case .watermark: return "text.badge.plus"
         case .eraser: return "eraser"
         case .crop: return "crop"

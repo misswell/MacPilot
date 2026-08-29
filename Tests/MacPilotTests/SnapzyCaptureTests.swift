@@ -1031,6 +1031,54 @@ struct SnapzyCaptureTests {
         ))
     }
 
+    @Test func barLayoutKeepsHorizontalAndVerticalBarsApartForSmallSelections() {
+        let bounds = CGSize(width: 1_440, height: 900)
+        let barSize = CGSize(width: 460, height: 38)
+        let sideSize = CGSize(width: 44, height: 232)
+
+        func assertInsideScreen(_ frame: CGRect, name: String) {
+            #expect(frame.minX >= AreaSelectionBarLayout.edgeMargin - 0.5, "\(name) minX")
+            #expect(frame.minY >= AreaSelectionBarLayout.edgeMargin - 0.5, "\(name) minY")
+            #expect(frame.maxX <= bounds.width - AreaSelectionBarLayout.edgeMargin + 0.5, "\(name) maxX")
+            #expect(frame.maxY <= bounds.height - AreaSelectionBarLayout.edgeMargin + 0.5, "\(name) maxY")
+        }
+
+        // 屏幕中部的小选区：侧栏在右、横栏在下，两者不相交且都在屏幕内。
+        let centered = CGRect(x: 700, y: 430, width: 60, height: 40)
+        let centeredResult = AreaSelectionBarLayout.resolve(
+            selectionRect: centered, barSize: barSize, sideSize: sideSize, bounds: bounds
+        )
+        #expect(!centeredResult.barFrame.intersects(centeredResult.sideFrame))
+        assertInsideScreen(centeredResult.barFrame, name: "centered bar")
+        assertInsideScreen(centeredResult.sideFrame, name: "centered side")
+
+        // 贴右下角的小选区：横栏横向避让侧栏，仍不相交。
+        let corner = CGRect(x: 1_300, y: 60, width: 80, height: 36)
+        let cornerResult = AreaSelectionBarLayout.resolve(
+            selectionRect: corner, barSize: barSize, sideSize: sideSize, bounds: bounds
+        )
+        #expect(!cornerResult.barFrame.intersects(cornerResult.sideFrame))
+        assertInsideScreen(cornerResult.barFrame, name: "corner bar")
+        assertInsideScreen(cornerResult.sideFrame, name: "corner side")
+
+        // 几乎占满屏幕的选区：所有候选都可能相交，仍须夹回屏幕内。
+        let huge = CGRect(x: 8, y: 8, width: 1_424, height: 884)
+        let hugeResult = AreaSelectionBarLayout.resolve(
+            selectionRect: huge, barSize: barSize, sideSize: sideSize, bounds: bounds
+        )
+        assertInsideScreen(hugeResult.barFrame, name: "huge bar")
+        assertInsideScreen(hugeResult.sideFrame, name: "huge side")
+
+        // 侧栏放不下右侧时翻到左侧，依旧不与横栏相交。
+        let leftEdge = CGRect(x: 8, y: 430, width: 60, height: 40)
+        let leftResult = AreaSelectionBarLayout.resolve(
+            selectionRect: leftEdge, barSize: barSize, sideSize: sideSize, bounds: bounds
+        )
+        #expect(!leftResult.barFrame.intersects(leftResult.sideFrame))
+        #expect(leftResult.sideFrame.minX > leftEdge.maxX)
+        assertInsideScreen(leftResult.barFrame, name: "left-edge bar")
+    }
+
     @Test func roundedCornerOutputKeepsTheCanvasSizeWhileShadowExpandsIt() throws {
         let source = image(width: 40, height: 30)
 
