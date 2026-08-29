@@ -433,7 +433,36 @@ final class AreaSelectionActionBar: NSView {
     return checkbox
   }
 
+  /// Line style lives on a plain button that pops its menu explicitly:
+  /// NSPopUpButton's built-in tracking is unreliable inside the borderless,
+  /// non-activating selection panel (the menu either never opens or the
+  /// selection action is dropped through the responder chain), which made
+  /// 实线/虚线/点线 impossible to switch.
+  private var lineStyleButton: NSButton?
+
   private func makeLineStylePopUp(_ model: SmartAnnotationModel) -> NSView {
+    let button = NSButton(
+      image: Self.lineStylePreview(model.currentStyle.lineStyle),
+      target: self,
+      action: #selector(lineStylePressed(_:))
+    )
+    button.isBordered = false
+    button.wantsLayer = true
+    button.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
+    button.layer?.cornerRadius = 6
+    button.imagePosition = .imageOnly
+    button.imageScaling = .scaleProportionallyDown
+    button.toolTip = AppText.value("scAnnotationLineStyle", language: .system)
+    button.setAccessibilityLabel(AppText.value("scAnnotationLineStyle", language: .system))
+    button.translatesAutoresizingMaskIntoConstraints = false
+    button.widthAnchor.constraint(equalToConstant: 40).isActive = true
+    button.heightAnchor.constraint(equalToConstant: 24).isActive = true
+    lineStyleButton = button
+    return button
+  }
+
+  @objc private func lineStylePressed(_ sender: NSButton) {
+    guard let model = annotationBinding?.model else { return }
     let menu = NSMenu()
     for lineStyle in SmartAnnotationLineStyle.allCases {
       let item = NSMenuItem(
@@ -443,20 +472,20 @@ final class AreaSelectionActionBar: NSView {
       )
       item.tag = lineStyleIndex(lineStyle)
       item.image = Self.lineStylePreview(lineStyle)
+      item.state = model.currentStyle.lineStyle == lineStyle ? .on : .off
+      // Explicit target: nil-targeted menu items dispatch through the
+      // responder chain, which the non-activating panel does not guarantee.
+      item.target = self
       menu.addItem(item)
     }
-    let button = NSPopUpButton(frame: .zero, pullsDown: false)
-    button.menu = menu
-    button.preferredEdge = .maxY
-    button.toolTip = AppText.value("scAnnotationLineStyle", language: .system)
-    button.setAccessibilityLabel(AppText.value("scAnnotationLineStyle", language: .system))
-    button.font = NSFont.systemFont(ofSize: 11)
-    button.selectItem(withTag: lineStyleIndex(model.currentStyle.lineStyle))
-    button.target = self
-    button.action = #selector(lineStylePopUpChanged(_:))
-    button.translatesAutoresizingMaskIntoConstraints = false
-    button.widthAnchor.constraint(equalToConstant: 58).isActive = true
-    return button
+    menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 2), in: sender)
+  }
+
+  @objc private func lineStyleMenuItemSelected(_ sender: NSMenuItem) {
+    annotationBinding?.model?.setLineStyle(lineStyle(forIndex: sender.tag))
+    if let style = annotationBinding?.model?.currentStyle.lineStyle {
+      lineStyleButton?.image = Self.lineStylePreview(style)
+    }
   }
 
   private func makeWidthControl(_ model: SmartAnnotationModel, titleKey: String) -> NSView {
@@ -610,6 +639,7 @@ final class AreaSelectionActionBar: NSView {
     }
     undoButton?.isEnabled = !model.annotations.isEmpty
     widthValueLabel?.stringValue = "\(Int(model.currentStyle.lineWidth.rounded()))"
+    lineStyleButton?.image = Self.lineStylePreview(model.currentStyle.lineStyle)
     shapeSegmented?.selectedSegment = activeTool == .ellipse ? 1 : 0
     fillCheckbox?.state = model.currentStyle.fillEnabled ? .on : .off
     colorWell?.color = model.currentStyle.color.nsColor
@@ -662,6 +692,7 @@ final class AreaSelectionActionBar: NSView {
         keyEquivalent: ""
       )
       item.tag = group.selectorTag * 10 + index + 1
+      item.target = self
       item.image = NSImage(
         systemSymbolName: tool.systemImage,
         accessibilityDescription: nil
@@ -727,6 +758,7 @@ final class AreaSelectionActionBar: NSView {
       keyEquivalent: ""
     )
     upload.tag = 1
+    upload.target = self
     upload.image = NSImage(systemSymbolName: "icloud.and.arrow.up", accessibilityDescription: nil)
     menu.addItem(upload)
     let crop = NSMenuItem(
@@ -735,6 +767,7 @@ final class AreaSelectionActionBar: NSView {
       keyEquivalent: ""
     )
     crop.tag = 2
+    crop.target = self
     crop.image = NSImage(systemSymbolName: "scissors", accessibilityDescription: nil)
     menu.addItem(crop)
     menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.frame.height + 2), in: sender)
@@ -766,15 +799,6 @@ final class AreaSelectionActionBar: NSView {
 
   @objc private func fillChanged(_ sender: NSButton) {
     annotationBinding?.model?.setFillEnabled(sender.state == .on)
-  }
-
-  @objc private func lineStyleMenuItemSelected(_ sender: NSMenuItem) {
-    annotationBinding?.model?.setLineStyle(lineStyle(forIndex: sender.tag))
-  }
-
-  @objc private func lineStylePopUpChanged(_ sender: NSPopUpButton) {
-    guard let item = sender.selectedItem else { return }
-    annotationBinding?.model?.setLineStyle(lineStyle(forIndex: item.tag))
   }
 
   @objc private func widthPressed(_ sender: NSButton) {

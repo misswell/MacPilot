@@ -1010,6 +1010,27 @@ struct SnapzyCaptureTests {
         #expect(model.nextCounter == 1)
     }
 
+    @Test func doubleEscapeWithinWindowDismissesThePins() {
+        let first = Date(timeIntervalSinceReferenceDate: 100)
+        // 第一按下：仅记录时间点，不关闭任何贴图。
+        #expect(!SmartPinEscapeRouting.shouldDismissPins(lastEscapeAt: nil, now: first))
+        // 0.8 秒窗口内的第二下：关闭全部贴图。
+        #expect(SmartPinEscapeRouting.shouldDismissPins(
+            lastEscapeAt: first,
+            now: first.addingTimeInterval(0.5)
+        ))
+        // 恰好在窗口边界上也算连按。
+        #expect(SmartPinEscapeRouting.shouldDismissPins(
+            lastEscapeAt: first,
+            now: first.addingTimeInterval(SmartPinEscapeRouting.doublePressInterval)
+        ))
+        // 超出窗口：不关闭，重新开始计时。
+        #expect(!SmartPinEscapeRouting.shouldDismissPins(
+            lastEscapeAt: first,
+            now: first.addingTimeInterval(1.5)
+        ))
+    }
+
     @Test func roundedCornerOutputKeepsTheCanvasSizeWhileShadowExpandsIt() throws {
         let source = image(width: 40, height: 30)
 
