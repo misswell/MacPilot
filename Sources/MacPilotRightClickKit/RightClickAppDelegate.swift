@@ -268,7 +268,7 @@ public final class RightClickMenuCoordinator {
         logger.debug("开始打开常用目录，目标路径：\(target)")
 
         for dirPath in target {
-            let path = dirPath.removingPercentEncoding ?? dirPath
+            let path = RightClickIPCPath.fileSystemPath(dirPath)
             let url = URL(fileURLWithPath: path, isDirectory: true)
 
             logger.debug("正在打开目录：\(path)")
@@ -288,41 +288,16 @@ public final class RightClickMenuCoordinator {
         logger.debug("openApp: rid=\(rid) app=\(appUrl.path) target=\(target)")
 
         for dirPath in target {
-            let dir = URL(fileURLWithPath: dirPath.removingPercentEncoding ?? dirPath, isDirectory: true)
-
-            // 特殊处理：WezTerm
-            if appUrl.path.hasSuffix("WezTerm.app") {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/Users/lixu/play/rpm/target/debug/rpm")
-                process.arguments = ["--name", "arg2"]
-
-                let pipe = Pipe()
-                process.standardOutput = pipe
-                process.standardError = pipe
-
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    if let output = String(data: data, encoding: .utf8) {
-                        print("Output: \(output)")
-                    }
-                } catch {
-                    print("Error: \(error)")
-                }
-            }
-            // 通用处理：使用 NSWorkspace 打开目录
-            else {
-                let config = NSWorkspace.OpenConfiguration()
-                let logger = self.logger  // 捕获 Sendable logger
-                NSWorkspace.shared.open([dir], withApplicationAt: appUrl, configuration: config) { @Sendable [logger] runningApp, error in
-                    if let error = error {
-                        logger.error("Error opening with application: \(error.localizedDescription)")
-                        logger.error("Error code: \((error as NSError).code), domain: \((error as NSError).domain)")
-                    } else if let runningApp = runningApp {
-                        logger.debug("Successfully opened with application: \(runningApp.localizedName ?? "Unknown")")
-                    }
+            let path = RightClickIPCPath.fileSystemPath(dirPath)
+            let dir = URL(fileURLWithPath: path, isDirectory: true)
+            let config = NSWorkspace.OpenConfiguration()
+            let logger = self.logger
+            NSWorkspace.shared.open([dir], withApplicationAt: appUrl, configuration: config) { @Sendable [logger] runningApp, error in
+                if let error = error {
+                    logger.error("Error opening with application: \(error.localizedDescription)")
+                    logger.error("Error code: \((error as NSError).code), domain: \((error as NSError).domain)")
+                } else if let runningApp = runningApp {
+                    logger.debug("Successfully opened with application: \(runningApp.localizedName ?? "Unknown")")
                 }
             }
         }
@@ -348,7 +323,7 @@ public final class RightClickMenuCoordinator {
 
     private func targetDirectoryForNewFile(_ target: [String]) -> String? {
         guard let rawPath = target.first else { return nil }
-        let path = rawPath.removingPercentEncoding ?? rawPath
+        let path = RightClickIPCPath.fileSystemPath(rawPath)
         var isDirectory: ObjCBool = false
 
         if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) {
@@ -424,7 +399,7 @@ public final class RightClickMenuCoordinator {
         }
 
         for item in target {
-            let decodedPath = item.removingPercentEncoding ?? item
+            let decodedPath = RightClickIPCPath.fileSystemPath(item)
             logger.info("airdrop path \(decodedPath)")
 
             if Utils.isProtectedFolder(decodedPath) {
@@ -478,7 +453,7 @@ public final class RightClickMenuCoordinator {
         logger.info("开始取消隐藏文件和目录，目标路径：\(target)")
         if let dirPath = target.first {
             let fileManager = FileManager.default
-            let path = dirPath.removingPercentEncoding ?? dirPath
+            let path = RightClickIPCPath.fileSystemPath(dirPath)
             logger.info("处理主目录：\(path)")
             let url = URL(fileURLWithPath: path)
 
@@ -524,7 +499,7 @@ public final class RightClickMenuCoordinator {
         let fileManager = FileManager.default
 
         if trigger == "ctx-container", let dirPath = target.first {
-            let path = dirPath.removingPercentEncoding ?? dirPath
+            let path = RightClickIPCPath.fileSystemPath(dirPath)
             logger.info("处理主目录：\(path)")
             let url = URL(fileURLWithPath: path)
 
@@ -557,7 +532,7 @@ public final class RightClickMenuCoordinator {
             }
         } else if trigger == "ctx-items" {
             for dirPath in target {
-                let path = dirPath.removingPercentEncoding ?? dirPath
+                let path = RightClickIPCPath.fileSystemPath(dirPath)
                 logger.info("处理路径：\(path)")
                 let url = URL(fileURLWithPath: path)
 
@@ -591,7 +566,7 @@ public final class RightClickMenuCoordinator {
 
     func copyPath(_ target: [String]) {
         let paths = target.compactMap { rawPath -> String? in
-            let path = rawPath.removingPercentEncoding ?? rawPath
+            let path = RightClickIPCPath.fileSystemPath(rawPath)
             guard !path.isEmpty else { return nil }
             return path
         }
@@ -609,7 +584,7 @@ public final class RightClickMenuCoordinator {
 
     func openTerminal(_ target: [String]) {
         let directories = target.compactMap { rawPath -> URL? in
-            let path = rawPath.removingPercentEncoding ?? rawPath
+            let path = RightClickIPCPath.fileSystemPath(rawPath)
             guard !path.isEmpty else { return nil }
 
             var isDirectory: ObjCBool = false
@@ -668,7 +643,7 @@ public final class RightClickMenuCoordinator {
         }
 
         for item in target {
-            let decodedPath = item.removingPercentEncoding ?? item
+            let decodedPath = RightClickIPCPath.fileSystemPath(item)
 
             if Utils.isProtectedFolder(decodedPath) {
                 let alert = NSAlert()

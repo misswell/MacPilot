@@ -73,7 +73,23 @@ class SharedDataManager {
             }
         }
 
-        fatalError("创建共享 ModelContainer 失败: \(lastError.map(String.init(describing:)) ?? "未知错误")")
+        // Right-click integration is optional; a corrupt or unmigratable
+        // on-disk store must not prevent the whole menu-bar app from launching.
+        logger.error("持久化数据库不可用，使用临时内存数据库: \(lastError.map(String.init(describing:)) ?? "未知错误")")
+        do {
+            let fallback = ModelConfiguration(isStoredInMemoryOnly: true)
+            return try ModelContainer(
+                for: AppEntity.self,
+                     ActionEntity.self,
+                     NewFileTypeEntity.self,
+                     CommonDirEntity.self,
+                     BookmarkEntity.self,
+                     DataVersion.self,
+                configurations: fallback
+            )
+        } catch {
+            fatalError("创建内存 ModelContainer 失败（模型配置错误）: \(error)")
+        }
     }()
 
     /// 初始化默认数据

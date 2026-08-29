@@ -1,5 +1,11 @@
 import Foundation
 
+/// FinderSync sends `URL.path`, not a percent-encoded URL component. Keep the
+/// value byte-for-byte so names containing `%2F` or `%25` cannot be retargeted.
+enum RightClickIPCPath {
+    static func fileSystemPath(_ value: String) -> String { value }
+}
+
 public class Utils {
     public static func isProtectedFolder(_ path: String) -> Bool {
         print("isProtectedFolder: \(path)")

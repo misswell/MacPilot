@@ -93,6 +93,7 @@ final class ClipboardModel: ObservableObject {
         monitor.stop()
         unregisterHotKey()
         closePanel()
+        history.flush()
     }
 
     func t(_ key: String, _ arguments: CVarArg...) -> String {

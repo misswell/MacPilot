@@ -121,14 +121,30 @@ final class ClipboardHistory: ObservableObject {
             }
             guard !Task.isCancelled else { return }
             do {
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                let data = try encoder.encode(itemsToSave)
-                try data.write(to: url, options: .atomic)
+                try Self.persist(itemsToSave, to: url)
             } catch {
                 NSLog("MacPilot clipboard: failed to save history: \(error.localizedDescription)")
             }
         }
+    }
+
+    /// Persist the latest snapshot before application termination instead of
+    /// losing mutations still inside the normal 300 ms debounce window.
+    func flush() {
+        saveTask?.cancel()
+        saveTask = nil
+        do {
+            try Self.persist(allItems, to: storageURL)
+        } catch {
+            NSLog("MacPilot clipboard: failed to flush history: \(error.localizedDescription)")
+        }
+    }
+
+    private nonisolated static func persist(_ items: [ClipboardItem], to url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(items)
+        try data.write(to: url, options: .atomic)
     }
 
     // MARK: - Mutations

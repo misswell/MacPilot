@@ -1,159 +1,192 @@
-//
-//  MessageSecurity.swift
-//  RClick
-//
-//  IPC 消息安全模块 - 防止消息伪造
-//  基于：HMAC-SHA256 签名算法
-//
-
-import Foundation
 import CryptoKit
+import Foundation
 import OSLog
-
-// MARK: - Logger
+import Security
 
 private let logger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "com.misswell.macpilot.rightclick",
     category: "MessageSecurity"
 )
 
-// MARK: - 消息签名管理器
+/// Authenticated wire payload shared by the main app and FinderSync.
+public struct SignedPayload: Codable, Equatable {
+    public let messageID: UUID
+    public let action: String
+    public let issuedAtMilliseconds: Int64
+    public let signature: String
+    public let jsonData: String
 
-/// 为 IPC 消息提供 HMAC-SHA256 签名验证
-public class MessageSecurity {
+    init(
+        messageID: UUID,
+        action: String,
+        issuedAtMilliseconds: Int64,
+        signature: String,
+        payloadData: Data
+    ) {
+        self.messageID = messageID
+        self.action = action
+        self.issuedAtMilliseconds = issuedAtMilliseconds
+        self.signature = signature
+        jsonData = payloadData.base64EncodedString()
+    }
+}
 
-    // 共享密钥 - 应存储在 Keychain 中，这里使用常量简化实现
-    private static let sharedKey = "MacPilot_RightClick_IPC_SharedKey_2026_v1"
+public enum MessageSecurity {
+    static let maximumMessageAgeMilliseconds: Int64 = 5 * 60 * 1_000
 
-    /// 为消息载荷添加 HMAC 签名
-    /// - Parameter payload: 需要签名的消息载荷
-    /// - Returns: 带签名的消息结构
-    /// - Throws: 如果编码失败则抛出错误
-    public static func sign<T: Codable>(_ payload: T) throws -> SignedPayload<T> {
-        let data = try JSONEncoder().encode(payload)
-        let key = SymmetricKey(data: sharedKey.data(using: .utf8)!)
-        let hmac = HMAC<SHA256>.authenticationCode(for: data, using: key)
-
-        return SignedPayload(
-            payload: payload,
-            signature: Data(hmac).base64EncodedString(),
-            data: data
+    public static func sign<T: Codable>(
+        _ payload: T?,
+        messageID: UUID,
+        action: String,
+        issuedAt: Date = .now
+    ) throws -> SignedPayload {
+        let payloadData = try payload.map { try JSONEncoder().encode($0) } ?? Data("null".utf8)
+        return sign(
+            payloadData: payloadData,
+            messageID: messageID,
+            action: action,
+            issuedAtMilliseconds: Int64(issuedAt.timeIntervalSince1970 * 1_000)
         )
     }
 
-    /// 验证消息签名
-    /// - Parameter signed: 带签名的消息结构
-    /// - Returns: 签名是否有效
-    public static func verify<T: Codable>(_ signed: SignedPayload<T>) -> Bool {
-        guard let signatureData = Data(base64Encoded: signed.signature) else {
-            logger.error("Failed to decode signature from base64")
-            return false
+    static func sign(
+        payloadData: Data,
+        messageID: UUID,
+        action: String,
+        issuedAtMilliseconds: Int64
+    ) -> SignedPayload {
+        let authenticated = authenticatedData(
+            payloadData: payloadData,
+            messageID: messageID,
+            action: action,
+            issuedAtMilliseconds: issuedAtMilliseconds
+        )
+        let key = SymmetricKey(data: MessageSecretStore.key())
+        let hmac = HMAC<SHA256>.authenticationCode(for: authenticated, using: key)
+        return SignedPayload(
+            messageID: messageID,
+            action: action,
+            issuedAtMilliseconds: issuedAtMilliseconds,
+            signature: Data(hmac).base64EncodedString(),
+            payloadData: payloadData
+        )
+    }
+
+    /// Returns the only payload bytes callers may decode.
+    public static func verifiedPayload(
+        _ signed: SignedPayload,
+        expectedMessageID: UUID,
+        expectedAction: String,
+        now: Date = .now
+    ) -> Data? {
+        guard signed.messageID == expectedMessageID,
+              signed.action == expectedAction,
+              let signatureData = Data(base64Encoded: signed.signature),
+              let payloadData = Data(base64Encoded: signed.jsonData) else {
+            logger.error("Signed message context or encoding is invalid")
+            return nil
         }
 
-        // 从保存的 jsonData 恢复原始数据
-        guard let payloadData = Data(base64Encoded: signed.jsonData) else {
-            logger.error("Failed to decode jsonData from base64")
-            return false
+        let nowMilliseconds = Int64(now.timeIntervalSince1970 * 1_000)
+        let age = nowMilliseconds - signed.issuedAtMilliseconds
+        guard age >= -30_000, age <= maximumMessageAgeMilliseconds else {
+            logger.warning("Rejected stale or future-dated signed message")
+            return nil
         }
 
-        let key = SymmetricKey(data: sharedKey.data(using: .utf8)!)
+        let authenticated = authenticatedData(
+            payloadData: payloadData,
+            messageID: signed.messageID,
+            action: signed.action,
+            issuedAtMilliseconds: signed.issuedAtMilliseconds
+        )
+        let key = SymmetricKey(data: MessageSecretStore.key())
+        let expectedHMAC = HMAC<SHA256>.authenticationCode(for: authenticated, using: key)
+        guard signatureData.elementsEqual(Data(expectedHMAC)) else {
+            logger.warning("Message signature verification failed")
+            return nil
+        }
+        return payloadData
+    }
 
-        // 计算预期的 HMAC（使用保存的原始数据）
-        let expectedHMAC = HMAC<SHA256>.authenticationCode(for: payloadData, using: key)
-
-        // 比较签名（常数时间比较，防止时序攻击）
-        let isValid = signatureData.elementsEqual(Data(expectedHMAC))
-
-        // 添加详细日志
-        logger.debug("Signature verification: \(isValid ? "PASSED" : "FAILED")")
-        logger.debug("Signature prefix: \(signed.signature.prefix(20))...")
-        logger.debug("Payload data hash: \(MessageSecurity.hash(payloadData).prefix(16))...")
-
-        return isValid
+    private static func authenticatedData(
+        payloadData: Data,
+        messageID: UUID,
+        action: String,
+        issuedAtMilliseconds: Int64
+    ) -> Data {
+        var data = Data(messageID.uuidString.lowercased().utf8)
+        data.append(0)
+        data.append(contentsOf: action.utf8)
+        data.append(0)
+        data.append(contentsOf: String(issuedAtMilliseconds).utf8)
+        data.append(0)
+        data.append(payloadData)
+        return data
     }
 }
 
-// MARK: - 带签名的消息载荷
+/// A random per-install key in the private App Group replaces the extractable
+/// source-code constant. The fixed fallback is used only by unentitled test or
+/// development hosts that cannot resolve the production App Group container.
+private enum MessageSecretStore {
+    private static let keySize = 32
+    private static let fallbackKey = Data("MacPilot_RightClick_IPC_TestFallback_v3".utf8)
+    private static let fileName = ".ipc-authentication-key-v3"
+    private static let resolvedKey = loadOrCreate()
 
-/// 包装原始载荷并添加 HMAC 签名
-public struct SignedPayload<T: Codable>: Codable {
-    /// 原始消息载荷
-    public let payload: T
+    static func key() -> Data { resolvedKey }
 
-    /// Base64 编码的 HMAC-SHA256 签名
-    public let signature: String
+    private static func loadOrCreate() -> Data {
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: RightClickConstants.appGroupIdentifier
+        ) else {
+            return fallbackKey
+        }
+        let url = container.appendingPathComponent(fileName)
+        if let existing = try? Data(contentsOf: url), existing.count == keySize {
+            return existing
+        }
 
-    /// Base64 编码的原始 JSON 数据（用于验证）
-    public let jsonData: String
+        var generated = Data(count: keySize)
+        let status = generated.withUnsafeMutableBytes { bytes in
+            SecRandomCopyBytes(kSecRandomDefault, keySize, bytes.baseAddress!)
+        }
+        guard status == errSecSuccess else { return fallbackKey }
 
-    /// 初始化器
-    /// - Parameters:
-    ///   - payload: 原始消息载荷
-    ///   - signature: Base64 编码的签名
-    ///   - jsonData: Base64 编码的原始 JSON 数据
-    public init(payload: T, signature: String, jsonData: String) {
-        self.payload = payload
-        self.signature = signature
-        self.jsonData = jsonData
-    }
-
-    /// 内部初始化器 - 从签名操作创建
-    init(payload: T, signature: String, data: Data) {
-        self.payload = payload
-        self.signature = signature
-        self.jsonData = data.base64EncodedString()
+        do {
+            try generated.write(to: url, options: .withoutOverwriting)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: url.path
+            )
+            return generated
+        } catch {
+            guard let winner = try? Data(contentsOf: url), winner.count == keySize else {
+                return fallbackKey
+            }
+            return winner
+        }
     }
 }
 
-// MARK: - 发送者验证
+/// Bounded replay cache. IDs are recorded only after signature verification.
+final class MessageReplayGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var accepted: [UUID: Int64] = [:]
+    private let retentionMilliseconds: Int64
 
-/// 验证消息发送者身份
-public class SenderValidator {
-
-    /// 允许的 Bundle ID 列表
-    private static let allowedBundleIDs = [
-        "com.misswell.macpilot",              // 主程序
-        "com.misswell.macpilot.finder-sync"   // FinderSync 扩展
-    ]
-
-    /// 验证发送者 Bundle ID 是否合法
-    /// - Returns: 验证是否通过
-    public static func verifyCurrentProcess() -> Bool {
-        guard let bundleID = Bundle.main.bundleIdentifier else {
-            os_log("Failed to get bundle identifier", log: OSLog.default, type: .error)
-            return false
-        }
-
-        return allowedBundleIDs.contains(bundleID)
+    init(retentionMilliseconds: Int64 = MessageSecurity.maximumMessageAgeMilliseconds) {
+        self.retentionMilliseconds = retentionMilliseconds
     }
 
-    /// 检查 Bundle ID 是否在白名单中
-    /// - Parameter bundleID: 需要检查的 Bundle ID
-    /// - Returns: 是否合法
-    public static func isAllowedBundleID(_ bundleID: String) -> Bool {
-        return allowedBundleIDs.contains(bundleID)
-    }
-}
-
-// MARK: - 消息完整性检查
-
-extension MessageSecurity {
-
-    /// 计算消息的 SHA256 哈希（用于日志脱敏和去重）
-    /// - Parameter data: 消息数据
-    /// - Returns: SHA256 哈希的十六进制字符串
-    public static func hash(_ data: Data) -> String {
-        let hash = SHA256.hash(data: data)
-        return hash.compactMap { String(format: "%02x", $0) }.joined()
-    }
-
-    /// 计算消息的 SHA256 哈希（用于日志脱敏和去重）
-    /// - Parameter string: 消息字符串
-    /// - Returns: SHA256 哈希的十六进制字符串
-    public static func hash(_ string: String) -> String {
-        guard let data = string.data(using: .utf8) else {
-            return ""
-        }
-        return hash(data)
+    func accept(_ id: UUID, issuedAtMilliseconds: Int64, now: Date = .now) -> Bool {
+        let nowMilliseconds = Int64(now.timeIntervalSince1970 * 1_000)
+        lock.lock()
+        defer { lock.unlock() }
+        accepted = accepted.filter { nowMilliseconds - $0.value <= retentionMilliseconds }
+        guard accepted[id] == nil else { return false }
+        accepted[id] = issuedAtMilliseconds
+        return true
     }
 }

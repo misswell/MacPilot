@@ -1104,7 +1104,7 @@ final class MacPilotModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak clipboard] _ in
-            Task { @MainActor in clipboard?.shutdown() }
+            MainActor.assumeIsolated { clipboard?.shutdown() }
         }
         NotificationCenter.default.addObserver(
             forName: .macPilotDeepLink,

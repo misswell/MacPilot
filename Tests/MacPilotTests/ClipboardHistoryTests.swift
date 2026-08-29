@@ -134,6 +134,19 @@ struct ClipboardHistoryTests {
         #expect(reloaded.allItems.first?.title == "persisted")
     }
 
+    @Test func flushPersistsInsideTheDebounceWindow() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipboard-flush-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let history = makeHistory(url: url)
+        history.add(makeItem("latest"))
+        history.flush()
+
+        let reloaded = makeHistory(url: url)
+        #expect(reloaded.allItems.map(\.title) == ["latest"])
+    }
+
     @Test func fileBackedContentIsStoredOnDiskAndResolvesOnDemand() async throws {
         // 图片/大数据应落盘：内容 value 为空，仅保留文件引用；按需读取能还原数据。
         let id = UUID()

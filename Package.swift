@@ -20,7 +20,6 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("FinderSync"),
-                .linkedFramework("ServiceManagement"),
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("CryptoKit"),
             ]
@@ -29,6 +28,10 @@ let package = Package(
             name: "MacPilotOcclusionPatch",
             linkerSettings: [.linkedFramework("AppKit")]
         ),
-        .testTarget(name: "MacPilotTests", dependencies: ["MacPilot"])
+        .testTarget(name: "MacPilotTests", dependencies: ["MacPilot"]),
+        .testTarget(
+            name: "MacPilotRightClickKitTests",
+            dependencies: ["MacPilotRightClickKit"]
+        )
     ]
 )

@@ -163,15 +163,14 @@ struct MainToExtensionMessage: Codable {
         self.id = id
         self.action = action
 
-        // 对 payload 进行签名
-        if let data = data {
-            do {
-                let signedPayload = try MessageSecurity.sign(data)
-                self.signedData = try? JSONEncoder().encode(signedPayload)
-            } catch {
-                self.signedData = nil
-            }
-        } else {
+        do {
+            let signedPayload = try MessageSecurity.sign(
+                data,
+                messageID: id,
+                action: action.rawValue
+            )
+            signedData = try JSONEncoder().encode(signedPayload)
+        } catch {
             self.signedData = nil
         }
     }
@@ -194,15 +193,14 @@ struct ExtensionToMainMessage: Codable {
         self.id = id
         self.action = action
 
-        // 对 payload 进行签名
-        if let data = data {
-            do {
-                let signedPayload = try MessageSecurity.sign(data)
-                self.signedData = try? JSONEncoder().encode(signedPayload)
-            } catch {
-                self.signedData = nil
-            }
-        } else {
+        do {
+            let signedPayload = try MessageSecurity.sign(
+                data,
+                messageID: id,
+                action: action.rawValue
+            )
+            signedData = try JSONEncoder().encode(signedPayload)
+        } catch {
             self.signedData = nil
         }
     }
@@ -233,6 +231,7 @@ class Messager: @unchecked Sendable {
     static let extensionToMainNotification = "com.misswell.macpilot.ExtensionToMain"
 
     private let isExtension: Bool
+    private let replayGuard = MessageReplayGuard()
 
     private init() {
         // 判断当前是否为 Extension 进程
@@ -320,8 +319,17 @@ class Messager: @unchecked Sendable {
             let message = try JSONDecoder().decode(MainToExtensionMessage.self, from: jsonData)
             logger.debug("Received main-to-extension message: \(message.action.rawValue)")
 
+            guard let payload = authenticatedPayload(
+                from: message.signedData,
+                messageID: message.id,
+                action: message.action.rawValue
+            ) else {
+                logger.warning("Rejected unauthenticated main-to-extension message")
+                return
+            }
+
             if let handler = mainToExtensionHandlers[message.action] {
-                handler(message.signedData)
+                handler(payload)
             } else {
                 logger.warning("No handler registered for action: \(message.action.rawValue)")
             }
@@ -341,8 +349,17 @@ class Messager: @unchecked Sendable {
             let message = try JSONDecoder().decode(ExtensionToMainMessage.self, from: jsonData)
             logger.debug("Received extension-to-main message: \(message.action.rawValue)")
 
+            guard let payload = authenticatedPayload(
+                from: message.signedData,
+                messageID: message.id,
+                action: message.action.rawValue
+            ) else {
+                logger.warning("Rejected unauthenticated extension-to-main message")
+                return
+            }
+
             if let handler = extensionToMainHandlers[message.action] {
-                handler(message.signedData)
+                handler(payload)
             } else {
                 logger.warning("No handler registered for action: \(message.action.rawValue)")
             }
@@ -397,22 +414,35 @@ class Messager: @unchecked Sendable {
         return try? JSONDecoder().decode(T.self, from: data)
     }
 
-    /// 解码并验证签名的数据为指定类型
+    /// Decode payload bytes that were authenticated before handler dispatch.
     func decodeSignedData<T: Codable>(_ signedData: Data?, as type: T.Type = T.self) -> T? {
         guard let signedData = signedData else { return nil }
-
         do {
-            let signedPayload = try JSONDecoder().decode(SignedPayload<T>.self, from: signedData)
-
-            if MessageSecurity.verify(signedPayload) {
-                return signedPayload.payload
-            } else {
-                logger.warning("Message signature verification failed, dropping message")
-                return nil
-            }
+            return try JSONDecoder().decode(T.self, from: signedData)
         } catch {
             logger.error("Failed to decode signed data: \(error)")
             return nil
         }
+    }
+
+    private func authenticatedPayload(
+        from signedData: Data?,
+        messageID: UUID,
+        action: String
+    ) -> Data? {
+        guard let signedData,
+              let signed = try? JSONDecoder().decode(SignedPayload.self, from: signedData),
+              let payload = MessageSecurity.verifiedPayload(
+                  signed,
+                  expectedMessageID: messageID,
+                  expectedAction: action
+              ),
+              replayGuard.accept(
+                  messageID,
+                  issuedAtMilliseconds: signed.issuedAtMilliseconds
+              ) else {
+            return nil
+        }
+        return payload
     }
 }
