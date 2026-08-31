@@ -360,6 +360,55 @@ struct WindowSwitcherTests {
         ) == ["a", "new-2", "new-1"])
     }
 
+    @Test func newlyLaunchedApplicationMovesItsWindowToTheFront() {
+        let previousWindows = [
+            WindowSwitcherWindowIdentity(id: "a", processID: 10, windowNumber: 10, title: "A", frame: nil),
+            WindowSwitcherWindowIdentity(id: "b", processID: 20, windowNumber: 20, title: "B", frame: nil),
+            WindowSwitcherWindowIdentity(id: "c", processID: 30, windowNumber: 30, title: "C", frame: nil)
+        ]
+        let snapshotWindows = previousWindows + [
+            WindowSwitcherWindowIdentity(id: "d", processID: 40, windowNumber: 40, title: "D", frame: nil)
+        ]
+
+        #expect(WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
+            recentIDs: ["a", "b", "c"],
+            previousIDs: ["a", "b", "c"],
+            previousWindows: previousWindows,
+            snapshotWindows: snapshotWindows
+        ) == ["d", "a", "b", "c"])
+    }
+
+    @Test func newWindowInAnExistingApplicationDoesNotDisplaceCommittedRecency() {
+        let previousWindows = [
+            WindowSwitcherWindowIdentity(id: "a1", processID: 10, windowNumber: 10, title: "A1", frame: nil),
+            WindowSwitcherWindowIdentity(id: "b", processID: 20, windowNumber: 20, title: "B", frame: nil)
+        ]
+        let snapshotWindows = previousWindows + [
+            WindowSwitcherWindowIdentity(id: "a2", processID: 10, windowNumber: 11, title: "A2", frame: nil)
+        ]
+
+        #expect(WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
+            recentIDs: ["b", "a1"],
+            previousIDs: ["a1", "b"],
+            previousWindows: previousWindows,
+            snapshotWindows: snapshotWindows
+        ) == ["b", "a1", "a2"])
+    }
+
+    @Test func initialInventoryDoesNotTreatEveryRunningApplicationAsNew() {
+        let snapshotWindows = [
+            WindowSwitcherWindowIdentity(id: "a", processID: 10, windowNumber: 10, title: "A", frame: nil),
+            WindowSwitcherWindowIdentity(id: "b", processID: 20, windowNumber: 20, title: "B", frame: nil)
+        ]
+
+        #expect(WindowSwitcherRecentWindowIDs.afterInventorySnapshot(
+            recentIDs: ["b", "a"],
+            previousIDs: [],
+            previousWindows: [],
+            snapshotWindows: snapshotWindows
+        ) == ["b", "a"])
+    }
+
     @Test func recreatedDBeaverWindowRemainsSecondAfterSwitchingAnotherWindow() {
         // DBeaver can recreate its WindowServer surface while starting. The
         // same visible window then has a new ID and a slightly different title.

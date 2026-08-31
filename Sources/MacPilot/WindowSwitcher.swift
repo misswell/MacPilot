@@ -336,6 +336,8 @@ enum WindowSwitcherRecentWindowIDs {
             previous: previousWindows,
             current: snapshotWindows
         )
+        let previousProcessIDs = Set(previousWindows.map(\.processID))
+        let canDetectNewApplications = !previousWindows.isEmpty
         var matchedCurrentIDs = Set<String>()
 
         for match in matches {
@@ -353,12 +355,24 @@ enum WindowSwitcherRecentWindowIDs {
         }
 
         var seenIDs = Set<String>()
+        var newApplicationWindowIDs: [String] = []
         updated = updated.filter { seenIDs.insert($0).inserted }
         for window in snapshotWindows {
             guard !matchedCurrentIDs.contains(window.id),
                   !previousIDs.contains(window.id),
                   seenIDs.insert(window.id).inserted else { continue }
-            updated.append(window.id)
+            if canDetectNewApplications,
+               window.processID > 0,
+               !previousProcessIDs.contains(window.processID) {
+                newApplicationWindowIDs.append(window.id)
+            } else {
+                updated.append(window.id)
+            }
+        }
+        if !newApplicationWindowIDs.isEmpty {
+            let newApplicationWindowIDSet = Set(newApplicationWindowIDs)
+            updated.removeAll(where: newApplicationWindowIDSet.contains)
+            updated.insert(contentsOf: newApplicationWindowIDs, at: 0)
         }
         if let activatedWindowID, updated.contains(activatedWindowID) {
             updated = moveToFront(activatedWindowID, in: updated, limit: limit)
@@ -1984,9 +1998,10 @@ final class WindowSwitcherModel: ObservableObject {
         )
     }
 
-    /// Newly appearing windows (just launched apps, or windows that reappeared
-    /// in a refreshed snapshot) are recorded after already-known recency. A
-    /// refresh must never outrank a window the user just activated.
+    /// Newly appearing windows are merged into recency while preserving
+    /// logical identities. Windows from a newly launched process lead the
+    /// list; extra windows from an existing process remain behind committed
+    /// recency unless a focus signal promotes them separately.
     @discardableResult
     private func recordNewWindows(
         _ snapshot: [WindowSwitcherItem],
