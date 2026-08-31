@@ -175,6 +175,15 @@ enum WindowSwitcherActivationRouting {
     }
 }
 
+enum WindowSwitcherFocusedWindowChangePolicy {
+    static func requiresInventoryRefresh(cachedCandidateCount _: Int) -> Bool {
+        // The AX notification may refer to a window that was created after the
+        // latest inventory snapshot. Cached candidates therefore cannot prove
+        // that the inventory is complete.
+        true
+    }
+}
+
 struct WindowSwitcherWindowIdentity: Equatable {
     let id: String
     let processID: pid_t
@@ -1821,8 +1830,12 @@ final class WindowSwitcherModel: ObservableObject {
               NSWorkspace.shared.frontmostApplication?.processIdentifier == processID,
               activationCandidate?.processIdentifier != processID else { return }
         let candidates = cachedWindows.filter { $0.processID == processID }
-        guard !candidates.isEmpty else {
+        if WindowSwitcherFocusedWindowChangePolicy.requiresInventoryRefresh(
+            cachedCandidateCount: candidates.count
+        ) {
             requestInventoryRefresh(priority: .utility)
+        }
+        guard !candidates.isEmpty else {
             return
         }
         guard candidates.count > 1 else {

@@ -221,6 +221,12 @@ struct WindowSwitcherTests {
         ) == "browser-a2")
     }
 
+    @Test func focusedWindowChangeRefreshesInventoryEvenWhenTheApplicationIsAlreadyCached() {
+        #expect(WindowSwitcherFocusedWindowChangePolicy.requiresInventoryRefresh(
+            cachedCandidateCount: 1
+        ))
+    }
+
     @Test func previewingIdeaWindowDoesNotPromoteItBeforeCommit() {
         let recentIDs = ["zed", "idea-secondary", "idea-primary"]
 
