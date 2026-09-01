@@ -34,6 +34,15 @@ struct ClipboardSettingsView: View {
                     }
                     if clipboard.settings.isEnabled {
                         permissionStatus
+
+                        Divider()
+
+                        Button {
+                            clipboard.openPanel()
+                        } label: {
+                            Label(model.t("clipboardOpenNow"), systemImage: "clipboard")
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
                 }
 
