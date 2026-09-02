@@ -11,7 +11,7 @@
 
 import AppKit
 import OSLog
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 import SwiftUI
 
 /// The highlight ring that follows the cursor while recording. Rings are
