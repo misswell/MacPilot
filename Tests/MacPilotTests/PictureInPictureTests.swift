@@ -39,7 +39,7 @@ struct PictureInPictureTests {
 
     @Test @MainActor func menuBarViewsObserveTheLivePictureInPictureModel() {
         let pictureInPicture = PictureInPictureModel()
-        let appMenu = MenuBarView(pictureInPicture: pictureInPicture)
+        let appMenu = MenuBarView(pictureInPicture: pictureInPicture, screenRecording: ScreenRecordingModel())
 
         #expect(appMenu.pictureInPicture === pictureInPicture)
 
