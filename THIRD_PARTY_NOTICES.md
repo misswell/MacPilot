@@ -100,3 +100,4 @@ SwiftData, no external SPM dependencies (Sauce, Defaults, KeyboardShortcuts,
 Settings, Fuse were dropped), a Carbon global hotkey reusing MacPilot's
 `SmartCaptureShortcutBinding`, ⌘V paste via CGEvent, and the MacPilot sidebar
 settings surface with Chinese/English localization.
+

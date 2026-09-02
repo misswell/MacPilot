@@ -22,10 +22,11 @@ struct ScreenRecordingTests {
     }
 
     @Test func recordingCaptureModesHaveStableLabelsAndRoundTrip() throws {
-        #expect(ScreenRecordingCaptureMode.allCases == [.area, .fullscreen, .application])
+        #expect(ScreenRecordingCaptureMode.allCases == [.area, .fullscreen, .application, .audio])
         #expect(ScreenRecordingCaptureMode.area.titleKey == "scRecordingArea")
         #expect(ScreenRecordingCaptureMode.fullscreen.titleKey == "scRecordingFullscreen")
         #expect(ScreenRecordingCaptureMode.application.titleKey == "scRecordingApplication")
+        #expect(ScreenRecordingCaptureMode.audio.titleKey == "scRecordingAudioMode")
 
         let settings = ScreenRecordingSettings(captureMode: .application)
         let decoded = try JSONDecoder().decode(

@@ -1754,6 +1754,8 @@ struct ScreenCaptureView: View {
     @State private var showingSmartShortcutEditor = false
     @State private var showingShortcutListEditor = false
     @State private var showingRecordingShortcutEditor = false
+    @State private var editingRecordingHotKey: ScreenRecordingHotKeyPurpose?
+    @State private var blocklistApps: [ScreenBlocklistApp] = []
     @State private var editingShortcutKind: ScreenCaptureShortcutKind = .smartElement
     @State private var resetFailureMessage: String?
     @State private var imageHostingCredential = ""
@@ -1812,6 +1814,9 @@ struct ScreenCaptureView: View {
         }
         .sheet(isPresented: $showingRecordingShortcutEditor) {
             ScreenRecordingShortcutEditor(recording: recording)
+        }
+        .sheet(item: $editingRecordingHotKey) { purpose in
+            ScreenRecordingHotKeyEditorSheet(recording: recording, purpose: purpose)
         }
     }
 
@@ -2163,6 +2168,7 @@ struct ScreenCaptureView: View {
                     }
                 }
                 .frame(width: 120)
+                .disabled(recording.settings.withAlpha)
 
                 Picker(t("scRecordingFPS"), selection: Binding(
                     get: { recording.settings.framesPerSecond },
@@ -2185,6 +2191,11 @@ struct ScreenCaptureView: View {
                 ))
                 .toggleStyle(.checkbox)
             }
+            if recording.settings.captureMode == .audio {
+                Text(t("scRecordingAudioOnlyHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             HStack(spacing: 14) {
                 Picker(t("scRecordingEncoder"), selection: Binding(
@@ -2196,12 +2207,93 @@ struct ScreenCaptureView: View {
                     }
                 }
                 .frame(width: 200)
+                .disabled(recording.settings.withAlpha)
 
+                Picker(t("scRecordingVideoQuality"), selection: Binding(
+                    get: { recording.settings.videoQuality },
+                    set: { recording.setVideoQuality($0) }
+                )) {
+                    ForEach(ScreenRecordingVideoQuality.allCases) { quality in
+                        Text(t(quality.titleKey)).tag(quality)
+                    }
+                }
+                .frame(width: 110)
+
+                Picker(t("scRecordingPixelFormat"), selection: Binding(
+                    get: { recording.settings.pixelFormat },
+                    set: { recording.setPixelFormat($0) }
+                )) {
+                    ForEach(ScreenRecordingPixelFormat.allCases) { format in
+                        Text(t(format.titleKey)).tag(format)
+                    }
+                }
+                .frame(width: 220)
+
+                Picker(t("scRecordingBackground"), selection: Binding(
+                    get: { recording.settings.background },
+                    set: { recording.setBackground($0) }
+                )) {
+                    ForEach(ScreenRecordingBackground.allCases) { background in
+                        Text(t(background.titleKey)).tag(background)
+                    }
+                }
+                .frame(width: 140)
+            }
+
+            HStack(spacing: 14) {
+                Toggle(t("scRecordingWithAlpha"), isOn: Binding(
+                    get: { recording.settings.withAlpha },
+                    set: { recording.setWithAlpha($0) }
+                ))
+                .toggleStyle(.checkbox)
+                Toggle(t("scRecordingHDR"), isOn: Binding(
+                    get: { recording.settings.recordHDR },
+                    set: { recording.setRecordHDR($0) }
+                ))
+                .toggleStyle(.checkbox)
+                Toggle(t("scRecordingHighRes"), isOn: Binding(
+                    get: { recording.settings.highRes },
+                    set: { recording.setHighRes($0) }
+                ))
+                .toggleStyle(.checkbox)
+                Toggle(t("scRecordingHighlightMouse"), isOn: Binding(
+                    get: { recording.settings.highlightMouse },
+                    set: { recording.setHighlightMouse($0) }
+                ))
+                .toggleStyle(.checkbox)
+                if recording.settings.background == .custom {
+                    TextField(
+                        t("scRecordingCustomBackground"),
+                        text: Binding(
+                            get: { recording.settings.customBackgroundHex },
+                            set: { recording.setCustomBackgroundHex($0) }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 150)
+                }
+            }
+
+            Divider()
+
+            HStack(spacing: 14) {
                 Toggle(t("scRecordingMicrophone"), isOn: Binding(
                     get: { recording.settings.capturesMicrophone },
                     set: { recording.setCapturesMicrophone($0) }
                 ))
                 .toggleStyle(.checkbox)
+
+                Picker(t("scRecordingMicDevice"), selection: Binding(
+                    get: { recording.settings.microphoneDeviceName },
+                    set: { recording.setMicrophoneDeviceName($0) }
+                )) {
+                    Text("default").tag("default")
+                    ForEach(recording.availableMicrophones, id: \.uniqueID) { device in
+                        Text(device.localizedName).tag(device.localizedName)
+                    }
+                }
+                .frame(width: 190)
+                .disabled(!recording.settings.capturesMicrophone)
 
                 Toggle(t("scRecordingEchoCancellation"), isOn: Binding(
                     get: { recording.settings.microphoneEchoCancellation },
@@ -2209,11 +2301,199 @@ struct ScreenCaptureView: View {
                 ))
                 .toggleStyle(.checkbox)
                 .disabled(!recording.settings.capturesMicrophone)
+
+                Picker(t("scRecordingDucking"), selection: Binding(
+                    get: { recording.settings.audioDuckingLevel },
+                    set: { recording.setAudioDuckingLevel($0) }
+                )) {
+                    ForEach(ScreenRecordingAudioDuckingLevel.allCases) { level in
+                        Text(t(level.titleKey)).tag(level)
+                    }
+                }
+                .frame(width: 150)
+                .disabled(!recording.settings.capturesMicrophone || !recording.settings.microphoneEchoCancellation)
+
+                Toggle(t("scRecordingRemuxAudio"), isOn: Binding(
+                    get: { recording.settings.remuxAudio },
+                    set: { recording.setRemuxAudio($0) }
+                ))
+                .toggleStyle(.checkbox)
+                .disabled(!recording.settings.capturesMicrophone || !recording.settings.capturesSystemAudio)
             }
             if recording.settings.capturesMicrophone {
-                Text(t("scRecordingMicTrackHint"))
+                Text(recording.settings.remuxAudio ? t("scRecordingMicTrackHint") : t("scRecordingRemuxHint"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 14) {
+                Picker(t("scRecordingAudioFormat"), selection: Binding(
+                    get: { recording.settings.audioFormat },
+                    set: { recording.setAudioFormat($0) }
+                )) {
+                    ForEach(ScreenRecordingAudioFormat.allCases) { format in
+                        Text(t(format.titleKey)).tag(format)
+                    }
+                }
+                .frame(width: 180)
+
+                Picker(t("scRecordingAudioQuality"), selection: Binding(
+                    get: { recording.settings.audioQuality },
+                    set: { recording.setAudioQuality($0) }
+                )) {
+                    ForEach(ScreenRecordingAudioQuality.allCases) { quality in
+                        Text(t(quality.titleKey)).tag(quality)
+                    }
+                }
+                .frame(width: 170)
+            }
+
+            Divider()
+
+            HStack(spacing: 14) {
+                Stepper(value: Binding(
+                    get: { recording.settings.countdownSeconds },
+                    set: { recording.setCountdownSeconds($0) }
+                ), in: 0...99) {
+                    Text(t("scRecordingCountdownValue", recording.settings.countdownSeconds))
+                        .frame(width: 260, alignment: .leading)
+                }
+                Stepper(value: Binding(
+                    get: { recording.settings.autoStopMinutes },
+                    set: { recording.setAutoStopMinutes($0) }
+                ), in: 0...99 * 24 * 60) {
+                    Text(t("scRecordingAutoStopValue", recording.settings.autoStopMinutes))
+                        .frame(width: 280, alignment: .leading)
+                }
+                Stepper(value: Binding(
+                    get: { recording.settings.presenterOverlaySafeDelay },
+                    set: { recording.setPresenterOverlaySafeDelay($0) }
+                ), in: 0...99) {
+                    Text(t("scRecordingPresenterOverlayDelayValue", recording.settings.presenterOverlaySafeDelay))
+                        .frame(width: 260, alignment: .leading)
+                }
+            }
+
+            HStack(spacing: 14) {
+                Toggle(t("scRecordingHideDesktopFiles"), isOn: Binding(
+                    get: { recording.settings.hideDesktopFiles },
+                    set: { recording.setHideDesktopFiles($0) }
+                ))
+                .toggleStyle(.checkbox)
+                Toggle(t("scRecordingHideControlCenter"), isOn: Binding(
+                    get: { recording.settings.hideControlCenter },
+                    set: { recording.setHideControlCenter($0) }
+                ))
+                .toggleStyle(.checkbox)
+                Toggle(t("scRecordingIncludeMenuBar"), isOn: Binding(
+                    get: { recording.settings.includeMenuBar },
+                    set: { recording.setIncludeMenuBar($0) }
+                ))
+                .toggleStyle(.checkbox)
+                Toggle(t("scRecordingExcludeSelf"), isOn: Binding(
+                    get: { recording.settings.excludeSelf },
+                    set: { recording.setExcludeSelf($0) }
+                ))
+                .toggleStyle(.checkbox)
+            }
+            HStack(spacing: 14) {
+                Toggle(t("scRecordingPreventSleep"), isOn: Binding(
+                    get: { recording.settings.preventSleep },
+                    set: { recording.setPreventSleep($0) }
+                ))
+                .toggleStyle(.checkbox)
+                Toggle(t("scRecordingShowPreview"), isOn: Binding(
+                    get: { recording.settings.showPreviewAfterRecord },
+                    set: { recording.setShowPreviewAfterRecord($0) }
+                ))
+                .toggleStyle(.checkbox)
+                Toggle(t("scRecordingShowController"), isOn: Binding(
+                    get: { recording.settings.showRecordingController },
+                    set: { recording.setShowRecordingController($0) }
+                ))
+                .toggleStyle(.checkbox)
+            }
+
+            Divider()
+
+            HStack(spacing: 14) {
+                Menu {
+                    if recording.availableCameras.isEmpty {
+                        Text(t("scRecordingNoCameras"))
+                    }
+                    ForEach(recording.availableCameras, id: \.uniqueID) { camera in
+                        Button(camera.localizedName) {
+                            recording.toggleCameraOverlay(named: camera.localizedName)
+                        }
+                    }
+                    if !recording.availableCaptureDevices.isEmpty {
+                        Divider()
+                        ForEach(recording.availableCaptureDevices, id: \.uniqueID) { device in
+                            Button(device.localizedName) {
+                                recording.toggleDevicePreview(named: device.localizedName)
+                            }
+                        }
+                    }
+                } label: {
+                    Label(
+                        recording.selectedCameraName.isEmpty ? t("scRecordingCamera") : recording.selectedCameraName,
+                        systemImage: "camera"
+                    )
+                }
+                if recording.isDeviceRecording {
+                    Button(t("scRecordingStopDeviceRecording")) { recording.stopDeviceRecording() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                }
+                Spacer()
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(t("scRecordingHotKeys"))
+                    .font(.subheadline.weight(.medium))
+                ForEach(ScreenRecordingHotKeyPurpose.allCases) { purpose in
+                    HStack {
+                        Text(t(purpose.titleKey))
+                        Spacer()
+                        Text(recording.hotKey(for: purpose)?.displayName ?? t("scRecordingHotKeyOff"))
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(recording.hotKey(for: purpose) == nil ? .secondary : .primary)
+                        Button(t("scRecordingEditHotKey")) { editingRecordingHotKey = purpose }
+                            .buttonStyle(.bordered)
+                    }
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(t("scRecordingBlocklist"))
+                    .font(.subheadline.weight(.medium))
+                Text(t("scRecordingBlocklistHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if blocklistApps.isEmpty {
+                    Text(t("scRecordingBlocklistEmpty"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(blocklistApps) { app in
+                    Toggle(app.name, isOn: Binding(
+                        get: { recording.settings.blocklist.contains(app.bundleID) },
+                        set: { included in
+                            var ids = recording.settings.blocklist
+                            if included {
+                                if !ids.contains(app.bundleID) { ids.append(app.bundleID) }
+                            } else {
+                                ids.removeAll { $0 == app.bundleID }
+                            }
+                            recording.setBlocklist(ids)
+                        }
+                    ))
+                    .toggleStyle(.checkbox)
+                }
             }
 
             HStack {
@@ -2246,6 +2526,10 @@ struct ScreenCaptureView: View {
                 .strokeBorder(.primary.opacity(0.07))
         )
         .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
+        .onAppear {
+            recording.refreshCaptureDeviceLists()
+            blocklistApps = ScreenBlocklistApp.runningApps()
+        }
     }
 
     private var recordingStatusText: String {
@@ -2740,6 +3024,86 @@ private struct SmartCaptureHistoryThumbnail: View {
             }
         }
         .onDisappear { image = nil }
+    }
+}
+
+/// A regular GUI application offered in the recording blocklist editor.
+struct ScreenBlocklistApp: Identifiable, Equatable {
+    let bundleID: String
+    let name: String
+
+    var id: String { bundleID }
+
+    static func runningApps() -> [ScreenBlocklistApp] {
+        NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil && $0.localizedName != nil }
+            .map { ScreenBlocklistApp(bundleID: $0.bundleIdentifier!, name: $0.localizedName!) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+}
+
+/// Editor sheet for the secondary recording hot keys (stop, pause, mode
+/// starts, save frame, magnifier). Reuses the shared key recorder.
+private struct ScreenRecordingHotKeyEditorSheet: View {
+    @EnvironmentObject private var appModel: MacPilotModel
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var recording: ScreenRecordingModel
+    let purpose: ScreenRecordingHotKeyPurpose
+    @State private var recordedKeyCode: UInt16?
+    @State private var recordedModifiers: InputSourceShortcutModifiers = []
+    @State private var validationMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(AppText.value(purpose.titleKey, language: appModel.language))
+                .font(.title2.bold())
+            Text(AppText.value("scShortcutHint", language: appModel.language))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            SmartCaptureShortcutRecorder(
+                keyCode: $recordedKeyCode,
+                modifiers: $recordedModifiers,
+                placeholder: AppText.value("scRecordShortcut", language: appModel.language),
+                onRejected: { error in
+                    validationMessage = AppText.value(error.messageKey, language: appModel.language)
+                }
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            HStack {
+                if recording.hotKey(for: purpose) != nil {
+                    Button(AppText.value("scRecordingClearHotKey", language: appModel.language), role: .destructive) {
+                        recording.setHotKey(purpose, nil)
+                        dismiss()
+                    }
+                }
+                Spacer()
+                Button(AppText.value("cancel", language: appModel.language), role: .cancel) { dismiss() }
+                Button(AppText.value("save", language: appModel.language)) { save() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(recordedKeyCode == nil || candidateBinding?.validationError != nil)
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
+        .onAppear { recording.suspendShortcut() }
+        .onDisappear { recording.resumeShortcut() }
+    }
+
+    private var candidateBinding: SmartCaptureShortcutBinding? {
+        guard let recordedKeyCode else { return nil }
+        return SmartCaptureShortcutBinding(keyCode: recordedKeyCode, modifiers: recordedModifiers)
+    }
+
+    private func save() {
+        guard let binding = candidateBinding else { return }
+        recording.setHotKey(purpose, binding)
+        dismiss()
     }
 }
 

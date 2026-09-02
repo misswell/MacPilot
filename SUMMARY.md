@@ -210,17 +210,19 @@ alt-tab-macos 使用 GPL-3.0 授权，MacPilot 只参考其公开行为和架构
 - **关于页**：应用图标改用 `NSApp.applicationIconImage`，RClick GitHub 链接替换为 MacPilot 仓库。
 - **Finder 右键菜单**：顶部加品牌头部（MacPilot + 图标），展开的各分组加禁用态分组标题与分隔线，子菜单图标与设置页标签一致，空配置时给出「暂无可用菜单项」。
 - **中文本地化**：补齐 MacPilotRightClickKit 与 FinderSync 两份 `AppLocalization.simplifiedChinese` 词条（约 120 项），设置页与右键菜单全程中文。
-## 十九、屏幕录制引擎升级：窗口级捕获与麦克风混录（v1.1.234 引入，v1.1.235 重写为独立实现）
+## 十九、屏幕录制引擎升级：全功能录屏（v1.1.234 引入，v1.1.235 重写，v1.1.236 功能升级）
 
-v1.1.234 曾将 QuickRecorder（AGPL-3.0）的录像引擎适配进 MacPilot；为彻底解除 AGPL 对后续闭源/商业分发的限制，v1.1.235 改为独立实现——仅基于 Apple 公开框架（ScreenCaptureKit / AVFoundation / VideoToolbox / IOKit）与原有显示器裁剪引擎重写，不包含任何第三方衍生代码。当前能力：
+v1.1.236 对录屏功能做整体升级，补齐主流录屏工具的完整能力（UI 样式保留 MacPilot 设计语言）。当前能力：
 
-- **引擎文件**：`Sources/MacPilot/RecordingEngine.swift`（`ScreenRecordingEngine`），对外暴露 prepare/start/pause/resume/stop/cancel 生命周期；`ScreenRecordingModel` 状态机、快捷键、选区浮层、快速访问面板、config.json 持久化全部复用。
-- **应用窗口模式升级**：选区矩形先匹配 SCWindow（图层 0、在屏、排除本应用、覆盖率 ≥50% 取最大重叠），命中即用 `SCContentFilter(desktopIndependentWindow:)`——录制跟随窗口移动、画面紧贴窗口；未命中回退到显示器裁剪。
-- **所有模式隐藏自身窗口**：filters 一律排除 MacPilot 自己的窗口，设置页不会出现在录像里。
-- **编码器**：`ScreenRecordingVideoEncoder`（H.264 / HEVC），码率启发式沿用原引擎的 `宽×高×fps/6` 预算，HEVC 取 60%，并钳制在 2–24 Mbps。
-- **麦克风混录**：`AVAudioEngine` 输入节点 tap + 可选回声消除（原生 `setVoiceProcessingEnabled`），PCM 转 CMSampleBuffer 写入独立音轨；采样率/声道取自实际输入格式，低于 44.1 kHz 的设备自动降码率；启动前走系统麦克风权限（`Info.plist` 补 `NSMicrophoneUsageDescription`）；麦克风失败只丢音轨不中断录像。
-- **录制期间防休眠**：`DisplaySleepAssertion`（IOPMAssertion 防显示器休眠），停止/取消时释放。
-- **设置项**：`capturesMicrophone`（默认关）、`microphoneEchoCancellation`（默认开）、`encoder`（默认 h264），旧 config.json 缺字段安全解码。
-- **UI**：录制卡片新增编码器选择器与麦克风/回声消除开关（回声消除仅在麦克风开启时可用），文案走 `AppText` 中英同步。
-- **测试**：`RecordingEngineTests` 覆盖码率公式（含上下限钳制）、编码器映射、音频设置低采样率降码率、窗口匹配规则、偶数尺寸钳制、设置解码默认值。
-- **许可说明**：v1.1.234 发布包曾含 AGPL-3.0 衍生引擎（该版本源码即本仓库，分发义务已满足）；自 v1.1.235 起无第三方衍生代码，`THIRD_PARTY_NOTICES.md` 已移除 QuickRecorder 条目。纯音频录制与 HEVC With Alpha 仍未纳入。
+- **引擎模块**：`Sources/MacPilot/Recording/`（引擎本体 `RecordingEngine.swift`，输出参数规划 `RecordingOutputPlanning.swift`，捕获规划 `RecordingCapturePlanning.swift`，采样缓冲 `RecordingSampleBuffers.swift`，混音 `RecordingAudioMixer.swift`，防休眠 `RecordingDisplaySleep.swift`，设备 `RecordingDevices.swift`，鼠标辅助 `RecordingMouseAids.swift`，悬浮面板 `RecordingPanels.swift`）；引擎对外暴露 makeSession/start/pause/resume/stop/cancel 生命周期；`ScreenRecordingModel` 状态机、快捷键、选区浮层、快速访问面板、config.json 持久化全部复用。
+- **录制模式**：框选区域 / 全屏 / 应用窗口（桌面无关窗口，跟随移动）/ **纯音频**（系统声音+可选麦克风 → m4a/caf），另支持「录制最前窗口」快捷启动与 iOS 设备录制。
+- **码率公式**：`max(600,宽)×max(600,高)×(fps/8)×编码器系数(H.264 0.9 / HEVC 0.5)×画质系数(低/中/高)×(HDR ×2)`，下限 200 kbps。
+- **编码与画质**：H.264 / HEVC / **HEVC With Alpha**（选 Alpha 自动强制 HEVC+MOV）；**HDR 录制**（macOS 15 使用 `captureHDRStreamLocalDisplay` 预设、BT.2020 PQ 色域、HEVC Main10）；像素格式 6 选（默认/BGRA/YUV 8/10bit 视频与全幅）；Retina 原生分辨率开关；窗口背景填充（保留壁纸/透明/八色/自定义十六进制，透明时同步排除 Dock 壁纸窗口）。
+- **滤镜构造**（对齐 QR）：应用黑名单排除、隐藏控制中心图标、隐藏桌面文件（Finder 全屏无标题窗口）、可选包含菜单栏（macOS 14.2+）、排除自身窗口（摄像头/鼠标/放大镜/iDevice 悬浮窗除外）。
+- **音频**：AAC/ALAC/FLAC 三格式、128–320 kbps 音质档（低采样率自动减半封顶 64k）；麦克风支持设备选择（非默认设备走 AVCaptureSession）+ 回声消除（VoiceProcessing）+ **压低系统音量三档**（`kAUVoiceIOProperty_OtherAudioDuckingConfiguration`）；**remux 混音**——录制完成后把麦克风轨混入主音轨并 passthrough 重封装，关闭则保留双音轨。
+- **录制辅助**（`RecordingOverlays.swift`）：鼠标点击高亮（左键蓝/右键紫/其他橙，按下 0.8 / 移动 0.3 透明度，未捕获光标时补点）、屏幕放大镜（3x、快捷键开关、截图排除本应用窗口）、录制前倒计时（0–99 秒）、悬浮控制条（停止/暂停/计时/摄像头入口）、完成后悬浮预览（打开/Finder/删除/复制，6 秒自动消失）、定时自动停止（分钟）。
+- **摄像头与设备**（`RecordingDevices.swift`）：浮动摄像头窗口（可翻转、圆角、可拖动，画面经窗口被录制流捕获）、iPhone/iPad 预览与直接录制（AVCaptureSession + AVCaptureMovieFileOutput，静音连接移除），启动时置 `kCMIOHardwarePropertyAllowScreenCaptureDevices`；**演示者叠加（Presenter Overlay）**支持——帧信息 `presenterOverlayContentRect` 状态机 + delegate 回调 + 保护延迟设置，叠加激活时自动收起摄像头窗口。
+- **快捷键**：主开关外新增 8 个可选热键（停止/暂停继续/录系统声音/录当前屏/录最前窗口/框选/存帧/放大镜），Carbon 注册，默认未绑定（与 QR 一致）。
+- **存帧**：录制中保存当前帧为 PNG（`Capturing at <时间>.png`），HDR 帧走 10-bit PNG + EV+1。
+- **其他**：H.264 硬件编码器预检（VideoToolbox 探测失败弹窗询问切 HEVC 并持久化）、帧去重（20 帧滚动窗口）、完成/失败/混音系统通知、防休眠可开关。
+- **未纳入**：MP3/Opus 音频导出（需第三方编码器依赖）、多窗口同录选择 UI、后期剪辑窗口。
