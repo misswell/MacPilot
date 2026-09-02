@@ -101,6 +101,7 @@ enum SoftwareUpdateError: Error, Equatable {
     case versionMismatch
     case invalidSignature
     case wrongDeveloperTeam
+    case identityMismatch
     case gatekeeperRejected
     case installationUnavailable
     case updaterHelperMissing
@@ -162,7 +163,7 @@ struct SoftwareUpdateFailure: Equatable {
         case .digestMismatch:
             message = .integrity
             detail = nil
-        case .invalidApplication, .versionMismatch, .invalidSignature, .wrongDeveloperTeam, .gatekeeperRejected:
+        case .invalidApplication, .versionMismatch, .invalidSignature, .wrongDeveloperTeam, .identityMismatch, .gatekeeperRejected:
             message = .verification
             detail = nil
         case .installationUnavailable:
@@ -275,6 +276,9 @@ final class SoftwareUpdater: ObservableObject {
     }
 
     private func launchInstaller(for package: VerifiedUpdatePackage) throws {
+        guard !Bundle.main.bundleURL.path.contains("/AppTranslocation/") else {
+            throw SoftwareUpdateError.installationUnavailable
+        }
         guard applicationURL.pathExtension == "app",
               AppIdentity.isKnownBundleIdentifier(Bundle(url: applicationURL)?.bundleIdentifier),
               FileManager.default.isWritableFile(atPath: applicationURL.deletingLastPathComponent().path) else {
@@ -357,16 +361,55 @@ enum UpdatePackageValidator {
             guard signatureDetails.contains("TeamIdentifier=\(developerTeamIdentifier)") else {
                 throw SoftwareUpdateError.wrongDeveloperTeam
             }
+            // Privacy grants (Accessibility, Screen Recording, Apple Events)
+            // are bound to the app's designated requirement. Refuse an
+            // update whose requirement differs from the running app, or
+            // macOS would discard every grant and re-prompt on relaunch.
+            let runningRequirement = try designatedRequirement(of: Bundle.main.bundleURL)
+            let incomingRequirement = try designatedRequirement(of: applicationURL)
+            guard !runningRequirement.isEmpty, runningRequirement == incomingRequirement else {
+                throw SoftwareUpdateError.identityMismatch
+            }
             do {
                 try run("/usr/sbin/spctl", arguments: ["--assess", "--type", "execute", applicationURL.path])
             } catch {
                 throw SoftwareUpdateError.gatekeeperRejected
             }
+            // Drop the Gatekeeper quarantine attribute from the verified
+            // update so the relaunched app is not translocated to a
+            // randomized path, which would re-prompt privacy grants.
+            stripQuarantine(from: applicationURL)
             return VerifiedUpdatePackage(applicationURL: applicationURL, workingDirectory: workingDirectory)
         } catch {
             try? FileManager.default.removeItem(at: workingDirectory)
             throw error
         }
+    }
+
+    /// The designated requirement of the signed bundle at `bundleURL`
+    /// (everything after "designated =>" in `codesign -d -r-` output), or
+    /// an empty string when it cannot be determined.
+    static func designatedRequirement(of bundleURL: URL) throws -> String {
+        let output = try run(
+            "/usr/bin/codesign",
+            arguments: ["--display", "-r-", bundleURL.path]
+        )
+        return Self.parseDesignatedRequirement(from: output)
+    }
+
+    static func parseDesignatedRequirement(from codesignOutput: String) -> String {
+        for line in codesignOutput.split(separator: "\n") {
+            if line.contains("designated"), let range = line.range(of: "=> ") {
+                return String(line[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return ""
+    }
+
+    /// Removes the Gatekeeper quarantine attribute; a no-op when the
+    /// attribute is absent.
+    private static func stripQuarantine(from applicationURL: URL) {
+        _ = try? run("/usr/bin/xattr", arguments: ["-d", "com.apple.quarantine", applicationURL.path])
     }
 
     static func sha256(of url: URL) throws -> String {

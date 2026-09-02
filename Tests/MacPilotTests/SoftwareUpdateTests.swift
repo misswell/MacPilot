@@ -3,6 +3,32 @@ import Testing
 @testable import MacPilot
 
 struct SoftwareUpdateTests {
+    @Test func parsesDesignatedRequirementFromCodesignOutput() {
+        let output = """
+        Executable=/Applications/MacPilot.app/Contents/MacOS/MacPilot
+        Identifier=com.misswell.macpilot
+        designated => identifier "com.misswell.macpilot" and anchor apple generic
+        """
+
+        #expect(
+            UpdatePackageValidator.parseDesignatedRequirement(from: output)
+                == "identifier \"com.misswell.macpilot\" and anchor apple generic"
+        )
+        #expect(UpdatePackageValidator.parseDesignatedRequirement(from: "no requirement line") == "")
+    }
+
+    @Test func designatedRequirementComparisonRejectsIdentityChanges() {
+        // Identical requirements describe the same TCC identity; any
+        // difference (bundle id, team, anchor) must fail the update check.
+        let same = "identifier \"com.misswell.macpilot\" and anchor apple generic"
+        let changedBundle = "identifier \"com.other.app\" and anchor apple generic"
+        let changedTeam = "identifier \"com.misswell.macpilot\" and anchor apple generic and certificate leaf[subject.OU] = \"OTHERTEAM\""
+
+        #expect(same == same)
+        #expect(same != changedBundle)
+        #expect(same != changedTeam)
+    }
+
     @Test func comparesSemanticVersionsNumerically() throws {
         let current = try #require(SoftwareVersion("1.9.9"))
         let available = try #require(SoftwareVersion("v1.10.0"))

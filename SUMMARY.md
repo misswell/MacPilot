@@ -59,6 +59,7 @@ BLE 板块采用独立的视觉语言，区别于普通列表：
 
 - `Resources/MacPilot.entitlements`：Hardened Runtime 所需权限。
 - `Scripts/build-app.sh`：优先用 Developer ID，否则自动选择 Apple Development；两者都以相同的 Bundle ID 与 Apple 信任链 requirement 签名（刻意不绑定证书 Team ID，以兼容开发/正式证书属于不同团队的机器），嵌套 updater/dylib 独立签名，找不到稳定身份时才回退 ad-hoc；旧环境变量别名仍可用。
+- **更新器隐私授权保护（v1.1.241）**：应用内更新在既有 SHA-256 / codesign / Team ID / Gatekeeper 四重校验之上，新增「designated requirement 与运行中应用一致」校验——身份不同的更新包直接拒绝安装，杜绝更新后辅助功能/屏幕录制/自动化授权全部失效；校验通过后移除更新包的隔离属性，避免重启后 App Translocation；从隔离位置（下载目录直开）运行时启动即提示移到「应用程序」，且拒绝在转移位置执行更新。
 - `Scripts/distribute-app.sh`：一键签名 → 提交 Apple 公证 → 装订票据 → 打 zip → Gatekeeper 校验；支持钥匙串公证 profile（不接触明文密码）。
 - `.github/workflows/build.yml`：日常 push/PR 使用本机可用的稳定开发签名或回退 ad-hoc artifact；打 `v*` tag 自动以同一共享 requirement 签名、公证并发布 Release。
 - tag 工作流依赖 6 个 Actions secrets：`APPLE_CERTIFICATE_P12`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_DEVELOPER_ID`、`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`；已于 2026-07-24 配齐。
