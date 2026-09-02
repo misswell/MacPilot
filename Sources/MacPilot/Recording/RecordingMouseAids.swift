@@ -190,6 +190,12 @@ final class ScreenRecordingMagnifier {
     private var magnifierWindow: NSWindow?
     private var isEnabled = false
     private var isCapturing = false
+    /// ScreenCaptureKit content cached per display; re-queried only when
+    /// the cursor moves to another display. The magnifier refreshes many
+    /// times per second, and a full content query per refresh is the
+    /// expensive part.
+    private var cachedContent: SCShareableContent?
+    private var cachedDisplayID: CGDirectDisplayID?
 
     func toggle() {
         isEnabled.toggle()
@@ -204,8 +210,10 @@ final class ScreenRecordingMagnifier {
     }
 
     /// Moves the magnifier to the event location and refreshes its zoomed
-    /// snapshot. Snapshot refreshes are throttled: while one capture is in
-    /// flight the window just follows the cursor.
+    /// snapshot. Only the 134×116 pt region around the cursor is captured
+    /// (rendered at 3× into a 402×348 image), and snapshot refreshes are
+    /// throttled: while one capture is in flight the window just follows
+    /// the cursor.
     func follow(event: NSEvent) {
         guard isEnabled, event.type != .scrollWheel else { return }
         if magnifierWindow == nil {
@@ -216,17 +224,63 @@ final class ScreenRecordingMagnifier {
         Task { @MainActor [weak self] in
             defer { self?.isCapturing = false }
             guard let self, self.isEnabled, let window = self.magnifierWindow else { return }
-            guard let image = await NSImage.snapshotOfActiveDisplay() else { return }
             let location = NSEvent.mouseLocation
+            guard let image = await self.zoomedSnapshot(around: location) else { return }
             var frame = window.frame
             frame.origin = NSPoint(x: location.x - frame.width / 2, y: location.y - frame.height / 2)
-            let cropRect = NSRect(x: location.x - 67, y: location.y - 58, width: 134, height: 116)
             window.contentView = NSHostingView(
-                rootView: MagnifierContentView(snapshot: image.cropped(to: cropRect))
+                rootView: MagnifierContentView(snapshot: image)
             )
             window.setFrameOrigin(frame.origin)
             window.orderFront(nil)
         }
+    }
+
+    /// Captures the region around `location` at 3× magnification, using the
+    /// cached ScreenCaptureKit content when the cursor stays on the same
+    /// display.
+    private func zoomedSnapshot(around location: NSPoint) async -> NSImage? {
+        guard let display = await displayUnderCursor(at: location) else { return nil }
+        let localOrigin = CGPoint(
+            x: location.x - display.frame.minX,
+            y: location.y - display.frame.minY
+        )
+        let cropRect = CGRect(origin: localOrigin, size: .zero)
+            .insetBy(dx: -67, dy: -58)
+            .intersection(CGRect(origin: .zero, size: display.frame.size))
+        guard !cropRect.isNull, !cropRect.isEmpty else { return nil }
+
+        let ownApplications = cachedContent?.applications.filter {
+            $0.bundleIdentifier == Bundle.main.bundleIdentifier
+        } ?? []
+        let filter = SCContentFilter(display: display, excludingApplications: ownApplications, exceptingWindows: [])
+        let configuration = SCStreamConfiguration()
+        configuration.sourceRect = cropRect
+        configuration.width = max(2, Int(cropRect.width) * 3)
+        configuration.height = max(2, Int(cropRect.height) * 3)
+        configuration.showsCursor = false
+        configuration.captureResolution = .best
+        guard let cgImage = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) else {
+            return nil
+        }
+        return NSImage(cgImage: cgImage, size: cropRect.size)
+    }
+
+    /// The SCDisplay under `location`, refreshing the cached shareable
+    /// content only when the cursor switches displays.
+    private func displayUnderCursor(at location: NSPoint) async -> SCDisplay? {
+        if let content = cachedContent,
+           let display = content.displays.first(where: { $0.frame.contains(location) }),
+           let id = NSScreen.screenWithMouse?.displayID,
+           id == cachedDisplayID {
+            return display
+        }
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else {
+            return nil
+        }
+        cachedContent = content
+        cachedDisplayID = NSScreen.screenWithMouse?.displayID
+        return content.displays.first(where: { $0.frame.contains(location) }) ?? content.displays.first
     }
 
     private func makeWindow() -> NSWindow {
@@ -242,40 +296,5 @@ final class ScreenRecordingMagnifier {
         window.isReleasedWhenClosed = false
         window.backgroundColor = .clear
         return window
-    }
-}
-
-private extension NSImage {
-    /// Screen capture of the display under the cursor with this app's
-    /// windows excluded. Main-actor isolated because it reads the mouse
-    /// location and returns a non-sendable `NSImage`.
-    @MainActor
-    static func snapshotOfActiveDisplay() async -> NSImage? {
-        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else {
-            return nil
-        }
-        let mouseLocation = NSEvent.mouseLocation
-        guard let display = content.displays.first(where: { $0.frame.contains(mouseLocation) }) ?? content.displays.first else {
-            return nil
-        }
-        let ownApp = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
-        let filter = SCContentFilter(display: display, excludingApplications: ownApp, exceptingWindows: [])
-        let configuration = SCStreamConfiguration()
-        configuration.width = max(2, Int(display.frame.width))
-        configuration.height = max(2, Int(display.frame.height))
-        configuration.showsCursor = false
-        configuration.captureResolution = .best
-        guard let cgImage = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) else {
-            return nil
-        }
-        return NSImage(cgImage: cgImage, size: display.frame.size)
-    }
-
-    func cropped(to rect: CGRect) -> NSImage {
-        let result = NSImage(size: rect.size)
-        result.lockFocus()
-        result.draw(in: CGRect(origin: .zero, size: result.size), from: rect, operation: .copy, fraction: 1.0)
-        result.unlockFocus()
-        return result
     }
 }

@@ -13,14 +13,18 @@ import AVFoundation
 import Foundation
 
 enum ScreenRecordingAudioMixer {
-    /// Blends every audio track of the asset into one and re-muxes the
-    /// result with the original video. On success the caller owns
-    /// `videoURL`'s twin file (same name minus the extra container
-    /// extension) and should delete `videoURL`.
-    static func mixAndRemux(videoURL: URL, container: AVFileType) async -> Result<URL, Error> {
-        let asset = AVURLAsset(url: videoURL)
-        let audioOnlyURL = videoURL.deletingPathExtension()
-        let remuxedURL = audioOnlyURL.deletingPathExtension()
+    /// Blends every audio track of `inputURL` into one and re-muxes the
+    /// result with the original video, writing the finished file to
+    /// `outputURL` in `container` format. The input file is left untouched;
+    /// the caller removes it once it no longer needs it.
+    static func mixAndRemux(
+        inputURL: URL,
+        outputURL: URL,
+        container: AVFileType
+    ) async -> Result<URL, Error> {
+        let asset = AVURLAsset(url: inputURL)
+        let audioOnlyURL = outputURL.deletingPathExtension().appendingPathExtension("mixaudio")
+        let remuxedURL = outputURL
 
         do {
             let audioTracks = try await asset.loadTracks(withMediaType: .audio)
@@ -59,6 +63,7 @@ enum ScreenRecordingAudioMixer {
             mixSession.audioMix = audioMix
             await mixSession.export()
             guard mixSession.status == .completed else {
+                try? FileManager.default.removeItem(at: audioOnlyURL)
                 return .failure(mixSession.error ?? mixerError("Audio mix export failed."))
             }
 

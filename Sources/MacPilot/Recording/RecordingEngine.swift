@@ -32,12 +32,17 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
     private let writer: AVAssetWriter
     private let videoInput: AVAssetWriterInput?
     private let systemAudioInput: AVAssetWriterInput?
-    private let outputURL: URL
+    private let workURL: URL
+    /// The file the finished recording is delivered under.
+    private let finalURL: URL
     private let settings: ScreenRecordingSettings
     private let audioEngine = AVAudioEngine()
     private let sleepAssertion = DisplaySleepAssertion()
     private let sampleQueue = DispatchQueue(label: "com.misswell.macpilot.screen-recording.samples", qos: .userInitiated)
     private let micSampleQueue = DispatchQueue(label: "com.misswell.macpilot.screen-recording.mic", qos: .userInitiated)
+    /// PNG encoding for save-frame requests runs here so a slow encode
+    /// never blocks sample delivery on the recording queue.
+    private let frameSaveQueue = DispatchQueue(label: "com.misswell.macpilot.screen-recording.frames", qos: .utility)
     private let lock = NSLock()
 
     private var microphoneInput: AVAssetWriterInput?
@@ -65,9 +70,9 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
 
     /// Fired with `true` when the system presenter overlay takes over (the
     /// floating camera window should hide) and `false` when it ends.
-    var presenterOverlayActivityHandler: ((Bool) -> Void)?
-    var frameSavedHandler: ((URL) -> Void)?
-    var encoderFallbackHandler: ((ScreenRecordingVideoEncoder) -> Void)?
+    var presenterOverlayActivityHandler: (@MainActor (Bool) -> Void)?
+    var frameSavedHandler: (@MainActor (URL) -> Void)?
+    var encoderFallbackHandler: (@MainActor (ScreenRecordingVideoEncoder) -> Void)?
 
     // MARK: Frame saving
 
@@ -79,13 +84,15 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
         writer: AVAssetWriter,
         videoInput: AVAssetWriterInput?,
         systemAudioInput: AVAssetWriterInput?,
-        outputURL: URL,
+        workURL: URL,
+        finalURL: URL,
         settings: ScreenRecordingSettings
     ) {
         self.writer = writer
         self.videoInput = videoInput
         self.systemAudioInput = systemAudioInput
-        self.outputURL = outputURL
+        self.workURL = workURL
+        self.finalURL = finalURL
         self.settings = settings
     }
 
@@ -124,12 +131,12 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
             frontmostOnly: frontmostWindowOnly,
             settings: settings
         )
-        let outputURL = try nextRecordingURL(for: settings)
+        let targets = try makeRecordingTargets(for: settings)
 
         let writer: AVAssetWriter
         do {
             writer = try AVAssetWriter(
-                outputURL: outputURL,
+                outputURL: targets.workURL,
                 fileType: isAudioOnly ? settings.audioFormat.fileType : settings.effectiveFormat.fileType
             )
         } catch {
@@ -193,7 +200,8 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
             writer: writer,
             videoInput: videoInput,
             systemAudioInput: systemAudioInput,
-            outputURL: outputURL,
+            workURL: targets.workURL,
+            finalURL: targets.finalURL,
             settings: settings
         )
         // The engine is also the stream delegate so presenter overlay
@@ -275,29 +283,30 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
         return displays.first(where: { $0.frame.contains(pointer) }) ?? displays.first
     }
 
-    /// Picks the output file name. When the audio tracks will be mixed down
-    /// after recording, the writer targets a triple-extension file so the
-    /// mixdown can land atomically on the clean single-extension name.
-    private static func nextRecordingURL(for settings: ScreenRecordingSettings) throws -> URL {
+    /// Picks the working and final file names. The writer always targets a
+    /// `.recpart` working file; when recording ends it is either renamed to
+    /// the final name or consumed by the audio mixdown, which writes the
+    /// final file directly.
+    private static func makeRecordingTargets(for settings: ScreenRecordingSettings) throws -> (workURL: URL, finalURL: URL) {
         let folder = ScreenRecordingOutput.folder(for: settings)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: nil)
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
         let timestamp = formatter.string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let baseName = "MacPilot-" + timestamp
+        let containerExtension = settings.captureMode == .audio
+            ? settings.audioFormat.fileExtension
+            : settings.effectiveFormat.fileExtension
 
-        let isAudioOnly = settings.captureMode == .audio
-        let containerExtension = isAudioOnly ? settings.audioFormat.fileExtension : settings.effectiveFormat.fileExtension
-        let willMixdown = settings.capturesMicrophone && settings.capturesSystemAudio && settings.remuxAudio
-        let targetExtension = willMixdown ? "\(containerExtension).\(containerExtension).\(containerExtension)" : containerExtension
-
-        var outputURL = folder.appendingPathComponent("\(baseName).\(targetExtension)")
+        var workURL = folder.appendingPathComponent("\(baseName).recpart")
+        var finalURL = folder.appendingPathComponent("\(baseName).\(containerExtension)")
         var suffix = 2
-        while FileManager.default.fileExists(atPath: outputURL.path) {
-            outputURL = folder.appendingPathComponent("\(baseName)-\(suffix).\(targetExtension)")
+        while FileManager.default.fileExists(atPath: workURL.path) || FileManager.default.fileExists(atPath: finalURL.path) {
+            workURL = folder.appendingPathComponent("\(baseName)-\(suffix).recpart")
+            finalURL = folder.appendingPathComponent("\(baseName)-\(suffix).\(containerExtension)")
             suffix += 1
         }
-        return outputURL
+        return (workURL, finalURL)
     }
 
     /// Checks that a hardware H.264 encoder can handle the requested size;
@@ -319,8 +328,11 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
             compressionSessionOut: &session
         )
         guard status != noErr else { return }
-        if await MainActor.run(body: Self.offerEncoderFallback) {
-            encoderFallbackHandler?(.hevc)
+        let useHEVC = await MainActor.run(body: Self.offerEncoderFallback)
+        if useHEVC {
+            await MainActor.run {
+                self.encoderFallbackHandler?(.hevc)
+            }
         }
     }
 
@@ -370,12 +382,12 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
     }
 
     func stop() async throws -> URL {
-        guard beginTermination() else { return cleanedOutputURL() }
+        guard beginTermination() else { return deliverWorkFile() }
         stopMicrophoneCapture()
         try? await stream.stopCapture()
         sleepAssertion.release()
         let writtenURL = try await finalizeWriting()
-        return try await mixdownIfNeeded(writtenURL: writtenURL)
+        return await assembleOutput(writtenURL: writtenURL)
     }
 
     func cancel() async {
@@ -385,7 +397,7 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
             try? await stream.stopCapture()
         }
         sleepAssertion.release()
-        try? FileManager.default.removeItem(at: outputURL)
+        try? FileManager.default.removeItem(at: workURL)
     }
 
     private func beginTermination() -> Bool {
@@ -396,12 +408,22 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
         return true
     }
 
-    /// The file name the finished recording should carry: a mixdown rewrites
-    /// the triple-extension target onto its clean name.
-    private func cleanedOutputURL() -> URL {
-        let willMixdown = settings.capturesMicrophone && settings.capturesSystemAudio && settings.remuxAudio
-        guard willMixdown else { return outputURL }
-        return outputURL.deletingPathExtension().deletingPathExtension()
+    /// Moves the working file to its final name without a mixdown.
+    private func deliverWorkFile() -> URL {
+        moveWorkFileToFinal()
+        return finalURL
+    }
+
+    @discardableResult
+    private func moveWorkFileToFinal() -> Bool {
+        try? FileManager.default.removeItem(at: finalURL)
+        do {
+            try FileManager.default.moveItem(at: workURL, to: finalURL)
+            return true
+        } catch {
+            Self.logger.error("Could not move the recording into place: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
     }
 
     // MARK: - Frame saving
@@ -460,7 +482,7 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
         }
 
         if settings.microphoneDeviceName != "default",
-           let device = ScreenRecordingDeviceController.availableMicrophones().first(where: { device in
+           let device = ScreenRecordingDeviceDiscovery.availableMicrophones().first(where: { device in
                device.localizedName == self.settings.microphoneDeviceName
            }) {
             // Named device: AVCaptureSession path.
@@ -477,7 +499,7 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
                 return
             }
             session.addOutput(output)
-            let sampleRate = ScreenRecordingDeviceController.selectedMicrophoneSampleRate(deviceName: self.settings.microphoneDeviceName)
+            let sampleRate = ScreenRecordingDeviceDiscovery.selectedMicrophoneSampleRate(deviceName: self.settings.microphoneDeviceName)
             let writerInput = makeWriterInput(sampleRate: sampleRate, channels: 2)
             guard registerWriterInput(writerInput) else { return }
             micCaptureSession = session
@@ -585,10 +607,19 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
             }
             lock.unlock()
             if wantsSave {
-                let url = Self.writeFramePNG(from: imageBuffer, settings: settings)
-                handler?(url)
-                if let url {
-                    frameSavedHandler?(url)
+                let settings = self.settings
+                // The pixel buffer is a thread-safe CF type retained for the
+                // encode; the completion hops back to the main actor.
+                nonisolated(unsafe) let imageBuffer = imageBuffer
+                nonisolated(unsafe) let handler = handler
+                frameSaveQueue.async { [weak self] in
+                    let url = Self.writeFramePNG(from: imageBuffer, settings: settings)
+                    Task { @MainActor in
+                        handler?(url)
+                        if let url {
+                            self?.frameSavedHandler?(url)
+                        }
+                    }
                 }
             }
         }
@@ -775,7 +806,7 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
     // MARK: - Finishing
 
     private func finalizeWriting() async throws -> URL {
-        try validateCapturedContent()
+        try finishInputs()
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             self.writer.finishWriting {
@@ -786,10 +817,10 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
                 }
             }
         }
-        return outputURL
+        return workURL
     }
 
-    private func validateCapturedContent() throws {
+    private func finishInputs() throws {
         lock.lock()
         defer { lock.unlock() }
         if let streamFailure {
@@ -805,34 +836,40 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
         microphoneInput?.markAsFinished()
     }
 
-    // MARK: - Mixdown
+    // MARK: - Output assembly
 
-    /// When both system audio and the microphone were captured and "mix
-    /// microphone into main track" is enabled, the finished file's audio
-    /// tracks are blended into one and re-muxed with the video. Native
-    /// mixdown presets only produce AAC/M4A, so lossless audio-only files
-    /// keep their two-track container.
-    private func mixdownIfNeeded(writtenURL: URL) async throws -> URL {
-        guard settings.capturesMicrophone, settings.capturesSystemAudio, settings.remuxAudio else {
-            return writtenURL
-        }
-        if isAudioOnly, settings.audioFormat != .aac {
-            return writtenURL
+    /// Delivers the finished recording. With mixing enabled the working
+    /// file's audio tracks are blended and re-muxed straight into the final
+    /// name; otherwise the working file is renamed. Native mixdown presets
+    /// only produce AAC/M4A, so lossless audio-only files skip the mixdown
+    /// and keep their two-track container.
+    private func assembleOutput(writtenURL: URL) async -> URL {
+        let wantsMixdown = settings.capturesMicrophone
+            && settings.capturesSystemAudio
+            && settings.remuxAudio
+            && !(isAudioOnly && settings.audioFormat != .aac)
+        if !wantsMixdown {
+            moveWorkFileToFinal()
+            return finalURL
         }
         ScreenRecordingNotifications.show(
             titleKey: "scRecordingMixingTitle",
             bodyKey: "scRecordingMixingBody"
         )
         let container: AVFileType = isAudioOnly ? .m4a : settings.effectiveFormat.fileType
-        let result = await ScreenRecordingAudioMixer.mixAndRemux(videoURL: writtenURL, container: container)
+        let result = await ScreenRecordingAudioMixer.mixAndRemux(
+            inputURL: writtenURL,
+            outputURL: finalURL,
+            container: container
+        )
         switch result {
         case .success:
             try? FileManager.default.removeItem(at: writtenURL)
-            return cleanedOutputURL()
         case .failure(let error):
-            Self.logger.error("Audio mixdown failed, keeping original: \(error.localizedDescription, privacy: .public)")
-            return writtenURL
+            Self.logger.error("Audio mixdown failed, delivering the unmixed recording: \(error.localizedDescription, privacy: .public)")
+            moveWorkFileToFinal()
         }
+        return finalURL
     }
 }
 

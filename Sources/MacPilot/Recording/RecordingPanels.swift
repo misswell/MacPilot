@@ -381,3 +381,10 @@ final class ScreenRecordingCompletionPreview {
         panel = nil
     }
 }
+
+extension NSScreen {
+    static var screenWithMouse: NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
+    }
+}

@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 录制功能初始化：允许捕获移动设备画面，并提前请求通知权限以便发送录制完成通知。
-        ScreenRecordingDeviceController.enableMobileDeviceScreenCapture()
+        ScreenRecordingDeviceDiscovery.enableMobileDeviceScreenCapture()
         ScreenRecordingNotifications.requestAuthorization()
         // 登录启动时不弹出主窗口，仅保留菜单栏图标，应用在后台运行。
         guard hideWindowDuringLaunch else { return }
@@ -1147,9 +1147,9 @@ final class MacPilotModel: ObservableObject {
             onEncoderFallback: { [weak self] encoder in
                 self?.screenRecording.setEncoder(encoder)
             },
-            onPresenterOverlayChanged: { active in
+            onPresenterOverlayChanged: { [weak screenRecording] active in
                 if active {
-                    ScreenRecordingDeviceController.shared.closeCameraOverlay()
+                    screenRecording?.cameraOverlay.close()
                 }
             }
         )
