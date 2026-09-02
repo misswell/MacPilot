@@ -247,7 +247,9 @@ final class ScreenRecordingMagnifier {
 
 private extension NSImage {
     /// Screen capture of the display under the cursor with this app's
-    /// windows excluded.
+    /// windows excluded. Main-actor isolated because it reads the mouse
+    /// location and returns a non-sendable `NSImage`.
+    @MainActor
     static func snapshotOfActiveDisplay() async -> NSImage? {
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else {
             return nil
