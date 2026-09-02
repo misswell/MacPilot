@@ -2186,6 +2186,36 @@ struct ScreenCaptureView: View {
                 .toggleStyle(.checkbox)
             }
 
+            HStack(spacing: 14) {
+                Picker(t("scRecordingEncoder"), selection: Binding(
+                    get: { recording.settings.encoder },
+                    set: { recording.setEncoder($0) }
+                )) {
+                    ForEach(ScreenRecordingVideoEncoder.allCases) { encoder in
+                        Text(t(encoder.titleKey)).tag(encoder)
+                    }
+                }
+                .frame(width: 200)
+
+                Toggle(t("scRecordingMicrophone"), isOn: Binding(
+                    get: { recording.settings.capturesMicrophone },
+                    set: { recording.setCapturesMicrophone($0) }
+                ))
+                .toggleStyle(.checkbox)
+
+                Toggle(t("scRecordingEchoCancellation"), isOn: Binding(
+                    get: { recording.settings.microphoneEchoCancellation },
+                    set: { recording.setMicrophoneEchoCancellation($0) }
+                ))
+                .toggleStyle(.checkbox)
+                .disabled(!recording.settings.capturesMicrophone)
+            }
+            if recording.settings.capturesMicrophone {
+                Text(t("scRecordingMicTrackHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack {
                 Button(t("scRecordingOpenFolder")) { recording.openOutputFolder() }
                     .buttonStyle(.bordered)

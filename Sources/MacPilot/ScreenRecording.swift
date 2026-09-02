@@ -63,11 +63,15 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
     var framesPerSecond: Int
     var showsCursor: Bool
     var capturesSystemAudio: Bool
+    var capturesMicrophone: Bool
+    var microphoneEchoCancellation: Bool
+    var encoder: ScreenRecordingVideoEncoder
     var shortcut: SmartCaptureShortcutBinding
 
     private enum CodingKeys: String, CodingKey {
         case outputFolder, format, captureMode, framesPerSecond, showsCursor
-        case capturesSystemAudio, shortcut
+        case capturesSystemAudio, capturesMicrophone, microphoneEchoCancellation
+        case encoder, shortcut
     }
 
     init(
@@ -77,6 +81,9 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
         framesPerSecond: Int = 30,
         showsCursor: Bool = true,
         capturesSystemAudio: Bool = false,
+        capturesMicrophone: Bool = false,
+        microphoneEchoCancellation: Bool = true,
+        encoder: ScreenRecordingVideoEncoder = .h264,
         shortcut: SmartCaptureShortcutBinding = Self.defaultShortcut,
         migrateLegacyDefaultShortcut: Bool = false
     ) {
@@ -86,6 +93,9 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
         self.framesPerSecond = min(60, max(5, framesPerSecond))
         self.showsCursor = showsCursor
         self.capturesSystemAudio = capturesSystemAudio
+        self.capturesMicrophone = capturesMicrophone
+        self.microphoneEchoCancellation = microphoneEchoCancellation
+        self.encoder = encoder
         let safeShortcut = shortcut.isValid ? shortcut : Self.defaultShortcut
         // The first development builds used Apple's system screenshot key as
         // the recording default. Migrate that exact persisted value while
@@ -105,6 +115,9 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
             framesPerSecond: try container.decodeIfPresent(Int.self, forKey: .framesPerSecond) ?? 30,
             showsCursor: try container.decodeIfPresent(Bool.self, forKey: .showsCursor) ?? true,
             capturesSystemAudio: try container.decodeIfPresent(Bool.self, forKey: .capturesSystemAudio) ?? false,
+            capturesMicrophone: try container.decodeIfPresent(Bool.self, forKey: .capturesMicrophone) ?? false,
+            microphoneEchoCancellation: try container.decodeIfPresent(Bool.self, forKey: .microphoneEchoCancellation) ?? true,
+            encoder: try container.decodeIfPresent(ScreenRecordingVideoEncoder.self, forKey: .encoder) ?? .h264,
             shortcut: try container.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .shortcut)
                 ?? Self.defaultShortcut,
             migrateLegacyDefaultShortcut: true
@@ -122,6 +135,7 @@ enum ScreenRecordingState: String, Equatable, Sendable {
 
 enum ScreenRecordingError: Error, Equatable, Sendable {
     case permissionRequired
+    case microphonePermissionRequired
     case noDisplayFound
     case alreadyRecording
     case notRecording
@@ -132,6 +146,7 @@ enum ScreenRecordingError: Error, Equatable, Sendable {
     var messageKey: String {
         switch self {
         case .permissionRequired: return "scRecordingPermissionRequired"
+        case .microphonePermissionRequired: return "scRecordingMicPermissionRequired"
         case .noDisplayFound: return "scRecordingNoDisplay"
         case .alreadyRecording: return "scRecordingAlreadyRunning"
         case .notRecording: return "scRecordingNotRunning"
@@ -152,346 +167,6 @@ enum ScreenRecordingOutput {
         let pictures = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Pictures", isDirectory: true)
         return pictures.appendingPathComponent("MacPilot Recordings", isDirectory: true)
-    }
-}
-
-/// A small ScreenCaptureKit + AVAssetWriter session.  The callbacks arrive on
-/// a private serial queue and are guarded by a lock so the main-actor model can
-/// stop the stream without racing the final video/audio samples.
-private final class ScreenRecordingSession: NSObject, SCStreamOutput, @unchecked Sendable {
-    private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "ScreenRecording")
-
-    private let stream: SCStream
-    private let writer: AVAssetWriter
-    private let videoInput: AVAssetWriterInput
-    private let audioInput: AVAssetWriterInput?
-    private let outputURL: URL
-    private let sampleQueue = DispatchQueue(label: "com.misswell.macpilot.screen-recording.samples", qos: .userInitiated)
-    private let lock = NSLock()
-    private var didStartSession = false
-    private var didReceiveVideoFrame = false
-    private var streamError: Error?
-    private var isStopped = false
-    private var isPaused = false
-    private var accumulatedPause = CMTime.zero
-    private var pauseStartedAt: Date?
-
-    private init(
-        stream: SCStream,
-        writer: AVAssetWriter,
-        videoInput: AVAssetWriterInput,
-        audioInput: AVAssetWriterInput?,
-        outputURL: URL
-    ) {
-        self.stream = stream
-        self.writer = writer
-        self.videoInput = videoInput
-        self.audioInput = audioInput
-        self.outputURL = outputURL
-    }
-
-    static func prepare(
-        settings: ScreenRecordingSettings,
-        captureRect: CGRect?
-    ) async throws -> ScreenRecordingSession {
-        guard CGPreflightScreenCaptureAccess() else {
-            throw ScreenRecordingError.permissionRequired
-        }
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = activeDisplay(from: content.displays, captureRect: captureRect) else {
-            throw ScreenRecordingError.noDisplayFound
-        }
-
-        let outputFolder = ScreenRecordingOutput.folder(for: settings)
-        try FileManager.default.createDirectory(
-            at: outputFolder,
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
-        let timestamp = formatter.string(from: Date()).replacingOccurrences(of: ":", with: "-")
-        let baseName = "MacPilot-" + timestamp
-        var outputURL = outputFolder.appendingPathComponent("\(baseName).\(settings.format.fileExtension)")
-        var suffix = 2
-        while FileManager.default.fileExists(atPath: outputURL.path) {
-            outputURL = outputFolder.appendingPathComponent("\(baseName)-\(suffix).\(settings.format.fileExtension)")
-            suffix += 1
-        }
-
-        let displayScaleX = CGFloat(display.width) / max(1, display.frame.width)
-        let displayScaleY = CGFloat(display.height) / max(1, display.frame.height)
-        let localCaptureRect = captureRect
-            .map { $0.intersection(display.frame) }
-            .flatMap { $0.isNull || $0.isEmpty ? nil : $0.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY) }
-        let width = evenDimension(Int(((localCaptureRect?.width ?? display.frame.width) * displayScaleX).rounded()))
-        let height = evenDimension(Int(((localCaptureRect?.height ?? display.frame.height) * displayScaleY).rounded()))
-        let writer: AVAssetWriter
-        do {
-            writer = try AVAssetWriter(outputURL: outputURL, fileType: settings.format.fileType)
-        } catch {
-            throw ScreenRecordingError.writerCreationFailed
-        }
-
-        let bitrate = max(2_000_000, min(24_000_000, width * height * settings.framesPerSecond / 6))
-        let videoInput = AVAssetWriterInput(
-            mediaType: .video,
-            outputSettings: [
-                AVVideoCodecKey: AVVideoCodecType.h264,
-                AVVideoWidthKey: width,
-                AVVideoHeightKey: height,
-                AVVideoCompressionPropertiesKey: [
-                    AVVideoAverageBitRateKey: bitrate,
-                    AVVideoExpectedSourceFrameRateKey: settings.framesPerSecond,
-                    AVVideoMaxKeyFrameIntervalKey: settings.framesPerSecond * 2,
-                    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
-                ]
-            ]
-        )
-        videoInput.expectsMediaDataInRealTime = true
-        guard writer.canAdd(videoInput) else { throw ScreenRecordingError.writerCreationFailed }
-        writer.add(videoInput)
-
-        var audioInput: AVAssetWriterInput?
-        if settings.capturesSystemAudio {
-            let input = AVAssetWriterInput(
-                mediaType: .audio,
-                outputSettings: [
-                    AVFormatIDKey: kAudioFormatMPEG4AAC,
-                    AVSampleRateKey: 48_000,
-                    AVNumberOfChannelsKey: 2,
-                    AVEncoderBitRateKey: 128_000
-                ]
-            )
-            input.expectsMediaDataInRealTime = true
-            if writer.canAdd(input) {
-                writer.add(input)
-                audioInput = input
-            }
-        }
-
-        let configuration = SCStreamConfiguration()
-        configuration.width = width
-        configuration.height = height
-        configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.framesPerSecond))
-        configuration.queueDepth = settings.framesPerSecond >= 60 ? 8 : 5
-        configuration.pixelFormat = kCVPixelFormatType_32BGRA
-        configuration.showsCursor = settings.showsCursor
-        configuration.capturesAudio = settings.capturesSystemAudio
-        configuration.excludesCurrentProcessAudio = true
-        if let localCaptureRect {
-            configuration.sourceRect = localCaptureRect
-        }
-        if settings.capturesSystemAudio {
-            configuration.sampleRate = 48_000
-            configuration.channelCount = 2
-        }
-
-        let stream = SCStream(
-            filter: SCContentFilter(display: display, excludingWindows: []),
-            configuration: configuration,
-            delegate: nil
-        )
-        let session = ScreenRecordingSession(
-            stream: stream,
-            writer: writer,
-            videoInput: videoInput,
-            audioInput: audioInput,
-            outputURL: outputURL
-        )
-        try stream.addStreamOutput(session, type: .screen, sampleHandlerQueue: session.sampleQueue)
-        if audioInput != nil {
-            try stream.addStreamOutput(session, type: .audio, sampleHandlerQueue: session.sampleQueue)
-        }
-        return session
-    }
-
-    func start() async throws {
-        try await stream.startCapture()
-    }
-
-    func pause() {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !isStopped, !isPaused else { return }
-        isPaused = true
-        pauseStartedAt = Date()
-    }
-
-    func resume() {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !isStopped, isPaused else { return }
-        if let pauseStartedAt {
-            accumulatedPause = accumulatedPause + CMTime(
-                seconds: max(0, Date().timeIntervalSince(pauseStartedAt)),
-                preferredTimescale: 600
-            )
-        }
-        self.pauseStartedAt = nil
-        isPaused = false
-    }
-
-    func stop() async throws -> URL {
-        guard markStoppedIfNeeded() else { return outputURL }
-
-        try? await stream.stopCapture()
-        return try await finishWriting()
-    }
-
-    func cancel() async {
-        let shouldStop = markStoppedIfNeeded()
-        if shouldStop { try? await stream.stopCapture() }
-        try? FileManager.default.removeItem(at: outputURL)
-    }
-
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
-        lock.lock()
-        defer { lock.unlock() }
-        guard !isStopped, !isPaused else { return }
-        let sampleBuffer = retimedSampleBuffer(sampleBuffer, subtracting: accumulatedPause) ?? sampleBuffer
-
-        switch type {
-        case .screen:
-            let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-            guard timestamp.isValid, !timestamp.isIndefinite else { return }
-            if !didStartSession {
-                guard writer.startWriting() else {
-                    streamError = writer.error ?? ScreenRecordingError.writerCreationFailed
-                    return
-                }
-                writer.startSession(atSourceTime: timestamp)
-                didStartSession = true
-            }
-            didReceiveVideoFrame = true
-            if videoInput.isReadyForMoreMediaData, !videoInput.append(sampleBuffer) {
-                streamError = writer.error ?? ScreenRecordingError.streamFailed("video writer rejected a frame")
-            }
-        case .audio:
-            guard didStartSession, let audioInput, audioInput.isReadyForMoreMediaData else { return }
-            if !audioInput.append(sampleBuffer) {
-                Self.logger.debug("Audio sample was rejected while recording")
-            }
-        case .microphone:
-            break
-        @unknown default:
-            break
-        }
-    }
-
-    private func finishWriting() async throws -> URL {
-        try prepareWriterForFinishing()
-
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            self.writer.finishWriting {
-                if let error = self.writer.error {
-                    continuation.resume(throwing: ScreenRecordingError.streamFailed(error.localizedDescription))
-                } else {
-                    continuation.resume(returning: ())
-                }
-            }
-        }
-        return outputURL
-    }
-
-    private func markStoppedIfNeeded() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !isStopped else { return false }
-        isStopped = true
-        return true
-    }
-
-    private func prepareWriterForFinishing() throws {
-        lock.lock()
-        defer { lock.unlock() }
-        if let streamError {
-            throw ScreenRecordingError.streamFailed(streamError.localizedDescription)
-        }
-        guard didReceiveVideoFrame else {
-            throw ScreenRecordingError.noVideoFrames
-        }
-        videoInput.markAsFinished()
-        audioInput?.markAsFinished()
-    }
-
-    private func retimedSampleBuffer(
-        _ sampleBuffer: CMSampleBuffer,
-        subtracting offset: CMTime
-    ) -> CMSampleBuffer? {
-        guard offset.isValid, CMTimeCompare(offset, .zero) != 0 else { return sampleBuffer }
-        var entryCount = 0
-        guard CMSampleBufferGetSampleTimingInfoArray(
-            sampleBuffer,
-            entryCount: 0,
-            arrayToFill: nil,
-            entriesNeededOut: &entryCount
-        ) == noErr, entryCount > 0 else {
-            return sampleBuffer
-        }
-        var timing = Array(
-            repeating: CMSampleTimingInfo(
-                duration: .invalid,
-                presentationTimeStamp: .invalid,
-                decodeTimeStamp: .invalid
-            ),
-            count: entryCount
-        )
-        let readStatus = timing.withUnsafeMutableBufferPointer { buffer in
-            CMSampleBufferGetSampleTimingInfoArray(
-                sampleBuffer,
-                entryCount: entryCount,
-                arrayToFill: buffer.baseAddress,
-                entriesNeededOut: &entryCount
-            )
-        }
-        guard readStatus == noErr else { return sampleBuffer }
-        for index in timing.indices {
-            if timing[index].presentationTimeStamp.isValid,
-               !timing[index].presentationTimeStamp.isIndefinite {
-                timing[index].presentationTimeStamp = CMTimeSubtract(
-                    timing[index].presentationTimeStamp,
-                    offset
-                )
-            }
-            if timing[index].decodeTimeStamp.isValid,
-               !timing[index].decodeTimeStamp.isIndefinite {
-                timing[index].decodeTimeStamp = CMTimeSubtract(
-                    timing[index].decodeTimeStamp,
-                    offset
-                )
-            }
-        }
-        var retimed: CMSampleBuffer?
-        let status = timing.withUnsafeBufferPointer { buffer in
-            CMSampleBufferCreateCopyWithNewTiming(
-                allocator: nil,
-                sampleBuffer: sampleBuffer,
-                sampleTimingEntryCount: timing.count,
-                sampleTimingArray: buffer.baseAddress,
-                sampleBufferOut: &retimed
-            )
-        }
-        return status == noErr ? retimed : sampleBuffer
-    }
-
-    private static func activeDisplay(from displays: [SCDisplay], captureRect: CGRect?) -> SCDisplay? {
-        guard !displays.isEmpty else { return nil }
-        if let captureRect {
-            return displays.max {
-                let lhs = $0.frame.intersection(captureRect)
-                let rhs = $1.frame.intersection(captureRect)
-                return max(0, lhs.width) * max(0, lhs.height) < max(0, rhs.width) * max(0, rhs.height)
-            }
-        }
-        let pointer = NSEvent.mouseLocation
-        return displays.first(where: { $0.frame.contains(pointer) }) ?? displays.first
-    }
-
-    private static func evenDimension(_ value: Int) -> Int {
-        let clamped = max(2, value)
-        return clamped.isMultiple(of: 2) ? clamped : clamped - 1
     }
 }
 
@@ -572,7 +247,7 @@ final class ScreenRecordingModel: ObservableObject {
     /// model remains independent from the overlay controller.
     var onRequestSelection: ((ScreenRecordingCaptureMode) -> Void)?
 
-    private var session: ScreenRecordingSession?
+    private var session: QuickRecorderRecordingEngine?
     private var timerTask: Task<Void, Never>?
     private var startedAt: Date?
     private var pauseStartedAt: Date?
@@ -623,6 +298,18 @@ final class ScreenRecordingModel: ObservableObject {
 
     func setCapturesSystemAudio(_ value: Bool) {
         updateSettings { $0.capturesSystemAudio = value }
+    }
+
+    func setCapturesMicrophone(_ value: Bool) {
+        updateSettings { $0.capturesMicrophone = value }
+    }
+
+    func setMicrophoneEchoCancellation(_ value: Bool) {
+        updateSettings { $0.microphoneEchoCancellation = value }
+    }
+
+    func setEncoder(_ encoder: ScreenRecordingVideoEncoder) {
+        updateSettings { $0.encoder = encoder }
     }
 
     @discardableResult
@@ -682,7 +369,16 @@ final class ScreenRecordingModel: ObservableObject {
         let snapshot = settings
         Task { [weak self] in
             do {
-                let session = try await ScreenRecordingSession.prepare(
+                if snapshot.capturesMicrophone {
+                    let granted = await Self.ensureMicrophonePermission()
+                    guard granted else {
+                        guard let self else { return }
+                        self.state = .idle
+                        self.errorMessage = self.localized(ScreenRecordingError.microphonePermissionRequired)
+                        return
+                    }
+                }
+                let session = try await QuickRecorderRecordingEngine.prepare(
                     settings: snapshot,
                     captureRect: captureRect
                 )
@@ -704,6 +400,19 @@ final class ScreenRecordingModel: ObservableObject {
                 self.errorMessage = self.localized(error)
                 Self.logger.error("Could not start recording: \(error.localizedDescription, privacy: .public)")
             }
+        }
+    }
+
+    /// The QuickRecorder-derived engine records the microphone through its own
+    /// audio tap, so the permission must be resolved before the stream starts.
+    private static func ensureMicrophonePermission() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        default:
+            return false
         }
     }
 

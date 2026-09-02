@@ -100,3 +100,41 @@ SwiftData, no external SPM dependencies (Sauce, Defaults, KeyboardShortcuts,
 Settings, Fuse were dropped), a Carbon global hotkey reusing MacPilot's
 `SmartCaptureShortcutBinding`, ⌘V paste via CGEvent, and the MacPilot sidebar
 settings surface with Chinese/English localization.
+
+## QuickRecorder screen recording engine (AGPL-3.0)
+
+MacPilot's screen recording engine is adapted from
+[lihaoyun6/QuickRecorder](https://github.com/lihaoyun6/QuickRecorder), upstream
+commit `e820517` (2025-06-11). The adapted source lives under
+`Sources/MacPilot/QuickRecorder/QuickRecorderRecordingEngine.swift` and powers
+`ScreenRecordingModel` through the engine's prepare/start/pause/resume/stop
+lifecycle. The following parts are derived from QuickRecorder and reworked for
+MacPilot's settings model, localization, and Swift 6 concurrency rules:
+
+- stream filter construction: desktop-independent window capture for the
+  application-window mode and hiding MacPilot's own windows in every mode
+  (`RecordEngine.prepRecord`, `SCContext.getSelfWindows`),
+- video writer setup: H.264/HEVC codec choice, the resolution-aware target
+  bitrate formula, and BT.709 color properties (`RecordEngine.initVideo`),
+- microphone capture: AVAudioEngine input tap with optional voice-processing
+  echo cancellation, the PCM-to-CMSampleBuffer conversion, and input device
+  sample-rate discovery (`RecordEngine.startMicRecording`,
+  `SCContext.getSampleRate`),
+- audio writer settings including the reduced bitrate for low-rate devices
+  (`SCContext.updateAudioSettings`),
+- idle-display-sleep prevention while recording (`Supports/SleepPreventer.swift`).
+
+Pause handling keeps MacPilot's accumulated-pause presentation timestamp
+retiming instead of QuickRecorder's time-offset variant. MacPilot-specific
+additions are the settings persistence (`capturesMicrophone`,
+`microphoneEchoCancellation`, `encoder`), the microphone permission flow, and
+the recording UI card.
+
+QuickRecorder is copyright (C) 2024 lihaoyun6 and licensed under the GNU
+Affero General Public License, version 3. The upstream license text is
+available at
+<https://github.com/lihaoyun6/QuickRecorder/blob/main/LICENSE>. Because this
+code is combined into the MacPilot work, MacPilot's distributed builds that
+include the QuickRecorder-derived engine are made available under AGPL-3.0
+with respect to that combined work; the upstream source of the adapted engine
+is this repository.

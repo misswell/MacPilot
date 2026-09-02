@@ -45,6 +45,8 @@
 	<string>MacPilot uses Bluetooth to detect nearby BLE devices (such as your iPhone or Apple Watch) for proximity-based screen lock and unlock.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>MacPilot uses Bluetooth to detect nearby BLE devices for proximity-based screen lock and unlock.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>MacPilot uses the microphone to record narration as a separate audio track in screen recordings. Audio stays on your Mac.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>MacPilot captures selected windows and displays for Picture-in-Picture and periodic screenshots. Captured images stay on your Mac.</string>
 </dict>
