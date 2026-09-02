@@ -45,6 +45,7 @@ final class AreaSelectionActionBar: NSView {
   private var undoButton: NSButton?
   private var eraserButton: NSButton?
   private var widthValueLabel: NSTextField?
+  private var widthSlider: NSSlider?
   private var shapeSegmented: NSSegmentedControl?
   private var fillCheckbox: NSButton?
   private var colorWell: NSColorWell?
@@ -355,6 +356,7 @@ final class AreaSelectionActionBar: NSView {
     shapeSegmented = nil
     fillCheckbox = nil
     widthValueLabel = nil
+    widthSlider = nil
     colorWell = nil
     swatchButtons.removeAll()
 
@@ -494,6 +496,9 @@ final class AreaSelectionActionBar: NSView {
     }
   }
 
+  /// 粗细直接用行内滑块：nonactivating 面板里 NSPopover（与当年的
+  /// NSPopUpButton 一样）无法可靠弹出，行内控件是唯一确定可用的形态，
+  /// 也让用户在画出第一个标注之前就能预设粗细。
   private func makeWidthControl(_ model: SmartAnnotationModel, titleKey: String) -> NSView {
     let stack = NSStackView()
     stack.orientation = .horizontal
@@ -512,27 +517,29 @@ final class AreaSelectionActionBar: NSView {
     icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
     icon.heightAnchor.constraint(equalToConstant: 12).isActive = true
 
+    let slider = NSSlider(value: Double(model.currentStyle.lineWidth), minValue: 1, maxValue: 48, target: self, action: #selector(widthSliderChanged(_:)))
+    slider.isContinuous = true
+    slider.controlSize = .small
+    slider.toolTip = AppText.value(titleKey, language: .system)
+    slider.setAccessibilityLabel(AppText.value(titleKey, language: .system))
+    slider.translatesAutoresizingMaskIntoConstraints = false
+    slider.widthAnchor.constraint(equalToConstant: 72).isActive = true
+    widthSlider = slider
+
     let value = NSTextField(labelWithString: "\(Int(model.currentStyle.lineWidth.rounded()))")
     value.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
     value.textColor = .white
     value.toolTip = AppText.value(titleKey, language: .system)
     widthValueLabel = value
 
-    let button = NSButton(title: "", target: self, action: #selector(widthPressed(_:)))
-    button.isBordered = false
-    button.wantsLayer = true
-    button.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
-    button.layer?.cornerRadius = 6
-    button.toolTip = AppText.value("scAnnotationLineWidth", language: .system)
-    button.setAccessibilityLabel(AppText.value("scAnnotationLineWidth", language: .system))
-    button.translatesAutoresizingMaskIntoConstraints = false
-    button.widthAnchor.constraint(equalToConstant: 40).isActive = true
-    button.heightAnchor.constraint(equalToConstant: 24).isActive = true
-
     stack.addArrangedSubview(icon)
+    stack.addArrangedSubview(slider)
     stack.addArrangedSubview(value)
-    stack.addArrangedSubview(button)
     return stack
+  }
+
+  @objc private func widthSliderChanged(_ sender: NSSlider) {
+    annotationBinding?.model?.setLineWidth(CGFloat(sender.doubleValue.rounded()))
   }
 
   private func makeColorControls(_ model: SmartAnnotationModel) -> NSView {
@@ -645,6 +652,7 @@ final class AreaSelectionActionBar: NSView {
     }
     undoButton?.isEnabled = !model.annotations.isEmpty
     widthValueLabel?.stringValue = "\(Int(model.currentStyle.lineWidth.rounded()))"
+    widthSlider?.doubleValue = Double(model.currentStyle.lineWidth)
     lineStyleButton?.image = Self.lineStylePreview(model.currentStyle.lineStyle)
     shapeSegmented?.selectedSegment = activeTool == .ellipse ? 1 : 0
     fillCheckbox?.state = model.currentStyle.fillEnabled ? .on : .off
@@ -807,18 +815,6 @@ final class AreaSelectionActionBar: NSView {
     annotationBinding?.model?.setFillEnabled(sender.state == .on)
   }
 
-  @objc private func widthPressed(_ sender: NSButton) {
-    guard let model = annotationBinding?.model else { return }
-    let popover = NSPopover()
-    popover.behavior = .transient
-    popover.contentViewController = WidthPopoverController(
-      initialWidth: model.currentStyle.lineWidth
-    ) { [weak model] width in
-      model?.setLineWidth(width)
-    }
-    popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
-  }
-
   @objc private func customColorChanged(_ sender: NSColorWell) {
     annotationBinding?.model?.setColor(SmartAnnotationColor(sender.color))
   }
@@ -830,57 +826,6 @@ final class AreaSelectionActionBar: NSView {
 
   @objc private func clearAllPressed(_ sender: NSButton) {
     annotationBinding?.model?.removeAll()
-  }
-}
-
-// MARK: - Width Popover
-
-@MainActor
-private final class WidthPopoverController: NSViewController {
-  private let initialWidth: CGFloat
-  private let onChange: (CGFloat) -> Void
-
-  init(initialWidth: CGFloat, onChange: @escaping (CGFloat) -> Void) {
-    self.initialWidth = initialWidth
-    self.onChange = onChange
-    super.init(nibName: nil, bundle: nil)
-  }
-
-  @available(*, unavailable)
-  required init?(coder: NSCoder) {
-    fatalError("init(coder:) has not been implemented")
-  }
-
-  override func loadView() {
-    let slider = NSSlider(
-      value: Double(initialWidth),
-      minValue: 1,
-      maxValue: 48,
-      target: self,
-      action: #selector(sliderChanged(_:))
-    )
-    slider.frame = NSRect(x: 16, y: 34, width: 168, height: 22)
-    slider.autoresizingMask = [.width]
-
-    let label = NSTextField(labelWithString: "\(Int(initialWidth.rounded()))")
-    label.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-    label.frame = NSRect(x: 16, y: 8, width: 168, height: 18)
-    label.alignment = .right
-    label.autoresizingMask = [.width]
-    label.textColor = .labelColor
-
-    let container = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 62))
-    container.addSubview(slider)
-    container.addSubview(label)
-    view = container
-  }
-
-  @objc private func sliderChanged(_ sender: NSSlider) {
-    let value = CGFloat(sender.doubleValue.rounded())
-    onChange(value)
-    if let label = view.subviews.compactMap({ $0 as? NSTextField }).first {
-      label.stringValue = "\(Int(value))"
-    }
   }
 }
 
