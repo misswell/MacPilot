@@ -4,7 +4,7 @@ import Foundation
 import Testing
 @testable import MacPilot
 
-struct QuickRecorderEngineTests {
+struct RecordingEngineTests {
     @Test func videoEncodersOfferH264AndHEVCWithStableLabels() throws {
         #expect(ScreenRecordingVideoEncoder.allCases == [.h264, .hevc])
         #expect(ScreenRecordingVideoEncoder.h264.titleKey == "scRecordingEncoderH264")
@@ -18,7 +18,7 @@ struct QuickRecorderEngineTests {
         #expect(decoded.encoder == .hevc)
     }
 
-    @Test func recordingSettingsDecodeLegacyPayloadWithQuickRecorderDefaults() throws {
+    @Test func recordingSettingsDecodeLegacyPayloadWithEngineDefaults() throws {
         let settings = try JSONDecoder().decode(
             ScreenRecordingSettings.self,
             from: Data("{\"format\":\"mov\",\"framesPerSecond\":30}".utf8)
@@ -38,140 +38,141 @@ struct QuickRecorderEngineTests {
         #expect(explicit.encoder == .hevc)
     }
 
-    @Test func targetBitrateFollowsTheQuickRecorderFormula() {
-        // 1920x1080 @ 30 fps H.264: 1920 * 1080 * (30 / 8) * 0.9
+    @Test func targetBitrateScalesWithResolutionAndHalvesForHEVC() {
+        // 1920 * 1080 * 30 / 6 for H.264.
         #expect(
-            QuickRecorderRecordingEngineSupport.targetBitrate(
+            ScreenRecordingEngine.targetBitrate(
                 width: 1920, height: 1080, framesPerSecond: 30, encoder: .h264
-            ) == 6_998_400
+            ) == 10_368_000
         )
-        // HEVC halves the encoder multiplier: 1920 * 1080 * (30 / 8) * 0.5.
+        // HEVC runs at 60% of the H.264 budget.
         #expect(
-            QuickRecorderRecordingEngineSupport.targetBitrate(
+            ScreenRecordingEngine.targetBitrate(
                 width: 1920, height: 1080, framesPerSecond: 30, encoder: .hevc
-            ) == 3_888_000
+            ) == 6_220_800
         )
-        // The resolution floors at 600 pt per axis and the result floors at 200 kbps.
+        // Tiny captures are lifted to the 2 Mbps floor.
         #expect(
-            QuickRecorderRecordingEngineSupport.targetBitrate(
-                width: 10, height: 10, framesPerSecond: 1, encoder: .h264
-            ) == 200_000
+            ScreenRecordingEngine.targetBitrate(
+                width: 100, height: 100, framesPerSecond: 5, encoder: .h264
+            ) == 2_000_000
         )
-        // MacPilot clamps the formula's upper end at 24 Mbps.
+        // 8K60 exceeds the 24 Mbps ceiling and is clamped to it.
         #expect(
-            QuickRecorderRecordingEngineSupport.targetBitrate(
+            ScreenRecordingEngine.targetBitrate(
                 width: 7680, height: 4320, framesPerSecond: 60, encoder: .h264
             ) == 24_000_000
         )
     }
 
     @Test func videoWriterSettingsUseTheSelectedCodecAndDerivedBitrate() throws {
-        let hevc = QuickRecorderRecordingEngineSupport.videoWriterSettings(
+        let hevc = ScreenRecordingEngine.videoWriterSettings(
             width: 1920, height: 1080, framesPerSecond: 30, encoder: .hevc
         )
         #expect(hevc[AVVideoCodecKey] as? AVVideoCodecType == .hevc)
         let hevcProperties = try #require(hevc[AVVideoCompressionPropertiesKey] as? [String: Any])
-        #expect(hevcProperties[AVVideoAverageBitRateKey] as? Int == 3_888_000)
+        #expect(hevcProperties[AVVideoAverageBitRateKey] as? Int == 6_220_800)
+        #expect(hevcProperties[AVVideoMaxKeyFrameIntervalKey] as? Int == 60)
 
-        let h264 = QuickRecorderRecordingEngineSupport.videoWriterSettings(
+        let h264 = ScreenRecordingEngine.videoWriterSettings(
             width: 1920, height: 1080, framesPerSecond: 30, encoder: .h264
         )
         #expect(h264[AVVideoCodecKey] as? AVVideoCodecType == .h264)
         #expect(h264[AVVideoColorPropertiesKey] as? [String: Any] != nil)
     }
 
-    @Test func audioWriterSettingsHalveBitrateForLowSampleRateDevices() {
-        let standard = QuickRecorderRecordingEngineSupport.audioWriterSettings(sampleRate: 48_000, channels: 2)
+    @Test func audioWriterSettingsReduceBitrateForLowSampleRateDevices() {
+        let standard = ScreenRecordingEngine.audioWriterSettings(sampleRate: 48_000, channels: 2)
         #expect(standard[AVFormatIDKey] as? AudioFormatID == kAudioFormatMPEG4AAC)
         #expect(standard[AVSampleRateKey] as? Int == 48_000)
         #expect(standard[AVNumberOfChannelsKey] as? Int == 2)
         #expect(standard[AVEncoderBitRateKey] as? Int == 128_000)
 
-        let lowRate = QuickRecorderRecordingEngineSupport.audioWriterSettings(sampleRate: 32_000, channels: 1)
+        let lowRate = ScreenRecordingEngine.audioWriterSettings(sampleRate: 32_000, channels: 1)
         #expect(lowRate[AVSampleRateKey] as? Int == 32_000)
         #expect(lowRate[AVNumberOfChannelsKey] as? Int == 1)
         #expect(lowRate[AVEncoderBitRateKey] as? Int == 64_000)
     }
 
-    @Test func windowMatchingPrefersTheLargestOverlapWithoutMatchingOwnWindows() {
+    @Test func windowSelectionPrefersTheLargestOverlapWithoutMatchingOwnWindows() {
         let selection = CGRect(x: 0, y: 0, width: 100, height: 100)
-        let candidates = [
-            QuickRecorderWindowCandidate(
-                frame: CGRect(x: 0, y: 0, width: 60, height: 100), layer: 0, isOnScreen: true,
+        let probes = [
+            ScreenRecordingWindowProbe(
+                frame: CGRect(x: 0, y: 0, width: 60, height: 100), windowLayer: 0, isOnScreen: true,
                 bundleID: "com.example.small"
             ),
-            QuickRecorderWindowCandidate(
-                frame: CGRect(x: 0, y: 0, width: 100, height: 100), layer: 0, isOnScreen: true,
+            ScreenRecordingWindowProbe(
+                frame: CGRect(x: 0, y: 0, width: 100, height: 100), windowLayer: 0, isOnScreen: true,
                 bundleID: "com.example.large"
             )
         ]
         #expect(
-            QuickRecorderRecordingEngineSupport.bestWindowCandidate(
-                candidates: candidates,
-                captureRect: selection,
+            ScreenRecordingEngine.selectWindow(
+                probes: probes,
+                selection: selection,
                 ownBundleID: "com.misswell.macpilot"
             )?.bundleID == "com.example.large"
         )
     }
 
-    @Test func windowMatchingIgnoresOffscreenOverlaysAndOwnWindows() {
+    @Test func windowSelectionIgnoresOffscreenOverlaysAndOwnWindows() {
         let selection = CGRect(x: 0, y: 0, width: 100, height: 100)
-        let candidates = [
-            QuickRecorderWindowCandidate(
-                frame: selection, layer: 0, isOnScreen: false, bundleID: "com.example.offscreen"
+        let probes = [
+            ScreenRecordingWindowProbe(
+                frame: selection, windowLayer: 0, isOnScreen: false, bundleID: "com.example.offscreen"
             ),
-            QuickRecorderWindowCandidate(
-                frame: selection, layer: 25, isOnScreen: true, bundleID: "com.example.overlay"
+            ScreenRecordingWindowProbe(
+                frame: selection, windowLayer: 25, isOnScreen: true, bundleID: "com.example.overlay"
             ),
-            QuickRecorderWindowCandidate(
-                frame: selection, layer: 0, isOnScreen: true, bundleID: "com.misswell.macpilot"
+            ScreenRecordingWindowProbe(
+                frame: selection, windowLayer: 0, isOnScreen: true, bundleID: "com.misswell.macpilot"
             )
         ]
         #expect(
-            QuickRecorderRecordingEngineSupport.bestWindowCandidate(
-                candidates: candidates,
-                captureRect: selection,
+            ScreenRecordingEngine.selectWindow(
+                probes: probes,
+                selection: selection,
                 ownBundleID: "com.misswell.macpilot"
             ) == nil
         )
     }
 
-    @Test func windowMatchingRequiresMajorityCoverageAndAUsableSelection() {
+    @Test func windowSelectionRequiresMajorityCoverageAndAUsableSelection() {
         // Barely 10% overlap is not treated as a window recording.
         let partial = [
-            QuickRecorderWindowCandidate(
-                frame: CGRect(x: 90, y: 0, width: 100, height: 100), layer: 0, isOnScreen: true,
+            ScreenRecordingWindowProbe(
+                frame: CGRect(x: 90, y: 0, width: 100, height: 100), windowLayer: 0, isOnScreen: true,
                 bundleID: "com.example.partial"
             )
         ]
         #expect(
-            QuickRecorderRecordingEngineSupport.bestWindowCandidate(
-                candidates: partial,
-                captureRect: CGRect(x: 0, y: 0, width: 100, height: 100),
+            ScreenRecordingEngine.selectWindow(
+                probes: partial,
+                selection: CGRect(x: 0, y: 0, width: 100, height: 100),
                 ownBundleID: "com.misswell.macpilot"
             ) == nil
         )
         #expect(
-            QuickRecorderRecordingEngineSupport.bestWindowCandidate(
-                candidates: partial,
-                captureRect: .zero,
+            ScreenRecordingEngine.selectWindow(
+                probes: partial,
+                selection: .zero,
                 ownBundleID: "com.misswell.macpilot"
             ) == nil
         )
     }
 
     @Test func outputDimensionsSnapToEvenValues() {
-        #expect(QuickRecorderRecordingEngineSupport.evenDimension(1081) == 1080)
-        #expect(QuickRecorderRecordingEngineSupport.evenDimension(1080) == 1080)
-        #expect(QuickRecorderRecordingEngineSupport.evenDimension(1) == 2)
-        #expect(QuickRecorderRecordingEngineSupport.evenDimension(3) == 2)
+        #expect(ScreenRecordingEngine.evenDimension(1081) == 1080)
+        #expect(ScreenRecordingEngine.evenDimension(1080) == 1080)
+        #expect(ScreenRecordingEngine.evenDimension(1) == 2)
+        #expect(ScreenRecordingEngine.evenDimension(3) == 2)
     }
 
     @Test func microphoneRecordingFailureSurfacesAStableLocalizationKey() {
         #expect(ScreenRecordingError.microphonePermissionRequired.messageKey == "scRecordingMicPermissionRequired")
     }
 
-    @Test @MainActor func recordingModelPersistsQuickRecorderEnginePreferences() {
+    @Test @MainActor func recordingModelPersistsEnginePreferences() {
         let model = ScreenRecordingModel()
         var persisted = false
         model.persist = { persisted = true }

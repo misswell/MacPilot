@@ -210,18 +210,17 @@ alt-tab-macos 使用 GPL-3.0 授权，MacPilot 只参考其公开行为和架构
 - **关于页**：应用图标改用 `NSApp.applicationIconImage`，RClick GitHub 链接替换为 MacPilot 仓库。
 - **Finder 右键菜单**：顶部加品牌头部（MacPilot + 图标），展开的各分组加禁用态分组标题与分隔线，子菜单图标与设置页标签一致，空配置时给出「暂无可用菜单项」。
 - **中文本地化**：补齐 MacPilotRightClickKit 与 FinderSync 两份 `AppLocalization.simplifiedChinese` 词条（约 120 项），设置页与右键菜单全程中文。
+## 十九、屏幕录制引擎升级：窗口级捕获与麦克风混录（v1.1.234 引入，v1.1.235 重写为独立实现）
 
-## 十九、屏幕录制引擎融合 QuickRecorder（源自 lihaoyun6/QuickRecorder）
+v1.1.234 曾将 QuickRecorder（AGPL-3.0）的录像引擎适配进 MacPilot；为彻底解除 AGPL 对后续闭源/商业分发的限制，v1.1.235 改为独立实现——仅基于 Apple 公开框架（ScreenCaptureKit / AVFoundation / VideoToolbox / IOKit）与原有显示器裁剪引擎重写，不包含任何第三方衍生代码。当前能力：
 
-把 [QuickRecorder](https://github.com/lihaoyun6/QuickRecorder)（AGPL-3.0，commit `e820517`）的录像引擎源码融合进 MacPilot 的屏幕录制功能，替代原先仅支持单显示器裁剪的 `ScreenRecordingSession`：
-
-- **引擎文件**：`Sources/MacPilot/QuickRecorder/QuickRecorderRecordingEngine.swift`，由 QuickRecorder 的 `RecordEngine.swift`、`SCContext.swift`、`Supports/SleepPreventer.swift` 适配而来（文件头注明来源与 AGPL 许可），对外暴露 prepare/start/pause/resume/stop/cancel 生命周期，`ScreenRecordingModel` 状态机、快捷键、选区浮层、快速访问面板、config.json 持久化全部复用。
-- **应用窗口模式升级**：选区矩形先经 SCWindow 匹配（图层面板 0、在屏、与本应用排除、覆盖率 ≥50% 取最大重叠），命中即改用 QuickRecorder 的 `SCContentFilter(desktopIndependentWindow:)`——录制跟随窗口移动、画面紧贴窗口；未命中回退到原显示器裁剪。
-- **所有模式隐藏自身窗口**：filters 排除 MacPilot 自己的窗口（QuickRecorder 的 hideSelf 行为），设置页不会出现在录像里。
-- **编码器**：新增 H.264 / HEVC 选择（`ScreenRecordingVideoEncoder`），采用 QuickRecorder 的分辨率感知码率公式（600pt 下限、fps/8、HEVC 减半）并保留 MacPilot 24 Mbps 上限。
-- **麦克风混录**：`AVAudioEngine` 输入节点 tap + 可选回声消除（原生 `setVoiceProcessingEnabled`，未引入 AECAudioStream 依赖），PCM 经 CMSampleBuffer 转换写入独立音轨；采样率/声道取自实际输入格式；启动前走系统麦克风权限请求（`Info.plist` 补 `NSMicrophoneUsageDescription`）；麦克风失败只丢音轨不中断录像。
-- **录制期间防休眠**：移植 `SleepPreventer`（IOPMAssertion 防显示器休眠），停止/取消时释放。
+- **引擎文件**：`Sources/MacPilot/RecordingEngine.swift`（`ScreenRecordingEngine`），对外暴露 prepare/start/pause/resume/stop/cancel 生命周期；`ScreenRecordingModel` 状态机、快捷键、选区浮层、快速访问面板、config.json 持久化全部复用。
+- **应用窗口模式升级**：选区矩形先匹配 SCWindow（图层 0、在屏、排除本应用、覆盖率 ≥50% 取最大重叠），命中即用 `SCContentFilter(desktopIndependentWindow:)`——录制跟随窗口移动、画面紧贴窗口；未命中回退到显示器裁剪。
+- **所有模式隐藏自身窗口**：filters 一律排除 MacPilot 自己的窗口，设置页不会出现在录像里。
+- **编码器**：`ScreenRecordingVideoEncoder`（H.264 / HEVC），码率启发式沿用原引擎的 `宽×高×fps/6` 预算，HEVC 取 60%，并钳制在 2–24 Mbps。
+- **麦克风混录**：`AVAudioEngine` 输入节点 tap + 可选回声消除（原生 `setVoiceProcessingEnabled`），PCM 转 CMSampleBuffer 写入独立音轨；采样率/声道取自实际输入格式，低于 44.1 kHz 的设备自动降码率；启动前走系统麦克风权限（`Info.plist` 补 `NSMicrophoneUsageDescription`）；麦克风失败只丢音轨不中断录像。
+- **录制期间防休眠**：`DisplaySleepAssertion`（IOPMAssertion 防显示器休眠），停止/取消时释放。
 - **设置项**：`capturesMicrophone`（默认关）、`microphoneEchoCancellation`（默认开）、`encoder`（默认 h264），旧 config.json 缺字段安全解码。
 - **UI**：录制卡片新增编码器选择器与麦克风/回声消除开关（回声消除仅在麦克风开启时可用），文案走 `AppText` 中英同步。
-- **测试**：`QuickRecorderEngineTests` 覆盖码率公式（含上下限钳制）、编码器映射、音频设置低采样率减半、窗口匹配规则、偶数尺寸钳制、设置解码默认值。
-- **许可证**：QuickRecorder 为 AGPL-3.0，融合后含该引擎的 MacPilot 发行版按 AGPL-3.0 提供（详见 `THIRD_PARTY_NOTICES.md`）。未引入 SwiftLAME/Sparkle/KeyboardShortcuts 等外部依赖，纯音频录制与 HEVC With Alpha 未纳入。
+- **测试**：`RecordingEngineTests` 覆盖码率公式（含上下限钳制）、编码器映射、音频设置低采样率降码率、窗口匹配规则、偶数尺寸钳制、设置解码默认值。
+- **许可说明**：v1.1.234 发布包曾含 AGPL-3.0 衍生引擎（该版本源码即本仓库，分发义务已满足）；自 v1.1.235 起无第三方衍生代码，`THIRD_PARTY_NOTICES.md` 已移除 QuickRecorder 条目。纯音频录制与 HEVC With Alpha 仍未纳入。

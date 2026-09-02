@@ -247,7 +247,7 @@ final class ScreenRecordingModel: ObservableObject {
     /// model remains independent from the overlay controller.
     var onRequestSelection: ((ScreenRecordingCaptureMode) -> Void)?
 
-    private var session: QuickRecorderRecordingEngine?
+    private var session: ScreenRecordingEngine?
     private var timerTask: Task<Void, Never>?
     private var startedAt: Date?
     private var pauseStartedAt: Date?
@@ -378,7 +378,7 @@ final class ScreenRecordingModel: ObservableObject {
                         return
                     }
                 }
-                let session = try await QuickRecorderRecordingEngine.prepare(
+                let session = try await ScreenRecordingEngine.prepare(
                     settings: snapshot,
                     captureRect: captureRect
                 )
@@ -403,8 +403,8 @@ final class ScreenRecordingModel: ObservableObject {
         }
     }
 
-    /// The QuickRecorder-derived engine records the microphone through its own
-    /// audio tap, so the permission must be resolved before the stream starts.
+    /// The recording engine captures the microphone through its own audio
+    /// tap, so the permission must be resolved before the stream starts.
     private static func ensureMicrophonePermission() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
