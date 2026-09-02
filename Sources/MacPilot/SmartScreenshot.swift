@@ -5182,6 +5182,11 @@ private final class SmartPinImageView: NSView {
     override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
+        // 双击贴图复制到剪贴板（与右键菜单的「复制」同一链路）；第二击仍
+        // 记录 dragOffset，双击后按住拖动依旧有效。
+        if event.clickCount == 2 {
+            onCopy()
+        }
         dragOffset = event.locationInWindow
     }
 
