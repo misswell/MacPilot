@@ -536,6 +536,39 @@ struct WindowSwitcherTests {
         ))
     }
 
+    @Test func selectedThumbnailRefreshesOnlyForVisibleCapturableSelection() {
+        #expect(WindowSwitcherSelectedThumbnailPolicy.shouldRefreshSelectedThumbnail(
+            isShowing: true,
+            showThumbnails: true,
+            showIconsOnly: false,
+            hasCapturableWindow: true
+        ))
+        #expect(!WindowSwitcherSelectedThumbnailPolicy.shouldRefreshSelectedThumbnail(
+            isShowing: false,
+            showThumbnails: true,
+            showIconsOnly: false,
+            hasCapturableWindow: true
+        ))
+        #expect(!WindowSwitcherSelectedThumbnailPolicy.shouldRefreshSelectedThumbnail(
+            isShowing: true,
+            showThumbnails: false,
+            showIconsOnly: false,
+            hasCapturableWindow: true
+        ))
+        #expect(!WindowSwitcherSelectedThumbnailPolicy.shouldRefreshSelectedThumbnail(
+            isShowing: true,
+            showThumbnails: true,
+            showIconsOnly: true,
+            hasCapturableWindow: true
+        ))
+        #expect(!WindowSwitcherSelectedThumbnailPolicy.shouldRefreshSelectedThumbnail(
+            isShowing: true,
+            showThumbnails: true,
+            showIconsOnly: false,
+            hasCapturableWindow: false
+        ))
+    }
+
     @Test func settingsDecodeMissingFieldsWithSafeDefaults() throws {
         let settings = try JSONDecoder().decode(
             WindowSwitcherSettings.self,

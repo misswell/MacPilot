@@ -413,6 +413,20 @@ enum WindowSwitcherThumbnailPriority {
     }
 }
 
+enum WindowSwitcherSelectedThumbnailPolicy {
+    /// The highlighted tile is the one the user is about to activate, so its
+    /// preview must reflect the window's current content rather than an image
+    /// cached during an earlier session.
+    static func shouldRefreshSelectedThumbnail(
+        isShowing: Bool,
+        showThumbnails: Bool,
+        showIconsOnly: Bool,
+        hasCapturableWindow: Bool
+    ) -> Bool {
+        isShowing && showThumbnails && !showIconsOnly && hasCapturableWindow
+    }
+}
+
 enum WindowSwitcherThumbnailCapturePolicy {
     static func outputPixelSize(
         windowSize: CGSize,
@@ -1211,6 +1225,9 @@ final class WindowSwitcherModel: ObservableObject {
     // Previews are session-scoped. Capture at most thirty items in the visible
     // snapshot; never prewarm a hidden process-wide image cache.
     private static let thumbnailMaximumPixelSize = CGSize(width: 256, height: 160)
+    // Rapid Tab cycling re-enters this path on every key repeat; the debounce
+    // collapses the burst into one capture once the selection stops moving.
+    private static let selectedThumbnailRefreshDebounce = Duration.milliseconds(50)
     private static let thumbnailCaptureQueue = WindowSwitcherPreviewCaptureQueue()
     private static let mouseSelectionDistanceThreshold: CGFloat = 24
     private static let performanceLogger = Logger(
@@ -1252,10 +1269,14 @@ final class WindowSwitcherModel: ObservableObject {
     private var thumbnailTask: Task<Void, Never>?
     private var thumbnailRevision = 0
     private var thumbnailTaskWindowIDs: Set<String> = []
+    private var selectedThumbnailTask: Task<Void, Never>?
+    private var selectedThumbnailRevision = 0
     /// Reuse previews for the current window inventory across repeated
     /// switcher sessions. Re-capturing every tile on every shortcut creates a
     /// new WindowServer/Mach image transfer even when the window set has not
-    /// changed; this cache is pruned whenever the inventory changes.
+    /// changed; this cache is pruned whenever the inventory changes. The
+    /// highlighted tile is the exception: selection changes always re-capture
+    /// it so the tile the user is about to activate shows current content.
     private var thumbnailCache: [String: NSImage] = [:]
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
@@ -1470,6 +1491,7 @@ final class WindowSwitcherModel: ObservableObject {
         objectWillChange.send()
         selectedIndex = index
         selectedItemID = itemID
+        scheduleSelectedThumbnailRefresh()
     }
 
     func handleHover(itemID: String) {
@@ -1641,6 +1663,9 @@ final class WindowSwitcherModel: ObservableObject {
             for: snapshot,
             selectedIndex: selectedIndex
         )
+        // Cached previews are shown instantly above; the highlighted tile is
+        // still re-captured so it never displays stale content.
+        scheduleSelectedThumbnailRefresh()
         if manual {
             manualDismissTask?.cancel()
             manualDismissTask = Task { @MainActor [weak self] in
@@ -1671,6 +1696,7 @@ final class WindowSwitcherModel: ObservableObject {
         objectWillChange.send()
         selectedIndex = next
         selectedItemID = windows[next].id
+        scheduleSelectedThumbnailRefresh()
     }
 
     @discardableResult
@@ -2128,6 +2154,11 @@ final class WindowSwitcherModel: ObservableObject {
                     }
                     self.cachedWindows = snapshot
                     self.restoreCachedPreviews(to: snapshot)
+                    if self.isShowing {
+                        // The selected tile may have been restored from a stale
+                        // cache entry after the window set changed.
+                        self.scheduleSelectedThumbnailRefresh()
+                    }
                     self.updateFocusObservers(for: snapshot)
                     let newlyObservedWindowIDs = self.recordNewWindows(
                         snapshot,
@@ -2313,10 +2344,7 @@ final class WindowSwitcherModel: ObservableObject {
                     showThumbnails: self.settings.showThumbnails,
                     showIconsOnly: self.settings.showIconsOnly
                 ) else { return }
-                self.thumbnailCache[item.id] = image
-                item.updatePreview(image)
-                self.cachedWindows.first(where: { $0.id == item.id })?.updatePreview(image)
-                self.windows.first(where: { $0.id == item.id })?.updatePreview(image)
+                self.commitThumbnail(image, for: item.id)
                 committedPreviews += 1
             }
         }
@@ -2327,6 +2355,82 @@ final class WindowSwitcherModel: ObservableObject {
         thumbnailTask?.cancel()
         thumbnailTask = nil
         thumbnailTaskWindowIDs.removeAll(keepingCapacity: false)
+        cancelSelectedThumbnailRefresh()
+    }
+
+    private func cancelSelectedThumbnailRefresh() {
+        selectedThumbnailRevision += 1
+        selectedThumbnailTask?.cancel()
+        selectedThumbnailTask = nil
+    }
+
+    /// Re-captures the highlighted window every time the selection changes so
+    /// the tile the user is about to activate always shows current content
+    /// instead of an image cached during an earlier session. Rapid Tab cycling
+    /// coalesces through cancellation plus a short debounce; only the final
+    /// resting selection performs a WindowServer capture.
+    private func scheduleSelectedThumbnailRefresh() {
+        selectedThumbnailRevision += 1
+        selectedThumbnailTask?.cancel()
+        selectedThumbnailTask = nil
+        let item = selectedIndex.flatMap { index in
+            windows.indices.contains(index) ? windows[index] : nil
+        }
+        guard WindowSwitcherSelectedThumbnailPolicy.shouldRefreshSelectedThumbnail(
+            isShowing: isShowing,
+            showThumbnails: settings.showThumbnails,
+            showIconsOnly: settings.showIconsOnly,
+            hasCapturableWindow: item?.windowID != nil && item?.canCapturePreview == true
+        ), let item, let windowID = item.windowID else { return }
+        let revision = selectedThumbnailRevision
+        let itemID = item.id
+        selectedThumbnailTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.selectedThumbnailRefreshDebounce)
+            guard !Task.isCancelled, let self else { return }
+            await self.captureSelectedThumbnail(
+                windowID: windowID,
+                itemID: itemID,
+                revision: revision
+            )
+        }
+    }
+
+    private func captureSelectedThumbnail(windowID: CGWindowID, itemID: String, revision: Int) async {
+        defer {
+            if selectedThumbnailRevision == revision {
+                selectedThumbnailTask = nil
+            }
+        }
+        let maximumPixelSize = Self.thumbnailMaximumPixelSize
+        let captured = await WindowSwitcherPreviewCapture.captureBatch(
+            windowIDs: [windowID],
+            maximumPixelSize: maximumPixelSize
+        ).first
+        guard WindowSwitcherThumbnailCommitPolicy.shouldStoreThumbnail(
+            taskIsCancelled: Task.isCancelled,
+            revisionMatches: selectedThumbnailRevision == revision,
+            showThumbnails: settings.showThumbnails,
+            showIconsOnly: settings.showIconsOnly
+        ), isShowing, selectedItemID == itemID, let captured, captured.windowID == windowID else { return }
+        let image = autoreleasepool {
+            NSImage(
+                cgImage: captured.image,
+                size: NSSize(width: captured.image.width, height: captured.image.height)
+            )
+        }
+        commitThumbnail(image, for: itemID)
+    }
+
+    /// Single commit path for freshly captured previews: the bounded cache and
+    /// every live copy of the item (session panel + hidden inventory) must
+    /// agree, otherwise a later prune or restore can resurrect stale pixels.
+    private func commitThumbnail(_ image: NSImage, for itemID: String) {
+        thumbnailCache[itemID] = image
+        var visited = Set<ObjectIdentifier>()
+        for item in windows + cachedWindows where item.id == itemID {
+            guard visited.insert(ObjectIdentifier(item)).inserted else { continue }
+            item.updatePreview(image)
+        }
     }
 
     private func clearThumbnailCache() {
