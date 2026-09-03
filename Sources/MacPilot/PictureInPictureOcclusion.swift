@@ -352,7 +352,7 @@ final class PiPOcclusionController: ObservableObject {
         let runningApplications = NSRunningApplication.runningApplications(
             withBundleIdentifier: bundleIdentifier
         )
-        for application in runningApplications { application.terminate() }
+        for application in runningApplications { quitWithoutAutomationPrompt(application) }
 
         let deadline = Date().addingTimeInterval(8)
         while !NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).isEmpty {
