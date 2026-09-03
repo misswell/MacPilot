@@ -1633,6 +1633,49 @@ final class MacPilotModel: ObservableObject {
         lastChecked = now
     }
 
+    /// Quits a rule app without surfacing an automation prompt.
+    ///
+    /// `NSRunningApplication.terminate()` delivers a quit Apple Event; on
+    /// recent macOS releases that event is subject to the Automation
+    /// privacy consent, so the first terminate after a relaunch (for
+    /// example right after an update, when overnight-inactive apps get
+    /// cleaned up) pops the "wants to access data from other apps" dialog.
+    /// Ask the system first: when quit events are exempt or already
+    /// permitted use the graceful terminate, otherwise fall back to
+    /// SIGTERM, which needs no privacy grant between same-user processes.
+    private func quitWithoutPrompt(_ app: NSRunningApplication) {
+        var pid = app.processIdentifier
+        guard pid > 0 else { return }
+        var target = AEAddressDesc()
+        let created = AECreateDesc(
+            typeKernelProcessID,
+            &pid,
+            MemoryLayout<pid_t>.size,
+            &target
+        )
+        guard created == noErr else {
+            kill(pid, SIGTERM)
+            return
+        }
+        defer { AEDisposeDesc(&target) }
+        let consent = AEDeterminePermissionToAutomateTarget(
+            &target,
+            kCoreEventClass,
+            kAEQuitApplication,
+            false
+        )
+        // noErr: consent already granted; errAEEventNotHandled: this event
+        // does not require automation consent. Anything else (the user has
+        // denied consent, or a prompt would be required) means the graceful
+        // terminate would surface the automation dialog, so fall back to
+        // SIGTERM.
+        if consent == noErr || consent == errAEEventNotHandled {
+            app.terminate()
+        } else {
+            kill(pid, SIGTERM)
+        }
+    }
+
     private func evaluateQuitRule(_ rule: QuitRule, app: NSRunningApplication?, now: Date) {
         guard let app else {
             cancelQuitTask(for: rule.id)
@@ -1667,7 +1710,7 @@ final class MacPilotModel: ObservableObject {
         ].compactMap { $0 }.min()
 
         if let initialQuitDeadline, initialQuitDeadline <= now {
-            app.terminate()
+            quitWithoutPrompt(app)
             quitRuntimeStates[rule.id] = state
             quitDeadlines[rule.id] = nil
             scheduleQuitWake(for: rule.id, at: now.addingTimeInterval(60), now: now)
