@@ -7,13 +7,20 @@ import Foundation
 /// 这里把每条内容按 `itemID-index` 写成独立文件，内存/JSON 只保留
 /// 类型、文件名和大小，展示或粘贴时才从磁盘按需读取。
 enum ClipboardContentStore {
-    private static let directory: URL = {
+    /// 内容文件目录；测试可临时覆盖（用后恢复 nil）。
+    nonisolated(unsafe) static var directoryOverride: URL?
+
+    private static let defaultDirectory: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         let dir = base.appendingPathComponent("MacPilot/Clipboard", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
+
+    static var directory: URL {
+        directoryOverride ?? defaultDirectory
+    }
 
     static func write(_ data: Data, itemID: UUID, index: Int) -> String? {
         let fileName = "\(itemID.uuidString)-\(index).bin"

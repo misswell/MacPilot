@@ -7,7 +7,6 @@
 
 import AppKit
 import ApplicationServices
-import Carbon.HIToolbox
 import Combine
 import OSLog
 import SwiftUI
@@ -51,22 +50,19 @@ final class ClipboardModel: ObservableObject {
 
     let history = ClipboardHistory()
     private let monitor = ClipboardMonitor()
+    private lazy var hotKeyCenter = ClipboardHotKeyCenter()
 
     var persist: (() -> Void)?
 
     private var panel: ClipboardPanel?
 
-    // 全局快捷键（Carbon）。
-    nonisolated static let hotKeySignature: OSType = 0x4D50434C // "MPCL"
-    nonisolated static let hotKeyIdentifier: UInt32 = 1
-    private var hotKeyRef: EventHotKeyRef?
-    private var hotKeyEventHandler: EventHandlerRef?
-    private var hotKeyContext: ClipboardHotKeyContext?
-
     init() {
         monitor.settingsProvider = { [weak self] in self?.settings ?? ClipboardSettings() }
         monitor.onNewCopy { [weak self] item in
             self?.history.add(item)
+        }
+        hotKeyCenter.onToggle = { [weak self] in
+            self?.togglePanel()
         }
         refreshPermissionStatus()
     }
@@ -90,7 +86,7 @@ final class ClipboardModel: ObservableObject {
 
     func shutdown() {
         monitor.stop()
-        unregisterHotKey()
+        hotKeyCenter.stop()
         closePanel()
         history.flush()
     }
@@ -101,7 +97,7 @@ final class ClipboardModel: ObservableObject {
 
     private func start() {
         monitor.start()
-        registerHotKey()
+        hotKeyCenter.updateBinding(settings.hotkey)
     }
 
     // MARK: - Settings setters
@@ -118,7 +114,7 @@ final class ClipboardModel: ObservableObject {
     }
 
     func setStorageLimit(_ value: Int) {
-        let clamped = max(1, min(1_000, value))
+        let clamped = ClipboardSettings.clampedStorageLimit(value)
         guard settings.storageLimit != clamped else { return }
         settings.storageLimit = clamped
         history.storageLimit = clamped
@@ -153,8 +149,7 @@ final class ClipboardModel: ObservableObject {
     func setHotkey(_ binding: SmartCaptureShortcutBinding) {
         guard binding != settings.hotkey else { return }
         settings.hotkey = binding.isValid ? binding : ClipboardSettings.defaultHotkey
-        unregisterHotKey()
-        registerHotKey()
+        hotKeyCenter.updateBinding(settings.hotkey)
         persist?()
     }
 
@@ -253,102 +248,4 @@ final class ClipboardModel: ObservableObject {
             monitor.clearSystemClipboard()
         }
     }
-
-    // MARK: - Global hotkey
-
-    private func registerHotKey() {
-        guard hotKeyRef == nil, hotKeyEventHandler == nil else { return }
-        let binding = settings.hotkey
-        guard binding.isValid else { return }
-
-        let context = ClipboardHotKeyContext(model: self)
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-        var handler: EventHandlerRef?
-        let handlerStatus = InstallEventHandler(
-            GetApplicationEventTarget(),
-            clipboardHotKeyEventHandler,
-            1,
-            &eventType,
-            Unmanaged.passUnretained(context).toOpaque(),
-            &handler
-        )
-        guard handlerStatus == noErr, let handler else { return }
-
-        var hotKey: EventHotKeyRef?
-        let status = RegisterEventHotKey(
-            UInt32(binding.keyCode),
-            Self.hotKeyModifiers(for: binding),
-            EventHotKeyID(signature: Self.hotKeySignature, id: Self.hotKeyIdentifier),
-            GetApplicationEventTarget(),
-            OptionBits(kEventHotKeyNoOptions),
-            &hotKey
-        )
-        guard status == noErr, let hotKey else {
-            RemoveEventHandler(handler)
-            return
-        }
-
-        hotKeyContext = context
-        hotKeyEventHandler = handler
-        hotKeyRef = hotKey
-    }
-
-    private func unregisterHotKey() {
-        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
-        if let hotKeyEventHandler { RemoveEventHandler(hotKeyEventHandler) }
-        hotKeyRef = nil
-        hotKeyEventHandler = nil
-        hotKeyContext = nil
-    }
-
-    private static func hotKeyModifiers(for binding: SmartCaptureShortcutBinding) -> UInt32 {
-        var result: UInt32 = 0
-        if binding.modifiers.contains(.command) { result |= UInt32(cmdKey) }
-        if binding.modifiers.contains(.option) { result |= UInt32(optionKey) }
-        if binding.modifiers.contains(.control) { result |= UInt32(controlKey) }
-        if binding.modifiers.contains(.shift) { result |= UInt32(shiftKey) }
-        return result
-    }
-}
-
-@MainActor
-private final class ClipboardHotKeyContext {
-    weak var model: ClipboardModel?
-
-    init(model: ClipboardModel) {
-        self.model = model
-    }
-}
-
-private func clipboardHotKeyEventHandler(
-    _ callRef: EventHandlerCallRef?,
-    _ event: EventRef?,
-    _ userData: UnsafeMutableRawPointer?
-) -> OSStatus {
-    guard let event, let userData else { return noErr }
-    let context = Unmanaged<ClipboardHotKeyContext>
-        .fromOpaque(userData)
-        .takeUnretainedValue()
-    var hotKeyID = EventHotKeyID()
-    let status = GetEventParameter(
-        event,
-        EventParamName(kEventParamDirectObject),
-        EventParamType(typeEventHotKeyID),
-        nil,
-        MemoryLayout<EventHotKeyID>.size,
-        nil,
-        &hotKeyID
-    )
-    guard status == noErr,
-          hotKeyID.signature == ClipboardModel.hotKeySignature,
-          hotKeyID.id == ClipboardModel.hotKeyIdentifier else {
-        return status == noErr ? noErr : status
-    }
-    Task { @MainActor in
-        context.model?.togglePanel()
-    }
-    return noErr
 }

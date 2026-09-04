@@ -39,12 +39,17 @@ struct ClipboardSettings: Codable, Equatable, Sendable {
         hotkey: SmartCaptureShortcutBinding = ClipboardSettings.defaultHotkey
     ) {
         self.isEnabled = isEnabled
-        self.storageLimit = max(1, min(1_000, storageLimit))
+        self.storageLimit = Self.clampedStorageLimit(storageLimit)
         self.pasteByDefault = pasteByDefault
         self.showSearch = showSearch
         self.clearSystemClipboardOnClear = clearSystemClipboardOnClear
         self.pinsAtTop = pinsAtTop
         self.hotkey = hotkey.isValid ? hotkey : ClipboardSettings.defaultHotkey
+    }
+
+    /// 历史条数上限的唯一裁剪规则（1...1000）。
+    static func clampedStorageLimit(_ value: Int) -> Int {
+        max(1, min(1_000, value))
     }
 
     static let storageLimitOptions = [50, 100, 200, 500, 1_000]

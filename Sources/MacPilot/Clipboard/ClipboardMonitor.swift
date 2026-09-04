@@ -2,7 +2,7 @@
 //  ClipboardMonitor.swift
 //  MacPilot
 //
-//  剪贴板监听与复制/粘贴执行。
+//  剪贴板监听与复制/粘贴执行。采集过滤决策见底部的纯函数段（可单测）。
 //
 
 import AppKit
@@ -18,7 +18,7 @@ final class ClipboardMonitor {
     typealias OnNewCopyHook = (ClipboardItem) -> Void
     typealias SettingsProvider = () -> ClipboardSettings
 
-    private var onNewCopyHooks: [OnNewCopyHook] = []
+    private var onNewCopyHook: OnNewCopyHook?
     private var changeCount: Int
 
     private let pasteboard = NSPasteboard.general
@@ -37,8 +37,6 @@ final class ClipboardMonitor {
     /// 从 ClipboardModel 读取最新设置。
     var settingsProvider: SettingsProvider?
 
-    private let dynamicTypePrefix = "dyn."
-    private let microsoftSourcePrefix = "com.microsoft.ole.source."
     private let supportedTypes: Set<NSPasteboard.PasteboardType> = [
         .fileURL, .html, .png, .rtf, .string, .tiff, .jpeg, .heic
     ]
@@ -51,18 +49,22 @@ final class ClipboardMonitor {
     }
 
     func onNewCopy(_ hook: @escaping OnNewCopyHook) {
-        onNewCopyHooks.append(hook)
+        onNewCopyHook = hook
     }
 
     func start() {
         guard timer == nil else { return }
-        timer = Timer.scheduledTimer(
-            timeInterval: 0.5,
+        let newTimer = Timer.scheduledTimer(
+            timeInterval: Self.pollingInterval,
             target: self,
             selector: #selector(checkForChangesInPasteboard),
             userInfo: nil,
             repeats: true
         )
+        // .common 让菜单跟踪、滚动条拖动等模态期间照常轮询
+        // （仅 .default 模式时这些场景下轮询会暂停）。
+        RunLoop.main.add(newTimer, forMode: .common)
+        timer = newTimer
     }
 
     func stop() {
@@ -74,7 +76,8 @@ final class ClipboardMonitor {
     func copy(_ string: String) {
         pasteboard.clearContents()
         pasteboard.setString(string, forType: .string)
-        pasteboard.setString(NSPasteboard.PasteboardType.fromMacPilot.rawValue, forType: .source)
+        pasteboard.setString("", forType: .fromMacPilot)
+        pasteboard.setString(Bundle.main.bundleIdentifier ?? "", forType: .source)
         checkForChangesInPasteboard()
     }
 
@@ -154,33 +157,15 @@ final class ClipboardMonitor {
 
         // 读取类型时 NSPasteboard 会给出所有可用类型，甚至包括
         // NSPasteboardItem 上不存在的类型。
-        guard !shouldIgnore(Set(pasteboard.types ?? [])) else { return }
+        guard !Self.shouldIgnoreTypes(
+            Set(pasteboard.types ?? []),
+            supportedTypes: supportedTypes,
+            ignoredTypes: ignoredTypes
+        ) else { return }
 
-        // 某些应用（BBEdit、Edge）复制时会写入 2 个 item，
-        // 合并成一个记录。
+        // 某些应用（BBEdit、Edge）复制时会写入 2 个 item，合并成一个记录。
         let itemID = UUID()
-        var contents = [ClipboardContent]()
-        pasteboard.pasteboardItems?.forEach { item in
-            var types = Set(item.types)
-            if types.contains(.string) && isEmptyString(item) && !richText(item) {
-                return
-            }
-
-            types = types
-                .filter { !$0.rawValue.starts(with: dynamicTypePrefix) }
-                .filter { !$0.rawValue.starts(with: microsoftSourcePrefix) }
-
-            // 避免读取 Microsoft Word 书签与交叉引用链接。
-            if types.isSuperset(of: [.microsoftLinkSource, .microsoftObjectLink]) {
-                types = types.subtracting([.microsoftLinkSource, .microsoftObjectLink, .pdf])
-            }
-
-            var index = 0
-            types.forEach { type in
-                let data = item.data(forType: type)
-                contents.append(Self.makeContent(type: type.rawValue, data: data, itemID: itemID, index: &index))
-            }
-        }
+        let contents = Self.captureContents(from: pasteboard.pasteboardItems ?? [], itemID: itemID)
 
         guard !contents.isEmpty else { return }
 
@@ -188,7 +173,84 @@ final class ClipboardMonitor {
         historyItem.application = frontmostApplicationBundleIdentifier()
         historyItem.title = historyItem.generateTitle()
 
-        onNewCopyHooks.forEach { $0(historyItem) }
+        onNewCopyHook?(historyItem)
+    }
+
+    private func frontmostApplicationBundleIdentifier() -> String? {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    }
+
+    private func clearFormatting(_ contents: [ClipboardContent]) -> [ClipboardContent] {
+        let stringContents = contents.filter { NSPasteboard.PasteboardType($0.type) == .string }
+        guard !stringContents.isEmpty else { return contents }
+
+        var newContents = stringContents
+        let fileURLContents = contents.filter { NSPasteboard.PasteboardType($0.type) == .fileURL }
+        if !fileURLContents.isEmpty {
+            newContents += fileURLContents
+        }
+        return newContents
+    }
+}
+
+// MARK: - 采集决策（纯函数，可单元测试）
+
+extension ClipboardMonitor {
+    static let dynamicTypePrefix = "dyn."
+    static let microsoftSourcePrefix = "com.microsoft.ole.source."
+
+    static let pollingInterval: TimeInterval = 0.5
+
+    /// 判断粘贴板整体类型集合是否应被忽略：无任何受支持类型，或带忽略标记。
+    static func shouldIgnoreTypes(
+        _ types: Set<NSPasteboard.PasteboardType>,
+        supportedTypes: Set<NSPasteboard.PasteboardType>,
+        ignoredTypes: Set<NSPasteboard.PasteboardType>
+    ) -> Bool {
+        types.isDisjoint(with: supportedTypes) || !types.isDisjoint(with: ignoredTypes)
+    }
+
+    /// 把一个粘贴板的全部 items 合并为一条记录的内容列表（按需落盘）。
+    /// 类型按名称排序处理，保证结果顺序确定、可测试。
+    static func captureContents(
+        from items: [NSPasteboardItem],
+        itemID: UUID
+    ) -> [ClipboardContent] {
+        var collected = [ClipboardContent]()
+        var index = 0
+        for item in items {
+            guard let itemContents = contents(for: item, itemID: itemID, index: &index) else { continue }
+            collected.append(contentsOf: itemContents)
+        }
+        return collected
+    }
+
+    /// 处理单个 NSPasteboardItem；返回 nil 表示该 item 应被跳过。
+    private static func contents(
+        for item: NSPasteboardItem,
+        itemID: UUID,
+        index: inout Int
+    ) -> [ClipboardContent]? {
+        var types = Set(item.types)
+        if types.contains(.string) && isEmptyString(item) && !richText(item) {
+            return nil
+        }
+
+        types = types
+            .filter { !$0.rawValue.starts(with: dynamicTypePrefix) }
+            .filter { !$0.rawValue.starts(with: microsoftSourcePrefix) }
+
+        // 避免读取 Microsoft Word 书签与交叉引用链接。
+        if types.isSuperset(of: [.microsoftLinkSource, .microsoftObjectLink]) {
+            types = types.subtracting([.microsoftLinkSource, .microsoftObjectLink, .pdf])
+        }
+
+        var result: [ClipboardContent] = []
+        for type in types.sorted(by: { $0.rawValue < $1.rawValue }) {
+            let data = item.data(forType: type)
+            result.append(makeContent(type: type.rawValue, data: data, itemID: itemID, index: &index))
+        }
+        return result
     }
 
     /// 大数据（图片、大段内容）落盘保存，内存里只保留文件引用，减少常驻内存。
@@ -209,21 +271,12 @@ final class ClipboardMonitor {
         return ClipboardContent(type: type, value: data, size: data.count)
     }
 
-    private func frontmostApplicationBundleIdentifier() -> String? {
-        NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-    }
-
-    private func shouldIgnore(_ types: Set<NSPasteboard.PasteboardType>) -> Bool {
-        let ignored = ignoredTypes
-        return types.isDisjoint(with: supportedTypes) || !types.isDisjoint(with: ignored)
-    }
-
-    private func isEmptyString(_ item: NSPasteboardItem) -> Bool {
+    private static func isEmptyString(_ item: NSPasteboardItem) -> Bool {
         guard let string = item.string(forType: .string) else { return true }
         return string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private func richText(_ item: NSPasteboardItem) -> Bool {
+    private static func richText(_ item: NSPasteboardItem) -> Bool {
         if let rtf = item.data(forType: .rtf),
            let attributedString = NSAttributedString(rtf: rtf, documentAttributes: nil) {
             return !attributedString.string.isEmpty
@@ -233,17 +286,5 @@ final class ClipboardMonitor {
             return !attributedString.string.isEmpty
         }
         return false
-    }
-
-    private func clearFormatting(_ contents: [ClipboardContent]) -> [ClipboardContent] {
-        let stringContents = contents.filter { NSPasteboard.PasteboardType($0.type) == .string }
-        guard !stringContents.isEmpty else { return contents }
-
-        var newContents = stringContents
-        let fileURLContents = contents.filter { NSPasteboard.PasteboardType($0.type) == .fileURL }
-        if !fileURLContents.isEmpty {
-            newContents += fileURLContents
-        }
-        return newContents
     }
 }

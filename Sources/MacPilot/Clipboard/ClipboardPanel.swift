@@ -373,6 +373,12 @@ private struct ClipboardItemRow: View {
     let imageLabel: String
     let onSelect: () -> Void
 
+    // 渲染缓存：缩略图解码、磁盘读取与应用名查询开销较大，
+    // 首帧之后改用缓存，选中态切换时不再重复做 IO。
+    @State private var cachedThumbnail: NSImage?
+    @State private var cachedText: String?
+    @State private var cachedFileURL: URL?
+
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 10) {
@@ -409,6 +415,11 @@ private struct ClipboardItemRow: View {
             }
         }
         .buttonStyle(.plain)
+        .task(id: item.id) {
+            cachedThumbnail = item.thumbnailImage
+            cachedText = item.text
+            cachedFileURL = item.fileURLs.first
+        }
     }
 
     @ViewBuilder
@@ -425,7 +436,7 @@ private struct ClipboardItemRow: View {
 
     @ViewBuilder
     private var thumbnail: some View {
-        if let image = item.thumbnailImage {
+        if let image = cachedThumbnail ?? item.thumbnailImage {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -438,9 +449,9 @@ private struct ClipboardItemRow: View {
 
     private var titleView: some View {
         Group {
-            if let text = item.text {
+            if let text = cachedText ?? item.text {
                 Text(text)
-            } else if let url = item.fileURLs.first {
+            } else if let url = cachedFileURL ?? item.fileURLs.first {
                 Text(url.path)
             } else if !item.title.isEmpty {
                 Text(item.title)
@@ -453,10 +464,19 @@ private struct ClipboardItemRow: View {
         .truncationMode(.tail)
     }
 
+    private static let appNameCache = NSCache<NSString, NSString>()
+
     private var appName: String? {
         guard let application = item.application else { return nil }
+        if let cached = Self.appNameCache.object(forKey: application as NSString) {
+            return cached as String
+        }
         let name = NSWorkspace.shared.urlForApplication(withBundleIdentifier: application)?
             .deletingPathExtension().lastPathComponent
-        return name?.shortened(to: 16)
+        let shortened = name?.shortened(to: 16)
+        if let shortened {
+            Self.appNameCache.setObject(shortened as NSString, forKey: application as NSString)
+        }
+        return shortened
     }
 }

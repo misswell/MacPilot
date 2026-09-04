@@ -2,7 +2,8 @@
 //  ClipboardHistory.swift
 //  MacPilot
 //
-//  剪贴板历史模型（记录、去重、固定、搜索、持久化）。
+//  剪贴板历史内存模型：去重合并、裁剪、搜索排序、选择导航与固定。
+//  磁盘职责见 ClipboardHistoryStorage。
 //
 
 import AppKit
@@ -39,26 +40,17 @@ final class ClipboardHistory: ObservableObject {
     var pinnedItems: [ClipboardItem] { items.filter(\.isPinned) }
     var unpinnedItems: [ClipboardItem] { items.filter { !$0.isPinned } }
 
-    private let storageURL: URL
-    private var saveTask: Task<Void, Never>?
+    private let storage: ClipboardHistoryStorage
 
     init(storageURL: URL? = nil) {
-        self.storageURL = storageURL ?? Self.defaultStorageURL()
+        self.storage = ClipboardHistoryStorage(storageURL: storageURL)
         load()
     }
 
     // MARK: - Persistence
 
-    private static func defaultStorageURL() -> URL {
-        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MacPilot", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.appendingPathComponent("ClipboardHistory.json")
-    }
-
-    func load() {
-        guard let data = try? Data(contentsOf: storageURL),
-              let decoded = try? JSONDecoder().decode([ClipboardItem].self, from: data) else {
+    private func load() {
+        guard let decoded = storage.loadItems() else {
             allItems = []
             items = []
             return
@@ -68,7 +60,8 @@ final class ClipboardHistory: ObservableObject {
         // 之后内存只保留文件引用，彻底释放旧数据占用的内存。
         let migrated = migrateInlineContentToDisk()
         trimToLimit()
-        if storageURL == Self.defaultStorageURL() {
+        // 仅默认存储位置才回收孤儿文件，避免测试目录误删真实内容文件。
+        if storage.isDefaultStorage {
             let referencedFiles = Set(allItems.flatMap { item in
                 item.contents.compactMap(\.file)
             })
@@ -78,69 +71,25 @@ final class ClipboardHistory: ObservableObject {
         updateFilteredItems()
     }
 
-    /// 把历史里仍内联的大数据（图片、>64KB）写入磁盘并替换为文件引用。
     private func migrateInlineContentToDisk() -> Bool {
         var changed = false
-        for (itemIndex, item) in allItems.enumerated() {
-            var newContents = item.contents
-            var itemChanged = false
-            for (contentIndex, content) in newContents.enumerated() {
-                let externalized = ClipboardContentStore.externalized(
-                    content,
-                    itemID: item.id,
-                    index: contentIndex
-                )
-                if externalized != content {
-                    newContents[contentIndex] = externalized
-                    itemChanged = true
-                }
-            }
-            if itemChanged {
-                var updated = item
-                updated.contents = newContents
-                allItems[itemIndex] = updated
-                changed = true
-            }
+        for index in allItems.indices {
+            let externalized = ClipboardHistoryStorage.externalizeInlineContent(in: allItems[index])
+            guard externalized != allItems[index] else { continue }
+            allItems[index] = externalized
+            changed = true
         }
         return changed
     }
 
-    private func save() {
-        saveTask?.cancel()
-        let itemsToSave = allItems
-        let url = storageURL
-        saveTask = Task.detached(priority: .utility) {
-            do {
-                try await Task.sleep(for: .milliseconds(300))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
-            do {
-                try Self.persist(itemsToSave, to: url)
-            } catch {
-                NSLog("MacPilot clipboard: failed to save history: \(error.localizedDescription)")
-            }
-        }
+    func save() {
+        storage.scheduleSave(allItems)
     }
 
     /// Persist the latest snapshot before application termination instead of
     /// losing mutations still inside the normal 300 ms debounce window.
     func flush() {
-        saveTask?.cancel()
-        saveTask = nil
-        do {
-            try Self.persist(allItems, to: storageURL)
-        } catch {
-            NSLog("MacPilot clipboard: failed to flush history: \(error.localizedDescription)")
-        }
-    }
-
-    private nonisolated static func persist(_ items: [ClipboardItem], to url: URL) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(items)
-        try data.write(to: url, options: .atomic)
+        storage.flush(allItems)
     }
 
     // MARK: - Mutations
@@ -150,7 +99,7 @@ final class ClipboardHistory: ObservableObject {
     func add(_ newItem: ClipboardItem) -> ClipboardItem {
         // Keep the published model index-like even when a caller bypasses
         // ClipboardMonitor and supplies inline image/large data.
-        var item = externalizeInlineContent(in: newItem)
+        var item = ClipboardHistoryStorage.externalizeInlineContent(in: newItem)
 
         if let existingIndex = allItems.firstIndex(where: { existing in
             existing.id != item.id && existing.supersedes(item)
@@ -207,24 +156,6 @@ final class ClipboardHistory: ObservableObject {
         save()
     }
 
-    func togglePin(_ item: ClipboardItem) {
-        guard let index = allItems.firstIndex(where: { $0.id == item.id }) else { return }
-        var updated = allItems[index]
-        if updated.pin != nil {
-            updated.pin = nil
-        } else {
-            updated.pin = Self.randomAvailablePin(in: allItems)
-        }
-        allItems[index] = updated
-        updateFilteredItems()
-        save()
-    }
-
-    func togglePinSelected() {
-        guard let selected = selectedItem else { return }
-        togglePin(selected)
-    }
-
     /// 记录一次使用（更新时间与次数，并置顶）。
     func recordUse(of item: ClipboardItem) {
         guard let index = allItems.firstIndex(where: { $0.id == item.id }) else { return }
@@ -249,16 +180,11 @@ final class ClipboardHistory: ObservableObject {
     }
 
     func selectFirst() {
-        selectedIndex = items.isEmpty ? 0 : 0
+        selectedIndex = 0
     }
 
     func selectItem(at index: Int) {
         guard items.indices.contains(index) else { return }
-        selectedIndex = index
-    }
-
-    func selectItem(withId id: UUID) {
-        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         selectedIndex = index
     }
 
@@ -282,25 +208,6 @@ final class ClipboardHistory: ObservableObject {
     }
 
     // MARK: - Helpers
-
-    private func externalizeInlineContent(in item: ClipboardItem) -> ClipboardItem {
-        var contents = item.contents
-        var changed = false
-        for index in contents.indices {
-            let externalized = ClipboardContentStore.externalized(
-                contents[index],
-                itemID: item.id,
-                index: index
-            )
-            guard externalized != contents[index] else { continue }
-            contents[index] = externalized
-            changed = true
-        }
-        guard changed else { return item }
-        var updated = item
-        updated.contents = contents
-        return updated
-    }
 
     private func trimToLimit() {
         let unpinned = allItems.filter { !$0.isPinned }
@@ -331,13 +238,7 @@ final class ClipboardHistory: ObservableObject {
         }
 
         if !items.indices.contains(selectedIndex) {
-            selectedIndex = items.isEmpty ? 0 : 0
+            selectedIndex = 0
         }
-    }
-
-    private static func randomAvailablePin(in items: [ClipboardItem]) -> String {
-        let assigned = Set(items.compactMap(\.pin))
-        let candidates = "bcdefghijklmnoprstuxy".map(String.init)
-        return candidates.first { !assigned.contains($0) } ?? ""
     }
 }
