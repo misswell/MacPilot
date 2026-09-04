@@ -33,6 +33,19 @@ let package = Package(
                 .linkedFramework("CryptoKit"),
             ]
         ),
+        // FinderSync appex executable. The `_NSExtensionMain` entry point
+        // replaces the usual `main`; Scripts/build-findersync.sh assembles the
+        // resulting binary into the .appex bundle. SwiftUI is linked explicitly
+        // so SwiftUICore reaches the linker through SwiftUI's re-export instead
+        // of an autolink entry, which SwiftUICore's allowed-clients would reject.
+        .executableTarget(
+            name: "MacPilotFinderSync",
+            dependencies: ["MacPilotRightClickKit"],
+            linkerSettings: [
+                .linkedFramework("SwiftUI"),
+                .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain"])
+            ]
+        ),
         .target(
             name: "MacPilotOcclusionPatch",
             linkerSettings: [.linkedFramework("AppKit")]
@@ -44,6 +57,13 @@ let package = Package(
         .testTarget(
             name: "MacPilotRightClickKitTests",
             dependencies: ["MacPilotRightClickKit"]
+        ),
+        .testTarget(
+            name: "MacPilotFinderSyncTests",
+            dependencies: [
+                "MacPilotFinderSync",
+                "MacPilotRightClickKit"
+            ]
         )
     ]
 )

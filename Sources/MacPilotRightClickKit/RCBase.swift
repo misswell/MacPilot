@@ -261,12 +261,12 @@ extension NewFile {
 // MARK: - Menu Item Models for Extension Communication
 
 /// Menu item for opening files with external applications
-struct AppMenuItem: Codable {
-    let id: String
-    let name: String
-    let icon: String
-    let tag: Int
-    let appURL: String?  // 应用路径，用于获取应用图标
+public struct AppMenuItem: Codable, Equatable {
+    public let id: String
+    public let name: String
+    public let icon: String
+    public let tag: Int
+    public let appURL: String?  // 应用路径，用于获取应用图标
 
     init(id: String, name: String, icon: String, tag: Int, appURL: String? = nil) {
         self.id = id
@@ -278,11 +278,11 @@ struct AppMenuItem: Codable {
 }
 
 /// Menu item for custom actions (copy path, delete, etc.)
-struct ActionMenuItem: Codable {
-    let id: String
-    let name: String
-    let icon: String
-    let tag: Int
+public struct ActionMenuItem: Codable, Equatable {
+    public let id: String
+    public let name: String
+    public let icon: String
+    public let tag: Int
 
     init(id: String, name: String, icon: String, tag: Int) {
         self.id = id
@@ -293,13 +293,13 @@ struct ActionMenuItem: Codable {
 }
 
 /// Menu item for creating new files
-struct NewFileMenuItem: Codable {
+public struct NewFileMenuItem: Codable, Equatable {
     static let customFileId = "__rclick_custom_new_file"
 
-    let id: String
-    let name: String
-    let ext: String
-    let icon: String
+    public let id: String
+    public let name: String
+    public let ext: String
+    public let icon: String
 
     init(id: String, name: String, ext: String, icon: String) {
         self.id = id
@@ -310,11 +310,11 @@ struct NewFileMenuItem: Codable {
 }
 
 /// Menu item for common directories
-struct CommonDirMenuItem: Codable {
-    let id: String
-    let name: String
-    let icon: String
-    let url: String?  // 文件夹路径，用于获取文件夹图标
+public struct CommonDirMenuItem: Codable, Equatable {
+    public let id: String
+    public let name: String
+    public let icon: String
+    public let url: String?  // 文件夹路径，用于获取文件夹图标
 
     init(id: String, name: String, icon: String, url: String? = nil) {
         self.id = id

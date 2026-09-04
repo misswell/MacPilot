@@ -40,23 +40,23 @@ public enum ExtensionToMainAction: String, Codable {
 /// 菜单配置消息载荷
 public struct MenuConfigPayload: Codable {
     /// 菜单版本号，用于防重复和防乱序
-    let version: Int
+    public let version: Int
     /// 动作菜单项列表
-    let actions: [ActionMenuItem]
+    public let actions: [ActionMenuItem]
     /// 应用菜单项列表
-    let apps: [AppMenuItem]
+    public let apps: [AppMenuItem]
     /// 新建文件菜单项列表
-    let newFiles: [NewFileMenuItem]
+    public let newFiles: [NewFileMenuItem]
     /// 常用目录菜单项列表
-    let commonDirs: [CommonDirMenuItem]
+    public let commonDirs: [CommonDirMenuItem]
     /// 是否折叠动作菜单（默认 false）
-    let actionsCollapsed: Bool
+    public let actionsCollapsed: Bool
     /// 是否折叠应用菜单（默认 false）
-    let appsCollapsed: Bool
+    public let appsCollapsed: Bool
     /// 是否折叠新建文件菜单（默认 true）
-    let newFilesCollapsed: Bool
+    public let newFilesCollapsed: Bool
     /// 是否折叠常用目录菜单（默认 true）
-    let commonDirsCollapsed: Bool
+    public let commonDirsCollapsed: Bool
 
     init(
         version: Int = 1,
@@ -84,15 +84,15 @@ public struct MenuConfigPayload: Codable {
 /// 点击事件消息载荷
 public struct ClickEventPayload: Codable {
     /// 点击的菜单项 ID
-    let itemId: String
+    public let itemId: String
     /// 菜单项类型
-    let itemType: MenuItemType
+    public let itemType: MenuItemType
     /// 目标文件/目录路径列表
-    let target: [String]
+    public let target: [String]
     /// 触发来源
-    let trigger: MenuTrigger
+    public let trigger: MenuTrigger
 
-    init(
+    public init(
         itemId: String,
         itemType: MenuItemType,
         target: [String] = [],
@@ -110,7 +110,7 @@ public struct ClickEventPayload: Codable {
 /// 运行状态消息载荷（用于通知 Extension 主程序运行状态）
 public struct RunningPayload: Codable {
     /// 监听目录列表
-    let directories: [String]
+    public let directories: [String]
 
     init(directories: [String] = []) {
         self.directories = directories
@@ -135,13 +135,6 @@ public enum MenuTrigger: String, Codable {
     case contextualSidebar = "ctx-sidebar"
     /// 工具栏
     case toolbar = "toolbar"
-}
-
-/// 项目类型（文件/文件夹）
-public enum ItemType: String, Codable {
-    case file = "file"
-    case folder = "folder"
-    case unknown = "unknown"
 }
 
 // MARK: - 消息结构
@@ -171,6 +164,7 @@ public struct MainToExtensionMessage: Codable {
             )
             signedData = try JSONEncoder().encode(signedPayload)
         } catch {
+            logger.error("Failed to sign main-to-extension message: \(error)")
             self.signedData = nil
         }
     }
@@ -201,6 +195,7 @@ public struct ExtensionToMainMessage: Codable {
             )
             signedData = try JSONEncoder().encode(signedPayload)
         } catch {
+            logger.error("Failed to sign extension-to-main message: \(error)")
             self.signedData = nil
         }
     }
@@ -221,8 +216,9 @@ public final class Messager: @unchecked Sendable {
     public static let shared = Messager()
 
     // 消息处理器存储
-    // 安全说明：仅在 init/启动阶段写入一次，之后只读不写
-    // 写入发生在分布式通知到达之前，无并发读写风险
+    // 安全说明：注册发生在启动阶段，之后处理器字典只读；
+    // 注册与分发都可能来自不同线程，统一由 handlerLock 保护。
+    private let handlerLock = NSLock()
     nonisolated(unsafe) private var mainToExtensionHandlers: [MainToExtensionAction: (Data?) -> Void] = [:]
     nonisolated(unsafe) private var extensionToMainHandlers: [ExtensionToMainAction: (Data?) -> Void] = [:]
 
@@ -297,12 +293,16 @@ public final class Messager: @unchecked Sendable {
     // MARK: - 注册处理器
 
     /// Extension 注册主程序消息处理器
-    func onMainMessage(_ action: MainToExtensionAction, handler: @escaping (Data?) -> Void) {
+    public func onMainMessage(_ action: MainToExtensionAction, handler: @escaping (Data?) -> Void) {
+        handlerLock.lock()
+        defer { handlerLock.unlock() }
         mainToExtensionHandlers[action] = handler
     }
 
     /// 主程序注册 Extension 消息处理器
-    func onExtensionMessage(_ action: ExtensionToMainAction, handler: @escaping (Data?) -> Void) {
+    public func onExtensionMessage(_ action: ExtensionToMainAction, handler: @escaping (Data?) -> Void) {
+        handlerLock.lock()
+        defer { handlerLock.unlock() }
         extensionToMainHandlers[action] = handler
     }
 
@@ -328,7 +328,8 @@ public final class Messager: @unchecked Sendable {
                 return
             }
 
-            if let handler = mainToExtensionHandlers[message.action] {
+            let handler = handlerLock.withLock { mainToExtensionHandlers[message.action] }
+            if let handler {
                 handler(payload)
             } else {
                 logger.warning("No handler registered for action: \(message.action.rawValue)")
@@ -358,7 +359,8 @@ public final class Messager: @unchecked Sendable {
                 return
             }
 
-            if let handler = extensionToMainHandlers[message.action] {
+            let handler = handlerLock.withLock { extensionToMainHandlers[message.action] }
+            if let handler {
                 handler(payload)
             } else {
                 logger.warning("No handler registered for action: \(message.action.rawValue)")
@@ -387,32 +389,21 @@ public final class Messager: @unchecked Sendable {
     }
 
     /// Extension 发送心跳
-    func sendHeartbeat() {
+    public func sendHeartbeat() {
         sendToMain(.heartbeat, data: Optional<Int>.none)
     }
 
     /// 请求菜单配置
-    func requestMenuConfig() {
+    public func requestMenuConfig() {
         sendToMain(.requestConfig, data: Optional<Int>.none)
     }
 
     /// Extension 发送点击事件
-    func sendClickEvent(_ event: ClickEventPayload) {
+    public func sendClickEvent(_ event: ClickEventPayload) {
         sendToMain(.click, data: event)
     }
 
-    /// 主程序响应菜单配置请求
-    func respondMenuConfigRequest(_ config: MenuConfigPayload) {
-        sendToExtension(.requestConfig, data: config)
-    }
-
     // MARK: - 解码辅助
-
-    /// 解码数据为指定类型
-    public func decode<T: Codable>(_ data: Data?) -> T? {
-        guard let data = data else { return nil }
-        return try? JSONDecoder().decode(T.self, from: data)
-    }
 
     /// Decode payload bytes that were authenticated before handler dispatch.
     public func decodeSignedData<T: Codable>(_ signedData: Data?, as type: T.Type = T.self) -> T? {

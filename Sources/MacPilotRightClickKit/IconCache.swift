@@ -42,11 +42,6 @@ public class IconCache {
         }
     }
 
-    /// 清除缓存
-    public func clearCache() {
-        memoryCache.removeAll()
-    }
-
     /// 缓存中的图标数量
     public var cacheSize: Int {
         memoryCache.count

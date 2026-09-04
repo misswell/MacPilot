@@ -6,9 +6,8 @@
 //
 
 import Foundation
-import SwiftUI
 
-enum AppLocalization {
+public enum AppLocalization {
     static let tableName = "Localizable"
 
     /// The Finder extension is compiled separately from the main app and does
@@ -163,7 +162,7 @@ enum AppLocalization {
         }
     }
 
-    static func localized(_ key: String) -> String {
+    public static func localized(_ key: String) -> String {
         if usesChinese,
            let translation = simplifiedChinese[key] {
             return translation
@@ -179,7 +178,7 @@ enum AppLocalization {
 
     /// Localize an action by its stable identifier rather than its persisted
     /// display name. This also updates actions created by an older version.
-    static func localizedActionName(id: String, fallback: String) -> String {
+    public static func localizedActionName(id: String, fallback: String) -> String {
         let key: String
         switch id {
         case "copy-path": key = "Copy Path"
@@ -191,11 +190,5 @@ enum AppLocalization {
         default: return fallback
         }
         return localized(key)
-    }
-}
-
-extension Text {
-    init(appLocalized key: String) {
-        self.init(AppLocalization.localized(key))
     }
 }

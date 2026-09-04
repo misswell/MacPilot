@@ -23,7 +23,6 @@ class AppState: ObservableObject {
     @Published var actions: [RCAction] = []
     @Published var newFiles: [NewFile] = []
     @Published var cdirs: [CommonDir] = []
-    @Published var inExt: Bool
 
     let bookmarkManager = BookmarkManager()
 
@@ -38,8 +37,7 @@ class AppState: ObservableObject {
     // SwiftData ModelContext（lazy 复用单个实例）
     private lazy var modelContext = ModelContext(SharedDataManager.sharedModelContainer)
 
-    init(inExt: Bool = false) {
-        self.inExt = inExt
+    init() {
         Task { @MainActor in
             logger.debug("start load")
             try? load()
@@ -86,7 +84,7 @@ class AppState: ObservableObject {
     }
 
     func getAppItem(rid: String) -> OpenWithApp? {
-        return apps.first { rid.contains($0.id) }
+        return apps.first { $0.id == rid }
     }
 
     func getFileType(rid: String) -> NewFile? {

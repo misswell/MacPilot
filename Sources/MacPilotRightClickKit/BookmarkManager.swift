@@ -147,9 +147,17 @@ final class BookmarkManager: ObservableObject {
                 authorizedDirectories.append(normalized)
             }
 
-            let entity = BookmarkEntity(bookmarkData: bookmarkData, pathString: url.path)
+            // Upsert：同一目录重复授权时更新已有书签，避免累积重复行。
             let context = ModelContext(SharedDataManager.sharedModelContainer)
-            context.insert(entity)
+            let path = url.path
+            let descriptor = FetchDescriptor<BookmarkEntity>(
+                predicate: #Predicate { $0.pathString == path }
+            )
+            if let existing = try? context.fetch(descriptor), let entity = existing.first {
+                entity.bookmarkData = bookmarkData
+            } else {
+                context.insert(BookmarkEntity(bookmarkData: bookmarkData, pathString: url.path))
+            }
             try context.save()
 
             logger.debug("已保存 bookmark：\(url.path)")

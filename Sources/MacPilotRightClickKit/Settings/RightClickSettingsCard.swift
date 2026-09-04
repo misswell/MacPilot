@@ -26,3 +26,10 @@ struct RightClickSettingsCard<Content: View>: View {
             .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 }
+
+extension Text {
+    /// 用 Kit 的本地化词典渲染文本（设置界面专用；扩展进程不走 SwiftUI）。
+    init(appLocalized key: String) {
+        self.init(AppLocalization.localized(key))
+    }
+}

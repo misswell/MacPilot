@@ -11,8 +11,9 @@ import OSLog
 
 /// 文件类型图标提供者 - 优先使用系统 App 图标，失败则回退到 SF Symbol
 /// 带内存缓存，避免每次生成菜单都查询 NSWorkspace
-final class FileTypeIconProvider: @unchecked Sendable {
-    static let shared = FileTypeIconProvider()
+/// 主 App 与 FinderSync 扩展共用；两者都在主线程调用。
+public final class FileTypeIconProvider: @unchecked Sendable {
+    public static let shared = FileTypeIconProvider()
 
     /// 菜单项图标尺寸
     private let iconSize: CGFloat = 18
@@ -29,7 +30,7 @@ final class FileTypeIconProvider: @unchecked Sendable {
     ///   - ext: 文件扩展名（可能带点，如 ".txt"）
     ///   - fallbackSymbol: 图标名称，可能是旧 PNG 名("icon-file-txt")或新 SF Symbol 名("doc.text")
     /// - Returns: 图标 NSImage
-    func icon(for ext: String, fallbackSymbol: String = "doc") -> NSImage? {
+    public func icon(for ext: String, fallbackSymbol: String = "doc") -> NSImage? {
         // 0. 内存缓存命中
         if let cached = cache[ext] {
             return cached
@@ -58,7 +59,7 @@ final class FileTypeIconProvider: @unchecked Sendable {
         }
 
         // 3. SF Symbol 回退：先解析旧 PNG 图标名映射，再尝试直接匹配
-        let resolvedSymbol = iconFallbackMap[fallbackSymbol] ?? fallbackSymbol
+        let resolvedSymbol = Self.iconFallbackMap[fallbackSymbol] ?? fallbackSymbol
         if let icon = sfSymbolIcon(named: resolvedSymbol) {
             cache[ext] = icon
             return icon
@@ -73,17 +74,15 @@ final class FileTypeIconProvider: @unchecked Sendable {
         return nil
     }
 
-    /// 清除缓存（菜单配置更新时调用）
-    func clearCache() {
-        cache.removeAll()
-    }
-
     // MARK: - Private
 
-    private let logger = Logger(subsystem: "com.misswell.macpilot.rightclick", category: "FileTypeIconProvider")
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.misswell.macpilot.rightclick",
+        category: "FileTypeIconProvider"
+    )
 
     /// 旧版 PNG 图标名 → SF Symbol 映射（兼容升级用户数据库中的旧数据）
-    private let iconFallbackMap: [String: String] = [
+    private static let iconFallbackMap: [String: String] = [
         "icon-file-json": "curlybraces",
         "icon-file-txt": "doc.text",
         "icon-file-md": "doc.richtext",
@@ -91,7 +90,13 @@ final class FileTypeIconProvider: @unchecked Sendable {
         "icon-file-pptx": "rectangle.on.rectangle.fill",
         "icon-file-xlsx": "tablecells",
         "document": "doc",
+        "apps.iphone.badge.checkmark": "square.grid.2x2",
     ]
+
+    /// 将旧版图标名解析为可用的 SF Symbol 名；未知名称原样返回。
+    public static func resolvedFallbackSymbol(for name: String) -> String {
+        iconFallbackMap[name] ?? name
+    }
 
     /// 通过 NSWorkspace 获取文件类型对应的默认应用图标
     /// 主线程安全：主 App 在 @MainActor 调用，Extension 在 main thread 调用

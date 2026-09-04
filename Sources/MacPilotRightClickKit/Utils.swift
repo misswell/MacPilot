@@ -1,19 +1,23 @@
 import Foundation
+import OSLog
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "com.misswell.macpilot.rightclick",
+    category: "RightClickUtils"
+)
 
 /// FinderSync sends `URL.path`, not a percent-encoded URL component. Keep the
 /// value byte-for-byte so names containing `%2F` or `%25` cannot be retargeted.
-enum RightClickIPCPath {
-    static func fileSystemPath(_ value: String) -> String { value }
+public enum RightClickIPCPath {
+    public static func fileSystemPath(_ value: String) -> String { value }
 }
 
 public class Utils {
     public static func isProtectedFolder(_ path: String) -> Bool {
-        print("isProtectedFolder: \(path)")
-
-        return Constants.protectedDirs.contains { protectedPath in
-            print("Comparing with protected path: \(protectedPath)")
-            return path == protectedPath
-        }
+        // Finder 传来的路径不带尾斜杠，而 Constants.protectedDirs 统一带尾斜杠；
+        // 归一化后再比较，否则 /Applications 这类路径永远匹配不上。
+        let normalized = path.hasSuffix("/") ? path : path + "/"
+        return Constants.protectedDirs.contains(normalized)
     }
     // MARK:
     public static func getRealHomeDir() -> String {
