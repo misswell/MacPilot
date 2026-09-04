@@ -13,12 +13,11 @@ final class SmoothScrollModel: ObservableObject {
     private var isActive = false
 
     init() {
-        refreshPermissionStatus()
+        hasAccessibilityPermission = AXIsProcessTrusted()
     }
 
     func applyLoadedSettings(_ loaded: SmoothScrollSettings) {
         settings = loaded.clamped()
-        refreshPermissionStatus()
         if isActive {
             controller.activate(settings: settings)
         }
@@ -36,116 +35,85 @@ final class SmoothScrollModel: ObservableObject {
     }
 
     func setEnabled(_ enabled: Bool) {
-        guard settings.isEnabled != enabled else { return }
-        settings.isEnabled = enabled
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.isEnabled = enabled }
     }
 
     func setSmoothVertical(_ enabled: Bool) {
-        settings.smoothVertical = enabled
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.smoothVertical = enabled }
     }
 
     func setSmoothHorizontal(_ enabled: Bool) {
-        settings.smoothHorizontal = enabled
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.smoothHorizontal = enabled }
     }
 
     func setReverseScrollingEnabled(_ enabled: Bool) {
-        settings.reverseScrollingEnabled = enabled
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.reverseScrollingEnabled = enabled }
     }
 
     func setReverseVertical(_ enabled: Bool) {
-        settings.reverseVertical = enabled
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.reverseVertical = enabled }
     }
 
     func setReverseHorizontal(_ enabled: Bool) {
-        settings.reverseHorizontal = enabled
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.reverseHorizontal = enabled }
     }
 
     func setMinimumStep(_ value: Double) {
-        settings.minimumStep = value.clamped(to: SmoothScrollSettings.stepRange)
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.minimumStep = value.clamped(to: SmoothScrollSettings.stepRange) }
     }
 
     func setSpeed(_ value: Double) {
-        settings.speed = value.clamped(to: SmoothScrollSettings.speedRange)
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.speed = value.clamped(to: SmoothScrollSettings.speedRange) }
     }
 
     func setDuration(_ value: Double) {
-        settings.duration = value.clamped(to: SmoothScrollSettings.durationRange)
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.duration = value.clamped(to: SmoothScrollSettings.durationRange) }
     }
 
     func setDeadZone(_ value: Double) {
-        settings.deadZone = value.clamped(to: SmoothScrollSettings.deadZoneRange)
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.deadZone = value.clamped(to: SmoothScrollSettings.deadZoneRange) }
     }
 
     func setAdaptiveSpeedEnabled(_ enabled: Bool) {
-        settings.adaptiveSpeedEnabled = enabled
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.adaptiveSpeedEnabled = enabled }
     }
 
     func setAdaptiveSpeedMaximum(_ value: Double) {
-        settings.adaptiveSpeedMaximum = value.clamped(to: SmoothScrollSettings.adaptiveSpeedRange)
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.adaptiveSpeedMaximum = value.clamped(to: SmoothScrollSettings.adaptiveSpeedRange) }
     }
 
     func setBlockSmoothWhileCommandHeld(_ enabled: Bool) {
-        settings.blockSmoothWhileCommandHeld = enabled
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.blockSmoothWhileCommandHeld = enabled }
     }
 
     func setSimulatesTrackpadPhases(_ enabled: Bool) {
-        settings.simulatesTrackpadPhases = enabled
-        controller.activate(settings: settings)
-        persist?()
+        apply { $0.simulatesTrackpadPhases = enabled }
     }
 
     func setExcludedApplication(_ bundleIdentifier: String, enabled: Bool) {
         let identifier = bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !identifier.isEmpty else { return }
         let canonicalIdentifier = SmoothScrollApplicationExclusions.canonicalIdentifier(identifier)
-
-        var identifiers = settings.excludedApplicationBundleIdentifiers
-        if enabled {
-            guard !identifiers.contains(where: {
-                SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
-            }) else { return }
-            identifiers.append(identifier)
-        } else {
-            identifiers.removeAll {
-                SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+        apply { settings in
+            var identifiers = settings.excludedApplicationBundleIdentifiers
+            if enabled {
+                guard !identifiers.contains(where: {
+                    SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+                }) else { return }
+                identifiers.append(identifier)
+            } else {
+                identifiers.removeAll {
+                    SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+                }
+            }
+            settings.excludedApplicationBundleIdentifiers = SmoothScrollApplicationExclusions
+                .normalizedIdentifiers(identifiers)
+            if !enabled {
+                settings.excludedApplicationReverseBundleIdentifiers.removeAll {
+                    SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+                }
             }
         }
-
-        settings.excludedApplicationBundleIdentifiers = SmoothScrollApplicationExclusions
-            .normalizedIdentifiers(identifiers)
-        if !enabled {
-            settings.excludedApplicationReverseBundleIdentifiers.removeAll {
-                SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
-            }
-        }
-        controller.activate(settings: settings)
-        persist?()
     }
 
     func isExcludedApplicationReversed(_ bundleIdentifier: String) -> Bool {
@@ -159,38 +127,40 @@ final class SmoothScrollModel: ObservableObject {
         let identifier = bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !identifier.isEmpty else { return }
         let canonicalIdentifier = SmoothScrollApplicationExclusions.canonicalIdentifier(identifier)
-        guard settings.excludedApplicationBundleIdentifiers.contains(where: {
-            SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
-        }) else { return }
+        apply { settings in
+            guard settings.excludedApplicationBundleIdentifiers.contains(where: {
+                SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+            }) else { return }
 
-        var reversedIdentifiers = settings.excludedApplicationReverseBundleIdentifiers
-        let wasReversed = reversedIdentifiers.contains {
-            SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
-        }
-        guard wasReversed != reversed else { return }
-
-        if reversed {
-            reversedIdentifiers.append(identifier)
-        } else {
-            reversedIdentifiers.removeAll {
+            var reversedIdentifiers = settings.excludedApplicationReverseBundleIdentifiers
+            let wasReversed = reversedIdentifiers.contains {
                 SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
             }
+            guard wasReversed != reversed else { return }
+
+            if reversed {
+                reversedIdentifiers.append(identifier)
+            } else {
+                reversedIdentifiers.removeAll {
+                    SmoothScrollApplicationExclusions.canonicalIdentifier($0) == canonicalIdentifier
+                }
+            }
+            settings.excludedApplicationReverseBundleIdentifiers = SmoothScrollApplicationExclusions
+                .normalizedIdentifiers(reversedIdentifiers)
         }
-        settings.excludedApplicationReverseBundleIdentifiers = SmoothScrollApplicationExclusions
-            .normalizedIdentifiers(reversedIdentifiers)
-        controller.activate(settings: settings)
-        persist?()
     }
 
     func requestAccessibility() {
-        hasAccessibilityPermission = AXIsProcessTrustedWithOptions(
-            ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-        )
-        controller.activate(settings: settings)
+        AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        refreshPermissionStatus()
     }
 
     func refreshPermissionStatus() {
-        hasAccessibilityPermission = AXIsProcessTrusted()
+        let granted = AXIsProcessTrusted()
+        guard granted != hasAccessibilityPermission else { return }
+        hasAccessibilityPermission = granted
+        // A newly granted (or revoked) permission changes whether the tap can
+        // run; a settings change already re-evaluates it on its own.
         controller.activate(settings: settings)
     }
 
@@ -200,10 +170,15 @@ final class SmoothScrollModel: ObservableObject {
         }
         NSWorkspace.shared.open(url)
     }
-}
 
-private extension Double {
-    func clamped(to range: ClosedRange<Double>) -> Double {
-        Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
+    /// Applies a settings change, then reconfigures the tap and persists.
+    /// Transforms that leave the settings unchanged are no-ops.
+    private func apply(_ transform: (inout SmoothScrollSettings) -> Void) {
+        var updated = settings
+        transform(&updated)
+        guard updated != settings else { return }
+        settings = updated
+        controller.activate(settings: settings)
+        persist?()
     }
 }

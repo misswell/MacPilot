@@ -124,7 +124,7 @@ struct SmoothScrollingTests {
         let plan = SmoothScrollPlanner.plan(vertical: vertical, horizontal: SmoothScrollAxisValue(), settings: settings)
 
         #expect(plan.verticalTarget == 60)
-        #expect(plan.shouldSuppressOriginal)
+        #expect(!plan.passThroughVertical && !plan.passThroughHorizontal)
     }
 
     @Test func plannerPassesThroughDisabledAxesWhileSmoothingEnabledAxes() {
@@ -144,7 +144,7 @@ struct SmoothScrollingTests {
         #expect(plan.verticalTarget == -20)
         #expect(plan.horizontalTarget == 0)
         #expect(plan.passThroughHorizontal)
-        #expect(!plan.shouldSuppressOriginal)
+        #expect(!plan.passThroughVertical)
     }
 
     @Test func plannerLeavesDirectionUnchangedWhenReverseIsDisabled() {

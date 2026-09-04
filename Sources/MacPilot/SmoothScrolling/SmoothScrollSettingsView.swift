@@ -5,58 +5,14 @@ import UniformTypeIdentifiers
 struct SmoothScrollSettingsView: View {
     @ObservedObject var smoothScrolling: SmoothScrollModel
     @EnvironmentObject private var model: MacPilotModel
-    @State private var applicationListRevision = 0
+    @State private var excludedApplications: [ExcludedApplication] = []
+    @State private var availableApplications: [NSRunningApplication] = []
 
     private struct ExcludedApplication: Identifiable {
         let id: String
         let name: String
         let icon: NSImage?
         let isRunning: Bool
-    }
-
-    private var excludedApplications: [ExcludedApplication] {
-        smoothScrolling.settings.excludedApplicationBundleIdentifiers.map { identifier in
-            let runningApplication = NSRunningApplication.runningApplications(
-                withBundleIdentifier: identifier
-            ).first
-            let applicationURL = runningApplication?.bundleURL
-                ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
-            let name = runningApplication?.localizedName
-                ?? applicationURL.flatMap(Self.applicationDisplayName)
-                ?? identifier
-            let icon = runningApplication?.icon
-                ?? applicationURL.map { NSWorkspace.shared.icon(forFile: $0.path) }
-            return ExcludedApplication(
-                id: identifier,
-                name: name,
-                icon: icon,
-                isRunning: runningApplication != nil
-            )
-        }
-    }
-
-    private var availableApplications: [NSRunningApplication] {
-        let excludedIdentifiers = Set(
-            smoothScrolling.settings.excludedApplicationBundleIdentifiers.map(
-                SmoothScrollApplicationExclusions.canonicalIdentifier
-            )
-        )
-        var seenIdentifiers = Set<String>()
-        return NSWorkspace.shared.runningApplications
-            .filter { $0.activationPolicy == .regular }
-            .filter { application in
-                guard let identifier = application.bundleIdentifier,
-                      identifier.caseInsensitiveCompare(Bundle.main.bundleIdentifier ?? "") != .orderedSame
-                else { return false }
-                let canonicalIdentifier = SmoothScrollApplicationExclusions.canonicalIdentifier(identifier)
-                return excludedIdentifiers.contains(canonicalIdentifier) == false
-                    && seenIdentifiers.insert(canonicalIdentifier).inserted
-            }
-            .sorted {
-                ($0.localizedName ?? $0.bundleIdentifier ?? "")
-                    .localizedCaseInsensitiveCompare($1.localizedName ?? $1.bundleIdentifier ?? "")
-                    == .orderedAscending
-            }
     }
 
     var body: some View {
@@ -163,7 +119,6 @@ struct SmoothScrollSettingsView: View {
                     }
                     .menuStyle(.borderlessButton)
                 }
-                .id(applicationListRevision)
 
                 SettingsCard {
                     Text(model.t("smoothScrollingReverseSection")).font(.headline)
@@ -246,12 +201,63 @@ struct SmoothScrollSettingsView: View {
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
         }
+        .onAppear(perform: refreshApplicationCaches)
+        .onChange(of: smoothScrolling.settings.excludedApplicationBundleIdentifiers) { _, _ in
+            refreshApplicationCaches()
+        }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification)) { _ in
-            applicationListRevision &+= 1
+            refreshApplicationCaches()
         }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)) { _ in
-            applicationListRevision &+= 1
+            refreshApplicationCaches()
         }
+    }
+
+    /// Resolves application names, icons, and running states once per change
+    /// instead of on every body evaluation.
+    private func refreshApplicationCaches() {
+        let excludedIdentifiers = Set(
+            smoothScrolling.settings.excludedApplicationBundleIdentifiers.map(
+                SmoothScrollApplicationExclusions.canonicalIdentifier
+            )
+        )
+        excludedApplications = smoothScrolling.settings.excludedApplicationBundleIdentifiers.map { identifier in
+            let runningApplication = NSRunningApplication.runningApplications(
+                withBundleIdentifier: identifier
+            ).first
+            let applicationURL = runningApplication?.bundleURL
+                ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
+            let name = runningApplication?.localizedName
+                ?? applicationURL.flatMap(Self.applicationDisplayName)
+                ?? identifier
+            let icon = runningApplication?.icon
+                ?? applicationURL.map { NSWorkspace.shared.icon(forFile: $0.path) }
+            return ExcludedApplication(
+                id: identifier,
+                name: name,
+                icon: icon,
+                isRunning: runningApplication != nil
+            )
+        }
+
+        var seenIdentifiers = Set<String>()
+        availableApplications = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .filter { application in
+                guard let identifier = application.bundleIdentifier else { return false }
+                if let ownIdentifier = Bundle.main.bundleIdentifier,
+                   identifier.caseInsensitiveCompare(ownIdentifier) == .orderedSame {
+                    return false
+                }
+                let canonicalIdentifier = SmoothScrollApplicationExclusions.canonicalIdentifier(identifier)
+                return excludedIdentifiers.contains(canonicalIdentifier) == false
+                    && seenIdentifiers.insert(canonicalIdentifier).inserted
+            }
+            .sorted {
+                ($0.localizedName ?? $0.bundleIdentifier ?? "")
+                    .localizedCaseInsensitiveCompare($1.localizedName ?? $1.bundleIdentifier ?? "")
+                    == .orderedAscending
+            }
     }
 
     private var permissionStatus: some View {
@@ -301,9 +307,12 @@ struct SmoothScrollSettingsView: View {
         guard panel.runModal() == .OK,
               let url = panel.url,
               let bundle = Bundle(url: url),
-              let identifier = bundle.bundleIdentifier,
-              identifier.caseInsensitiveCompare(Bundle.main.bundleIdentifier ?? "") != .orderedSame
+              let identifier = bundle.bundleIdentifier
         else { return }
+        if let ownIdentifier = Bundle.main.bundleIdentifier,
+           identifier.caseInsensitiveCompare(ownIdentifier) == .orderedSame {
+            return
+        }
         smoothScrolling.setExcludedApplication(identifier, enabled: true)
     }
 
