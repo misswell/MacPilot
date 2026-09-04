@@ -209,6 +209,7 @@ struct SystemMaintenanceSettingsView: View {
     @EnvironmentObject private var model: MacPilotModel
     @StateObject private var service = SystemMaintenanceService()
     @State private var showsConfirmAlert = false
+    @State private var showsFinalConfirmAlert = false
     @State private var guardMessageKey: String?
 
     var body: some View {
@@ -229,13 +230,23 @@ struct SystemMaintenanceSettingsView: View {
             }
         }
         .task { service.refreshStatus() }
+        // 软重启会关闭所有应用，执行前必须经过两层确认：
+        // 第一层说明影响，第二层为最终确认。
         .alert(t("softRestartConfirmTitle"), isPresented: $showsConfirmAlert) {
             Button(t("cancel"), role: .cancel) {}
             Button(t("softRestartAction"), role: .destructive) {
-                Task { await service.requestUserspaceReboot() }
+                showsFinalConfirmAlert = true
             }
         } message: {
             Text(t("softRestartConfirmMessage"))
+        }
+        .alert(t("softRestartFinalConfirmTitle"), isPresented: $showsFinalConfirmAlert) {
+            Button(t("cancel"), role: .cancel) {}
+            Button(t("softRestartFinalConfirmAction"), role: .destructive) {
+                Task { await service.requestUserspaceReboot() }
+            }
+        } message: {
+            Text(t("softRestartFinalConfirmMessage"))
         }
     }
 
