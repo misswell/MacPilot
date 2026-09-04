@@ -1,11 +1,11 @@
 import CoreGraphics
 import Foundation
 
-/// Configuration for Mos-derived smooth mouse-wheel scrolling.
+/// Configuration for smooth mouse-wheel scrolling.
 ///
-/// The numeric defaults match Mos' scrolling defaults (`step = 33.6`,
-/// `speed = 2.7`, and UI duration = `4.35`). Values loaded from an old or
-/// hand-edited configuration are clamped before they can reach the input tap.
+/// The numeric defaults are `step = 33.6`, `speed = 2.7`, and UI duration =
+/// `4.35`. Values loaded from an old or hand-edited configuration are clamped
+/// before they can reach the input tap.
 struct SmoothScrollSettings: Codable, Equatable, Sendable {
     static let stepRange: ClosedRange<Double> = 1...200
     static let speedRange: ClosedRange<Double> = 0.1...10
@@ -57,8 +57,8 @@ struct SmoothScrollSettings: Codable, Equatable, Sendable {
     }
 
     static func interpolationFactor(forDuration duration: Double) -> Double {
-        // This is Mos' duration-to-frame-factor curve. A larger UI duration
-        // produces a smaller factor and therefore a longer glide.
+        // Duration-to-frame-factor curve. A larger UI duration produces a
+        // smaller factor and therefore a longer glide.
         let upperLimit = 5.2
         let value = 1 - (duration / upperLimit).squareRoot()
         return (value * 1_000).rounded() / 1_000
@@ -260,7 +260,7 @@ enum SmoothScrollPlanner {
             plan.horizontalTarget = settings.shouldReverseHorizontal ? -horizontal.value : horizontal.value
         }
 
-        // Mos raises tiny wheel deltas to its minimum step before applying speed.
+        // Tiny wheel deltas are raised to the minimum step before applying speed.
         if settings.smoothVertical, plan.verticalTarget != 0 {
             plan.verticalTarget = normalized(plan.verticalTarget, minimum: settings.minimumStep) * settings.speed
         } else {
@@ -305,15 +305,15 @@ enum SmoothScrollVelocityBoost {
     }
 }
 
-/// Linear interpolation used by Mos' display-link frame generator.
+/// Linear interpolation used by the display-link frame generator.
 enum SmoothScrollInterpolator {
     static func lerp(current: Double, target: Double, factor: Double) -> Double {
         (target - current) * factor
     }
 }
 
-/// Two-value curve filter derived from Mos' ScrollFilter. It removes startup
-/// jitter by interpolating the previous frame toward the newly generated one.
+/// Two-value curve filter. It removes startup jitter by interpolating the
+/// previous frame toward the newly generated one.
 struct SmoothScrollFilter: Equatable, Sendable {
     private(set) var verticalWindow: [Double] = [0, 0]
     private(set) var horizontalWindow: [Double] = [0, 0]
@@ -377,8 +377,8 @@ enum SmoothScrollPhase: Equatable, Sendable {
     }
 }
 
-/// Pure form of Mos' scroll phase machine. It is only emitted when trackpad
-/// phase simulation is enabled; ordinary pixel scroll remains compatible with
+/// Pure scroll phase machine. It is only emitted when trackpad phase
+/// simulation is enabled; ordinary pixel scroll remains compatible with
 /// apps that do not understand trackpad phase fields.
 struct SmoothScrollPhaseMachine: Equatable, Sendable {
     private(set) var phase: SmoothScrollPhase = .idle

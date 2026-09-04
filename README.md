@@ -117,8 +117,6 @@ The first capture requires Screen Recording access in **System Settings → Priv
 
 The **Smooth Scrolling** sidebar makes mouse-wheel scrolling feel more like a
 trackpad by rewriting wheel events into interpolated, continuous scroll frames.
-It is derived from the scrolling pipeline of
-[Mos](https://github.com/Caldis/Mos) under its CC BY-NC 4.0 license.
 
 - Enable smooth vertical/horizontal scrolling independently, or pass one axis
   through untouched while the other is smoothed.

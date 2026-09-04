@@ -95,7 +95,7 @@ struct SmoothScrollingTests {
         #expect(!settings.requiresInputTap)
     }
 
-    @Test func settingsDecodeWithMosDefaultsAndSafeBounds() throws {
+    @Test func settingsDecodeWithDefaultValuesAndSafeBounds() throws {
         let data = Data(#"{"minimumStep":999,"speed":0,"duration":99,"deadZone":-10}"#.utf8)
         let settings = try JSONDecoder().decode(SmoothScrollSettings.self, from: data)
 
@@ -106,7 +106,7 @@ struct SmoothScrollingTests {
         #expect(settings.deadZone == 0)
     }
 
-    @Test func mosDurationCurveUsesIndependentKnownValues() {
+    @Test func durationCurveUsesIndependentKnownValues() {
         #expect(SmoothScrollSettings.interpolationFactor(forDuration: 0) == 1)
         #expect(SmoothScrollSettings.interpolationFactor(forDuration: 4.35) == 0.085)
         #expect(SmoothScrollSettings.interpolationFactor(forDuration: 5) == 0.019)

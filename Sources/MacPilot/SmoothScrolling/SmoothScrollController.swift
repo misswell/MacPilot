@@ -5,7 +5,7 @@ import CoreVideo
 import Foundation
 import os
 
-/// Low-level presenter for Mos-style smooth wheel scrolling.
+/// Low-level presenter for smooth wheel scrolling.
 ///
 /// A single CGEvent tap reads physical wheel events on the main run loop, feeds
 /// their deltas into a CVDisplayLink-backed interpolator, then posts synthetic
