@@ -2234,6 +2234,7 @@ struct ContentView: View {
         switch section {
         case .exit:
             header
+            enforcementStatus
             if model.rules.isEmpty { EmptyRulesView(addRule: { showingAdd = true }) }
             else { rulesList }
         case .launch:
@@ -2279,7 +2280,21 @@ struct ContentView: View {
             Button { showingAdd = true } label: { Label(model.t("addApp"), systemImage: "plus") }
                 .buttonStyle(.borderedProminent).controlSize(.large)
         }
-        .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 28)
+        .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 22)
+    }
+
+    private var enforcementStatus: some View {
+        SettingsCard {
+            HStack(spacing: 10) {
+                Circle().fill(model.isEnforcing ? .green : .orange).frame(width: 8, height: 8)
+                Text(model.isEnforcing ? model.t("enforcing") : model.t("paused")).font(.subheadline.weight(.medium))
+                Spacer()
+                Toggle("", isOn: $model.isEnforcing).labelsHidden().toggleStyle(.switch)
+            }
+            Text(model.t("enabledChecked", model.enabledCount, model.timeString))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 36).padding(.bottom, 16)
     }
 
     private var rulesList: some View {
@@ -2485,17 +2500,6 @@ struct Sidebar: View {
             .background(section == .settings ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             Spacer()
-            VStack(alignment: .leading, spacing: 13) {
-                HStack {
-                    Circle().fill(model.isEnforcing ? .green : .orange).frame(width: 8, height: 8)
-                    Text(model.isEnforcing ? model.t("enforcing") : model.t("paused")).font(.subheadline.weight(.medium))
-                    Spacer()
-                    Toggle("", isOn: $model.isEnforcing).labelsHidden().controlSize(.mini)
-                }
-                Text(model.t("enabledChecked", model.enabledCount, model.timeString))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            .padding(15).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12)).padding(16)
         }
         .frame(width: 230).background(Color(nsColor: .controlBackgroundColor))
     }
