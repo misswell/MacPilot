@@ -4963,7 +4963,13 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
             height: max(1, naturalImageSize.height * scale)
         )
         let panel = NSPanel(
-            contentRect: CGRect(origin: .zero, size: imageSize),
+            contentRect: CGRect(
+                origin: .zero,
+                size: CGSize(
+                    width: imageSize.width + SmartPinImageView.badgeOverhang,
+                    height: imageSize.height + SmartPinImageView.badgeOverhang
+                )
+            ),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -4981,9 +4987,10 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
         installContent(in: panel)
         if let screenRect {
             // 贴图显示在框选的原位；输出带阴影/圆角垫边或被屏幕缩放时，
-            // 以原框选区域为中心摆放。
+            // 以原框选区域为中心摆放。窗口左/上含角标悬出垫边，定位时
+            // 扣掉垫边让图片本体仍居中于框选区域。
             panel.setFrameOrigin(CGPoint(
-                x: screenRect.midX - imageSize.width / 2,
+                x: screenRect.midX - imageSize.width / 2 - SmartPinImageView.badgeOverhang,
                 y: screenRect.midY - imageSize.height / 2
             ))
         } else {
@@ -5110,8 +5117,64 @@ private final class SmartPinWindowController: NSObject, NSWindowDelegate {
     }
 }
 
+/// 贴图视图基类：左上角关闭角标默认隐藏，鼠标悬停在贴图上时才显示；
+/// 角标中心始终对齐内容的左上角尖（由子类给出角尖坐标）。
 @MainActor
-private final class SmartPinImageView: NSView {
+private class SmartPinContentView: NSView {
+    let closeButton = PinCloseButton()
+
+    /// 内容（图片矩形/文字气泡）左上角的角尖，view 坐标系。
+    var closeButtonCenter: CGPoint { .zero }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        addSubview(closeButton)
+        closeButton.isHidden = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas where area.owner === self {
+            removeTrackingArea(area)
+        }
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self
+        ))
+    }
+
+    override func layout() {
+        super.layout()
+        let diameter = PinCloseButton.diameter
+        let center = closeButtonCenter
+        closeButton.frame = CGRect(
+            x: center.x - diameter / 2,
+            y: center.y - diameter / 2,
+            width: diameter,
+            height: diameter
+        )
+    }
+
+    override func mouseEntered(with _: NSEvent) {
+        closeButton.isHidden = false
+    }
+
+    override func mouseExited(with _: NSEvent) {
+        closeButton.isHidden = true
+    }
+}
+
+@MainActor
+private final class SmartPinImageView: SmartPinContentView {
+    /// 窗口在图片左/上侧让出的透明垫边 = 角标半径，使角标中心恰好
+    /// 落在图片左上角尖且完整可见（不被窗口裁剪）。
+    static let badgeOverhang = PinCloseButton.diameter / 2
     private let image: CGImage
     private let language: AppLanguage
     private let onCopy: () -> Void
@@ -5120,8 +5183,6 @@ private final class SmartPinImageView: NSView {
     private let onUpload: () -> Void
     private let onClose: () -> Void
     private var dragOffset: CGPoint?
-    /// 左上角常驻关闭按钮（iShot 式贴图角标）。
-    private let closeButton = PinCloseButton()
 
     init(
         image: CGImage,
@@ -5148,7 +5209,6 @@ private final class SmartPinImageView: NSView {
         let tooltip = AppText.value("scClose", language: language)
         closeButton.toolTip = tooltip
         closeButton.setAccessibilityLabel(tooltip)
-        addSubview(closeButton)
     }
 
     @available(*, unavailable)
@@ -5156,23 +5216,25 @@ private final class SmartPinImageView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func layout() {
-        super.layout()
-        // AppKit 坐标原点在左下，「左上角」= y 取 bounds 高度减按钮尺寸加边距。
-        let edge: CGFloat = 6
-        let size: CGFloat = 18
-        closeButton.frame = CGRect(
-            x: edge,
-            y: bounds.height - size - edge,
-            width: size,
-            height: size
+    /// 图片内容区：窗口左/上是角标悬出的透明垫边。
+    private var imageRect: NSRect {
+        NSRect(
+            x: Self.badgeOverhang,
+            y: 0,
+            width: bounds.width - Self.badgeOverhang,
+            height: bounds.height - Self.badgeOverhang
         )
+    }
+
+    override var closeButtonCenter: CGPoint {
+        // 图片为直角内容，角尖即图片矩形左上角点。
+        CGPoint(x: Self.badgeOverhang, y: bounds.height - Self.badgeOverhang)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height)).draw(
-            in: bounds,
+            in: imageRect,
             from: .zero,
             operation: .copy,
             fraction: 1
@@ -5239,6 +5301,9 @@ private final class SmartPinImageView: NSView {
 /// 左上角圆形关闭角标；acceptsFirstMouse 让首击即可关闭贴图。
 @MainActor
 private final class PinCloseButton: NSButton {
+    /// 角标直径；贴图窗口按 `diameter / 2` 预留悬出垫边。
+    static let diameter: CGFloat = 18
+
     init() {
         super.init(frame: .zero)
         let symbol = NSImage(
@@ -5251,7 +5316,7 @@ private final class PinCloseButton: NSButton {
         contentTintColor = .white
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
-        layer?.cornerRadius = 9
+        layer?.cornerRadius = Self.diameter / 2
         layer?.borderWidth = 1
         layer?.borderColor = NSColor.white.withAlphaComponent(0.6).cgColor
     }
@@ -5298,9 +5363,15 @@ private final class SmartTextPinWindowController: NSObject, NSWindowDelegate {
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: font]
         ).size
-        let size = CGSize(
+        let bubbleSize = CGSize(
             width: max(72, ceil(textSize.width) + padding * 2 + 6),
             height: max(40, ceil(textSize.height) + padding * 2 + 6)
+        )
+        // 窗口比气泡大出一圈角标悬出垫边（左/上），角标中心才能落在
+        // 气泡左上角尖上且完整可见。
+        let size = CGSize(
+            width: bubbleSize.width + SmartTextPinView.badgeOverhang,
+            height: bubbleSize.height + SmartTextPinView.badgeOverhang
         )
         let panel = NSPanel(
             contentRect: CGRect(origin: .zero, size: size),
@@ -5352,13 +5423,16 @@ private final class SmartTextPinWindowController: NSObject, NSWindowDelegate {
 }
 
 @MainActor
-private final class SmartTextPinView: NSView {
+private final class SmartTextPinView: SmartPinContentView {
+    /// 窗口在气泡左/上侧让出的透明垫边 = 角标半径，使角标中心恰好
+    /// 落在气泡左上角尖且完整可见（不被窗口裁剪）。
+    static let badgeOverhang = PinCloseButton.diameter / 2
+    private static let bubbleRadius: CGFloat = 8
     private let text: String
     private let font: NSFont
     private let language: AppLanguage
     private let onClose: () -> Void
     private var dragOffset: CGPoint?
-    private let closeButton = PinCloseButton()
     private let textPadding: CGFloat = 12
     private let textAttributes: [NSAttributedString.Key: Any]
 
@@ -5378,7 +5452,6 @@ private final class SmartTextPinView: NSView {
         closeButton.action = #selector(closeRequested)
         closeButton.toolTip = tooltip
         closeButton.setAccessibilityLabel(tooltip)
-        addSubview(closeButton)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel(text)
@@ -5389,28 +5462,39 @@ private final class SmartTextPinView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func layout() {
-        super.layout()
-        let edge: CGFloat = 5
-        let size: CGFloat = 18
-        closeButton.frame = CGRect(
-            x: edge,
-            y: bounds.height - size - edge,
-            width: size,
-            height: size
+    /// 文字气泡内容区：窗口左/上是角标悬出的透明垫边。
+    private var bubbleRect: NSRect {
+        NSRect(
+            x: Self.badgeOverhang,
+            y: 0,
+            width: bounds.width - Self.badgeOverhang,
+            height: bounds.height - Self.badgeOverhang
+        )
+    }
+
+    override var closeButtonCenter: CGPoint {
+        // 圆角气泡的角尖 = 圆弧上离中心最远的点（45° 处）。
+        let tipInset = Self.bubbleRadius * (1 - sqrt(2) / 2)
+        return CGPoint(
+            x: bubbleRect.minX + tipInset,
+            y: bubbleRect.maxY - tipInset
         )
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        let bubble = NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8)
+        let bubble = NSBezierPath(
+            roundedRect: bubbleRect,
+            xRadius: Self.bubbleRadius,
+            yRadius: Self.bubbleRadius
+        )
         NSColor.white.withAlphaComponent(0.96).setFill()
         bubble.fill()
         NSColor.black.withAlphaComponent(0.18).setStroke()
         bubble.lineWidth = 1
         bubble.stroke()
-        // 左上让出关闭角标的位置，避免压住第一行文字。
-        let textRect = bounds.insetBy(dx: textPadding + 6, dy: textPadding)
+        // 角标默认隐藏、悬停时才显示在左上角尖，常规内边距即可容纳首行文字。
+        let textRect = bubbleRect.insetBy(dx: textPadding, dy: textPadding)
         (text as NSString).draw(in: textRect, withAttributes: textAttributes)
     }
 
