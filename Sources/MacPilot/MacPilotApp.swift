@@ -660,7 +660,21 @@ enum AppText {
         "clipboardHistoryEmpty": "剪贴板历史为空",
         "clipboardFooterHint": "%d 条 · ↑↓ 选择 · ⏎ 粘贴 · ⌘⏎ 复制 · ⌫ 删除",
         "clipboardImageLabel": "图片",
-        "clipboardHotkeyLabel": "快捷键 %@"
+        "clipboardHotkeyLabel": "快捷键 %@",
+        "systemMaintenance": "系统维护",
+        "systemMaintenanceDescription": "重新启动 macOS 用户空间和系统服务，但不会重新启动内核和硬件。",
+        "softRestartWarning": "未保存的工作可能丢失。",
+        "softRestartMacOS": "软重启 macOS",
+        "softRestartConfirmTitle": "软重启 macOS？",
+        "softRestartConfirmMessage": "这将关闭当前运行的应用并重新启动 macOS 用户空间和系统服务。未保存的数据可能丢失。内核和硬件不会重新启动。",
+        "softRestartAction": "软重启",
+        "systemHelperEnable": "启用系统维护功能",
+        "systemHelperRequiresApproval": "系统维护组件需要获得系统授权。",
+        "systemHelperOpenSettings": "前往系统设置",
+        "systemHelperMissing": "系统维护组件缺失，请重新安装 MacPilot。",
+        "systemHelperFailed": "系统维护操作失败：%@",
+        "softRestartRecordingActive": "请先停止正在进行的屏幕录制，再执行软重启。",
+        "softRestartUpdateActive": "MacPilot 正在更新，请等待更新完成后再执行软重启。"
     ]
 
     static func value(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
@@ -967,7 +981,21 @@ enum AppText {
             "clipboardHistoryEmpty": "Clipboard history is empty",
             "clipboardFooterHint": "%d items · ↑↓ select · ⏎ paste · ⌘⏎ copy · ⌫ delete",
             "clipboardImageLabel": "Image",
-            "clipboardHotkeyLabel": "Shortcut %@"
+            "clipboardHotkeyLabel": "Shortcut %@",
+            "systemMaintenance": "System Maintenance",
+            "systemMaintenanceDescription": "Restart the macOS user space and system services without restarting the kernel or hardware.",
+            "softRestartWarning": "Unsaved work may be lost.",
+            "softRestartMacOS": "Restart User Space",
+            "softRestartConfirmTitle": "Restart User Space?",
+            "softRestartConfirmMessage": "This will quit running apps and restart the macOS user space and system services. Unsaved data may be lost. The kernel and hardware are not restarted.",
+            "softRestartAction": "Soft Restart",
+            "systemHelperEnable": "Enable System Maintenance",
+            "systemHelperRequiresApproval": "The system maintenance component needs approval in System Settings.",
+            "systemHelperOpenSettings": "Open System Settings",
+            "systemHelperMissing": "The system maintenance component is missing. Please reinstall MacPilot.",
+            "systemHelperFailed": "The system maintenance operation failed: %@",
+            "softRestartRecordingActive": "Stop the in-progress screen recording before restarting the user space.",
+            "softRestartUpdateActive": "MacPilot is updating. Wait for the update to finish before restarting the user space."
         ]
 }
 
@@ -3823,6 +3851,9 @@ struct SettingsView: View {
                     ))
                     .toggleStyle(.switch)
                     Text(model.t("startAtLoginHint")).font(.subheadline).foregroundStyle(.secondary)
+                }
+                SettingsCard {
+                    SystemMaintenanceSettingsView()
                 }
                 SettingsCard {
                     SoftwareUpdateSettingsView(updater: model.updater, language: model.language)

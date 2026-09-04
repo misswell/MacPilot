@@ -7,14 +7,23 @@ let package = Package(
     products: [
         .executable(name: "MacPilot", targets: ["MacPilot"]),
         .executable(name: "MacPilotUpdater", targets: ["MacPilotUpdater"]),
+        .executable(name: "MacPilotSystemHelper", targets: ["MacPilotSystemHelper"]),
         .library(name: "MacPilotOcclusionPatch", type: .dynamic, targets: ["MacPilotOcclusionPatch"])
     ],
     targets: [
+        .target(name: "MacPilotSystemIPC"),
         .executableTarget(
             name: "MacPilot",
-            dependencies: ["MacPilotRightClickKit"]
+            dependencies: [
+                "MacPilotRightClickKit",
+                "MacPilotSystemIPC"
+            ]
         ),
         .executableTarget(name: "MacPilotUpdater"),
+        .executableTarget(
+            name: "MacPilotSystemHelper",
+            dependencies: ["MacPilotSystemIPC"]
+        ),
         .target(
             name: "MacPilotRightClickKit",
             linkerSettings: [
@@ -28,7 +37,10 @@ let package = Package(
             name: "MacPilotOcclusionPatch",
             linkerSettings: [.linkedFramework("AppKit")]
         ),
-        .testTarget(name: "MacPilotTests", dependencies: ["MacPilot"]),
+        .testTarget(
+            name: "MacPilotTests",
+            dependencies: ["MacPilot", "MacPilotSystemIPC"]
+        ),
         .testTarget(
             name: "MacPilotRightClickKitTests",
             dependencies: ["MacPilotRightClickKit"]
