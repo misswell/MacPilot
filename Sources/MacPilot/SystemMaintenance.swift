@@ -49,13 +49,33 @@ final class SystemMaintenanceService: ObservableObject {
     // MARK: 状态
 
     nonisolated static func state(for status: SMAppService.Status) -> SystemHelperState {
+        state(for: status, daemonPlistExists: bundledDaemonPlistExists)
+    }
+
+    nonisolated static func state(
+        for status: SMAppService.Status,
+        daemonPlistExists: Bool
+    ) -> SystemHelperState {
         switch status {
         case .notRegistered: .notRegistered
         case .requiresApproval: .requiresApproval
         case .enabled: .enabled
-        case .notFound: .unavailable
+        case .notFound:
+            // 新版 macOS 对「存在于 bundle 但从未注册」的服务一律返回
+            // .notFound（注册过再注销才会回到 .notRegistered）。只有当
+            // 打包的 LaunchDaemon plist 确实不在 bundle 里时才算「缺失」。
+            daemonPlistExists ? .notRegistered : .unavailable
         @unknown default: .unavailable
         }
+    }
+
+    nonisolated private static var bundledDaemonPlistExists: Bool {
+        FileManager.default.fileExists(
+            atPath: Bundle.main.bundleURL
+                .appendingPathComponent("Contents/Library/LaunchDaemons")
+                .appendingPathComponent(SystemHelperIdentity.plistName)
+                .path
+        )
     }
 
     func refreshStatus() {

@@ -27,10 +27,30 @@ struct SystemMaintenanceTests {
     // MARK: 2. Helper 状态映射
 
     @Test func helperDaemonStatusMapsToUIState() {
-        #expect(SystemMaintenanceService.state(for: .notRegistered) == .notRegistered)
-        #expect(SystemMaintenanceService.state(for: .requiresApproval) == .requiresApproval)
-        #expect(SystemMaintenanceService.state(for: .enabled) == .enabled)
-        #expect(SystemMaintenanceService.state(for: .notFound) == .unavailable)
+        #expect(
+            SystemMaintenanceService.state(for: .notRegistered, daemonPlistExists: true)
+                == .notRegistered
+        )
+        #expect(
+            SystemMaintenanceService.state(for: .requiresApproval, daemonPlistExists: true)
+                == .requiresApproval
+        )
+        #expect(
+            SystemMaintenanceService.state(for: .enabled, daemonPlistExists: true) == .enabled
+        )
+    }
+
+    @Test func notFoundTreatedAsUnregisteredWhileDaemonPlistShipped() {
+        // 新版 macOS 对未注册服务返回 .notFound；只要 LaunchDaemon plist
+        // 随包存在就按「未注册」处理，引导用户启用而不是提示重装。
+        #expect(
+            SystemMaintenanceService.state(for: .notFound, daemonPlistExists: true)
+                == .notRegistered
+        )
+        #expect(
+            SystemMaintenanceService.state(for: .notFound, daemonPlistExists: false)
+                == .unavailable
+        )
     }
 
     // MARK: 3. 录屏保护
