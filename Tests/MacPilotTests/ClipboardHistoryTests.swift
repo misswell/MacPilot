@@ -31,28 +31,12 @@ struct ClipboardHistoryTests {
         ClipboardHistory(storageURL: url)
     }
 
-    /// 把内容文件目录指到独立的临时目录，避免测试读写真实的用户目录。
-    private func isolateContentStore() -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("clipboard-content-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        ClipboardContentStore.directoryOverride = dir
-        return dir
-    }
-
-    /// 恢复默认目录并清理临时目录；无论与其他 defer 的相对顺序如何都安全。
-    private func restoreContentStore(_ dir: URL) {
-        ClipboardContentStore.directoryOverride = dir
-        try? FileManager.default.removeItem(at: dir)
-        ClipboardContentStore.directoryOverride = nil
-    }
-
     @Test func newestCopyIsInsertedFirst() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipboard-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let contentStore = isolateContentStore()
-        defer { restoreContentStore(contentStore) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
 
         let history = makeHistory(url: url)
         let first = makeItem("first", date: Date(timeIntervalSinceNow: -10))
@@ -68,8 +52,8 @@ struct ClipboardHistoryTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipboard-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let contentStore = isolateContentStore()
-        defer { restoreContentStore(contentStore) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
 
         let history = makeHistory(url: url)
         let first = makeItem("hello")
@@ -85,8 +69,8 @@ struct ClipboardHistoryTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipboard-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let contentStore = isolateContentStore()
-        defer { restoreContentStore(contentStore) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
 
         let history = makeHistory(url: url)
         history.storageLimit = 3
@@ -107,8 +91,8 @@ struct ClipboardHistoryTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipboard-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let contentStore = isolateContentStore()
-        defer { restoreContentStore(contentStore) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
 
         let history = makeHistory(url: url)
         history.add(makeItem("SwiftUI"))
@@ -127,8 +111,8 @@ struct ClipboardHistoryTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipboard-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let contentStore = isolateContentStore()
-        defer { restoreContentStore(contentStore) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
 
         let history = makeHistory(url: url)
         history.pinsAtTop = true
@@ -146,8 +130,8 @@ struct ClipboardHistoryTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipboard-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let contentStore = isolateContentStore()
-        defer { restoreContentStore(contentStore) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
 
         let history = makeHistory(url: url)
         history.add(makeItem("persisted"))
@@ -166,8 +150,8 @@ struct ClipboardHistoryTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipboard-flush-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let contentStore = isolateContentStore()
-        defer { restoreContentStore(contentStore) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
 
         let history = makeHistory(url: url)
         history.add(makeItem("latest"))
@@ -179,8 +163,8 @@ struct ClipboardHistoryTests {
 
     @Test func fileBackedContentIsStoredOnDiskAndResolvesOnDemand() async throws {
         // 图片/大数据应落盘：内容 value 为空，仅保留文件引用；按需读取能还原数据。
-        let contentStore = isolateContentStore()
-        defer { restoreContentStore(contentStore) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
         let id = UUID()
         let imageData = Data((0..<16_384).map { UInt8($0 % 251) })  // > 64KB? no, 16KB — 触发外部化需要图片类型
         let content = ClipboardContent(
@@ -201,8 +185,8 @@ struct ClipboardHistoryTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipboard-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let contentStore = isolateContentStore()
-        defer { restoreContentStore(contentStore) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
 
         let id = UUID()
         let data = Data(repeating: 0x5A, count: 128 * 1024)
@@ -232,8 +216,8 @@ struct ClipboardHistoryTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipboard-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let contentStore = isolateContentStore()
-        defer { restoreContentStore(contentStore) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
 
         let firstID = UUID()
         let secondID = UUID()
@@ -276,8 +260,8 @@ struct ClipboardHistoryTests {
     }
 
     @Test func fileBackedImageThumbnailIsBoundedWithoutResolvingOriginalData() throws {
-        let contentStore = isolateContentStore()
-        defer { restoreContentStore(contentStore) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let context = try #require(CGContext(
             data: nil,

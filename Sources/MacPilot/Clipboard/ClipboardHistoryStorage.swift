@@ -73,29 +73,6 @@ final class ClipboardHistoryStorage {
         try data.write(to: url, options: .atomic)
     }
 
-    // MARK: - Externalization
-
-    /// 把条目里仍内联的大数据（图片、>64KB）替换为磁盘文件引用。
-    /// 加载旧版历史与接收新条目共用这一条路径。
-    static func externalizeInlineContent(in item: ClipboardItem) -> ClipboardItem {
-        var contents = item.contents
-        var changed = false
-        for index in contents.indices {
-            let externalized = ClipboardContentStore.externalized(
-                contents[index],
-                itemID: item.id,
-                index: index
-            )
-            guard externalized != contents[index] else { continue }
-            contents[index] = externalized
-            changed = true
-        }
-        guard changed else { return item }
-        var updated = item
-        updated.contents = contents
-        return updated
-    }
-
     // MARK: - Defaults
 
     private static func defaultStorageURL() -> URL {

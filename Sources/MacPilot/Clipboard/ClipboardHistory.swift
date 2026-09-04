@@ -74,7 +74,7 @@ final class ClipboardHistory: ObservableObject {
     private func migrateInlineContentToDisk() -> Bool {
         var changed = false
         for index in allItems.indices {
-            let externalized = ClipboardHistoryStorage.externalizeInlineContent(in: allItems[index])
+            let externalized = ClipboardContentStore.externalizeInlineContent(in: allItems[index])
             guard externalized != allItems[index] else { continue }
             allItems[index] = externalized
             changed = true
@@ -99,7 +99,7 @@ final class ClipboardHistory: ObservableObject {
     func add(_ newItem: ClipboardItem) -> ClipboardItem {
         // Keep the published model index-like even when a caller bypasses
         // ClipboardMonitor and supplies inline image/large data.
-        var item = ClipboardHistoryStorage.externalizeInlineContent(in: newItem)
+        var item = ClipboardContentStore.externalizeInlineContent(in: newItem)
 
         if let existingIndex = allItems.firstIndex(where: { existing in
             existing.id != item.id && existing.supersedes(item)

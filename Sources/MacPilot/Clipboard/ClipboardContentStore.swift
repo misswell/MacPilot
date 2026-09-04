@@ -59,6 +59,27 @@ enum ClipboardContentStore {
         return ClipboardContent(type: content.type, file: file, size: value.count)
     }
 
+    /// 把条目里仍内联的大数据（图片、>64KB）整体替换为磁盘文件引用。
+    /// 加载旧版历史与接收新条目共用这一条路径。
+    static func externalizeInlineContent(in item: ClipboardItem) -> ClipboardItem {
+        var contents = item.contents
+        var changed = false
+        for index in contents.indices {
+            let externalized = externalized(
+                contents[index],
+                itemID: item.id,
+                index: index
+            )
+            guard externalized != contents[index] else { continue }
+            contents[index] = externalized
+            changed = true
+        }
+        guard changed else { return item }
+        var updated = item
+        updated.contents = contents
+        return updated
+    }
+
     /// 删除一个条目对应的所有内容文件（文件名以 `itemID-` 开头）。
     static func delete(itemID: UUID) {
         let prefix = itemID.uuidString + "-"
