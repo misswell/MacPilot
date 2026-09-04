@@ -1,6 +1,6 @@
 //
 //  Messager.swift
-//  RClick
+//  MacPilot
 //
 //  进程间通信（IPC）管理器
 //  基于：DistributedNotificationCenter + Codable 协议

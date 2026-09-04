@@ -1,6 +1,6 @@
 //
 //  BookmarkManager.swift
-//  RClick
+//  MacPilot
 //
 //  Created by Claude on 2026/07/12.
 //

@@ -3,10 +3,6 @@
 //  MacPilot
 //
 //  剪贴板历史模型（记录、去重、固定、搜索、持久化）。
-//  改编自 Maccy（MIT License, https://github.com/p0deje/Maccy）：
-//  - Maccy/Observables/History.swift
-//  - Maccy/Storage.swift
-//  - Maccy/Search.swift
 //
 
 import AppKit
@@ -163,7 +159,7 @@ final class ClipboardHistory: ObservableObject {
             item.firstCopiedAt = existing.firstCopiedAt
             item.numberOfCopies += existing.numberOfCopies
             item.pin = existing.pin
-            if !item.fromMaccy {
+            if !item.fromMacPilot {
                 item.application = existing.application
             }
             allItems.remove(at: existingIndex)

@@ -30,7 +30,7 @@ SWIFT_BUILD_ARGS=(-c release -Xswiftc -warnings-as-errors "${ARCH_ARGS[@]}")
 BIN_DIR="$(swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
 swift build "${SWIFT_BUILD_ARGS[@]}"
 
-# Build the FinderSync right-click extension (derived from RClick, GPLv3).
+# Build the FinderSync right-click extension.
 # Build it for the same architectures as the app so the context menu keeps
 # working on every supported CPU.
 MACPILOT_EXT_ARCHS="${ARCHS[*]}" "$ROOT/Scripts/build-findersync.sh"

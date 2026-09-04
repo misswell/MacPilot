@@ -1219,7 +1219,7 @@ final class MacPilotModel: ObservableObject {
         windowSwitcher.activateFromConfiguration()
         smoothScrolling.activateFromConfiguration()
         clipboard.activateFromConfiguration()
-        // Finder 右键菜单（融合 RClick FinderSync 扩展）。
+        // Finder 右键菜单（FinderSync 扩展）。
         startRightClickMenu()
         Task { [weak updater] in
             try? await Task.sleep(for: .seconds(2))

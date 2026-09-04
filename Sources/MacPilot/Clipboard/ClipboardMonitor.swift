@@ -3,8 +3,6 @@
 //  MacPilot
 //
 //  剪贴板监听与复制/粘贴执行。
-//  改编自 Maccy（MIT License, https://github.com/p0deje/Maccy）：
-//  - Maccy/Clipboard.swift
 //
 
 import AppKit
@@ -76,7 +74,7 @@ final class ClipboardMonitor {
     func copy(_ string: String) {
         pasteboard.clearContents()
         pasteboard.setString(string, forType: .string)
-        pasteboard.setString(NSPasteboard.PasteboardType.fromMaccy.rawValue, forType: .source)
+        pasteboard.setString(NSPasteboard.PasteboardType.fromMacPilot.rawValue, forType: .source)
         checkForChangesInPasteboard()
     }
 
@@ -104,7 +102,7 @@ final class ClipboardMonitor {
         }
         pasteboard.writeObjects(fileURLItems)
 
-        pasteboard.setString("", forType: .fromMaccy)
+        pasteboard.setString("", forType: .fromMacPilot)
         pasteboard.setString(item.application ?? "", forType: .source)
 
         checkForChangesInPasteboard()
@@ -150,7 +148,7 @@ final class ClipboardMonitor {
         changeCount = pasteboard.changeCount
 
         // 面板自身复制产生的变化：只更新 changeCount，不记录。
-        if pasteboard.pasteboardItems?.contains(where: { $0.types.contains(.fromMaccy) }) == true {
+        if pasteboard.pasteboardItems?.contains(where: { $0.types.contains(.fromMacPilot) }) == true {
             return
         }
 

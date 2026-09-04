@@ -1,6 +1,6 @@
 //
 //  GeneralSettingsTabView.swift
-//  RClick
+//  MacPilot
 //
 //  Created by 李旭 on 2024/4/10.
 //
@@ -206,7 +206,7 @@ struct GeneralSettingsTabView: View {
     private func exportSettings() {
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.propertyList]
-        savePanel.nameFieldStringValue = "RClick_Settings.plist"
+        savePanel.nameFieldStringValue = "MacPilot_Settings.plist"
         savePanel.begin { response in
             guard response == .OK, let url = savePanel.url else { return }
             // TODO: 实现设置导出逻辑
@@ -230,7 +230,7 @@ struct GeneralSettingsTabView: View {
     private func exportLogs() {
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.plainText]
-        savePanel.nameFieldStringValue = "RClick_Log.txt"
+        savePanel.nameFieldStringValue = "MacPilot_Log.txt"
         savePanel.begin { response in
             guard response == .OK, let url = savePanel.url else { return }
             // TODO: 实现日志导出逻辑

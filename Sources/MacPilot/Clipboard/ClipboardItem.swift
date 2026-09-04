@@ -3,10 +3,6 @@
 //  MacPilot
 //
 //  剪贴板历史数据模型。
-//  改编自 Maccy（MIT License, https://github.com/p0deje/Maccy）：
-//  - Maccy/Models/HistoryItem.swift
-//  - Maccy/Models/HistoryItemContent.swift
-//  - Maccy/Extensions/NSPasteboard.PasteboardType+Types.swift
 //
 
 import AppKit
@@ -71,7 +67,7 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
     /// 复制时产生的临时类型，不参与相似度判定。
     private static let transientTypes: [String] = [
         NSPasteboard.PasteboardType.modified.rawValue,
-        NSPasteboard.PasteboardType.fromMaccy.rawValue,
+        NSPasteboard.PasteboardType.fromMacPilot.rawValue,
         NSPasteboard.PasteboardType.linkPresentationMetadata.rawValue,
         NSPasteboard.PasteboardType.customWebKitPasteboardData.rawValue,
         NSPasteboard.PasteboardType.source.rawValue,
@@ -193,7 +189,7 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
         return String(data: data, encoding: .utf8)
     }
 
-    var fromMaccy: Bool { contentData([.fromMaccy]) != nil }
+    var fromMacPilot: Bool { contentData([.fromMacPilot]) != nil }
 
     private func contentData(_ types: [NSPasteboard.PasteboardType]) -> Data? {
         contents.first { types.contains(NSPasteboard.PasteboardType($0.type)) }.flatMap(resolvedData(for:))
@@ -213,7 +209,7 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-// MARK: - Pasteboard type helpers (源自 Maccy)
+// MARK: - Pasteboard type helpers
 
 extension NSPasteboard.PasteboardType {
     static let heic = NSPasteboard.PasteboardType(rawValue: "public.heic")
@@ -226,11 +222,10 @@ extension NSPasteboard.PasteboardType {
     static let source = NSPasteboard.PasteboardType(rawValue: "org.nspasteboard.source")
     static let transient = NSPasteboard.PasteboardType(rawValue: "org.nspasteboard.TransientType")
 
-    // https://github.com/p0deje/Maccy/issues/429
     static let modified = NSPasteboard.PasteboardType(rawValue: "x.nspasteboard.ModifiedType")
 
     /// 标记「本次复制来自 MacPilot 剪切板」。
-    static let fromMaccy = NSPasteboard.PasteboardType(rawValue: "com.misswell.macpilot.clipboard")
+    static let fromMacPilot = NSPasteboard.PasteboardType(rawValue: "com.misswell.macpilot.clipboard")
 
     static let microsoftObjectLink = NSPasteboard.PasteboardType(rawValue: "com.microsoft.ObjectLink")
     static let microsoftLinkSource = NSPasteboard.PasteboardType(rawValue: "com.microsoft.Link-Source")
@@ -242,7 +237,7 @@ extension NSPasteboard.PasteboardType {
     static let notesRichText = NSPasteboard.PasteboardType(rawValue: "com.apple.notes.richtext")
 }
 
-// MARK: - Small helpers (源自 Maccy)
+// MARK: - Small helpers
 
 extension String {
     /// 截断到最大长度（按字符，不截断多字节字符）。

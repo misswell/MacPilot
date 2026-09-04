@@ -1,6 +1,6 @@
 //
 //  ModelContainer.swift
-//  RClick
+//  MacPilot
 //
 //  Created by 李旭 on 2025/10/3.
 //

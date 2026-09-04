@@ -1,6 +1,6 @@
 //
 //  AppLocalization.swift
-//  RClick
+//  MacPilot
 //
 //  Created by Codex on 2026/7/3.
 //
@@ -149,7 +149,6 @@ enum AppLocalization {
         "Version %@ (%@)": "版本 %@（%@）",
         "Version %@ is ignored": "已忽略版本 %@",
         "Warning": "警告",
-        "RClick needs permission to install the update into your Applications folder.": "安装更新到应用程序文件夹需要权限，请授予 MacPilot 相应权限。",
     ]
 
     private static var usesChinese: Bool {

@@ -3,7 +3,6 @@
 //  MacPilot
 //
 //  剪贴板功能模型：生命周期、设置、全局快捷键、面板控制与选择动作。
-//  行为参照 Maccy（MIT License, https://github.com/p0deje/Maccy）。
 //
 
 import AppKit

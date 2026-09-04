@@ -2,7 +2,7 @@
 //  RightClickMenuSettingsView.swift
 //  MacPilot
 //
-//  Finder 右键菜单设置入口（融合 RClick 配置界面）。
+//  Finder 右键菜单设置入口。
 //  该文件是主 App 内唯一 import MacPilotRightClickKit 的地方之一，
 //  避免 Kit 的 SettingsView/MenuBarView 与主 App 同名符号冲突。
 //

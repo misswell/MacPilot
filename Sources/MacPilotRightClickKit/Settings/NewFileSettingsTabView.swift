@@ -1,6 +1,6 @@
 //
 //  NewFileSettingsTabView.swift
-//  RClick
+//  MacPilot
 //
 //  Created by 李旭 on 2024/11/18.
 //

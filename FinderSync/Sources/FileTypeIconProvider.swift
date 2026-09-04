@@ -1,6 +1,6 @@
 //
 //  FileTypeIconProvider.swift
-//  RClick
+//  MacPilot
 //
 //  Created by Claude on 2026/06/27.
 //

@@ -448,7 +448,7 @@ enum SmartCaptureClipboard {
         pasteboard.clearContents()
         // ClipboardMonitor recognizes this marker and will not re-ingest
         // MacPilot's own screenshot copy as a new history entry.
-        item.setString("", forType: .fromMaccy)
+        item.setString("", forType: .fromMacPilot)
         _ = pasteboard.writeObjects([item])
     }
 

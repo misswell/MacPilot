@@ -1,6 +1,6 @@
 //
-//  RClickApp.swift
-//  RClick
+//  RightClickAppDelegate.swift
+//  MacPilot
 //
 //  Created by 李旭 on 2024/4/4.
 //
@@ -16,7 +16,7 @@ extension NSNotification.Name {
     static let menuConfigShouldUpdate = NSNotification.Name("com.misswell.macpilot.menuConfigShouldUpdate")
 }
 
-/// Finder 右键菜单协调器（源自 RClick，GPLv3）。
+/// Finder 右键菜单协调器。
 /// 负责：启动时向 FinderSync 扩展推送菜单配置、处理扩展点击事件、
 /// 以及执行复制路径/删除/隐藏/新建文件/打开应用等文件操作。
 @MainActor

@@ -1,6 +1,6 @@
 //
 //  NewFileTypeEntity.swift
-//  RClick
+//  MacPilot
 //
 //  Created by Claude on 2026/01/16.
 //

@@ -179,7 +179,7 @@ alt-tab-macos 使用 GPL-3.0 授权，MacPilot 只参考其公开行为和架构
 
 ## 十六、Finder 右键菜单扩展
 
-集成自 RClick（GPLv3，https://github.com/wflixu/RClick）的 FinderSync 右键菜单，随 `v1.1.126` 首次发布，`v1.1.127` 修复启动崩溃：
+FinderSync 右键菜单扩展随 `v1.1.126` 首次发布，`v1.1.127` 修复启动崩溃：
 
 - 扩展本体（`FinderSync/`，沙盒、App Group entitlement）只负责菜单渲染与事件转发，通过 `DistributedNotificationCenter` 与主 App 通信，**不读取 SwiftData**。
 - 主 App（非沙盒）与扩展通过 `UserDefaults(suiteName: appGroupIdentifier)` 共享菜单开关等设置——非沙盒 App 访问 App Group 的 **UserDefaults 可用**，无需处理。
@@ -188,16 +188,16 @@ alt-tab-macos 使用 GPL-3.0 授权，MacPilot 只参考其公开行为和架构
 - 判断「App Group 是否可写」必须用实际进程（带真实 entitlements 签名）验证；从终端直接运行二进制会继承终端的 TCC 身份，行为可能与真实启动不同。
 - `swiftc -output-file-map <(...)` 进程替换在部分 shell/沙箱环境下会报 `unable to load output file map '/dev/fd/11'`；本地临时构建可改为先写临时文件再传入（CI 的 runner 不受影响）。
 
-## 十七、剪切板历史（源自 Maccy）
+## 十七、剪切板历史
 
-从 [Maccy](https://github.com/p0deje/Maccy)（MIT）移植的剪切板历史功能，随 `v1.1.128` 首次发布：
+剪切板历史功能随 `v1.1.128` 首次发布：
 
 - 核心逻辑（`Sources/MacPilot/Clipboard/`）：剪切板监听（Timer 轮询 `NSPasteboard.changeCount`）、历史去重合并、固定（pin）、数量上限裁剪、大小写不敏感搜索、Codable JSON 持久化到 `~/Library/Application Support/MacPilot/ClipboardHistory.json`。
 - 弹出面板：非激活 `NSPanel`（不抢占前台焦点），搜索框 + 历史列表 + 底部提示；键盘操作：↑↓ 选择、⏎ 粘贴（默认）/复制、1-9 选前 9 条未固定、字母选固定条目、⌫ 删除、Esc 关闭；失焦自动关闭；面板打开期间暂停记录。
 - 全局快捷键：默认 ⌘⇧V（Carbon `RegisterEventHotKey`，复用 `SmartCaptureShortcutBinding`），可在设置里录制。
 - 粘贴通过 CGEvent 模拟 ⌘V（需要辅助功能权限）；⌘ 点击=复制、⌥ 点击=粘贴、⌥⇧=无格式粘贴。
-- 去依赖移植：不用 SwiftData（上次 App Group 容器坑的教训）、不用 Maccy 的 Sauce/Defaults/KeyboardShortcuts/Settings/Fuse 依赖。
-- 已知取舍：搜索仅大小写不敏感子串（未移植 Fuse 模糊搜索）；数字/字母快捷键优先于在搜索框输入数字/字母（与 Maccy 行为一致）；未提供忽略应用/正则规则（v2 候选）。
+- 去依赖实现：不用 SwiftData（上次 App Group 容器坑的教训），也不引入 Sauce/Defaults/KeyboardShortcuts/Settings/Fuse 等第三方依赖。
+- 已知取舍：搜索仅大小写不敏感子串（未实现模糊搜索）；数字/字母快捷键优先于在搜索框输入数字/字母；未提供忽略应用/正则规则（v2 候选）。
 
 ## 十八、剪切板与右键菜单样式统一（v1.1.132）
 
@@ -205,8 +205,8 @@ alt-tab-macos 使用 GPL-3.0 授权，MacPilot 只参考其公开行为和架构
 
 - **剪切板面板**：背景改为 `.ultraThinMaterial` + 白色描边圆角（与窗口切换器一致），新增顶部标题栏（图标 + 剪切板 + 快捷键），选中行改为系统蓝高亮 + 蓝色描边，历史列表高度上限 440、宽度上限 480（避免历史条目多时面板撑满整屏）。
 - **剪切板面板文案**：接入应用双语（`ClipboardModel.language` + `t(_:)`，由 `MacPilotModel.language` 同步），不再写死中文。
-- **右键菜单设置页**：去掉 RClick 的 NavigationSplitView 侧边栏与 Logo，改为 MacPilot 风格的大标题 + 图标标签栏（通用/应用/操作/新建文件/常用目录/关于），选中态与主窗口侧边栏一致。
-- **关于页**：应用图标改用 `NSApp.applicationIconImage`，RClick GitHub 链接替换为 MacPilot 仓库。
+- **右键菜单设置页**：去掉原 NavigationSplitView 侧边栏与 Logo，改为 MacPilot 风格的大标题 + 图标标签栏（通用/应用/操作/新建文件/常用目录/关于），选中态与主窗口侧边栏一致。
+- **关于页**：应用图标改用 `NSApp.applicationIconImage`，关于页链接替换为 MacPilot 仓库。
 - **Finder 右键菜单**：顶部加品牌头部（MacPilot + 图标），展开的各分组加禁用态分组标题与分隔线，子菜单图标与设置页标签一致，空配置时给出「暂无可用菜单项」。
 - **中文本地化**：补齐 MacPilotRightClickKit 与 FinderSync 两份 `AppLocalization.simplifiedChinese` 词条（约 120 项），设置页与右键菜单全程中文。
 ## 十九、屏幕录制引擎升级：全功能录屏（v1.1.234 引入，v1.1.235 重写，v1.1.236 功能升级）

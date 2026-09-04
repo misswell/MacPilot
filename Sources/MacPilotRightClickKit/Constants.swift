@@ -1,6 +1,6 @@
 //
 //  Constants.swift
-//  RClick
+//  MacPilot
 //
 //  Created by 李旭 on 2024/9/25.
 //
@@ -8,7 +8,7 @@
 import Foundation
 
 
-/// MacPilot 集成的 Finder 右键菜单（源自 RClick，GPLv3）统一常量。
+/// MacPilot 集成的 Finder 右键菜单统一常量。
 /// 主 App 与 FinderSync 扩展必须使用同一 App Group 才能共享配置。
 public enum RightClickConstants {
     /// 主程序与 FinderSync 扩展共享配置的 App Group。

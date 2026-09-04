@@ -3,7 +3,6 @@ set -euo pipefail
 
 # Build the MacPilot FinderSync extension (appex) for embedding into MacPilot.app.
 #
-# Mirrors RClick's FinderSyncExt (GPLv3, https://github.com/wflixu/RClick).
 # Uses plain swiftc so the SwiftPM-based MacPilot repo stays untouched.
 #
 # Supports one or more architectures: set MACPILOT_EXT_ARCHS to a space-separated

@@ -3,9 +3,6 @@
 //  MacPilot
 //
 //  剪贴板历史弹出面板（NSPanel + SwiftUI）。
-//  改编自 Maccy（MIT License, https://github.com/p0deje/Maccy）：
-//  - Maccy/FloatingPanel.swift
-//  - Maccy/Views/*.swift
 //
 
 import AppKit

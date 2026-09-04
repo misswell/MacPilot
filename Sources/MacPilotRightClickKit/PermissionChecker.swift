@@ -1,6 +1,6 @@
 //
 //  PermissionChecker.swift
-//  RClick
+//  MacPilot
 //
 //  辅助功能权限检查模块
 //
