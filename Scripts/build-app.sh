@@ -68,20 +68,6 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_EXECUTABLE_NAME"
 cp "$UPDATER_BIN" "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
 cp "$OCCLUSION_PATCH_BIN" "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
-
-# Privileged system helper (SMAppService LaunchDaemon) for userspace reboot.
-HELPER_BIN="$BIN_DIR/MacPilotSystemHelper"
-HELPER_LABEL="${BUNDLE_IDENTIFIER}.system-helper"
-DAEMON_PLIST="$APP/Contents/Library/LaunchDaemons/MacPilotSystemHelper.plist"
-mkdir -p "$APP/Contents/Library/LaunchDaemons"
-cp "$HELPER_BIN" "$APP/Contents/Resources/MacPilotSystemHelper"
-cp "$ROOT/Resources/LaunchDaemons/MacPilotSystemHelper.plist" "$DAEMON_PLIST"
-/usr/libexec/PlistBuddy -c "Set :Label $HELPER_LABEL" "$DAEMON_PLIST"
-if ! /usr/libexec/PlistBuddy -c "Set :MachServices:$HELPER_LABEL true" "$DAEMON_PLIST" 2>/dev/null; then
-    /usr/libexec/PlistBuddy -c "Delete :MachServices:com.misswell.macpilot.system-helper" "$DAEMON_PLIST" 2>/dev/null || true
-    /usr/libexec/PlistBuddy -c "Add :MachServices:$HELPER_LABEL bool true" "$DAEMON_PLIST"
-fi
-
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 if [[ -d "$ROOT/Resources/zh-Hans.lproj" ]]; then
@@ -174,10 +160,6 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
             "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
         codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
             "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
-        # Sign the root helper before the main app so the app's resource seal
-        # covers it. It must not inherit MacPilot.entitlements.
-        codesign --force --options runtime --identifier "$HELPER_LABEL" \
-            --sign "$SIGNING_IDENTITY" "$APP/Contents/Resources/MacPilotSystemHelper"
         codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
             --requirements "=$SHARED_REQUIREMENT" --sign "$SIGNING_IDENTITY" "$APP"
     fi
