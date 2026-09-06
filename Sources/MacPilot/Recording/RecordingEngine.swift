@@ -73,6 +73,10 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
     var presenterOverlayActivityHandler: (@MainActor (Bool) -> Void)?
     var frameSavedHandler: (@MainActor (URL) -> Void)?
     var encoderFallbackHandler: (@MainActor (ScreenRecordingVideoEncoder) -> Void)?
+    /// Live input level (0...1) for the floating controller meter. Reported
+    /// at most ~10×/s from the microphone tap.
+    var microphoneLevelHandler: (@Sendable (Float) -> Void)?
+    private var lastMicrophoneLevelForwardAt: CFAbsoluteTime = 0
 
     // MARK: Frame saving
 
@@ -521,7 +525,9 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
         guard registerWriterInput(writerInput) else { return }
 
         input.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, _ in
-            guard let self, let sample = buffer.hostClockSampleBuffer else { return }
+            guard let self else { return }
+            self.reportMicrophoneLevel(of: buffer)
+            guard let sample = buffer.hostClockSampleBuffer else { return }
             self.handleMicrophoneSample(sample)
         }
         do {
@@ -572,6 +578,40 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
         if microphoneInput.isReadyForMoreMediaData, !microphoneInput.append(retimed) {
             Self.logger.debug("Microphone sample was rejected while recording")
         }
+    }
+
+    /// Reports the tap input level for the controller meter. Only the
+    /// default-device AVAudioEngine path feeds the meter; the named-device
+    /// AVCapture path is written straight to disk without metering.
+    private func reportMicrophoneLevel(of buffer: AVAudioPCMBuffer) {
+        guard settings.capturesMicrophone, let handler = microphoneLevelHandler else { return }
+        let rms = Self.microphoneRMS(of: buffer)
+        lock.lock()
+        let now = CFAbsoluteTimeGetCurrent()
+        let shouldForward = now - lastMicrophoneLevelForwardAt >= 0.1
+        if shouldForward { lastMicrophoneLevelForwardAt = now }
+        lock.unlock()
+        guard shouldForward else { return }
+        // Speech sits around 0.02–0.2 RMS; the gain makes the meter readable.
+        handler(min(1, max(0, rms * 4)))
+    }
+
+    /// Internal so the RMS math can be unit tested with synthetic buffers.
+    static func microphoneRMS(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let channelData = buffer.floatChannelData else { return 0 }
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { return 0 }
+        let channelCount = max(1, Int(buffer.format.channelCount))
+        var meanSquare: Float = 0
+        for channel in 0..<channelCount {
+            let samples = channelData[channel]
+            var sum: Float = 0
+            for frame in 0..<frameCount {
+                sum += samples[frame] * samples[frame]
+            }
+            meanSquare += sum / Float(frameCount)
+        }
+        return sqrt(meanSquare / Float(channelCount))
     }
 
     private func stopMicrophoneCapture() {

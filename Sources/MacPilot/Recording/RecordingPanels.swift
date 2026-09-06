@@ -82,10 +82,14 @@ final class ScreenRecordingCountdownPanel {
 // MARK: - Floating controller bar
 
 /// The bar shown at the top of the screen while recording: stop,
-/// pause/resume, the elapsed timer, and the camera/device picker button.
+/// pause/resume, the elapsed timer, the live microphone meter, and the
+/// camera/device picker button. The cancel button uses a two-step arm so a
+/// stray click cannot discard a long recording.
 struct FloatingControllerBarView: View {
     @ObservedObject var model: ScreenRecordingModel
     @State private var showsDevicePicker = false
+    @State private var isCancelArmed = false
+    @State private var cancelArmResetTask: Task<Void, Never>?
 
     var body: some View {
         HStack(spacing: 4) {
@@ -112,6 +116,13 @@ struct FloatingControllerBarView: View {
                 .foregroundStyle(.white)
                 .font(.system(size: 15).monospaced())
 
+            if model.settings.capturesMicrophone {
+                MicrophoneLevelMeter(level: model.microphoneLevel)
+                    .frame(width: 22, height: 14)
+                    .accessibilityLabel(Text(AppText.value("scRecordingMicLevel", language: model.language)))
+                    .help(AppText.value("scRecordingMicLevel", language: model.language))
+            }
+
             Button(action: { showsDevicePicker = true }, label: {
                 ZStack {
                     Rectangle()
@@ -126,15 +137,62 @@ struct FloatingControllerBarView: View {
             .popover(isPresented: $showsDevicePicker, arrowEdge: .bottom) {
                 CaptureDeviceMenuView(model: model)
             }
+
+            Button(action: { handleCancelPressed() }, label: {
+                Image(systemName: isCancelArmed ? "trash.circle.fill" : "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(isCancelArmed ? .red : .white.opacity(0.85))
+            })
+            .buttonStyle(.plain)
+            .help(AppText.value(
+                isCancelArmed ? "scRecordingCancelArmed" : "scRecordingCancel",
+                language: model.language
+            ))
         }
         .padding([.leading, .trailing], 4)
         .frame(height: 24)
         .background(Color.purple.cornerRadius(4).shadow(color: .black.opacity(0.3), radius: 4))
     }
 
+    /// First press arms the cancel button, a second press within three
+    /// seconds actually discards the recording; arming expires on its own.
+    private func handleCancelPressed() {
+        guard isCancelArmed else {
+            isCancelArmed = true
+            cancelArmResetTask?.cancel()
+            cancelArmResetTask = Task {
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                isCancelArmed = false
+            }
+            return
+        }
+        cancelArmResetTask?.cancel()
+        isCancelArmed = false
+        model.cancel()
+    }
+
     static func timerText(_ interval: TimeInterval) -> String {
         let total = max(0, Int(interval.rounded(.down)))
         return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+}
+
+/// Tiny 4-bar live microphone level indicator used inside the floating
+/// controller. Purely decorative; the accessibility label carries meaning.
+struct MicrophoneLevelMeter: View {
+    let level: Double
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 2) {
+            ForEach(0..<4, id: \.self) { index in
+                let threshold = Double(index + 1) / 4.0
+                Capsule()
+                    .fill(level >= threshold * 0.85 ? Color.white : Color.white.opacity(0.3))
+                    .frame(width: 3, height: CGFloat(4 + index * 3))
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: level)
     }
 }
 
@@ -226,7 +284,7 @@ final class ScreenRecordingFloatingController {
         panel.isReleasedWhenClosed = false
         panel.isMovableByWindowBackground = true
         panel.contentView = NSHostingView(rootView: FloatingControllerBarView(model: model))
-        panel.setContentSize(NSSize(width: 190, height: 24))
+        panel.setContentSize(NSSize(width: 262, height: 24))
         panel.center()
         if let screen = NSScreen.screenWithMouse {
             panel.setFrameOrigin(NSPoint(
@@ -254,6 +312,7 @@ final class ScreenRecordingFloatingController {
 struct CompletionPreviewContentView: View {
     let image: NSImage
     let fileURL: URL
+    var language: AppLanguage = .system
     var onClose: () -> Void
     @State private var opacity: Double = 0.0
     @State private var isHovered = false
@@ -311,23 +370,23 @@ struct CompletionPreviewContentView: View {
         .opacity(opacity)
         .onHover { hovering in isHovered = hovering }
         .contextMenu {
-            Button("Show in Finder") {
+            Button(AppText.value("scRecordingRevealInFinder", language: language)) {
                 NSWorkspace.shared.activateFileViewerSelecting([fileURL])
                 onClose()
             }
-            Button("Delete") {
+            Button(AppText.value("scRecordingDeleteFile", language: language)) {
                 try? FileManager.default.removeItem(at: fileURL)
                 onClose()
             }
             Divider()
-            Button("Copy") {
+            Button(AppText.value("scRecordingCopyFile", language: language)) {
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
                 pasteboard.writeObjects([fileURL as NSURL])
                 onClose()
             }
             Divider()
-            Button("Close") { onClose() }
+            Button(AppText.value("scRecordingClosePreview", language: language)) { onClose() }
         }
         .onAppear {
             withAnimation(.easeIn(duration: 0.3)) { opacity = 1.0 }
@@ -351,7 +410,7 @@ final class ScreenRecordingCompletionPreview {
 
     private var panel: NSWindow?
 
-    func show(image: NSImage, fileURL: URL) {
+    func show(image: NSImage, fileURL: URL, language: AppLanguage = .system) {
         close()
         let panel = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 266, height: 156),
@@ -365,7 +424,7 @@ final class ScreenRecordingCompletionPreview {
         panel.isReleasedWhenClosed = false
         panel.backgroundColor = .clear
         panel.contentView = NSHostingView(
-            rootView: CompletionPreviewContentView(image: image, fileURL: fileURL) { [weak self] in
+            rootView: CompletionPreviewContentView(image: image, fileURL: fileURL, language: language) { [weak self] in
                 self?.close()
             }
         )

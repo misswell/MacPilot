@@ -465,6 +465,30 @@ struct ScreenRecordingPageView: View {
     private var outputCard: some View {
         SettingsCard {
             Text(t("scRecordingOutputGroup")).font(.headline)
+            row(t("scRecordingGIFFPS")) {
+                Picker("", selection: Binding(
+                    get: { recording.settings.gifFramesPerSecond },
+                    set: { recording.setGIFFramesPerSecond($0) }
+                )) {
+                    ForEach([10, 15, 20, 24], id: \.self) { fps in
+                        Text(t("scRecordingFPSValue", fps)).tag(fps)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 200)
+            }
+            row(t("scRecordingGIFWidth")) {
+                Picker("", selection: Binding(
+                    get: { recording.settings.gifMaximumWidth },
+                    set: { recording.setGIFMaximumWidth($0) }
+                )) {
+                    ForEach([480, 720, 960, 1080], id: \.self) { width in
+                        Text(t("scRecordingGIFWidthValue", width)).tag(width)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 200)
+            }
             HStack {
                 Button(t("scRecordingOpenFolder")) { recording.openOutputFolder() }
                     .buttonStyle(.bordered)

@@ -225,3 +225,14 @@ v1.1.236 对录屏功能做整体升级，补齐主流录屏工具的完整能�
 - **存帧**：录制中保存当前帧为 PNG（`Capturing at <时间>.png`），HDR 帧走 10-bit PNG + EV+1。
 - **其他**：H.264 硬件编码器预检（VideoToolbox 探测失败弹窗询问切 HEVC 并持久化）、帧去重（20 帧滚动窗口）、完成/失败/混音系统通知、防休眠可开关。
 - **未纳入**：MP3/Opus 音频导出（需第三方编码器依赖）、多窗口同录选择 UI、后期剪辑窗口。
+
+## 二十、截图与录屏对标升级：延迟截图、聚光灯标注、录屏取消与电平、GIF 导出参数（本节随 v1.1.237 引入）
+
+对标「浮光」等同类工具的演示能力做一轮补强，原则是“吸收对方亮点 + 用我们已有的更深能力拉开差距”：
+
+- **延迟截图**（新增入口，对标“延迟截图”）：新增 `ScreenCaptureShortcutKind.delayedArea`（默认 ⌥⌘7），按下后弹出居中倒计时面板（进度环 + 取消按钮，`SnapzyCapture/DelayedCaptureCountdown.swift`，倒计时算术为可单测的值类型 `DelayedCaptureCountdown`），结束后打开常规区域选区；延迟秒数可在截图页选择（3/5/10 秒，存 `screenCapture.delayedCaptureSeconds`，安全解码默认 5）。菜单栏“延迟截图”、深链 `macpilot://capture/delayed`（兼容 `screenshot/delayed`、`delayed`）同步入口；快捷键走既有 Carbon 管线（新 id 13），支持冲突检测与编辑器改键。
+- **HUD 接入聚光灯标注**：`AreaSelectionAnnotationTool` 新增 `spotlight`，截图后工具栏新增聚光灯按钮（⌀ 圆点虚线图标），经既有桥接映射到 `SmartAnnotationTool.spotlight`——此前该工具只能在独立编辑器中使用，现在框选标注可直接压暗聚焦。
+- **录屏悬浮控制条升级**：新增取消按钮（两段式：第一次点击进入“确认取消”武装态、3 秒未再点自动解除，第二次点击才真正丢弃文件，防误触）；新增实时麦克风电平条（4 段），引擎在 AVAudioEngine 麦克风 tap 里计算 RMS（`ScreenRecordingEngine.microphoneRMS`，≈10Hz 节流经 `microphoneLevelHandler` 回传模型 `@Published microphoneLevel`；命名设备路径不提供电平）；控制条随之加宽。
+- **完成预览与文案本地化**：完成预览右键菜单（显示于访达/删除/拷贝/关闭）此前硬编码英文，现经 `AppText` 按模型语言本地化（`scRecordingRevealInFinder` 等新键，中英同步）。
+- **GIF 导出参数**（对标方无 GIF 能力）：导出帧率（10/15/20/24）与最大宽度（480/720/960/1080 px）可在录屏页“输出”卡片配置，存 `screenRecording.gifFramesPerSecond/gifMaximumWidth`（夹取 5–30、200–2000，解码默认 15/960），`ScreenRecordingGIFConverter` 直接接收参数。
+- **兼容性**：`StoredConfiguration.version` 18 → 19；所有新键走 `decodeIfPresent ?? 默认`，旧 config.json 无需迁移。新增 `Tests/MacPilotTests/CaptureEnhancementsTests.swift`（12 例：快捷键默认/往返、旧配置解码、倒计时算术、聚光灯桥接、RMS、GIF 参数与钳制）。

@@ -89,6 +89,7 @@ final class AreaSelectionActionBar: NSView {
     static let text = 1
     static let counter = 2
     static let mosaic = 3
+    static let spotlight = 11
     static let eraser = 4
     static let undo = 5
     static let ocr = 6
@@ -207,6 +208,7 @@ final class AreaSelectionActionBar: NSView {
     row.addArrangedSubview(makeSingleToolButton("t.square", titleKey: "scAnnotationText", tool: .text, tag: BarTag.text))
     row.addArrangedSubview(makeSingleToolButton("1.circle", titleKey: "scAnnotationCounter", tool: .counter, tag: BarTag.counter))
     row.addArrangedSubview(makeSingleToolButton("circle.lefthalf.filled", titleKey: "scAnnotationBlur", tool: .blur, tag: BarTag.mosaic))
+    row.addArrangedSubview(makeSingleToolButton("circle.dashed.inset.filled", titleKey: "scAnnotationSpotlight", tool: .spotlight, tag: BarTag.spotlight))
 
     let eraser = makeSingleToolButton("eraser", titleKey: "scAnnotationEraser", tool: .eraser, tag: BarTag.eraser)
     eraser.isHidden = true
@@ -681,6 +683,7 @@ final class AreaSelectionActionBar: NSView {
     case BarTag.text: tool = .text
     case BarTag.counter: tool = .counter
     case BarTag.mosaic: tool = .blur
+    case BarTag.spotlight: tool = .spotlight
     case BarTag.eraser: tool = .eraser
     case BarTag.undo:
       annotationBinding?.model?.undo()
@@ -745,9 +748,10 @@ final class AreaSelectionActionBar: NSView {
     case .text: return .text
     case .counter: return .counter
     case .blur: return .blur
+    case .spotlight: return .spotlight
     case .eraser: return .eraser
     case .crop: return .crop
-    case .watermark, .spotlight: return nil
+    case .watermark: return nil
     }
   }
 

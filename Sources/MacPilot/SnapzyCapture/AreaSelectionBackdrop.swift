@@ -23,6 +23,7 @@ nonisolated enum AreaSelectionAnnotationTool: String, Equatable, Sendable {
   case text
   case counter
   case blur
+  case spotlight
   case eraser
   case crop
 }

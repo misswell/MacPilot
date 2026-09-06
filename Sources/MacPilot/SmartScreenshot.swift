@@ -94,6 +94,9 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
     case smartElement
     case area
     case repeatArea
+    /// Runs the pre-capture countdown (settings `delayedCaptureSeconds`) and
+    /// then opens the regular area selector.
+    case delayedArea
     case applicationWindow
     case fullscreen
     case activeWindow
@@ -117,6 +120,8 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
             return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .option])
         case .repeatArea:
             return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .option, .shift])
+        case .delayedArea:
+            return SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_7), modifiers: [.command, .option])
         case .applicationWindow:
             // A separate global entry point complements the in-overlay `A`
             // mode switch while keeping the action reachable from any app.
@@ -182,6 +187,7 @@ enum ScreenCaptureShortcutKind: String, CaseIterable, Hashable, Identifiable, Se
         case .smartElement: return "scSmartCaptureShortcut"
         case .area: return "scAreaCaptureShortcut"
         case .repeatArea: return "scRepeatAreaShortcut"
+        case .delayedArea: return "scDelayedCaptureShortcut"
         case .applicationWindow: return "scApplicationWindowShortcut"
         case .fullscreen: return "scFullscreenCaptureShortcut"
         case .activeWindow: return "scActiveWindowCaptureShortcut"
@@ -741,6 +747,7 @@ private enum SmartCaptureCarbonHotKey {
     static let repeatAreaID: UInt32 = 10
     static let applicationWindowID: UInt32 = 11
     static let pinID: UInt32 = 12
+    static let delayedAreaID: UInt32 = 13
 
     static func identifier(_ id: UInt32) -> EventHotKeyID {
         EventHotKeyID(signature: signature, id: id)
@@ -760,6 +767,7 @@ private enum SmartCaptureCarbonHotKey {
         case .smartElement: return identifier(captureID)
         case .area: return identifier(areaID)
         case .repeatArea: return identifier(repeatAreaID)
+        case .delayedArea: return identifier(delayedAreaID)
         case .applicationWindow: return identifier(applicationWindowID)
         case .fullscreen: return identifier(fullscreenID)
         case .activeWindow: return identifier(activeWindowID)
@@ -1308,6 +1316,7 @@ final class SmartScreenshotController {
     private let onSelectionRect: (CGRect) -> Void
     private let onRecordingSelection: (CGRect, SmartCaptureSelectionMode) -> Void
     private let onRepeatLastArea: () -> Void
+    private let onDelayedAreaCapture: () -> Void
     private let onFullscreenCapture: () -> Void
     private let onActiveWindowCapture: () -> Void
     private let onAreaAnnotateCapture: (CGImage, CGRect?, AreaSelectionAnnotationTool) -> Void
@@ -1409,6 +1418,7 @@ final class SmartScreenshotController {
         onOCRCapture: @escaping (CGImage) -> Void = { _ in },
         onScrollingCapture: @escaping (CGImage) -> Void = { _ in },
         onObjectCutoutCapture: @escaping (CGImage) -> Void = { _ in },
+        onDelayedAreaCapture: @escaping () -> Void = {},
         screenCaptureAccessProvider: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
         initialTargetResolver: @escaping @Sendable (SmartCaptureSelectionMode, CGPoint) -> CGRect? = {
             mode,
@@ -1431,6 +1441,7 @@ final class SmartScreenshotController {
         self.onSelectionRect = onSelectionRect
         self.onRecordingSelection = onRecordingSelection
         self.onRepeatLastArea = onRepeatLastArea
+        self.onDelayedAreaCapture = onDelayedAreaCapture
         self.shortcutBinding = shortcutBinding
         self.additionalShortcutBindings = additionalShortcutBindings
         self.postSelectionPinShortcut = postSelectionPinShortcut
@@ -1646,7 +1657,7 @@ final class SmartScreenshotController {
         var registeredKinds: Set<ScreenCaptureShortcutKind> = []
         fallbackShortcutBindings.removeAll(keepingCapacity: true)
         unregisterAdditionalShortcuts()
-        for kind in [ScreenCaptureShortcutKind.area, .repeatArea, .applicationWindow, .fullscreen, .activeWindow, .areaAnnotate, .ocr, .scrolling, .objectCutout, .pin] {
+        for kind in [ScreenCaptureShortcutKind.area, .repeatArea, .delayedArea, .applicationWindow, .fullscreen, .activeWindow, .areaAnnotate, .ocr, .scrolling, .objectCutout, .pin] {
             guard let binding = additionalShortcutBindings[kind], binding.isValid else { continue }
             guard !registeredBindings.contains(binding), binding != shortcutBinding else {
                 Self.logger.error("Skipping duplicate screenshot shortcut \(kind.rawValue, privacy: .public)")
@@ -1659,6 +1670,7 @@ final class SmartScreenshotController {
             switch kind {
             case .area: id = SmartCaptureCarbonHotKey.areaID
             case .repeatArea: id = SmartCaptureCarbonHotKey.repeatAreaID
+            case .delayedArea: id = SmartCaptureCarbonHotKey.delayedAreaID
             case .applicationWindow: id = SmartCaptureCarbonHotKey.applicationWindowID
             case .fullscreen: id = SmartCaptureCarbonHotKey.fullscreenID
             case .activeWindow: id = SmartCaptureCarbonHotKey.activeWindowID
@@ -3090,6 +3102,8 @@ final class SmartScreenshotController {
             startSelection(mode: .manualArea)
         case SmartCaptureCarbonHotKey.repeatAreaID:
             onRepeatLastArea()
+        case SmartCaptureCarbonHotKey.delayedAreaID:
+            onDelayedAreaCapture()
         case SmartCaptureCarbonHotKey.applicationWindowID:
             startSelection(mode: .applicationWindow)
         case SmartCaptureCarbonHotKey.fullscreenID:
@@ -5644,10 +5658,11 @@ extension AreaSelectionAnnotationTool {
         case .text: return .text
         case .counter: return .counter
         case .blur: return .blur
+        case .spotlight: return .spotlight
         case .eraser: return .eraser
         case .crop: return .crop
-        }
     }
+}
 }
 
 struct SmartAnnotationColor: Equatable, Hashable, Sendable {

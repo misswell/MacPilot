@@ -61,6 +61,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
     var smartCaptureShortcut: SmartCaptureShortcutBinding
     var areaCaptureShortcut: SmartCaptureShortcutBinding
     var repeatAreaCaptureShortcut: SmartCaptureShortcutBinding
+    var delayedAreaCaptureShortcut: SmartCaptureShortcutBinding
+    var delayedCaptureSeconds: Int
     var applicationWindowCaptureShortcut: SmartCaptureShortcutBinding
     var fullscreenCaptureShortcut: SmartCaptureShortcutBinding
     var activeWindowCaptureShortcut: SmartCaptureShortcutBinding
@@ -92,6 +94,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         smartCaptureShortcut: SmartCaptureShortcutBinding = .default,
         areaCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.area.defaultBinding,
         repeatAreaCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.repeatArea.defaultBinding,
+        delayedAreaCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.delayedArea.defaultBinding,
+        delayedCaptureSeconds: Int = 5,
         applicationWindowCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.applicationWindow.defaultBinding,
         fullscreenCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.fullscreen.defaultBinding,
         activeWindowCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.activeWindow.defaultBinding,
@@ -130,6 +134,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.repeatAreaCaptureShortcut = migrateLegacyScreenshotShortcuts
             ? ScreenCaptureShortcutKind.repeatArea.migratedBinding(safeRepeatAreaShortcut)
             : safeRepeatAreaShortcut
+        self.delayedAreaCaptureShortcut = delayedAreaCaptureShortcut.isValid ? delayedAreaCaptureShortcut : ScreenCaptureShortcutKind.delayedArea.defaultBinding
+        self.delayedCaptureSeconds = max(1, min(60, delayedCaptureSeconds))
         self.applicationWindowCaptureShortcut = applicationWindowCaptureShortcut.isValid ? applicationWindowCaptureShortcut : ScreenCaptureShortcutKind.applicationWindow.defaultBinding
         self.fullscreenCaptureShortcut = migrateLegacyScreenshotShortcuts
             ? ScreenCaptureShortcutKind.fullscreen.migratedBinding(safeFullscreenShortcut)
@@ -151,7 +157,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         case isEnabled, outputFolder, busyStartHour, busyEndHour
         case busyIntervalMinutes, idleIntervalMinutes, imageFormat, quality
         case maxRetentionDays, captureAllDisplays, showsCursor, smartCaptureEnabled
-        case smartCaptureShortcut, areaCaptureShortcut, repeatAreaCaptureShortcut, applicationWindowCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut, pinCaptureShortcut, postSelectionPinShortcut
+        case smartCaptureShortcut, areaCaptureShortcut, repeatAreaCaptureShortcut, delayedAreaCaptureShortcut, delayedCaptureSeconds, applicationWindowCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut, pinCaptureShortcut, postSelectionPinShortcut
         case screenshotEnabled
         case copyAfterCapture, showQuickAccess, pinAfterCapture, imageHosting
     }
@@ -175,6 +181,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
             smartCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .smartCaptureShortcut) ?? .default,
             areaCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .areaCaptureShortcut) ?? ScreenCaptureShortcutKind.area.defaultBinding,
             repeatAreaCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .repeatAreaCaptureShortcut) ?? ScreenCaptureShortcutKind.repeatArea.defaultBinding,
+            delayedAreaCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .delayedAreaCaptureShortcut) ?? ScreenCaptureShortcutKind.delayedArea.defaultBinding,
+            delayedCaptureSeconds: try c.decodeIfPresent(Int.self, forKey: .delayedCaptureSeconds) ?? 5,
             applicationWindowCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .applicationWindowCaptureShortcut) ?? ScreenCaptureShortcutKind.applicationWindow.defaultBinding,
             fullscreenCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .fullscreenCaptureShortcut) ?? ScreenCaptureShortcutKind.fullscreen.defaultBinding,
             activeWindowCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .activeWindowCaptureShortcut) ?? ScreenCaptureShortcutKind.activeWindow.defaultBinding,
@@ -507,6 +515,7 @@ final class ScreenCaptureModel: ObservableObject {
     /// when a recording starts in area/application mode.
     var onRecordingSelection: ((CGRect, ScreenRecordingCaptureMode) -> Void)?
     private var isLoading = false
+    private var isDelayedCaptureCounting = false
     private var captureTask: Task<Void, Never>?
     private var permissionPollTask: Task<Void, Never>?
     private var diskUsageRevision = 0
@@ -549,6 +558,7 @@ final class ScreenCaptureModel: ObservableObject {
         additionalShortcutBindings: [
             .area: settings.areaCaptureShortcut,
             .repeatArea: settings.repeatAreaCaptureShortcut,
+            .delayedArea: settings.delayedAreaCaptureShortcut,
             .applicationWindow: settings.applicationWindowCaptureShortcut,
             .fullscreen: settings.fullscreenCaptureShortcut,
             .activeWindow: settings.activeWindowCaptureShortcut,
@@ -566,7 +576,8 @@ final class ScreenCaptureModel: ObservableObject {
         },
         onOCRCapture: { [weak self] image in self?.handleOCRCapture(image) },
         onScrollingCapture: { [weak self] image in self?.handleSmartCapture(image) },
-        onObjectCutoutCapture: { [weak self] image in self?.handleObjectCutout(image) }
+        onObjectCutoutCapture: { [weak self] image in self?.handleObjectCutout(image) },
+        onDelayedAreaCapture: { [weak self] in self?.startDelayedAreaCapture() }
         )
     }
 
@@ -613,6 +624,7 @@ final class ScreenCaptureModel: ObservableObject {
             smartCapture.updateAdditionalShortcutBindings([
                 .area: newSettings.areaCaptureShortcut,
                 .repeatArea: newSettings.repeatAreaCaptureShortcut,
+                .delayedArea: newSettings.delayedAreaCaptureShortcut,
                 .applicationWindow: newSettings.applicationWindowCaptureShortcut,
                 .fullscreen: newSettings.fullscreenCaptureShortcut,
                 .activeWindow: newSettings.activeWindowCaptureShortcut,
@@ -725,6 +737,10 @@ final class ScreenCaptureModel: ObservableObject {
         updateSettings { $0.pinAfterCapture = value }
     }
 
+    func setDelayedCaptureSeconds(_ seconds: Int) {
+        updateSettings { $0.delayedCaptureSeconds = max(1, min(60, seconds)) }
+    }
+
     func setImageHostingEnabled(_ value: Bool) {
         updateSettings { $0.imageHosting.isEnabled = value }
     }
@@ -780,6 +796,7 @@ final class ScreenCaptureModel: ObservableObject {
         case .smartElement: updated.smartCaptureShortcut = binding
         case .area: updated.areaCaptureShortcut = binding
         case .repeatArea: updated.repeatAreaCaptureShortcut = binding
+        case .delayedArea: updated.delayedAreaCaptureShortcut = binding
         case .applicationWindow: updated.applicationWindowCaptureShortcut = binding
         case .fullscreen: updated.fullscreenCaptureShortcut = binding
         case .activeWindow: updated.activeWindowCaptureShortcut = binding
@@ -799,6 +816,7 @@ final class ScreenCaptureModel: ObservableObject {
                 || [
                     updated.areaCaptureShortcut,
                     updated.repeatAreaCaptureShortcut,
+                    updated.delayedAreaCaptureShortcut,
                     updated.applicationWindowCaptureShortcut,
                     updated.fullscreenCaptureShortcut,
                     updated.activeWindowCaptureShortcut,
@@ -825,7 +843,7 @@ final class ScreenCaptureModel: ObservableObject {
             return false
         }
         if kind != .smartElement {
-            let others = [updated.areaCaptureShortcut, updated.repeatAreaCaptureShortcut, updated.applicationWindowCaptureShortcut, updated.fullscreenCaptureShortcut, updated.activeWindowCaptureShortcut, updated.areaAnnotateShortcut, updated.ocrShortcut, updated.scrollingCaptureShortcut, updated.objectCutoutShortcut, updated.pinCaptureShortcut, updated.postSelectionPinShortcut]
+            let others = [updated.areaCaptureShortcut, updated.repeatAreaCaptureShortcut, updated.delayedAreaCaptureShortcut, updated.applicationWindowCaptureShortcut, updated.fullscreenCaptureShortcut, updated.activeWindowCaptureShortcut, updated.areaAnnotateShortcut, updated.ocrShortcut, updated.scrollingCaptureShortcut, updated.objectCutoutShortcut, updated.pinCaptureShortcut, updated.postSelectionPinShortcut]
             if others.filter({ $0 == binding }).count > 1 {
                 errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
                 return false
@@ -834,6 +852,7 @@ final class ScreenCaptureModel: ObservableObject {
         let bindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding] = [
             .area: updated.areaCaptureShortcut,
             .repeatArea: updated.repeatAreaCaptureShortcut,
+            .delayedArea: updated.delayedAreaCaptureShortcut,
             .applicationWindow: updated.applicationWindowCaptureShortcut,
             .fullscreen: updated.fullscreenCaptureShortcut,
             .activeWindow: updated.activeWindowCaptureShortcut,
@@ -855,6 +874,7 @@ final class ScreenCaptureModel: ObservableObject {
             updateSettings {
                 $0.areaCaptureShortcut = updated.areaCaptureShortcut
                 $0.repeatAreaCaptureShortcut = updated.repeatAreaCaptureShortcut
+                $0.delayedAreaCaptureShortcut = updated.delayedAreaCaptureShortcut
                 $0.applicationWindowCaptureShortcut = updated.applicationWindowCaptureShortcut
                 $0.fullscreenCaptureShortcut = updated.fullscreenCaptureShortcut
                 $0.activeWindowCaptureShortcut = updated.activeWindowCaptureShortcut
@@ -874,6 +894,7 @@ final class ScreenCaptureModel: ObservableObject {
         case .smartElement: return settings.smartCaptureShortcut
         case .area: return settings.areaCaptureShortcut
         case .repeatArea: return settings.repeatAreaCaptureShortcut
+        case .delayedArea: return settings.delayedAreaCaptureShortcut
         case .applicationWindow: return settings.applicationWindowCaptureShortcut
         case .fullscreen: return settings.fullscreenCaptureShortcut
         case .activeWindow: return settings.activeWindowCaptureShortcut
@@ -888,7 +909,7 @@ final class ScreenCaptureModel: ObservableObject {
 
     @discardableResult
     func setSmartCaptureShortcut(_ binding: SmartCaptureShortcutBinding) -> Bool {
-        if [settings.areaCaptureShortcut, settings.repeatAreaCaptureShortcut, settings.applicationWindowCaptureShortcut, settings.fullscreenCaptureShortcut, settings.activeWindowCaptureShortcut, settings.areaAnnotateShortcut, settings.ocrShortcut, settings.scrollingCaptureShortcut, settings.objectCutoutShortcut, settings.pinCaptureShortcut, settings.postSelectionPinShortcut].contains(binding) {
+        if [settings.areaCaptureShortcut, settings.repeatAreaCaptureShortcut, settings.delayedAreaCaptureShortcut, settings.applicationWindowCaptureShortcut, settings.fullscreenCaptureShortcut, settings.activeWindowCaptureShortcut, settings.areaAnnotateShortcut, settings.ocrShortcut, settings.scrollingCaptureShortcut, settings.objectCutoutShortcut, settings.pinCaptureShortcut, settings.postSelectionPinShortcut].contains(binding) {
             errorMessage = AppText.value("scShortcutRegistrationFailed", language: language)
             return false
         }
@@ -930,6 +951,29 @@ final class ScreenCaptureModel: ObservableObject {
 
     func startAreaCapture() {
         startSelection(mode: .manualArea)
+    }
+
+    /// 延迟截图：先倒计时（可取消），结束后再打开常规区域选区。
+    func startDelayedAreaCapture() {
+        guard settings.screenshotEnabled else {
+            errorMessage = AppText.value("scScreenshotDisabled", language: language)
+            return
+        }
+        guard !isDelayedCaptureCounting else { return }
+        guard ensureCapturePermissions() else {
+            openScreenCaptureSettings()
+            return
+        }
+        isDelayedCaptureCounting = true
+        DelayedCaptureCountdownController.shared.show(
+            seconds: settings.delayedCaptureSeconds,
+            language: language
+        ) { [weak self] in
+            guard let self else { return }
+            self.isDelayedCaptureCounting = false
+            guard self.settings.screenshotEnabled else { return }
+            self.ensureSmartCapture().startSelection(mode: .manualArea)
+        }
     }
 
     func startPinCapture() {
@@ -1891,6 +1935,27 @@ struct ScreenCaptureView: View {
             }
             shortcutRow(.area, action: { capture.startAreaCapture() })
             shortcutRow(.repeatArea, action: { capture.repeatSmartCapture() })
+            shortcutRow(.delayedArea, action: { capture.startDelayedAreaCapture() })
+            HStack(spacing: 12) {
+                Image(systemName: "hourglass")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22)
+                Text(t("scDelayedCaptureSeconds"))
+                Text(t("scDelayedCaptureSecondsHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("", selection: Binding(
+                    get: { capture.settings.delayedCaptureSeconds },
+                    set: { capture.setDelayedCaptureSeconds($0) }
+                )) {
+                    ForEach([3, 5, 10], id: \.self) { seconds in
+                        Text(t("scSecondsValue", seconds)).tag(seconds)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 110)
+            }
             shortcutRow(.applicationWindow, action: { capture.startApplicationWindowCapture() })
             shortcutRow(.fullscreen, action: { capture.captureFullscreen() })
             shortcutRow(.activeWindow, action: { capture.captureActiveWindow() })
@@ -2102,7 +2167,7 @@ struct ScreenCaptureView: View {
 
     private func shortcutRow(_ kind: ScreenCaptureShortcutKind, action: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: kind == .area ? "rectangle.dashed" : kind == .repeatArea ? "arrow.clockwise" : kind == .applicationWindow ? "macwindow.on.rectangle" : kind == .fullscreen ? "rectangle.inset.filled" : kind == .activeWindow ? "macwindow" : kind == .scrolling ? "arrow.down.to.line.compact" : kind == .objectCutout ? "person.crop.circle" : kind == .pin ? "pin" : "text.viewfinder")
+            Image(systemName: kind == .area ? "rectangle.dashed" : kind == .repeatArea ? "arrow.clockwise" : kind == .delayedArea ? "timer" : kind == .applicationWindow ? "macwindow.on.rectangle" : kind == .fullscreen ? "rectangle.inset.filled" : kind == .activeWindow ? "macwindow" : kind == .scrolling ? "arrow.down.to.line.compact" : kind == .objectCutout ? "person.crop.circle" : kind == .pin ? "pin" : "text.viewfinder")
                 .foregroundStyle(.secondary)
                 .frame(width: 22)
             Text(t(kind.titleKey))

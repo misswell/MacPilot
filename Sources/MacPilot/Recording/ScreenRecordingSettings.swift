@@ -301,6 +301,9 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
     var presenterOverlaySafeDelay: Int
     var blocklist: [String]
     var hotkeys: [String: SmartCaptureShortcutBinding]
+    /// Options for the post-recording GIF export.
+    var gifFramesPerSecond: Int
+    var gifMaximumWidth: Int
 
     private enum CodingKeys: String, CodingKey {
         case outputFolder, format, captureMode, framesPerSecond, showsCursor
@@ -312,6 +315,7 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
         case audioDuckingLevel, highlightMouse, hideDesktopFiles, hideControlCenter
         case includeMenuBar, excludeSelf, preventSleep, showPreviewAfterRecord
         case showRecordingController, presenterOverlaySafeDelay, blocklist, hotkeys
+        case gifFramesPerSecond, gifMaximumWidth
     }
 
     init(
@@ -350,6 +354,8 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
         presenterOverlaySafeDelay: Int = 1,
         blocklist: [String] = [],
         hotkeys: [String: SmartCaptureShortcutBinding] = [:],
+        gifFramesPerSecond: Int = 15,
+        gifMaximumWidth: Int = 960,
         migrateLegacyDefaultShortcut: Bool = false
     ) {
         self.outputFolder = outputFolder
@@ -396,6 +402,8 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
         self.hotkeys = hotkeys.filter { purpose in
             ScreenRecordingHotKeyPurpose(rawValue: purpose.key) != nil && purpose.value.isValid
         }
+        self.gifFramesPerSecond = min(30, max(5, gifFramesPerSecond))
+        self.gifMaximumWidth = min(2_000, max(200, gifMaximumWidth))
     }
 
     init(from decoder: Decoder) throws {
@@ -437,6 +445,8 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
             presenterOverlaySafeDelay: try container.decodeIfPresent(Int.self, forKey: .presenterOverlaySafeDelay) ?? 1,
             blocklist: try container.decodeIfPresent([String].self, forKey: .blocklist) ?? [],
             hotkeys: try container.decodeIfPresent([String: SmartCaptureShortcutBinding].self, forKey: .hotkeys) ?? [:],
+            gifFramesPerSecond: try container.decodeIfPresent(Int.self, forKey: .gifFramesPerSecond) ?? 15,
+            gifMaximumWidth: try container.decodeIfPresent(Int.self, forKey: .gifMaximumWidth) ?? 960,
             migrateLegacyDefaultShortcut: true
         )
     }

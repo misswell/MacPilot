@@ -91,6 +91,8 @@ final class ScreenRecordingModel: ObservableObject {
     @Published private(set) var availableCameras: [AVCaptureDevice] = []
     @Published private(set) var availableCaptureDevices: [AVCaptureDevice] = []
     @Published private(set) var availableMicrophones: [AVCaptureDevice] = []
+    /// Live input level (0...1) for the floating controller meter.
+    @Published private(set) var microphoneLevel: Double = 0
 
     var language: AppLanguage = .system
     var persist: (() -> Void)?
@@ -295,6 +297,14 @@ final class ScreenRecordingModel: ObservableObject {
 
     func setBlocklist(_ bundleIDs: [String]) {
         updateSettings { $0.blocklist = bundleIDs }
+    }
+
+    func setGIFFramesPerSecond(_ value: Int) {
+        updateSettings { $0.gifFramesPerSecond = min(30, max(5, value)) }
+    }
+
+    func setGIFMaximumWidth(_ value: Int) {
+        updateSettings { $0.gifMaximumWidth = min(2_000, max(200, value)) }
     }
 
     func setHotKey(_ purpose: ScreenRecordingHotKeyPurpose, _ binding: SmartCaptureShortcutBinding?) {
@@ -562,6 +572,11 @@ final class ScreenRecordingModel: ObservableObject {
                 captureRect: captureRect,
                 frontmostWindowOnly: frontmostWindowOnly
             )
+            session.microphoneLevelHandler = { [weak self] level in
+                Task { @MainActor [weak self] in
+                    self?.microphoneLevel = Double(level)
+                }
+            }
             try await session.start()
             session.encoderFallbackHandler = sessionConfigurationHooks?.onEncoderFallback
             session.presenterOverlayActivityHandler = sessionConfigurationHooks?.onPresenterOverlayChanged
@@ -738,10 +753,11 @@ final class ScreenRecordingModel: ObservableObject {
         startedAt = nil
         pauseStartedAt = nil
         accumulatedPauseDuration = 0
+        microphoneLevel = 0
         state = .idle
         errorMessage = nil
         if settings.showPreviewAfterRecord, let image = previewImage ?? lastFrameThumbnail(for: url) {
-            ScreenRecordingCompletionPreview.shared.show(image: image, fileURL: url)
+            ScreenRecordingCompletionPreview.shared.show(image: image, fileURL: url, language: language)
         }
         ScreenRecordingNotifications.show(
             titleKey: "scRecordingCompletedTitle",
@@ -773,6 +789,7 @@ final class ScreenRecordingModel: ObservableObject {
         startedAt = nil
         pauseStartedAt = nil
         accumulatedPauseDuration = 0
+        microphoneLevel = 0
         stopTimer()
         ScreenRecordingFloatingController.shared.close()
         ScreenRecordingMouseHighlighter.shared.stopMonitoring()
@@ -792,11 +809,15 @@ final class ScreenRecordingModel: ObservableObject {
         isConvertingGIF = true
         errorMessage = nil
         let output = source.deletingPathExtension().appendingPathExtension("gif")
+        let gifFramesPerSecond = settings.gifFramesPerSecond
+        let gifMaximumWidth = settings.gifMaximumWidth
         Task { [weak self] in
             do {
                 let gif = try await ScreenRecordingGIFConverter.convert(
                     videoURL: source,
-                    outputURL: output
+                    outputURL: output,
+                    framesPerSecond: gifFramesPerSecond,
+                    maximumWidth: gifMaximumWidth
                 )
                 guard let self else { return }
                 self.lastRecordingURL = gif
