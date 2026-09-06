@@ -427,7 +427,7 @@ enum AppText {
         "launchPlanIdle": "没有待启动任务", "launchPlanDone": "本次启动计划已完成",
         "bleUnlock": "BLE 解锁", "ble": "BLE", "bleUnlockSubtitle": "根据 BLE 设备（iPhone、Apple Watch 等）的接近程度自动锁定和解锁 Mac。",
         "bleNotConfigured": "尚未选择设备", "bleDeviceNotDetected": "未检测到设备", "bleNoDevice": "尚未选择设备",
-        "bleLockNow": "立即锁定屏幕", "bleDevice": "设备", "bleScanning": "正在扫描…", "bleSelectDevice": "选择设备",
+        "bleLockNow": "立即锁定屏幕", "turnOffScreenNow": "关闭屏幕", "bleDevice": "设备", "bleScanning": "正在扫描…", "bleSelectDevice": "选择设备",
         "bleDeviceHint": "打开设备菜单开始扫描附近的 BLE 设备，选择你的 iPhone、Apple Watch 或其他 BLE 设备。需要使用固定 MAC 地址的设备。",
         "bleSecondDevice": "第二设备（可选）", "bleSecondDeviceInfo": "可以再添加一个设备，并选择两个设备如何共同判断是否在范围内。",
         "bleAddSecondDevice": "添加第二设备", "bleRemoveSecondDevice": "移除第二设备",
@@ -734,7 +734,7 @@ enum AppText {
             "launchPlanIdle": "No scheduled launches", "launchPlanDone": "This launch plan is complete",
             "bleUnlock": "BLE Unlock", "ble": "BLE", "bleUnlockSubtitle": "Automatically lock and unlock your Mac by proximity of a BLE device (iPhone, Apple Watch, etc.).",
             "bleNotConfigured": "No device set", "bleDeviceNotDetected": "Not detected", "bleNoDevice": "No device selected",
-            "bleLockNow": "Lock Screen Now", "bleDevice": "Device", "bleScanning": "Scanning…", "bleSelectDevice": "Select Device",
+            "bleLockNow": "Lock Screen Now", "turnOffScreenNow": "Turn Off Screen", "bleDevice": "Device", "bleScanning": "Scanning…", "bleSelectDevice": "Select Device",
             "bleDeviceHint": "Open the device menu to scan for nearby BLE devices and pick your iPhone, Apple Watch, or other BLE device. The device must use a static MAC address.",
             "bleSecondDevice": "Second device (optional)", "bleSecondDeviceInfo": "Add one more device and choose how the two devices should determine presence together.",
             "bleAddSecondDevice": "Add second device", "bleRemoveSecondDevice": "Remove second device",
@@ -3749,6 +3749,12 @@ struct MenuBarView: View {
                 deferCaptureAction { model.screenRecording.start() }
             }
             .disabled(screenRecording.state != .idle || screenRecording.isDeviceRecording)
+        }
+        Divider()
+        Button(model.t("turnOffScreenNow")) {
+            // Let the menu finish its tracking loop before blacking the
+            // display; the click's own input events would wake it again.
+            deferCaptureAction { DisplayPower.sleepDisplay() }
         }
         Divider()
         UpdateMenuItems(updater: model.updater) {

@@ -1386,7 +1386,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/ScreenSaverEngine.app"))
         } else {
             bleLockScreenViaShortcut()
-            if settings.turnOffScreen { bleSleepDisplay() }
+            if settings.turnOffScreen { DisplayPower.sleepDisplay() }
         }
     }
 
@@ -1635,7 +1635,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             if settings.unlockRSSI != Self.unlockDisabled {
                 if displaySleep && !systemSleep && settings.wakeOnProximity {
                     log("waking display due to proximity reason=\(reason)")
-                    bleWakeDisplay()
+                    DisplayPower.wakeDisplay()
                     wakeRetryTask?.cancel()
                     wakeRetryTask = Task { [weak self] in
                         // A missing screensDidWake notification must not leave
@@ -1643,7 +1643,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                         for _ in 0..<10 {
                             try? await Task.sleep(for: .seconds(1))
                             guard !Task.isCancelled, self != nil else { return }
-                            bleWakeDisplay()
+                            DisplayPower.wakeDisplay()
                         }
                         self?.wakeRetryTask = nil
                         self?.log("display wake retry task finished")
@@ -2076,16 +2076,4 @@ func bleLockScreenViaShortcut() {
     let up = CGEvent(keyboardEventSource: src, virtualKey: 0x0C, keyDown: false)
     up?.flags = [.maskControl, .maskCommand]
     up?.post(tap: .cghidEventTap)
-}
-
-func bleSleepDisplay() {
-    let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IOService:/IOResources/IODisplayWrangler")
-    guard entry != 0 else { return }
-    IORegistryEntrySetCFProperty(entry, "IORequestIdle" as CFString, kCFBooleanTrue)
-    IOObjectRelease(entry)
-}
-
-func bleWakeDisplay() {
-    var assertionID: IOPMAssertionID = 0
-    IOPMAssertionDeclareUserActivity("MacPilot" as CFString, kIOPMUserActiveLocal, &assertionID)
 }
