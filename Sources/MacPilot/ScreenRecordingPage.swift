@@ -455,6 +455,7 @@ struct ScreenRecordingPageView: View {
                 flag(t("scRecordingExcludeSelf"), isOn: Binding(get: { recording.settings.excludeSelf }, set: { recording.setExcludeSelf($0) }))
                 flag(t("scRecordingPreventSleep"), isOn: Binding(get: { recording.settings.preventSleep }, set: { recording.setPreventSleep($0) }))
                 flag(t("scRecordingShowController"), isOn: Binding(get: { recording.settings.showRecordingController }, set: { recording.setShowRecordingController($0) }))
+                flag(t("scRecordingShowPrepareBar"), isOn: Binding(get: { recording.settings.showsPrepareBar }, set: { recording.setShowsPrepareBar($0) }))
                 flag(t("scRecordingShowPreview"), isOn: Binding(get: { recording.settings.showPreviewAfterRecord }, set: { recording.setShowPreviewAfterRecord($0) }))
             }
         }

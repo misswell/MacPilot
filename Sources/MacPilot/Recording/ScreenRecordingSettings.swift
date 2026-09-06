@@ -298,6 +298,9 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
     var preventSleep: Bool
     var showPreviewAfterRecord: Bool
     var showRecordingController: Bool
+    /// 浮光-style ready-to-record bar: let the user toggle audio and framing
+    /// after the selection instead of starting immediately.
+    var showsPrepareBar: Bool
     var presenterOverlaySafeDelay: Int
     var blocklist: [String]
     var hotkeys: [String: SmartCaptureShortcutBinding]
@@ -314,7 +317,7 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
         case countdownSeconds, autoStopMinutes, remuxAudio, microphoneDeviceName
         case audioDuckingLevel, highlightMouse, hideDesktopFiles, hideControlCenter
         case includeMenuBar, excludeSelf, preventSleep, showPreviewAfterRecord
-        case showRecordingController, presenterOverlaySafeDelay, blocklist, hotkeys
+        case showRecordingController, showsPrepareBar, presenterOverlaySafeDelay, blocklist, hotkeys
         case gifFramesPerSecond, gifMaximumWidth
     }
 
@@ -351,6 +354,7 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
         preventSleep: Bool = true,
         showPreviewAfterRecord: Bool = true,
         showRecordingController: Bool = true,
+        showsPrepareBar: Bool = true,
         presenterOverlaySafeDelay: Int = 1,
         blocklist: [String] = [],
         hotkeys: [String: SmartCaptureShortcutBinding] = [:],
@@ -397,6 +401,7 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
         self.preventSleep = preventSleep
         self.showPreviewAfterRecord = showPreviewAfterRecord
         self.showRecordingController = showRecordingController
+        self.showsPrepareBar = showsPrepareBar
         self.presenterOverlaySafeDelay = min(99, max(0, presenterOverlaySafeDelay))
         self.blocklist = blocklist
         self.hotkeys = hotkeys.filter { purpose in
@@ -442,6 +447,7 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
             preventSleep: try container.decodeIfPresent(Bool.self, forKey: .preventSleep) ?? true,
             showPreviewAfterRecord: try container.decodeIfPresent(Bool.self, forKey: .showPreviewAfterRecord) ?? true,
             showRecordingController: try container.decodeIfPresent(Bool.self, forKey: .showRecordingController) ?? true,
+            showsPrepareBar: try container.decodeIfPresent(Bool.self, forKey: .showsPrepareBar) ?? true,
             presenterOverlaySafeDelay: try container.decodeIfPresent(Int.self, forKey: .presenterOverlaySafeDelay) ?? 1,
             blocklist: try container.decodeIfPresent([String].self, forKey: .blocklist) ?? [],
             hotkeys: try container.decodeIfPresent([String: SmartCaptureShortcutBinding].self, forKey: .hotkeys) ?? [:],

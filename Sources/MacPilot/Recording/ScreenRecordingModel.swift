@@ -93,6 +93,9 @@ final class ScreenRecordingModel: ObservableObject {
     @Published private(set) var availableMicrophones: [AVCaptureDevice] = []
     /// Live input level (0...1) for the floating controller meter.
     @Published private(set) var microphoneLevel: Double = 0
+    /// True while the ready-to-record bar waits for a confirm/cancel after
+    /// the area selection committed.
+    @Published private(set) var isPreparingRecording = false
 
     var language: AppLanguage = .system
     var persist: (() -> Void)?
@@ -291,6 +294,10 @@ final class ScreenRecordingModel: ObservableObject {
         updateSettings { $0.showRecordingController = value }
     }
 
+    func setShowsPrepareBar(_ value: Bool) {
+        updateSettings { $0.showsPrepareBar = value }
+    }
+
     func setPresenterOverlaySafeDelay(_ seconds: Int) {
         updateSettings { $0.presenterOverlaySafeDelay = min(99, max(0, seconds)) }
     }
@@ -446,7 +453,7 @@ final class ScreenRecordingModel: ObservableObject {
             errorMessage = localized(ScreenRecordingError.alreadyRecording)
             return
         }
-        guard !isCountingDown else { return }
+        guard !isCountingDown, !isPreparingRecording else { return }
         if captureRect == nil, settings.captureMode != .fullscreen {
             guard let onRequestSelection else {
                 errorMessage = localized(ScreenRecordingError.noDisplayFound)
@@ -470,6 +477,32 @@ final class ScreenRecordingModel: ObservableObject {
         } else {
             beginStart(captureRect: captureRect, directWindow: false)
         }
+    }
+
+    /// 浮光-style ready-to-record step: after the selection commits, show a
+    /// bar pinned to the region for audio toggles and 16:9/9:16 framing
+    /// before actually starting. Confirm hands the (possibly reframed) rect
+    /// to `start(captureRect:)`, which still honors the countdown setting.
+    func prepareRecording(captureRect: CGRect) {
+        guard state == .idle, !isDeviceRecording else { return }
+        guard !isCountingDown, !isPreparingRecording else { return }
+        guard settings.showsPrepareBar else {
+            start(captureRect: captureRect)
+            return
+        }
+        isPreparingRecording = true
+        ScreenRecordingPrepareBarController.shared.show(
+            captureRect: captureRect,
+            model: self,
+            onStart: { [weak self] rect in
+                guard let self else { return }
+                self.isPreparingRecording = false
+                self.start(captureRect: rect)
+            },
+            onCancel: { [weak self] in
+                self?.isPreparingRecording = false
+            }
+        )
     }
 
     /// Starts a recording of the current screen without the selection
@@ -834,6 +867,8 @@ final class ScreenRecordingModel: ObservableObject {
     func shutdown() {
         timerTask?.cancel()
         timerTask = nil
+        ScreenRecordingPrepareBarController.shared.close()
+        isPreparingRecording = false
         if let session {
             self.session = nil
             Task { await session.cancel() }

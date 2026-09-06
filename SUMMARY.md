@@ -238,3 +238,11 @@ v1.1.236 对录屏功能做整体升级，补齐主流录屏工具的完整能�
 - **兼容性**：`StoredConfiguration.version` 18 → 19；所有新键走 `decodeIfPresent ?? 默认`，旧 config.json 无需迁移。新增 `Tests/MacPilotTests/CaptureEnhancementsTests.swift`（12 例：快捷键默认/往返、旧配置解码、倒计时算术、聚光灯桥接、RMS、GIF 参数与钳制）。
 
 > **v1.1.257 验收修复**：① 倒计时面板“取消”按钮此前只关面板、不重置模型的倒计时中标志，导致取消一次后延迟截图被静默忽略——现通过 `onCancel` 回调重置，`shutdown()` 同步关闭面板；② 倒计时驱动从 SwiftUI `.task` 移入控制器（Task + ObservableObject 状态），归零/取消路径不依赖视图生命周期。真机端到端验证：面板出现 → 恰好 5 秒关闭 → 选区浮层开启。
+
+## 二十一、吸收「浮光」演示交互：准备录制条与序号自动重排（v1.1.258）
+
+按用户验收反馈，把视频演示中尚未吸收的两项核心交互补齐：
+
+- **准备录制条（对标"浮光"录屏"准备录制"）**：框选/选窗口提交后不再立即开录，先在选区下方（放不下则上方）弹出深色胶囊工具条：准备录制标签 + 实时选区尺寸、麦克风开关、系统声音开关、**16:9 横屏 / 9:16 竖屏**一键重设框（保持选区中心、夹回所在显示器，`RecordingRegionFraming` 纯函数可测）、取消 X、绿色开始按钮。点开始才走原有倒计时→开录流程；音频开关直接持久化到 `screenRecording.capturesMicrophone/capturesSystemAudio`。新增 `Recording/RecordingPrepareBar.swift`（控制器 ObservableObject + 非激活 NSPanel）；`ScreenRecordingModel.prepareRecording(captureRect:)` 接管原 `onRecordingSelection→start` 直通路径，准备期间屏蔽重复触发，`shutdown()` 同步清理。设置页"录制行为"新增"录制前显示准备工具条"开关（`showsPrepareBar`，默认开，关闭恢复旧行为）。真机 E2E：合成点击提交窗口选区后，准备条在目标窗口下方出现（346×44）。
+- **序号标注自动重排（对标"有的序号重新排一遍"）**：橡皮/删除任一步骤序号后，剩余序号按绘制顺序立即重排为 1..n，下一个新序号从 n+1 继续（此前只有删光才归 1，删除中间序号会留空洞）。撤销/重做基于文档快照，天然恢复重排前编号。
+- 新增 7 个测试：序号重排×3、16:9/9:16 适配几何×2、`showsPrepareBar` 旧配置解码、偏好开关。全量 425 例通过。

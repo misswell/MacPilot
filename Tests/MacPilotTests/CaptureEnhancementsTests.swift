@@ -162,4 +162,94 @@ struct CaptureEnhancementsTests {
         #expect(model.settings.gifFramesPerSecond == 30)
         #expect(model.settings.gifMaximumWidth == 2_000)
     }
+
+    // MARK: - Counter renumbering (浮光's 序号重排)
+
+    @Test @MainActor func erasingAMiddleCounterRenumbersTheRemainingSteps() {
+        let model = SmartAnnotationModel()
+        model.append(.counter(1, CGPoint(x: 10, y: 10)))
+        model.append(.counter(2, CGPoint(x: 20, y: 20)))
+        model.append(.counter(3, CGPoint(x: 30, y: 30)))
+
+        model.removeAnnotation(at: 1)
+
+        let values = model.annotations.compactMap { annotation -> Int? in
+            if case .counter(let value, _) = annotation { return value }
+            return nil
+        }
+        #expect(values == [1, 2])
+        #expect(model.nextCounter == 3)
+    }
+
+    @Test @MainActor func nextCounterContinuesAfterRenumbering() {
+        let model = SmartAnnotationModel()
+        model.append(.counter(1, CGPoint(x: 10, y: 10)))
+        model.append(.counter(2, CGPoint(x: 20, y: 20)))
+        model.removeAnnotation(at: 0)
+        #expect(model.nextCounter == 2)
+
+        model.append(.counter(model.nextCounter, CGPoint(x: 30, y: 30)))
+        let values = model.annotations.compactMap { annotation -> Int? in
+            if case .counter(let value, _) = annotation { return value }
+            return nil
+        }
+        #expect(values == [1, 2])
+    }
+
+    @Test @MainActor func erasingANonCounterNeverRenumbersCounters() {
+        let model = SmartAnnotationModel()
+        model.append(.rectangle(CGRect(x: 0, y: 0, width: 10, height: 10)))
+        model.append(.counter(1, CGPoint(x: 10, y: 10)))
+        model.append(.counter(2, CGPoint(x: 20, y: 20)))
+
+        model.removeAnnotation(at: 0)
+
+        let values = model.annotations.compactMap { annotation -> Int? in
+            if case .counter(let value, _) = annotation { return value }
+            return nil
+        }
+        #expect(values == [1, 2])
+    }
+
+    // MARK: - Ready-to-record bar
+
+    @Test func recordingRegionFramingSnapsToAspectAroundTheRegionCenter() {
+        let region = CGRect(x: 100, y: 100, width: 800, height: 400)
+        let bounds = CGRect(x: 0, y: 0, width: 2000, height: 1200)
+
+        let horizontal = RecordingRegionFraming.rectFitting(region, aspect: 16.0 / 9.0, in: bounds)
+        #expect(abs(horizontal.width / horizontal.height - 16.0 / 9.0) < 0.01)
+        #expect(abs(horizontal.midX - region.midX) <= 1.5)
+        #expect(abs(horizontal.midY - region.midY) <= 1.5)
+
+        let vertical = RecordingRegionFraming.rectFitting(region, aspect: 9.0 / 16.0, in: bounds)
+        #expect(abs(vertical.width / vertical.height - 9.0 / 16.0) < 0.01)
+        #expect(abs(vertical.midX - region.midX) <= 1.5)
+        #expect(bounds.contains(vertical))
+    }
+
+    @Test func recordingRegionFramingClampsIntoTheDisplay() {
+        let bounds = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let region = CGRect(x: 10, y: 10, width: 1900, height: 1060)
+
+        let framed = RecordingRegionFraming.rectFitting(region, aspect: 16.0 / 9.0, in: bounds)
+        #expect(bounds.contains(framed))
+        #expect(abs(framed.width / framed.height - 16.0 / 9.0) < 0.01)
+    }
+
+    @Test func legacyRecordingConfigDecodesPrepareBarDefault() throws {
+        let json = #"{"format": "mp4"}"#
+        let decoded = try JSONDecoder().decode(ScreenRecordingSettings.self, from: Data(json.utf8))
+        #expect(decoded.showsPrepareBar == true)
+    }
+
+    @Test @MainActor func recordingModelTogglesPrepareBarPreference() {
+        let model = ScreenRecordingModel()
+        defer { model.shutdown() }
+        model.setShowsPrepareBar(false)
+        #expect(model.settings.showsPrepareBar == false)
+        model.setShowsPrepareBar(true)
+        #expect(model.settings.showsPrepareBar == true)
+    }
 }
+

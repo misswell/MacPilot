@@ -3437,6 +3437,10 @@ enum SmartCaptureCoordinateConversion {
     static func quartzRect(fromAppKitRect rect: CGRect) -> CGRect? {
         SmartAXTargetQuery.quartzRect(fromAppKitRect: rect)
     }
+
+    static func appKitRect(fromQuartzRect rect: CGRect) -> CGRect? {
+        SmartAXTargetQuery.appKitRect(fromQuartzRect: rect)
+    }
 }
 
 private enum SmartAXTargetQuery {
@@ -3543,7 +3547,7 @@ private enum SmartAXTargetQuery {
         }
     }
 
-    private static func appKitRect(fromQuartzRect rect: CGRect) -> CGRect? {
+    static func appKitRect(fromQuartzRect rect: CGRect) -> CGRect? {
         let points = [
             CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
             CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY)
@@ -6168,8 +6172,9 @@ final class SmartAnnotationModel: ObservableObject {
     }
 
     /// Eraser support: deletes the annotation at `index` as a single undoable
-    /// step. Removing the last counter resets the sequence, mirroring
-    /// `removeAll()`.
+    /// step. Removing a counter renumbers the remaining steps in draw order
+    /// (iShot's 序号重排) so the labels never show gaps, and the next drawn
+    /// counter continues after the last remaining one.
     func removeAnnotation(at index: Int) {
         guard annotations.indices.contains(index) else { return }
         commitActiveMutation()
@@ -6180,10 +6185,15 @@ final class SmartAnnotationModel: ObservableObject {
         if annotationStyles.indices.contains(index) {
             annotationStyles.remove(at: index)
         }
-        if wasCounter, !annotations.contains(where: { annotation in
-            if case .counter = annotation { return true } else { return false }
-        }) {
-            nextCounter = 1
+        if wasCounter {
+            var counterValue = 1
+            for annotationIndex in annotations.indices {
+                if case .counter(_, let point) = annotations[annotationIndex] {
+                    annotations[annotationIndex] = .counter(counterValue, point)
+                    counterValue += 1
+                }
+            }
+            nextCounter = counterValue
         }
         if selectedIndex == index {
             selectedIndex = nil
