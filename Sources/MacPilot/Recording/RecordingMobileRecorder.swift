@@ -37,6 +37,8 @@ final class ScreenRecordingMobileRecorder: NSObject {
     /// when the preview is dismissed so the model can clear its selection.
     func showPreview(named deviceName: String, onClosed: @escaping () -> Void) {
         closePreview()
+        // The flag must be on before the device exposes its screen for capture.
+        ScreenRecordingDeviceDiscovery.enableMobileDeviceScreenCapture()
         guard let device = ScreenRecordingDeviceDiscovery.availableMobileDevices().first(where: { $0.localizedName == deviceName }) else {
             Self.logger.error("Device preview failed: \(deviceName, privacy: .public) not found")
             onClosed()
@@ -115,6 +117,8 @@ final class ScreenRecordingMobileRecorder: NSObject {
         settings: ScreenRecordingSettings,
         onCompleted: @escaping (URL) -> Void
     ) -> Bool {
+        // The flag must be on before the device exposes its screen for capture.
+        ScreenRecordingDeviceDiscovery.enableMobileDeviceScreenCapture()
         guard let device = ScreenRecordingDeviceDiscovery.availableMobileDevices().first(where: { $0.localizedName == deviceName }) else {
             return false
         }

@@ -44,6 +44,10 @@ struct ScreenRecordingPageView: View {
             ScreenRecordingHotKeyEditorSheet(recording: recording, purpose: purpose)
         }
         .onAppear {
+            // User intent: opening the recording page is the first touch of
+            // the mobile-device capture surface, so the CMIO allow flag goes
+            // here — never at app launch (see AppDelegate policy comment).
+            ScreenRecordingDeviceDiscovery.enableMobileDeviceScreenCapture()
             recording.refreshCaptureDeviceLists()
             blocklistApps = ScreenBlocklistApp.runningApps()
         }

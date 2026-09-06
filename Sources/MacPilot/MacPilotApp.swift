@@ -50,9 +50,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 录制功能初始化：允许捕获移动设备画面，并提前请求通知权限以便发送录制完成通知。
-        ScreenRecordingDeviceDiscovery.enableMobileDeviceScreenCapture()
-        ScreenRecordingNotifications.requestAuthorization()
+        // 启动路径不得触碰任何隐私授权（CMIO 捕获标志、通知、辅助功能等），
+        // 否则每次更新重启都会弹出系统授权框。权限请求只由功能入口触发：
+        // 移动设备捕获标志在录制页/录制器中设置，通知权限在录制开始时请求。
         notifyIfTranslocated()
         // 登录启动时不弹出主窗口，仅保留菜单栏图标，应用在后台运行。
         guard hideWindowDuringLaunch else { return }
