@@ -48,6 +48,12 @@ Contributor guide for **MacPilot**, a native macOS menu-bar app (Swift 6, SwiftP
 - Push the release commit to `main` before creating the version tag. Never move or overwrite an already-pushed version tag; publish a new patch version for release fixes.
 - A pushed tag is not proof of a published release. Verify the Actions `dist` job and `gh release view <tag>` both succeed, and confirm the ZIP asset is present.
 
+## Content Publishing
+
+- When publishing articles about this project to external platforms (Zhihu, Cnblogs, Juejin, CSDN, SegmentFault, sspai, etc.), write in a natural first-person developer voice — avoid template-y, marketing-style phrasing.
+- Do NOT check any 「内容由AI生成」 / AI-generated declaration checkbox on those platforms.
+- Reusable article drafts live in `~/Documents/MacPilot-Articles/` (`macpilot-intro.md` full version, `macpilot-human.md` first-person version, platform variants).
+
 ## Security & Signing
 
 - `MacPilot.entitlements` enables only `com.apple.security.cs.disable-library-validation` — do not add entitlements without justification.
