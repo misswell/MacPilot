@@ -609,6 +609,8 @@ final class ScreenCaptureModel: ObservableObject {
         captureTask = nil
         permissionPollTask?.cancel()
         permissionPollTask = nil
+        DelayedCaptureCountdownController.shared.close()
+        isDelayedCaptureCounting = false
         smartCapture?.stop()
         smartCapture = nil
     }
@@ -967,13 +969,19 @@ final class ScreenCaptureModel: ObservableObject {
         isDelayedCaptureCounting = true
         DelayedCaptureCountdownController.shared.show(
             seconds: settings.delayedCaptureSeconds,
-            language: language
-        ) { [weak self] in
-            guard let self else { return }
-            self.isDelayedCaptureCounting = false
-            guard self.settings.screenshotEnabled else { return }
-            self.ensureSmartCapture().startSelection(mode: .manualArea)
-        }
+            language: language,
+            onCancel: { [weak self] in
+                // Cancelling must release the counting state, otherwise every
+                // later delayed-capture request is silently ignored.
+                self?.isDelayedCaptureCounting = false
+            },
+            onFinish: { [weak self] in
+                guard let self else { return }
+                self.isDelayedCaptureCounting = false
+                guard self.settings.screenshotEnabled else { return }
+                self.ensureSmartCapture().startSelection(mode: .manualArea)
+            }
+        )
     }
 
     func startPinCapture() {

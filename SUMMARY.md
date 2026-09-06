@@ -236,3 +236,5 @@ v1.1.236 对录屏功能做整体升级，补齐主流录屏工具的完整能�
 - **完成预览与文案本地化**：完成预览右键菜单（显示于访达/删除/拷贝/关闭）此前硬编码英文，现经 `AppText` 按模型语言本地化（`scRecordingRevealInFinder` 等新键，中英同步）。
 - **GIF 导出参数**（对标方无 GIF 能力）：导出帧率（10/15/20/24）与最大宽度（480/720/960/1080 px）可在录屏页“输出”卡片配置，存 `screenRecording.gifFramesPerSecond/gifMaximumWidth`（夹取 5–30、200–2000，解码默认 15/960），`ScreenRecordingGIFConverter` 直接接收参数。
 - **兼容性**：`StoredConfiguration.version` 18 → 19；所有新键走 `decodeIfPresent ?? 默认`，旧 config.json 无需迁移。新增 `Tests/MacPilotTests/CaptureEnhancementsTests.swift`（12 例：快捷键默认/往返、旧配置解码、倒计时算术、聚光灯桥接、RMS、GIF 参数与钳制）。
+
+> **v1.1.257 验收修复**：① 倒计时面板“取消”按钮此前只关面板、不重置模型的倒计时中标志，导致取消一次后延迟截图被静默忽略——现通过 `onCancel` 回调重置，`shutdown()` 同步关闭面板；② 倒计时驱动从 SwiftUI `.task` 移入控制器（Task + ObservableObject 状态），归零/取消路径不依赖视图生命周期。真机端到端验证：面板出现 → 恰好 5 秒关闭 → 选区浮层开启。

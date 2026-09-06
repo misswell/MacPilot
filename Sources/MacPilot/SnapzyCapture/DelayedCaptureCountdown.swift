@@ -41,11 +41,23 @@ nonisolated struct DelayedCaptureCountdown: Equatable, Sendable {
     }
 }
 
+/// Observable state the controller ticks so the panel is purely a renderer:
+/// driving the countdown from SwiftUI `.task` proved unreliable inside an
+/// NSHostingView hosted by a non-activating NSPanel (the panel never closed).
+@MainActor
+final class DelayedCaptureCountdownState: ObservableObject {
+    @Published var countdown: DelayedCaptureCountdown
+
+    init(countdown: DelayedCaptureCountdown) {
+        self.countdown = countdown
+    }
+}
+
 /// Centered countdown panel shown between the delayed-capture hotkey and the
-/// selection overlay. `cancel` is invoked by the button; the completion only
-/// fires when the countdown runs to the end.
+/// selection overlay. `onCancel` fires for the cancel button, `onFinish` when
+/// the countdown reaches zero; either fires exactly once.
 struct DelayedCapturePanelView: View {
-    @State var countdown: DelayedCaptureCountdown
+    @ObservedObject var state: DelayedCaptureCountdownState
     var cancelLabel: String
     var onCancel: () -> Void
     var onFinish: () -> Void
@@ -56,10 +68,10 @@ struct DelayedCapturePanelView: View {
                 Circle()
                     .stroke(.primary.opacity(0.15), lineWidth: 5)
                 Circle()
-                    .trim(from: 0, to: countdown.progress)
+                    .trim(from: 0, to: state.countdown.progress)
                     .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 5, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                Text("\(countdown.remainingSeconds)")
+                Text("\(state.countdown.remainingSeconds)")
                     .font(.system(size: 34, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.primary)
@@ -72,13 +84,6 @@ struct DelayedCapturePanelView: View {
         }
         .padding(14)
         .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .task(id: countdown.totalSeconds) {
-            while !countdown.isFinished {
-                try? await Task.sleep(for: .seconds(1))
-                countdown = countdown.advanced()
-            }
-            onFinish()
-        }
     }
 }
 
@@ -87,16 +92,32 @@ final class DelayedCaptureCountdownController {
     static let shared = DelayedCaptureCountdownController()
 
     private var panel: NSPanel?
+    private var state: DelayedCaptureCountdownState?
+    private var tickTask: Task<Void, Never>?
     private var isFinished = false
+    private var pendingCancel: (() -> Void)?
+    private var pendingFinish: (() -> Void)?
 
     var isShowing: Bool { panel != nil }
 
-    /// Shows the countdown and invokes `onFinish` when it completes. Any
-    /// previous countdown is replaced; the replaced one neither finishes nor
-    /// cancels its completion.
-    func show(seconds: Int, language: AppLanguage, onFinish: @escaping () -> Void) {
+    /// Shows the countdown and invokes `onFinish` when it completes. The
+    /// cancel button invokes `onCancel` first, so the caller can release the
+    /// "counting" state; either callback fires exactly once. Any previous
+    /// countdown is replaced; the replaced one fires neither callback.
+    func show(
+        seconds: Int,
+        language: AppLanguage,
+        onCancel: @escaping () -> Void = {},
+        onFinish: @escaping () -> Void
+    ) {
         close()
         isFinished = false
+        pendingCancel = onCancel
+        pendingFinish = onFinish
+        let countdownState = DelayedCaptureCountdownState(
+            countdown: DelayedCaptureCountdown(totalSeconds: max(1, seconds))
+        )
+        state = countdownState
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 120, height: 150),
             styleMask: [.fullSizeContentView, .nonactivatingPanel],
@@ -114,15 +135,10 @@ final class DelayedCaptureCountdownController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentView = NSHostingView(
             rootView: DelayedCapturePanelView(
-                countdown: DelayedCaptureCountdown(totalSeconds: max(1, seconds)),
+                state: countdownState,
                 cancelLabel: AppText.value("scDelayedCaptureCancel", language: language),
-                onCancel: { [weak self] in self?.close() },
-                onFinish: { [weak self] in
-                    guard let self, !self.isFinished else { return }
-                    self.isFinished = true
-                    self.close()
-                    onFinish()
-                }
+                onCancel: { [weak self] in self?.terminate(isCancel: true) },
+                onFinish: { [weak self] in self?.terminate(isCancel: false) }
             )
         )
         panel.center()
@@ -134,10 +150,44 @@ final class DelayedCaptureCountdownController {
         }
         panel.orderFrontRegardless()
         self.panel = panel
+        startTicking()
+    }
+
+    /// Ticks once a second on the main actor and closes the panel at zero.
+    /// The panel view only renders `state`; the controller owns the clock so
+    /// termination cannot depend on SwiftUI lifecycle callbacks.
+    private func startTicking() {
+        tickTask?.cancel()
+        tickTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, !self.isFinished, let state = self.state else { return }
+                let advanced = state.countdown.advanced()
+                state.countdown = advanced
+                if advanced.isFinished {
+                    self.terminate(isCancel: false)
+                }
+            }
+        }
+    }
+
+    private func terminate(isCancel: Bool) {
+        guard !isFinished else { return }
+        isFinished = true
+        tickTask?.cancel()
+        tickTask = nil
+        let callback = isCancel ? pendingCancel : pendingFinish
+        close()
+        callback?()
     }
 
     func close() {
+        tickTask?.cancel()
+        tickTask = nil
         panel?.close()
         panel = nil
+        state = nil
+        pendingCancel = nil
+        pendingFinish = nil
     }
 }
