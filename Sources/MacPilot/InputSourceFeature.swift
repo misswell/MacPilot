@@ -1403,10 +1403,12 @@ struct InputSourcesView: View {
             }
             HStack {
                 Text(model.t("inputSourcesIndicatorDuration"))
-                Slider(value: Binding(
+                SettingsSlider(value: Binding(
                     get: { inputSources.settings.indicatorDuration },
                     set: { inputSources.setIndicatorDuration($0) }
-                ), in: 0.2...5, step: 0.1)
+                ), in: 0.2...5, step: 0.1,
+                   label: model.t("inputSourcesIndicatorDuration"),
+                   format: { String(format: "%.1fs", $0) })
                 .frame(width: 180)
                 Text(String(format: "%.1fs", inputSources.settings.indicatorDuration))
                     .font(.caption.monospacedDigit())

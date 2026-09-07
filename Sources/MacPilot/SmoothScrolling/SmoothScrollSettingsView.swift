@@ -294,7 +294,7 @@ struct SmoothScrollSettingsView: View {
                 Spacer()
                 Text(display(value.wrappedValue)).foregroundStyle(.secondary).monospacedDigit()
             }
-            Slider(value: value, in: range, step: step)
+            SettingsSlider(value: value, in: range, step: step, label: title, format: display)
         }
     }
 

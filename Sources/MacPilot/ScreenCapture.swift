@@ -2387,10 +2387,12 @@ struct ScreenCaptureView: View {
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
-                    Slider(value: Binding(
+                    SettingsSlider(value: Binding(
                         get: { capture.settings.quality },
                         set: { capture.setQuality($0) }
-                    ), in: 0.1...1.0, step: 0.05)
+                    ), in: 0.1...1.0, step: 0.05,
+                       label: t("scCompressionQuality"),
+                       format: { String(format: "%d%%", Int($0 * 100)) })
                     Text(t("scQualityHint"))
                         .font(.caption)
                         .foregroundStyle(.secondary)

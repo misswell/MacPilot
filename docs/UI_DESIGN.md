@@ -31,6 +31,7 @@ MacPilot 的界面统一采用 **「大标题页头 + 毛玻璃卡片」** 的�
 | 卡片内小节标题 | `.font(.headline)` |
 | 说明 / 提示文字 | `.font(.subheadline)` 或 `.font(.caption)` + `.foregroundStyle(.secondary)` |
 | 启用类开关 | `.toggleStyle(.switch)` |
+| 设置页滑块 | `SettingsSlider`（轨道高 5、滑块直径 18、控件高 22，accent 已选区间；禁止用带 `step` 的系统 `Slider`，会渲染成刻度线） |
 | 权限 / 警告内联提示框 | 背景 `.orange.opacity(0.1)` + 圆角 10 + 描边 `.orange.opacity(0.35)` |
 
 ## 3. 页面结构（标准模板）
@@ -72,6 +73,7 @@ struct 新功能SettingsView: View {
 必须复用以下组件，禁止重新写一套卡片样式：
 
 - **`SettingsCard`**（主模块）：`Sources/MacPilot/SettingsUI.swift`
+- **`SettingsSlider`**（主模块）：`Sources/MacPilot/SettingsUI.swift`——设置页滑块统一用它，自带步进取整、键盘微调与 VoiceOver 支持
 - **`RightClickSettingsCard`**（MacPilotRightClickKit 模块）：`Sources/MacPilotRightClickKit/Settings/RightClickSettingsCard.swift`
   - Kit 是独立模块，无法使用主模块组件，因此本地复制了一份；两处必须保持视觉一致。
 - 需要新组件时：优先基于现有设计令牌扩展；新组件放入 `Sources/MacPilot/`（主模块）并注明用途。
