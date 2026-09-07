@@ -1293,7 +1293,7 @@ struct InputSourcesView: View {
     }
 
     private var enableCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        SettingsCard {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(model.t("inputSourcesEnable")).font(.headline)
@@ -1315,17 +1315,10 @@ struct InputSourcesView: View {
                     .foregroundStyle(.orange)
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var currentSourceCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        SettingsCard {
             sectionTitle(model.t("inputSourcesCurrent"))
             HStack(spacing: 12) {
                 Image(systemName: inputSources.currentSource?.isCJKV == true ? "character.textbox" : "keyboard")
@@ -1346,17 +1339,10 @@ struct InputSourcesView: View {
                 Button(model.t("refresh")) { inputSources.refreshSources() }
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var defaultSourceCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        SettingsCard {
             sectionTitle(model.t("inputSourcesDefault"))
             Text(model.t("inputSourcesDefaultHint"))
                 .font(.subheadline)
@@ -1373,17 +1359,10 @@ struct InputSourcesView: View {
             .labelsHidden()
             .frame(maxWidth: 420)
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var indicatorCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        SettingsCard {
             sectionTitle(model.t("inputSourcesIndicator"))
             Toggle(model.t("inputSourcesShowIndicator"), isOn: Binding(
                 get: { inputSources.settings.showIndicator },
@@ -1415,17 +1394,10 @@ struct InputSourcesView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var shortcutCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        SettingsCard {
             sectionTitle(model.t("inputSourcesShortcuts"))
             Toggle(model.t("inputSourcesCycleShortcut"), isOn: Binding(
                 get: { inputSources.settings.globalShortcutEnabled },
@@ -1466,17 +1438,10 @@ struct InputSourcesView: View {
                 .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var appRulesCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        SettingsCard {
             HStack {
                 sectionTitle(model.t("inputSourcesAppRules"))
                 Spacer()
@@ -1504,17 +1469,10 @@ struct InputSourcesView: View {
                 }
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var browserRulesCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        SettingsCard {
             HStack {
                 sectionTitle(model.t("inputSourcesBrowserRules"))
                 Spacer()
@@ -1542,13 +1500,6 @@ struct InputSourcesView: View {
                 }
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private func sectionTitle(_ title: String) -> some View {

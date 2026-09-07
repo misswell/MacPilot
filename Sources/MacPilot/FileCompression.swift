@@ -1485,7 +1485,7 @@ struct FileCompressionView: View {
             .padding(.bottom, 22)
 
             ScrollView {
-                VStack(spacing: 16) {
+                VStack(spacing: 24) {
                     folderCard
                     rulesCard
                     resultsCard
@@ -1525,7 +1525,7 @@ struct FileCompressionView: View {
     }
 
     private var folderCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        SettingsCard {
             HStack(spacing: 14) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 13)
@@ -1612,6 +1612,7 @@ struct FileCompressionView: View {
                         set: { compression.setAutomaticallyCompress($0) }
                     ))
                     .labelsHidden()
+                    .toggleStyle(.switch)
                     .accessibilityLabel(t("compressionAutomatic"))
                 }
                 Text(t("compressionAutomaticHint"))
@@ -1620,11 +1621,10 @@ struct FileCompressionView: View {
             }
             .disabled(compression.settings.folderPaths.isEmpty)
         }
-        .compressionCard()
     }
 
     private var rulesCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        SettingsCard {
             Label(t("compressionRules"), systemImage: "slider.horizontal.3")
                 .font(.headline)
 
@@ -1684,11 +1684,10 @@ struct FileCompressionView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .compressionCard()
     }
 
     private var resultsCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        SettingsCard {
             HStack {
                 Label(t("compressionAnalysis"), systemImage: "chart.bar.doc.horizontal")
                     .font(.headline)
@@ -1758,7 +1757,6 @@ struct FileCompressionView: View {
                 }
             }
         }
-        .compressionCard()
     }
 
     @ViewBuilder
@@ -2113,18 +2111,5 @@ private struct CompressedFileListSheet: View {
 
     private func t(_ key: String, _ arguments: CVarArg...) -> String {
         AppText.value(key, language: language, arguments: arguments)
-    }
-}
-
-private extension View {
-    func compressionCard() -> some View {
-        self
-            .padding(20)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.07))
-            )
-            .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 }

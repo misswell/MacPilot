@@ -2923,7 +2923,7 @@ struct PictureInPictureView: View {
             dashboardHeader
             categoryBar
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 24) {
                     HStack(spacing: 10) {
                         Image(systemName: page.icon)
                             .font(.system(size: 15, weight: .semibold))
@@ -2948,7 +2948,8 @@ struct PictureInPictureView: View {
                     pageContent
                 }
                 .padding(.horizontal, 36)
-                .padding(.vertical, 24)
+                .padding(.top, 24)
+                .padding(.bottom, 30)
             }
         }
     }
@@ -2971,6 +2972,7 @@ struct PictureInPictureView: View {
                     set: { pictureInPicture.setEnabled($0) }
                 ))
                 .labelsHidden()
+                .toggleStyle(.switch)
                 .controlSize(.mini)
             }
             .padding(.leading, 11)
@@ -3034,7 +3036,7 @@ struct PictureInPictureView: View {
     }
 
     private var generalPage: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 24) {
             card {
                 settingRow(
                     t("pipGlobalShortcut"),
@@ -3114,7 +3116,7 @@ struct PictureInPictureView: View {
     }
 
     private var windowPage: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 24) {
             card {
                 pickerRow(t("pipPosition"), selection: Binding(
                     get: { pictureInPicture.settings.position },
@@ -3188,7 +3190,7 @@ struct PictureInPictureView: View {
     }
 
     private var capturePage: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 24) {
             card {
                 sliderRow(t("pipFrameRate"), value: Binding(
                     get: { Double(pictureInPicture.settings.defaultFrameRate) },
@@ -3237,7 +3239,7 @@ struct PictureInPictureView: View {
     }
 
     private var detectionPage: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 24) {
             card {
                 sliderRow(t("pipDetectionThreshold"), value: Binding(
                     get: { Double(pictureInPicture.settings.detectionThresholdSeconds) },
@@ -3316,14 +3318,7 @@ struct PictureInPictureView: View {
     }
 
     private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 14, content: content)
-            .padding(20)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.07))
-            )
-            .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
+        SettingsCard(content: content)
     }
 
     private func settingRow<Content: View>(_ title: String, hint: String? = nil, @ViewBuilder control: () -> Content) -> some View {
@@ -3562,15 +3557,7 @@ private struct PiPOcclusionSettingsView: View {
     }
 
     private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 14, content: content)
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.07))
-            )
-            .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
+        SettingsCard(content: content)
     }
 
     private func t(_ key: String) -> String {

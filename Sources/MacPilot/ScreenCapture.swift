@@ -1866,12 +1866,13 @@ struct ScreenCaptureView: View {
     // MARK: - Output folder card
 
     private var smartCaptureCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        SettingsCard {
             Toggle(t("scScreenshotEnabled"), isOn: Binding(
                 get: { capture.settings.screenshotEnabled },
                 set: { capture.setScreenshotEnabled($0) }
             ))
             .font(.body.weight(.medium))
+            .toggleStyle(.switch)
             Text(t("scScreenshotDisabledHint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1973,13 +1974,6 @@ struct ScreenCaptureView: View {
             shortcutRow(.objectCutout, action: { capture.startObjectCutoutCapture() })
             shortcutRow(.pin, action: { capture.startPinCapture() })
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var imageHostingCard: some View {
@@ -2199,7 +2193,7 @@ struct ScreenCaptureView: View {
     // MARK: - Output folder card
 
     private var outputCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        SettingsCard {
             HStack(spacing: 14) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 13)
@@ -2247,19 +2241,12 @@ struct ScreenCaptureView: View {
                 Text(t("scShowCursor"))
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     // MARK: - Schedule card
 
     private var scheduleCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        SettingsCard {
             Text(t("scSchedule"))
                 .font(.headline)
 
@@ -2271,6 +2258,7 @@ struct ScreenCaptureView: View {
                     Text(t("scEnableCapture"))
                         .font(.headline)
                 }
+                .toggleStyle(.switch)
                 Spacer()
                 Button(t("scCaptureNow")) { capture.captureNow() }
                     .buttonStyle(.borderedProminent)
@@ -2323,13 +2311,6 @@ struct ScreenCaptureView: View {
                 Spacer()
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private func intervalRow(label: String, value: Int, onSet: @escaping (Int) -> Void) -> some View {
@@ -2360,7 +2341,7 @@ struct ScreenCaptureView: View {
     // MARK: - Quality card
 
     private var qualityCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        SettingsCard {
             Text(t("scQuality"))
                 .font(.headline)
 
@@ -2419,13 +2400,6 @@ struct ScreenCaptureView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private func formatLabel(_ format: ScreenCaptureImageFormat) -> String {
@@ -2439,7 +2413,7 @@ struct ScreenCaptureView: View {
     // MARK: - Status card
 
     private var statusCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        SettingsCard {
             Text(t("scStatus"))
                 .font(.headline)
 
@@ -2506,17 +2480,10 @@ struct ScreenCaptureView: View {
                 }
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private var historyCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        SettingsCard {
             HStack {
                 Text(t("scHistory")).font(.headline)
                 Spacer()
@@ -2569,13 +2536,6 @@ struct ScreenCaptureView: View {
                 }
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
     }
 
     private func historyKindLabel(_ kind: SmartCaptureHistoryKind) -> String {
