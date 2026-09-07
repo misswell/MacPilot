@@ -21,7 +21,7 @@ final class AwakeSessionManager: ObservableObject {
     private let now: () -> Date
     private var maintenanceTask: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
-    private var isPowerMonitoring = false
+    private var powerMonitoringToken: UUID?
     private var isShutdown = false
 
     /// Called by `MacPilotModel` when the user-facing Awake preferences change.
@@ -48,6 +48,7 @@ final class AwakeSessionManager: ObservableObject {
     var hasManualSession: Bool { activeSessions.contains { $0.source == .manual } }
     var isSystemAssertionActive: Bool { assertionController.isSystemAssertionActive }
     var isDisplayAssertionActive: Bool { assertionController.isDisplayAssertionActive }
+    var sharedPowerStateProvider: any AwakePowerStateProviding { powerStateProvider }
 
     func startSession(
         source: SessionSource,
@@ -246,17 +247,16 @@ final class AwakeSessionManager: ObservableObject {
     }
 
     private func startPowerMonitoring() {
-        guard !isPowerMonitoring else { return }
-        isPowerMonitoring = true
-        powerStateProvider.startMonitoring { [weak self] in
+        guard powerMonitoringToken == nil else { return }
+        powerMonitoringToken = powerStateProvider.addMonitoringObserver { [weak self] in
             self?.handlePowerSourceChange()
         }
     }
 
     private func stopPowerMonitoring() {
-        guard isPowerMonitoring else { return }
-        isPowerMonitoring = false
-        powerStateProvider.stopMonitoring()
+        guard let token = powerMonitoringToken else { return }
+        powerMonitoringToken = nil
+        powerStateProvider.removeMonitoringObserver(token)
     }
 
     private func handlePowerSourceChange() {

@@ -10,3 +10,12 @@
 6. 在电池电量低于阈值的 Mac 上开启电量保护，确认所有 Awake Session 自动结束；关闭保护后不应自动恢复已经结束的 Session。
 
 退出 MacPilot 后再次运行，确认上一次手动 Awake Session 不会恢复；这是 P0 的默认启动策略。
+
+## Awake P1 自动规则
+
+7. 在 Awake 设置的「自动规则」中新增 Process Running 规则，填写 `claude`，保持「阻止系统休眠」开启。启动并退出 Claude CLI，确认规则分别创建和结束 Trigger Session；重复进程事件不应创建多个 Session。
+8. 新增 Application Running 或 Application Frontmost 规则，填写目标应用的 Bundle ID。启动或切换到该应用后，确认规则状态和 Session 详情显示自动规则来源。
+9. 新增 Power Adapter Connected 规则。插入和拔出电源适配器，确认对应 Trigger Session 随电源状态开始和结束。
+10. 新增 External Display 规则并设为至少 1 台。插拔外接显示器，确认 Session 随显示器重配置事件开始和结束。
+11. 为任一规则设置启动/停止延迟：状态短暂变化不应闪断 Session；持续超过延迟后才应切换状态。
+12. 停用或删除最后一个使用 Process、Power 或 Display 的规则，确认对应 Monitor 停止；没有相关规则时不应持续轮询这些系统状态。

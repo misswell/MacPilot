@@ -6,18 +6,31 @@ protocol AwakePowerStateProviding: AnyObject {
     func currentPowerState() -> PowerState
     func startMonitoring(_ handler: @escaping @MainActor () -> Void)
     func stopMonitoring()
+    @discardableResult
+    func addMonitoringObserver(_ handler: @escaping @MainActor () -> Void) -> UUID
+    func removeMonitoringObserver(_ id: UUID)
 }
 
 extension AwakePowerStateProviding {
     func startMonitoring(_ handler: @escaping @MainActor () -> Void) {}
     func stopMonitoring() {}
+
+    @discardableResult
+    func addMonitoringObserver(_ handler: @escaping @MainActor () -> Void) -> UUID {
+        startMonitoring(handler)
+        return UUID()
+    }
+
+    func removeMonitoringObserver(_ id: UUID) {
+        stopMonitoring()
+    }
 }
 
 private final class PowerSourceNotificationContext: @unchecked Sendable {
-    let handler: @MainActor () -> Void
+    weak var owner: PowerStateProvider?
 
-    init(handler: @escaping @MainActor () -> Void) {
-        self.handler = handler
+    init(owner: PowerStateProvider) {
+        self.owner = owner
     }
 }
 
@@ -28,14 +41,14 @@ final class PowerStateProvider: AwakePowerStateProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var runLoopSource: CFRunLoopSource?
     private var notificationContext: PowerSourceNotificationContext?
+    private var observers: [UUID: @MainActor () -> Void] = [:]
 
     private static let notificationCallback: @convention(c) (UnsafeMutableRawPointer?) -> Void = { context in
         guard let context else { return }
         let notificationContext = Unmanaged<PowerSourceNotificationContext>
             .fromOpaque(context)
             .takeUnretainedValue()
-        let handler = notificationContext.handler
-        Task { @MainActor in handler() }
+        notificationContext.owner?.notifyObservers()
     }
 
     func currentPowerState() -> PowerState {
@@ -77,30 +90,37 @@ final class PowerStateProvider: AwakePowerStateProviding, @unchecked Sendable {
         return state
     }
 
-    func startMonitoring(_ handler: @escaping @MainActor () -> Void) {
+    @discardableResult
+    func addMonitoringObserver(_ handler: @escaping @MainActor () -> Void) -> UUID {
+        let id = UUID()
         lock.lock()
-        guard runLoopSource == nil else {
-            lock.unlock()
-            return
+        observers[id] = handler
+        var shouldAddSource = false
+        if runLoopSource == nil {
+            let context = PowerSourceNotificationContext(owner: self)
+            guard let source = IOPSNotificationCreateRunLoopSource(
+                Self.notificationCallback,
+                Unmanaged.passUnretained(context).toOpaque()
+            )?.takeRetainedValue() else {
+                observers[id] = nil
+                lock.unlock()
+                logger.error("Could not create the IOKit power-source notification run-loop source")
+                return id
+            }
+            notificationContext = context
+            runLoopSource = source
+            shouldAddSource = true
         }
-        let context = PowerSourceNotificationContext(handler: handler)
-        guard let source = IOPSNotificationCreateRunLoopSource(
-            Self.notificationCallback,
-            Unmanaged.passUnretained(context).toOpaque()
-        )?.takeRetainedValue() else {
-            lock.unlock()
-            logger.error("Could not create the IOKit power-source notification run-loop source")
-            return
-        }
-        notificationContext = context
-        runLoopSource = source
+        let source = runLoopSource
         lock.unlock()
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+        if shouldAddSource, let source { CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode) }
+        return id
     }
 
-    func stopMonitoring() {
+    func removeMonitoringObserver(_ id: UUID) {
         lock.lock()
-        guard let source = runLoopSource else {
+        observers[id] = nil
+        guard observers.isEmpty, let source = runLoopSource else {
             lock.unlock()
             return
         }
@@ -108,5 +128,28 @@ final class PowerStateProvider: AwakePowerStateProviding, @unchecked Sendable {
         notificationContext = nil
         lock.unlock()
         CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .defaultMode)
+    }
+
+    func startMonitoring(_ handler: @escaping @MainActor () -> Void) {
+        _ = addMonitoringObserver(handler)
+    }
+
+    func stopMonitoring() {
+        lock.lock()
+        let source = runLoopSource
+        observers.removeAll()
+        runLoopSource = nil
+        notificationContext = nil
+        lock.unlock()
+        if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .defaultMode) }
+    }
+
+    private func notifyObservers() {
+        lock.lock()
+        let handlers = Array(observers.values)
+        lock.unlock()
+        for handler in handlers {
+            Task { @MainActor in handler() }
+        }
     }
 }

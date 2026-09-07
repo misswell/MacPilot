@@ -187,3 +187,289 @@ private final class TestPowerStateProvider: AwakePowerStateProviding {
 
     func currentPowerState() -> PowerState { state }
 }
+
+@MainActor
+struct AwakeTriggerTests {
+    @Test func triggerConditionsRoundTripAndEvaluateAllAndAny() throws {
+        let state = AwakeTriggerSystemState(
+            application: ApplicationState(
+                runningBundleIDs: ["com.example.editor"],
+                frontmostBundleID: "com.example.editor"
+            ),
+            process: ProcessState(runningNames: ["claude"], runningExecutablePaths: []),
+            power: PowerState(batteryLevel: 80, charging: true, onExternalPower: true),
+            display: DisplayState(
+                onlineDisplays: [DisplayInfo(id: 1, isBuiltIn: true), DisplayInfo(id: 2, isBuiltIn: false)],
+                externalDisplayCount: 1,
+                mirroringActive: false
+            )
+        )
+        let trigger = AwakeTrigger(
+            name: "Coding",
+            operatorType: .all,
+            conditions: [
+                .applicationFrontmost(bundleID: "com.example.editor"),
+                .processRunning(name: "claude"),
+                .externalDisplay(minimumCount: 1)
+            ],
+            timingPolicy: TriggerTimingPolicy(activationDelay: 2, deactivationDelay: 3)
+        )
+
+        #expect(trigger.matches(state))
+        #expect(AwakeTrigger(name: "Any", operatorType: .any, conditions: [.powerAdapter(connected: false), .processRunning(name: "claude")]).matches(state))
+
+        let decoded = try JSONDecoder().decode(AwakeTrigger.self, from: JSONEncoder().encode(trigger))
+        #expect(decoded == trigger)
+    }
+
+    @Test func processTriggerCreatesOneSessionAndEndsWhenProcessStops() {
+        let assertionController = TestAssertionController()
+        let powerProvider = TriggerTestPowerStateProvider()
+        let manager = AwakeSessionManager(assertionController: assertionController, powerStateProvider: powerProvider)
+        let processProvider = TriggerTestProcessStateProvider()
+        let engine = AwakeTriggerEngine(
+            sessionManager: manager,
+            powerStateProvider: powerProvider,
+            applicationStateProvider: TriggerTestApplicationStateProvider(),
+            processStateProvider: processProvider,
+            displayStateProvider: TriggerTestDisplayStateProvider()
+        )
+        defer {
+            engine.shutdown()
+            manager.shutdown()
+        }
+
+        let trigger = AwakeTrigger(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000010")!,
+            name: "Claude",
+            conditions: [.processRunning(name: "claude")]
+        )
+        engine.applyLoadedTriggers([trigger])
+        #expect(processProvider.isPolling)
+
+        processProvider.setState(ProcessState(runningNames: ["claude"], runningExecutablePaths: []))
+        #expect(manager.activeSessionCount == 1)
+        processProvider.setState(ProcessState(runningNames: ["claude"], runningExecutablePaths: []))
+        #expect(manager.activeSessionCount == 1)
+        #expect(manager.activeSessions.first?.source == .trigger(trigger.id))
+
+        processProvider.setState(.unknown)
+        #expect(manager.activeSessionCount == 0)
+        #expect(assertionController.lastState == .inactive)
+    }
+
+    @Test func powerAndDisplayTriggersUseSharedStateProviders() {
+        let powerProvider = TriggerTestPowerStateProvider()
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: powerProvider
+        )
+        let displayProvider = TriggerTestDisplayStateProvider()
+        let engine = AwakeTriggerEngine(
+            sessionManager: manager,
+            powerStateProvider: powerProvider,
+            applicationStateProvider: TriggerTestApplicationStateProvider(),
+            processStateProvider: TriggerTestProcessStateProvider(),
+            displayStateProvider: displayProvider
+        )
+        defer {
+            engine.shutdown()
+            manager.shutdown()
+        }
+
+        let powerTrigger = AwakeTrigger(
+            name: "Power",
+            conditions: [.powerAdapter(connected: true)]
+        )
+        let displayTrigger = AwakeTrigger(
+            name: "Display",
+            conditions: [.externalDisplay(minimumCount: 1)]
+        )
+        engine.applyLoadedTriggers([powerTrigger, displayTrigger])
+        #expect(powerProvider.isMonitoring)
+        #expect(displayProvider.isMonitoring)
+
+        powerProvider.setState(PowerState(batteryLevel: 80, charging: true, onExternalPower: true))
+        #expect(manager.activeSessionCount == 1)
+        displayProvider.setState(DisplayState(
+            onlineDisplays: [DisplayInfo(id: 1, isBuiltIn: true), DisplayInfo(id: 2, isBuiltIn: false)],
+            externalDisplayCount: 1,
+            mirroringActive: false
+        ))
+        #expect(manager.activeSessionCount == 2)
+
+        powerProvider.setState(PowerState(batteryLevel: 80, charging: false, onExternalPower: false))
+        #expect(manager.activeSessionCount == 1)
+        displayProvider.setState(.unknown)
+        #expect(manager.activeSessionCount == 0)
+    }
+
+    @Test func triggerDelaysActivationAndDeactivation() async throws {
+        let powerProvider = TriggerTestPowerStateProvider()
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: powerProvider
+        )
+        let processProvider = TriggerTestProcessStateProvider()
+        let engine = AwakeTriggerEngine(
+            sessionManager: manager,
+            powerStateProvider: powerProvider,
+            applicationStateProvider: TriggerTestApplicationStateProvider(),
+            processStateProvider: processProvider,
+            displayStateProvider: TriggerTestDisplayStateProvider()
+        )
+        defer {
+            engine.shutdown()
+            manager.shutdown()
+        }
+
+        let trigger = AwakeTrigger(
+            name: "Delayed Claude",
+            conditions: [.processRunning(name: "claude")],
+            timingPolicy: TriggerTimingPolicy(activationDelay: 0.05, deactivationDelay: 0.05)
+        )
+        engine.applyLoadedTriggers([trigger])
+        processProvider.setState(ProcessState(runningNames: ["claude"], runningExecutablePaths: []))
+        #expect(manager.activeSessionCount == 0)
+        for _ in 0..<20 where manager.activeSessionCount == 0 {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        #expect(manager.activeSessionCount == 1)
+
+        processProvider.setState(.unknown)
+        #expect(manager.activeSessionCount == 1)
+        for _ in 0..<20 where manager.activeSessionCount == 1 {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        #expect(manager.activeSessionCount == 0)
+    }
+
+    @Test func disablingLastTriggerStopsItsMonitor() {
+        let powerProvider = TriggerTestPowerStateProvider()
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: powerProvider
+        )
+        let processProvider = TriggerTestProcessStateProvider()
+        let engine = AwakeTriggerEngine(
+            sessionManager: manager,
+            powerStateProvider: powerProvider,
+            applicationStateProvider: TriggerTestApplicationStateProvider(),
+            processStateProvider: processProvider,
+            displayStateProvider: TriggerTestDisplayStateProvider()
+        )
+        defer {
+            engine.shutdown()
+            manager.shutdown()
+        }
+
+        let trigger = AwakeTrigger(name: "Claude", conditions: [.processRunning(name: "claude")])
+        engine.applyLoadedTriggers([trigger])
+        #expect(processProvider.isPolling)
+        engine.setTriggerEnabled(trigger.id, enabled: false)
+        #expect(!processProvider.isPolling)
+        #expect(!engine.runtimeState(for: trigger.id).sessionActive)
+    }
+}
+
+@MainActor
+private final class TriggerTestApplicationStateProvider: AwakeApplicationStateProviding {
+    var currentState = ApplicationState.unknown
+    var isMonitoring = false
+    private var handler: (@MainActor () -> Void)?
+
+    func startMonitoring(_ handler: @escaping @MainActor () -> Void) {
+        isMonitoring = true
+        self.handler = handler
+        handler()
+    }
+
+    func stopMonitoring() {
+        isMonitoring = false
+        handler = nil
+    }
+
+    func setState(_ state: ApplicationState) {
+        currentState = state
+        handler?()
+    }
+}
+
+@MainActor
+private final class TriggerTestProcessStateProvider: AwakeProcessStateProviding {
+    var currentState = ProcessState.unknown
+    var isPolling = false
+    private var handler: (@MainActor () -> Void)?
+
+    func startMonitoring(_ handler: @escaping @MainActor () -> Void) {
+        isPolling = true
+        self.handler = handler
+        handler()
+    }
+
+    func stopMonitoring() {
+        isPolling = false
+        handler = nil
+    }
+
+    func setState(_ state: ProcessState) {
+        currentState = state
+        handler?()
+    }
+}
+
+@MainActor
+private final class TriggerTestDisplayStateProvider: AwakeDisplayStateProviding {
+    var currentState = DisplayState.unknown
+    var isMonitoring = false
+    private var handler: (@MainActor () -> Void)?
+
+    func startMonitoring(_ handler: @escaping @MainActor () -> Void) {
+        isMonitoring = true
+        self.handler = handler
+        handler()
+    }
+
+    func stopMonitoring() {
+        isMonitoring = false
+        handler = nil
+    }
+
+    func setState(_ state: DisplayState) {
+        currentState = state
+        handler?()
+    }
+}
+
+@MainActor
+private final class TriggerTestPowerStateProvider: @MainActor AwakePowerStateProviding {
+    var state = PowerState(batteryLevel: 80, charging: false, onExternalPower: false)
+    private var observers: [UUID: @MainActor () -> Void] = [:]
+
+    var isMonitoring: Bool { !observers.isEmpty }
+
+    func currentPowerState() -> PowerState { state }
+
+    func addMonitoringObserver(_ handler: @escaping @MainActor () -> Void) -> UUID {
+        let id = UUID()
+        observers[id] = handler
+        return id
+    }
+
+    func removeMonitoringObserver(_ id: UUID) {
+        observers[id] = nil
+    }
+
+    func startMonitoring(_ handler: @escaping @MainActor () -> Void) {
+        _ = addMonitoringObserver(handler)
+    }
+
+    func stopMonitoring() {
+        observers.removeAll()
+    }
+
+    func setState(_ state: PowerState) {
+        self.state = state
+        observers.values.forEach { $0() }
+    }
+}

@@ -15,6 +15,7 @@ private enum AwakeSessionPreset: String, CaseIterable, Identifiable {
 struct AwakeSettingsView: View {
     @EnvironmentObject private var model: MacPilotModel
     @ObservedObject var awake: AwakeSessionManager
+    @ObservedObject var triggerEngine: AwakeTriggerEngine
 
     @State private var selectedPreset: AwakeSessionPreset = .unlimited
     @State private var customMinutes = 60
@@ -30,6 +31,7 @@ struct AwakeSettingsView: View {
 
                 sessionControlCard
                 sessionDetailsCard
+                AwakeTriggerListView(triggerEngine: triggerEngine)
                 batteryProtectionCard
                 powerStateCard
             }
@@ -94,7 +96,11 @@ struct AwakeSettingsView: View {
                 TimelineView(.periodic(from: Date(), by: 1)) { context in
                     VStack(alignment: .leading, spacing: 14) {
                         ForEach(awake.activeSessions) { session in
-                            AwakeSessionDetailRow(session: session, now: context.date)
+                            AwakeSessionDetailRow(
+                                session: session,
+                                now: context.date,
+                                triggerName: triggerName(for: session.source)
+                            )
                             if session.id != awake.activeSessions.last?.id {
                                 Divider()
                             }
@@ -184,6 +190,11 @@ struct AwakeSettingsView: View {
         return model.t("awakeBatteryValue", level)
     }
 
+    private func triggerName(for source: SessionSource) -> String? {
+        guard case .trigger(let id) = source else { return nil }
+        return triggerEngine.trigger(for: id)?.name
+    }
+
     private func warningBanner<Content: View>(_ content: Content) -> some View {
         content
             .padding(10)
@@ -219,6 +230,7 @@ private struct AwakeSessionDetailRow: View {
     @EnvironmentObject private var model: MacPilotModel
     let session: AwakeSession
     let now: Date
+    let triggerName: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -251,7 +263,7 @@ private struct AwakeSessionDetailRow: View {
         case .manual:
             return model.t("awakeManualSource")
         case .trigger:
-            return model.t("awakeTriggerSource")
+            return triggerName ?? model.t("awakeTriggerSource")
         case .application(let bundleID):
             return bundleID
         case .process(let name):
@@ -288,6 +300,7 @@ private struct AwakeSessionDetailRow: View {
 struct AwakeMenuView: View {
     @EnvironmentObject private var model: MacPilotModel
     @ObservedObject var awake: AwakeSessionManager
+    @ObservedObject var triggerEngine: AwakeTriggerEngine
     let openSettings: () -> Void
 
     var body: some View {
@@ -306,6 +319,17 @@ struct AwakeMenuView: View {
                     .foregroundStyle(.secondary)
                 Button(model.t("awakeStopAllManual"), action: awake.endAllManualSessions)
                     .disabled(!awake.hasManualSession)
+            }
+
+            if !triggerEngine.triggers.isEmpty {
+                Divider()
+                ForEach(triggerEngine.triggers) { trigger in
+                    Label(
+                        trigger.name,
+                        systemImage: triggerEngine.runtimeState(for: trigger.id).sessionActive ? "sun.max.fill" : "circle"
+                    )
+                    .foregroundStyle(trigger.enabled ? .primary : .secondary)
+                }
             }
 
             Menu(model.t("awakeDuration")) {

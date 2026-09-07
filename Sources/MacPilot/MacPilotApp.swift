@@ -424,7 +424,17 @@ enum AppText {
         "awakeBatteryProtectionHint": "电量低于此阈值时，所有 Awake Session 都会结束。", "awakeBatteryThresholdValue": "停止阈值：%d%%",
         "awakeSafetyActive": "电量过低，已停止保持唤醒", "awakePowerState": "电源状态", "awakeBattery": "电量", "awakeBatteryValue": "%d%%",
         "awakeExternalPower": "外接电源", "awakeCharging": "正在充电", "awakeConnected": "已连接", "awakeDisconnected": "未连接",
-        "awakeYes": "是", "awakeNo": "否", "awakeUnknown": "未知", "awakeAssertionError": "无法保持 Mac 唤醒：%@"
+        "awakeYes": "是", "awakeNo": "否", "awakeUnknown": "未知", "awakeAssertionError": "无法保持 Mac 唤醒：%@",
+        "awakeAutomation": "自动规则", "awakeAutomationHint": "当应用、进程、电源或显示器状态满足条件时自动保持唤醒。",
+        "awakeNoTriggers": "尚未添加自动规则。", "awakeAddTrigger": "添加规则", "awakeEditTrigger": "编辑自动规则",
+        "awakeTriggerName": "规则名称", "awakeCondition": "条件", "awakeAllConditions": "全部满足", "awakeAnyCondition": "任意满足",
+        "awakeAddCondition": "添加条件", "awakeRemoveCondition": "删除条件", "awakeApplicationRunning": "应用正在运行",
+        "awakeApplicationFrontmost": "应用位于前台", "awakeProcessRunning": "进程正在运行", "awakeProcessExecutable": "可执行文件正在运行",
+        "awakePowerAdapter": "已连接电源适配器", "awakeExternalDisplay": "外接显示器", "awakeMinimumDisplayCount": "至少连接的显示器数量",
+        "awakeBundleID": "Bundle ID", "awakeProcessName": "进程名称", "awakeExecutablePath": "可执行文件路径",
+        "awakeSystemSleepToggle": "阻止系统休眠", "awakeDisplaySleepToggle": "阻止显示器休眠",
+        "awakeActivationDelay": "启动延迟（秒）", "awakeDeactivationDelay": "停止延迟（秒）",
+        "awakeConditionMatched": "条件已满足", "awakeConditionNotMatched": "条件未满足"
         , "launch": "启动", "launchSubtitle": "在登录后按设定延迟启动应用。", "launchApps": "启动应用",
         "addLaunchApp": "添加启动应用", "addLaunchRule": "添加启动规则", "editLaunchRule": "编辑启动规则",
         "launchRuleDetail": "选择一个应用，并设置从 MacPilot 登录启动开始计算的延迟秒数。",
@@ -747,6 +757,16 @@ enum AppText {
             "awakeSafetyActive": "Battery too low; Awake sessions were stopped", "awakePowerState": "Power State", "awakeBattery": "Battery", "awakeBatteryValue": "%d%%",
             "awakeExternalPower": "External power", "awakeCharging": "Charging", "awakeConnected": "Connected", "awakeDisconnected": "Not connected",
             "awakeYes": "Yes", "awakeNo": "No", "awakeUnknown": "Unknown", "awakeAssertionError": "Could not keep the Mac awake: %@",
+            "awakeAutomation": "Automation", "awakeAutomationHint": "Keep the Mac awake automatically when application, process, power, or display conditions match.",
+            "awakeNoTriggers": "No automation rules yet.", "awakeAddTrigger": "Add Rule", "awakeEditTrigger": "Edit Automation Rule",
+            "awakeTriggerName": "Rule name", "awakeCondition": "Condition", "awakeAllConditions": "All conditions", "awakeAnyCondition": "Any condition",
+            "awakeAddCondition": "Add condition", "awakeRemoveCondition": "Remove condition", "awakeApplicationRunning": "Application is running",
+            "awakeApplicationFrontmost": "Application is frontmost", "awakeProcessRunning": "Process is running", "awakeProcessExecutable": "Executable is running",
+            "awakePowerAdapter": "Power adapter connected", "awakeExternalDisplay": "External display", "awakeMinimumDisplayCount": "Minimum display count",
+            "awakeBundleID": "Bundle ID", "awakeProcessName": "Process name", "awakeExecutablePath": "Executable path",
+            "awakeSystemSleepToggle": "Prevent system sleep", "awakeDisplaySleepToggle": "Prevent display sleep",
+            "awakeActivationDelay": "Activation delay (seconds)", "awakeDeactivationDelay": "Deactivation delay (seconds)",
+            "awakeConditionMatched": "Condition matched", "awakeConditionNotMatched": "Condition not matched",
             "launch": "Launch", "launchSubtitle": "Launch apps after their configured delay following login.", "launchApps": "LAUNCH APPS",
             "addLaunchApp": "Add launch app", "addLaunchRule": "Add launch rule", "editLaunchRule": "Edit launch rule",
             "launchRuleDetail": "Choose an app and set its delay in seconds from when MacPilot starts at login.",
@@ -1026,9 +1046,10 @@ final class MacPilotModel: ObservableObject {
         var smoothScrolling: SmoothScrollSettings
         var clipboard: ClipboardSettings
         var awake: AwakeSettings
+        var awakeTriggers: [AwakeTrigger]
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings) {
-            version = 20
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger]) {
+            version = 21
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -1045,6 +1066,7 @@ final class MacPilotModel: ObservableObject {
             self.smoothScrolling = smoothScrolling
             self.clipboard = clipboard
             self.awake = awake
+            self.awakeTriggers = awakeTriggers
         }
 
         init(from decoder: Decoder) throws {
@@ -1066,6 +1088,7 @@ final class MacPilotModel: ObservableObject {
             smoothScrolling = try container.decodeIfPresent(SmoothScrollSettings.self, forKey: .smoothScrolling) ?? SmoothScrollSettings()
             clipboard = try container.decodeIfPresent(ClipboardSettings.self, forKey: .clipboard) ?? ClipboardSettings()
             awake = try container.decodeIfPresent(AwakeSettings.self, forKey: .awake) ?? .standard
+            awakeTriggers = try container.decodeIfPresent([AwakeTrigger].self, forKey: .awakeTriggers) ?? []
         }
     }
 
@@ -1092,6 +1115,7 @@ final class MacPilotModel: ObservableObject {
     let smoothScrolling = SmoothScrollModel()
     let clipboard = ClipboardModel()
     let awake = AwakeSessionManager()
+    let awakeTriggers: AwakeTriggerEngine
     @Published var requestedSection: MainSection?
     /// Set by the menu bar/deep-link shortcut entry so the capture settings
     /// can present the recorder immediately after the main window is opened.
@@ -1122,6 +1146,7 @@ final class MacPilotModel: ObservableObject {
     ]
 
     init() {
+        awakeTriggers = AwakeTriggerEngine(sessionManager: awake)
         configurationURL = Self.defaultConfigurationURL()
         legacyConfigurationURLs = Self.legacyConfigurationURLs()
         isLoading = true
@@ -1165,6 +1190,13 @@ final class MacPilotModel: ObservableObject {
             queue: .main
         ) { [weak awake] _ in
             MainActor.assumeIsolated { awake?.shutdown() }
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak awakeTriggers] _ in
+            MainActor.assumeIsolated { awakeTriggers?.shutdown() }
         }
         NotificationCenter.default.addObserver(
             forName: .macPilotDeepLink,
@@ -1215,6 +1247,7 @@ final class MacPilotModel: ObservableObject {
         smoothScrolling.persist = { [weak self] in self?.saveIfReady() }
         clipboard.persist = { [weak self] in self?.saveIfReady() }
         awake.persist = { [weak self] in self?.saveIfReady() }
+        awakeTriggers.persist = { [weak self] in self?.saveIfReady() }
         windowSwitcher.language = language
         clipboard.language = language
         ble.startObservingSystemState()
@@ -1913,6 +1946,7 @@ final class MacPilotModel: ObservableObject {
         smoothScrolling.applyLoadedSettings(configuration.smoothScrolling)
         clipboard.applyLoadedSettings(configuration.clipboard)
         awake.applyLoadedSettings(configuration.awake)
+        awakeTriggers.applyLoadedTriggers(configuration.awakeTriggers)
     }
 
     private func scheduleInputSourceSave() {
@@ -1947,7 +1981,8 @@ final class MacPilotModel: ObservableObject {
             windowSwitcher: windowSwitcher.settings,
             smoothScrolling: smoothScrolling.settings,
             clipboard: clipboard.settings,
-            awake: awake.settings
+            awake: awake.settings,
+            awakeTriggers: awakeTriggers.triggers
         )
         let data: Data
         do {
@@ -2253,7 +2288,7 @@ struct ContentView: View {
         case .launch:
             LaunchRulesView(showingAdd: $showingLaunchAdd, editingRule: $editingLaunchRule)
         case .awake:
-            AwakeSettingsView(awake: model.awake)
+            AwakeSettingsView(awake: model.awake, triggerEngine: model.awakeTriggers)
         case .ble:
             BLEUnlockView(ble: model.ble)
         case .inputSources:
@@ -3829,7 +3864,7 @@ struct MenuBarView: View {
     var body: some View {
         // 移除设置页入口和规则/启动计划管理项，但保留各功能的即时操作。
         Divider()
-        AwakeMenuView(awake: awake) {
+        AwakeMenuView(awake: awake, triggerEngine: model.awakeTriggers) {
             model.requestedSection = .awake
             showMainWindow()
         }
