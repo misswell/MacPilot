@@ -78,7 +78,7 @@ struct AwakeSettingsView: View {
 
             HStack {
                 Button(model.t("awakeStart"), action: startSelectedSession)
-                    .buttonStyle(.borderedProminent)
+                    .macPilotProminentButtonStyle()
                 if awake.hasManualSession {
                     Button(model.t("awakeStop"), action: awake.endAllManualSessions)
                 }

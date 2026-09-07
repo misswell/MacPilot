@@ -82,12 +82,13 @@ extension AwakeProcessStateProviding {
 
 @MainActor
 final class ProcessStateProvider: AwakeProcessStateProviding {
-    typealias SnapshotReader = @MainActor () -> ProcessState
+    typealias SnapshotReader = @Sendable () -> ProcessState
 
     private(set) var currentState = ProcessState.unknown
     private let snapshotReader: SnapshotReader
     private var handler: (@MainActor () -> Void)?
     private var pollingTask: Task<Void, Never>?
+    private var refreshTask: Task<Void, Never>?
     private let pollInterval: Duration
 
     init(
@@ -101,7 +102,7 @@ final class ProcessStateProvider: AwakeProcessStateProviding {
     func startMonitoring(_ handler: @escaping @MainActor () -> Void) {
         stopMonitoring()
         self.handler = handler
-        refreshAndNotify(force: true)
+        requestRefresh(force: true)
         pollingTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -111,7 +112,7 @@ final class ProcessStateProvider: AwakeProcessStateProviding {
                     return
                 }
                 guard !Task.isCancelled else { return }
-                self.refreshAndNotify()
+                self.requestRefresh()
             }
         }
     }
@@ -119,25 +120,39 @@ final class ProcessStateProvider: AwakeProcessStateProviding {
     func stopMonitoring() {
         pollingTask?.cancel()
         pollingTask = nil
+        refreshTask?.cancel()
+        refreshTask = nil
         handler = nil
     }
 
     func refreshNow() {
-        refreshAndNotify(force: true)
+        requestRefresh(force: true)
     }
 
-    private func refreshAndNotify(force: Bool = false) {
-        let newState = snapshotReader()
+    private func requestRefresh(force: Bool = false) {
+        refreshTask?.cancel()
+        let snapshotReader = self.snapshotReader
+        refreshTask = Task { @MainActor [weak self] in
+            let newState = await Task.detached(priority: .utility) {
+                snapshotReader()
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            self.refreshTask = nil
+            self.apply(newState, force: force)
+        }
+    }
+
+    private func apply(_ newState: ProcessState, force: Bool) {
         let changed = newState != currentState
         currentState = newState
         if force || changed { handler?() }
     }
 
-    private static func readSystemProcessState() -> ProcessState {
+    nonisolated private static func readSystemProcessState() -> ProcessState {
         let task = Foundation.Process()
         let output = Pipe()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
-        task.arguments = ["-axo", "pid=,command="]
+        task.arguments = ["-axo", "pid=,comm="]
         task.standardOutput = output
         task.standardError = FileHandle.nullDevice
 
@@ -154,15 +169,13 @@ final class ProcessStateProvider: AwakeProcessStateProviding {
         }
     }
 
-    static func parseProcessList(_ text: String) -> ProcessState {
+    nonisolated static func parseProcessList(_ text: String) -> ProcessState {
         var names = Set<String>()
         var paths = Set<String>()
         for line in text.split(whereSeparator: \.isNewline) {
             let fields = line.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: { $0 == " " || $0 == "\t" })
             guard fields.count == 2 else { continue }
-            let command = String(fields[1]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let executableToken = command.split(whereSeparator: { $0 == " " || $0 == "\t" }).first else { continue }
-            let executable = String(executableToken)
+            let executable = String(fields[1]).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !executable.isEmpty else { continue }
             let path = URL(fileURLWithPath: executable).standardizedFileURL.path
             names.insert(ProcessState.normalizedName(URL(fileURLWithPath: executable).lastPathComponent))

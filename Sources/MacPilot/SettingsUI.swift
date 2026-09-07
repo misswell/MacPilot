@@ -178,10 +178,20 @@ struct SettingsSlider: View {
     }
 
     private func snapped(_ raw: Double) -> Double {
-        guard let step, step > 0 else { return raw }
-        let steps = ((raw - range.lowerBound) / step).rounded()
+        Self.normalizedValue(raw, in: range, step: step)
+    }
+
+    nonisolated static func normalizedValue(
+        _ raw: Double,
+        in range: ClosedRange<Double>,
+        step: Double?
+    ) -> Double {
+        let clamped = min(range.upperBound, max(range.lowerBound, raw))
+        guard let step, step > 0 else { return clamped }
+        let steps = ((clamped - range.lowerBound) / step).rounded()
         let snappedValue = range.lowerBound + steps * step
         // 抹平二进制浮点累计的尾数（如 0.30000000000000004），保持持久化数值干净
-        return (snappedValue * 1e9).rounded() / 1e9
+        let cleaned = (snappedValue * 1e9).rounded() / 1e9
+        return min(range.upperBound, max(range.lowerBound, cleaned))
     }
 }

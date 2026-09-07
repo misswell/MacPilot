@@ -6220,10 +6220,9 @@ final class SmartAnnotationModel: ObservableObject {
         var updated = currentStyle
         update(&updated)
         currentStyle = updated
+        stylesByTool[tool] = updated
         if let selectedIndex, annotationStyles.indices.contains(selectedIndex) {
             annotationStyles[selectedIndex] = updated
-        } else {
-            stylesByTool[tool] = updated
         }
     }
 
@@ -6378,6 +6377,47 @@ enum SmartAnnotationToolbarPlacement: Equatable {
     case below
 }
 
+@MainActor
+private final class SmartAnnotationPendingClickEffect {
+    private var action: (() -> Void)?
+    private var rollback: (() -> Void)?
+    private var task: Task<Void, Never>?
+
+    init(delay: TimeInterval, action: @escaping () -> Void) {
+        self.action = action
+        task = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            self?.commitNow()
+        }
+    }
+
+    init(immediateAction: () -> Void, rollback: @escaping () -> Void) {
+        action = nil
+        self.rollback = rollback
+        immediateAction()
+    }
+
+    func commitNow() {
+        task?.cancel()
+        task = nil
+        if let action {
+            self.action = nil
+            action()
+        }
+        rollback = nil
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+        action = nil
+        let rollback = self.rollback
+        self.rollback = nil
+        rollback?()
+    }
+}
+
 struct SmartAnnotationEditor: View {
     static let embeddedToolbarHeight: CGFloat = 48
     static let embeddedToolbarGap: CGFloat = 8
@@ -6419,7 +6459,7 @@ struct SmartAnnotationEditor: View {
     private struct AnnotationClickRecord {
         let time: Date
         let location: CGPoint
-        let effect: Task<Void, Never>?
+        let effect: SmartAnnotationPendingClickEffect?
     }
 
     init(
@@ -6548,9 +6588,15 @@ struct SmartAnnotationEditor: View {
             }
             annotationStyleControls
             Spacer(minLength: 0)
-            Button(AppText.value("scCancel", language: language), action: onCancel)
+            Button(AppText.value("scCancel", language: language)) {
+                cancelPendingClick()
+                onCancel()
+            }
                 .keyboardShortcut(.cancelAction)
-            Button(AppText.value("scDone", language: language), action: onComplete)
+            Button(AppText.value("scDone", language: language)) {
+                commitPendingClick()
+                onComplete()
+            }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
         }
@@ -6733,6 +6779,10 @@ struct SmartAnnotationEditor: View {
                     if dragStart == nil {
                         dragStart = location
                         dragPoints = [location]
+                        if isConfirmingDoubleClick(at: location) {
+                            dragCurrent = location
+                            return
+                        }
                         let normalizedPoint = normalized(location, in: fitted)
                         if let index = model.selectAnnotation(at: normalizedPoint, tolerance: 0.022),
                            model.annotations.indices.contains(index) {
@@ -6941,10 +6991,15 @@ struct SmartAnnotationEditor: View {
     }
 
     @discardableResult
-    private func finishDrag(_ end: CGPoint, fitted: CGRect, isClick: Bool) -> Task<Void, Never>? {
+    private func finishDrag(
+        _ end: CGPoint,
+        fitted: CGRect,
+        isClick: Bool
+    ) -> SmartAnnotationPendingClickEffect? {
         guard let start = dragStart, fitted.contains(start), fitted.contains(end) else {
             resetDrag(); return nil
         }
+        defer { resetDrag() }
         let rect = CGRect(
             x: min(start.x, end.x),
             y: min(start.y, end.y),
@@ -6953,16 +7008,24 @@ struct SmartAnnotationEditor: View {
         )
         // 点击式落点动作（序号/文字/橡皮擦等）在双击确认开启时延迟到双击
         // 窗口之后提交，让"双击画布确认复制"能取消第一次点击的副作用。
-        func commit(_ action: @escaping () -> Void) -> Task<Void, Never>? {
+        func commit(_ action: @escaping () -> Void) -> SmartAnnotationPendingClickEffect? {
             guard isClick, onDoubleClickCanvas != nil else {
                 action()
                 return nil
             }
-            return Task { @MainActor in
-                try? await Task.sleep(nanoseconds: UInt64(NSEvent.doubleClickInterval * 1_000_000_000))
-                guard !Task.isCancelled else { return }
-                action()
-            }
+            return SmartAnnotationPendingClickEffect(
+                delay: NSEvent.doubleClickInterval,
+                action: action
+            )
+        }
+        func commitImmediately(
+            _ action: () -> Void,
+            rollback: @escaping () -> Void
+        ) -> SmartAnnotationPendingClickEffect {
+            SmartAnnotationPendingClickEffect(
+                immediateAction: action,
+                rollback: rollback
+            )
         }
         switch model.tool {
         case .rectangle:
@@ -7006,16 +7069,21 @@ struct SmartAnnotationEditor: View {
                 return commit { model.append(.pencil(points)) }
             }
         case .counter:
-            return commit { model.append(.counter(model.nextCounter, normalized(end, in: fitted))) }
+            return commitImmediately(
+                { model.append(.counter(model.nextCounter, normalized(end, in: fitted))) },
+                rollback: model.undo
+            )
         case .eraser:
             // iShot-style eraser: a click deletes the annotation under the
             // pointer as one undoable step.
             let point = normalized(end, in: fitted)
-            return commit {
-                if let index = model.selectAnnotation(at: point, tolerance: 0.03) {
-                    model.removeAnnotation(at: index)
-                }
+            guard let index = model.selectAnnotation(at: point, tolerance: 0.03) else {
+                return nil
             }
+            return commitImmediately(
+                { model.removeAnnotation(at: index) },
+                rollback: model.undo
+            )
         case .text:
             return commit {
                 textPoint = normalized(end, in: fitted)
@@ -7029,7 +7097,6 @@ struct SmartAnnotationEditor: View {
                 showingTextEntry = true
             }
         }
-        resetDrag()
         return nil
     }
 
@@ -7051,11 +7118,20 @@ struct SmartAnnotationEditor: View {
     /// 双击确认：撤销第一次点击的待提交副作用，丢弃进行中的编辑，
     /// 然后交给宿主执行"复制并关闭"。
     private func confirmDoubleClick() {
-        lastClick?.effect?.cancel()
-        lastClick = nil
+        cancelPendingClick()
         cancelActiveEdit()
         resetDrag()
         onDoubleClickCanvas?()
+    }
+
+    private func commitPendingClick() {
+        lastClick?.effect?.commitNow()
+        lastClick = nil
+    }
+
+    private func cancelPendingClick() {
+        lastClick?.effect?.cancel()
+        lastClick = nil
     }
 
     private func cancelActiveEdit() {

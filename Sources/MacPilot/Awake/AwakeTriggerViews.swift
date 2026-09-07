@@ -1,14 +1,71 @@
 import SwiftUI
 
-private enum AwakeConditionKind: String, CaseIterable, Identifiable {
+enum AwakeConditionKind: String, CaseIterable, Identifiable {
     case applicationRunning
     case applicationFrontmost
     case processRunning
     case processExecutable
     case powerAdapter
+    case charging
+    case batteryLevel
     case externalDisplay
+    case displayMirroring
 
     var id: String { rawValue }
+
+    init(condition: TriggerConditionConfiguration) {
+        switch condition {
+        case .applicationRunning: self = .applicationRunning
+        case .applicationFrontmost: self = .applicationFrontmost
+        case .processRunning: self = .processRunning
+        case .processExecutable: self = .processExecutable
+        case .powerAdapter: self = .powerAdapter
+        case .charging: self = .charging
+        case .batteryLevel: self = .batteryLevel
+        case .externalDisplay: self = .externalDisplay
+        case .displayMirroring: self = .displayMirroring
+        }
+    }
+
+    var titleKey: String {
+        switch self {
+        case .applicationRunning: "awakeApplicationRunning"
+        case .applicationFrontmost: "awakeApplicationFrontmost"
+        case .processRunning: "awakeProcessRunning"
+        case .processExecutable: "awakeProcessExecutable"
+        case .powerAdapter: "awakePowerAdapter"
+        case .charging: "awakeChargingCondition"
+        case .batteryLevel: "awakeBatteryLevelCondition"
+        case .externalDisplay: "awakeExternalDisplay"
+        case .displayMirroring: "awakeDisplayMirroringCondition"
+        }
+    }
+
+    var defaultCondition: TriggerConditionConfiguration {
+        switch self {
+        case .applicationRunning: .applicationRunning(bundleID: "com.example.app")
+        case .applicationFrontmost: .applicationFrontmost(bundleID: "com.example.app")
+        case .processRunning: .processRunning(name: "claude")
+        case .processExecutable: .processExecutable(path: "/usr/bin/example")
+        case .powerAdapter: .powerAdapter(connected: true)
+        case .charging: .charging(value: true)
+        case .batteryLevel: .batteryLevel(comparison: .greaterThanOrEqual, value: 50)
+        case .externalDisplay: .externalDisplay(minimumCount: 1)
+        case .displayMirroring: .displayMirroring(active: true)
+        }
+    }
+}
+
+extension NumericComparison {
+    var titleKey: String {
+        switch self {
+        case .lessThan: "awakeComparisonLessThan"
+        case .lessThanOrEqual: "awakeComparisonLessThanOrEqual"
+        case .equal: "awakeComparisonEqual"
+        case .greaterThanOrEqual: "awakeComparisonGreaterThanOrEqual"
+        case .greaterThan: "awakeComparisonGreaterThan"
+        }
+    }
 }
 
 struct AwakeTriggerListView: View {
@@ -29,7 +86,7 @@ struct AwakeTriggerListView: View {
                 }
                 Spacer()
                 Button(model.t("awakeAddTrigger")) { showingAdd = true }
-                    .buttonStyle(.borderedProminent)
+                    .macPilotProminentButtonStyle()
             }
 
             if triggerEngine.triggers.isEmpty {
@@ -154,7 +211,7 @@ struct AwakeTriggerEditorView: View {
                 Spacer()
                 Button(model.t("cancel")) { dismiss() }
                 Button(model.t("save"), action: save)
-                    .buttonStyle(.borderedProminent)
+                    .macPilotProminentButtonStyle()
                     .disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.conditions.isEmpty)
             }
             .padding(.bottom, 20)
@@ -222,12 +279,9 @@ struct AwakeTriggerEditorView: View {
                     set: { draft.conditions[index] = makeCondition($0) }
                 )
             ) {
-                Text(model.t("awakeApplicationRunning")).tag(AwakeConditionKind.applicationRunning)
-                Text(model.t("awakeApplicationFrontmost")).tag(AwakeConditionKind.applicationFrontmost)
-                Text(model.t("awakeProcessRunning")).tag(AwakeConditionKind.processRunning)
-                Text(model.t("awakeProcessExecutable")).tag(AwakeConditionKind.processExecutable)
-                Text(model.t("awakePowerAdapter")).tag(AwakeConditionKind.powerAdapter)
-                Text(model.t("awakeExternalDisplay")).tag(AwakeConditionKind.externalDisplay)
+                ForEach(AwakeConditionKind.allCases) { kind in
+                    Text(model.t(kind.titleKey)).tag(kind)
+                }
             }
             .labelsHidden()
             .frame(width: 180)
@@ -262,38 +316,54 @@ struct AwakeTriggerEditorView: View {
         case .powerAdapter(let connected):
             Toggle(model.t(connected ? "awakeConnected" : "awakeDisconnected"), isOn: boolBinding(at: index, value: connected) { .powerAdapter(connected: $0) })
                 .toggleStyle(.switch)
+        case .charging(let charging):
+            Toggle(
+                model.t("awakeChargingCondition"),
+                isOn: boolBinding(at: index, value: charging) { .charging(value: $0) }
+            )
+            .toggleStyle(.switch)
+        case .batteryLevel(let comparison, let value):
+            HStack(spacing: 8) {
+                Picker(
+                    model.t("awakeComparison"),
+                    selection: comparisonBinding(at: index, value: comparison)
+                ) {
+                    ForEach(NumericComparison.allCases, id: \.rawValue) { item in
+                        Text(model.t(item.titleKey)).tag(item)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 120)
+                TextField(
+                    model.t("awakeBatteryLevelCondition"),
+                    value: doubleBinding(at: index, value: value),
+                    format: .number
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 72)
+                Text("%")
+            }
         case .externalDisplay(let minimumCount):
             Stepper(
                 model.t("awakeMinimumDisplayCount") + ": " + String(minimumCount),
                 value: intBinding(at: index, value: minimumCount) { .externalDisplay(minimumCount: $0) },
                 in: 1...32
             )
-        case .charging, .batteryLevel, .displayMirroring:
-            Text(model.t("awakeConditionNotMatched")).foregroundStyle(.secondary)
+        case .displayMirroring(let active):
+            Toggle(
+                model.t("awakeDisplayMirroringCondition"),
+                isOn: boolBinding(at: index, value: active) { .displayMirroring(active: $0) }
+            )
+            .toggleStyle(.switch)
         }
     }
 
     private func kind(for condition: TriggerConditionConfiguration) -> AwakeConditionKind {
-        switch condition {
-        case .applicationRunning: .applicationRunning
-        case .applicationFrontmost: .applicationFrontmost
-        case .processRunning: .processRunning
-        case .processExecutable: .processExecutable
-        case .powerAdapter: .powerAdapter
-        case .externalDisplay: .externalDisplay
-        case .charging, .batteryLevel, .displayMirroring: .processRunning
-        }
+        AwakeConditionKind(condition: condition)
     }
 
     private func makeCondition(_ kind: AwakeConditionKind) -> TriggerConditionConfiguration {
-        switch kind {
-        case .applicationRunning: .applicationRunning(bundleID: "com.example.app")
-        case .applicationFrontmost: .applicationFrontmost(bundleID: "com.example.app")
-        case .processRunning: .processRunning(name: "claude")
-        case .processExecutable: .processExecutable(path: "/usr/bin/example")
-        case .powerAdapter: .powerAdapter(connected: true)
-        case .externalDisplay: .externalDisplay(minimumCount: 1)
-        }
+        kind.defaultCondition
     }
 
     private func policyBinding(_ keyPath: WritableKeyPath<SessionPolicy, Bool>) -> Binding<Bool> {
@@ -343,6 +413,34 @@ struct AwakeTriggerEditorView: View {
         )
     }
 
+    private func doubleBinding(at index: Int, value: Double) -> Binding<Double> {
+        Binding(
+            get: { doubleValueForCondition(at: index) ?? value },
+            set: { newValue in
+                let comparison = comparisonValueForCondition(at: index) ?? .greaterThanOrEqual
+                draft.conditions[index] = .batteryLevel(
+                    comparison: comparison,
+                    value: min(100, max(0, newValue))
+                )
+            }
+        )
+    }
+
+    private func comparisonBinding(
+        at index: Int,
+        value: NumericComparison
+    ) -> Binding<NumericComparison> {
+        Binding(
+            get: { comparisonValueForCondition(at: index) ?? value },
+            set: { comparison in
+                draft.conditions[index] = .batteryLevel(
+                    comparison: comparison,
+                    value: doubleValueForCondition(at: index) ?? 50
+                )
+            }
+        )
+    }
+
     private func valueForCondition(at index: Int) -> String? {
         guard draft.conditions.indices.contains(index) else { return nil }
         switch draft.conditions[index] {
@@ -355,14 +453,30 @@ struct AwakeTriggerEditorView: View {
 
     private func boolValueForCondition(at index: Int) -> Bool? {
         guard draft.conditions.indices.contains(index) else { return nil }
-        if case .powerAdapter(let connected) = draft.conditions[index] { return connected }
-        return nil
+        return switch draft.conditions[index] {
+        case .powerAdapter(let connected): connected
+        case .charging(let value): value
+        case .displayMirroring(let active): active
+        default: nil
+        }
     }
 
     private func intValueForCondition(at index: Int) -> Int? {
         guard draft.conditions.indices.contains(index) else { return nil }
         if case .externalDisplay(let count) = draft.conditions[index] { return count }
         return nil
+    }
+
+    private func doubleValueForCondition(at index: Int) -> Double? {
+        guard draft.conditions.indices.contains(index),
+              case .batteryLevel(_, let value) = draft.conditions[index] else { return nil }
+        return value
+    }
+
+    private func comparisonValueForCondition(at index: Int) -> NumericComparison? {
+        guard draft.conditions.indices.contains(index),
+              case .batteryLevel(let comparison, _) = draft.conditions[index] else { return nil }
+        return comparison
     }
 
     private func save() {
