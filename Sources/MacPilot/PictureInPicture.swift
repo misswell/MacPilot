@@ -2994,7 +2994,7 @@ struct PictureInPictureView: View {
 
     private var categoryBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 7) {
+            HStack(spacing: 4) {
                 ForEach(PiPSettingsPage.allCases) { item in
                     Button { page = item } label: {
                         HStack(spacing: 7) {
@@ -3002,27 +3002,21 @@ struct PictureInPictureView: View {
                             Text(t(item.titleKey))
                                 .lineLimit(1)
                         }
-                        .font(.caption.weight(page == item ? .semibold : .medium))
+                        .font(.subheadline.weight(page == item ? .semibold : .regular))
                         .foregroundStyle(page == item ? Color.accentColor : Color.secondary)
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
+                        .padding(.vertical, 7)
                         .background(
                             page == item ? Color.accentColor.opacity(0.12) : Color.clear,
-                            in: Capsule()
+                            in: RoundedRectangle(cornerRadius: 8)
                         )
-                        .overlay {
-                            if page == item {
-                                Capsule().strokeBorder(Color.accentColor.opacity(0.2))
-                            }
-                        }
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 36)
+            .padding(.vertical, 8)
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
         .overlay(alignment: .bottom) { Divider() }
     }
 

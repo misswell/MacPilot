@@ -2267,7 +2267,7 @@ struct ContentView: View {
 
     private var rulesList: some View {
         List {
-            Section(model.t("apps")) {
+            Section {
                 ForEach(model.rules) { rule in
                     RuleRow(
                         rule: rule,
@@ -2280,11 +2280,20 @@ struct ContentView: View {
                             Divider()
                             Button(model.t("deleteRule"), role: .destructive) { model.remove(rule) }
                         }
+                        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 }
                 .onMove(perform: model.move)
+            } header: {
+                Text(model.t("apps"))
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .textCase(nil)
             }
         }
         .listStyle(.inset(alternatesRowBackgrounds: false))
+        .scrollContentBackground(.hidden)
         .padding(.horizontal, 22)
         .padding(.bottom, 20)
     }
@@ -2495,27 +2504,37 @@ struct RuleRow: View {
     let toggle: () -> Void
     let remove: () -> Void
     var body: some View {
-        HStack(spacing: 14) {
-            AppIcon(path: rule.bundlePath)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(rule.appName).font(.body.weight(.semibold))
-                Text(ruleSummary(rule)).font(.caption).foregroundStyle(.secondary)
+        AutomationRuleRowSurface {
+            HStack(spacing: 14) {
+                AppIcon(path: rule.bundlePath)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(rule.appName).font(.body.weight(.semibold))
+                    Text(ruleSummary(rule)).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                if let deadline = model.quitDeadlines[rule.id] {
+                    QuitCountdownBadge(deadline: deadline)
+                }
+                Divider().frame(height: 26)
+                Button {
+                    edit()
+                } label: {
+                    Label(model.t("edit"), systemImage: "pencil")
+                }
+                .buttonStyle(.borderless)
+                Button { showingRemoveConfirmation = true } label: {
+                    Image(systemName: "trash")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.red)
+                .help(model.t("remove"))
+                Toggle("", isOn: Binding(get: { rule.isEnabled }, set: { _ in toggle() }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
             }
-            Spacer()
-            if let deadline = model.quitDeadlines[rule.id] {
-                QuitCountdownBadge(deadline: deadline)
-            }
-            Button(model.t("edit"), action: edit).buttonStyle(.borderless)
-            Button { showingRemoveConfirmation = true } label: {
-                Image(systemName: "trash")
-                    .frame(width: 20, height: 20)
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.red)
-            .help(model.t("remove"))
-            Toggle("", isOn: Binding(get: { rule.isEnabled }, set: { _ in toggle() })).labelsHidden()
         }
-        .padding(.vertical, 5)
         .alert(model.t("removeConfirmTitle"), isPresented: $showingRemoveConfirmation) {
             Button(model.t("remove"), role: .destructive, action: remove)
             Button(model.t("cancel"), role: .cancel) {}
@@ -2531,6 +2550,29 @@ struct RuleRow: View {
         if let m = rule.inactiveQuitMinutes { items.append(model.t("quitAfter", m)) }
         if let m = rule.hiddenQuitMinutes { items.append(model.t("quitHidden", m)) }
         return items.joined(separator: " • ")
+    }
+}
+
+/// A compact frosted surface for sortable automation rows.
+/// The list itself remains the page's scroll container; this only gives each
+/// app identity row the same material language as the rest of the settings UI.
+private struct AutomationRuleRowSurface<Content: View>: View {
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(.primary.opacity(0.06))
+            )
     }
 }
 
@@ -2774,7 +2816,7 @@ struct LaunchRulesView: View {
                 EmptyLaunchRulesView(addRule: { showingAdd = true })
             } else {
                 List {
-                    Section(model.t("launchApps")) {
+                    Section {
                         ForEach(model.launchRules) { rule in
                             LaunchRuleRow(
                                 rule: rule,
@@ -2787,19 +2829,39 @@ struct LaunchRulesView: View {
                                     Divider()
                                     Button(model.t("deleteRule"), role: .destructive) { model.removeLaunchRule(rule) }
                                 }
+                                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
                         }
+                    } header: {
+                        Text(model.t("launchApps"))
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                            .textCase(nil)
                     }
                 }
                 .listStyle(.inset(alternatesRowBackgrounds: false))
+                .scrollContentBackground(.hidden)
                 .padding(.horizontal, 22).padding(.bottom, 20)
             }
         }
     }
 
     private var launchControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Toggle(model.t("launchEnabled"), isOn: $model.isLaunchSchedulingEnabled).toggleStyle(.switch)
+        SettingsCard {
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.t("launchEnabled")).font(.headline)
+                    Text(model.launchesAtLogin ? launchPlanMessage : model.t("loginRequired"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("", isOn: $model.isLaunchSchedulingEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+            HStack(spacing: 10) {
                 Spacer()
                 Button(model.t("cancelLaunches")) { model.cancelScheduledLaunches() }
                     .disabled(model.pendingLaunchCount == 0)
@@ -2807,16 +2869,7 @@ struct LaunchRulesView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.isLaunchSchedulingEnabled || model.enabledLaunchCount == 0)
             }
-            Text(model.launchesAtLogin ? launchPlanMessage : model.t("loginRequired"))
-                .font(.caption).foregroundStyle(.secondary)
         }
-        .padding(16)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
-        .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
         .padding(.horizontal, 36).padding(.bottom, 16)
     }
 
@@ -2849,28 +2902,38 @@ struct LaunchRuleRow: View {
     let toggle: () -> Void
     let remove: () -> Void
     var body: some View {
-        HStack(spacing: 14) {
-            AppIcon(path: rule.bundlePath)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(rule.appName).font(.body.weight(.semibold))
-                Text(model.t("launchAfter", rule.delaySeconds) + " • " + model.t(rule.visibilityMode.titleKey))
-                    .font(.caption).foregroundStyle(.secondary)
+        AutomationRuleRowSurface {
+            HStack(spacing: 14) {
+                AppIcon(path: rule.bundlePath)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(rule.appName).font(.body.weight(.semibold))
+                    Text(model.t("launchAfter", rule.delaySeconds) + " • " + model.t(rule.visibilityMode.titleKey))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                if let state = model.launchStates[rule.id] {
+                    LaunchStatusBadge(state: state)
+                }
+                Divider().frame(height: 26)
+                Button {
+                    edit()
+                } label: {
+                    Label(model.t("edit"), systemImage: "pencil")
+                }
+                .buttonStyle(.borderless)
+                Button { showingRemoveConfirmation = true } label: {
+                    Image(systemName: "trash")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.red)
+                .help(model.t("remove"))
+                Toggle("", isOn: Binding(get: { rule.isEnabled }, set: { _ in toggle() }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
             }
-            Spacer()
-            if let state = model.launchStates[rule.id] {
-                LaunchStatusBadge(state: state)
-            }
-            Button(model.t("edit"), action: edit).buttonStyle(.borderless)
-            Button { showingRemoveConfirmation = true } label: {
-                Image(systemName: "trash")
-                    .frame(width: 20, height: 20)
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.red)
-            .help(model.t("remove"))
-            Toggle("", isOn: Binding(get: { rule.isEnabled }, set: { _ in toggle() })).labelsHidden()
         }
-        .padding(.vertical, 5)
         .alert(model.t("removeConfirmTitle"), isPresented: $showingRemoveConfirmation) {
             Button(model.t("remove"), role: .destructive, action: remove)
             Button(model.t("cancel"), role: .cancel) {}
