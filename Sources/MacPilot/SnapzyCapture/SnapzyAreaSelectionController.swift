@@ -430,6 +430,9 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             },
             onComplete: { [weak self] in
                 self?.commitInlineAnnotation(as: .save)
+            },
+            onDoubleClickCanvas: { [weak self] in
+                self?.commitInlineAnnotation(as: .copy)
             }
         ))
         selectedWindow.overlayView.showEmbeddedAnnotationEditor(

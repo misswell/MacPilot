@@ -2944,6 +2944,9 @@ final class SmartScreenshotController {
             },
             onClose: { [weak self] in
                 self?.inlineAnnotationControllers.removeValue(forKey: id)
+            },
+            onQuickCopy: { annotated in
+                SmartCaptureClipboard.copy(image: annotated)
             }
         )
         inlineAnnotationControllers[id] = controller
@@ -6011,11 +6014,17 @@ final class SmartAnnotationModel: ObservableObject {
     private var redoDocuments: [Document] = []
     private var activeMutationDocument: Document?
     private(set) var nextCounter = 1
+    /// 各工具最近一次使用的线宽；跨标注会话记忆，下次标注沿用调整后的粗细。
+    private static var rememberedLineWidths: [SmartAnnotationTool: CGFloat] = [:]
 
     init(initialTool: SmartAnnotationTool = .rectangle) {
         tool = initialTool
-        stylesByTool = Dictionary(uniqueKeysWithValues: SmartAnnotationTool.allCases.map {
-            ($0, SmartAnnotationStyle.default(for: $0))
+        stylesByTool = Dictionary(uniqueKeysWithValues: SmartAnnotationTool.allCases.map { tool in
+            var style = SmartAnnotationStyle.default(for: tool)
+            if let remembered = Self.rememberedLineWidths[tool] {
+                style.lineWidth = remembered
+            }
+            return (tool, style)
         })
         currentStyle = stylesByTool[initialTool] ?? .default(for: initialTool)
     }
@@ -6095,12 +6104,18 @@ final class SmartAnnotationModel: ObservableObject {
         updateCurrentStyle { style in
             style.lineWidth = min(48, max(1, style.lineWidth + delta))
         }
+        rememberLineWidth()
     }
 
     func setLineWidth(_ value: CGFloat) {
         updateCurrentStyle { style in
             style.lineWidth = min(48, max(1, value))
         }
+        rememberLineWidth()
+    }
+
+    private func rememberLineWidth() {
+        Self.rememberedLineWidths[tool] = currentStyle.lineWidth
     }
 
     func adjustOpacity(by delta: CGFloat) {
@@ -6253,6 +6268,8 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
     private let language: AppLanguage
     private let onComplete: (CGImage) -> Void
     private let onClose: () -> Void
+    /// 双击画布的快捷路径：渲染结果直接交给宿主复制（不走完整产出管线）。
+    private let onQuickCopy: ((CGImage) -> Void)?
     private let model: SmartAnnotationModel
     private var window: NSWindow?
     private var didNotifyClose = false
@@ -6262,13 +6279,15 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
         language: AppLanguage,
         initialTool: SmartAnnotationTool = .rectangle,
         onComplete: @escaping (CGImage) -> Void,
-        onClose: @escaping () -> Void
+        onClose: @escaping () -> Void,
+        onQuickCopy: ((CGImage) -> Void)? = nil
     ) {
         self.image = image
         self.language = language
         self.model = SmartAnnotationModel(initialTool: initialTool)
         self.onComplete = onComplete
         self.onClose = onClose
+        self.onQuickCopy = onQuickCopy
     }
 
     func show(at screenRect: CGRect? = nil) {
@@ -6297,7 +6316,10 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
             model: model,
             embedded: targetRect != nil,
             onCancel: { [weak self] in self?.close() },
-            onComplete: { [weak self] in self?.complete() }
+            onComplete: { [weak self] in self?.complete() },
+            onDoubleClickCanvas: onQuickCopy.map { handler in
+                { [weak self] in self?.copyToClipboardAndClose(with: handler) }
+            }
         ))
         if let targetRect {
             let origin = CGPoint(
@@ -6326,6 +6348,18 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
             styles: model.styledAnnotations.map(\.style)
         ) else { return }
         onComplete(rendered)
+        close()
+    }
+
+    /// 双击画布确认：渲染标注结果交给宿主复制到剪贴板，然后关闭编辑器。
+    private func copyToClipboardAndClose(with handler: (CGImage) -> Void) {
+        Self.logger.info("Annotation quick copy requested via double click")
+        guard let rendered = SmartAnnotationRenderer.render(
+            image: image,
+            annotations: model.annotations,
+            styles: model.styledAnnotations.map(\.style)
+        ) else { return }
+        handler(rendered)
         close()
     }
 
@@ -6363,6 +6397,8 @@ struct SmartAnnotationEditor: View {
     var embeddedCanvasHorizontalOffset: CGFloat
     let onCancel: () -> Void
     let onComplete: () -> Void
+    /// 双击画布的确认动作（如"复制并关闭"）；`nil` 时画布保持原有单击语义。
+    var onDoubleClickCanvas: (() -> Void)?
     @State private var dragStart: CGPoint?
     @State private var dragCurrent: CGPoint?
     @State private var dragPoints: [CGPoint] = []
@@ -6375,7 +6411,16 @@ struct SmartAnnotationEditor: View {
     @State private var editingOriginal: SmartAnnotation?
     @State private var editingOriginalBounds: CGRect?
     @State private var editingHandle: SmartAnnotationResizeHandle?
+    /// 上一次"点击式"手势（无拖动）；用于把两次点击判成双击确认。
+    @State private var lastClick: AnnotationClickRecord?
     @FocusState private var inlineTextFocused: Bool
+
+    /// 一次点击式手势的记录；`effect` 是被推迟提交的单击副作用，双击确认时取消。
+    private struct AnnotationClickRecord {
+        let time: Date
+        let location: CGPoint
+        let effect: Task<Void, Never>?
+    }
 
     init(
         image: CGImage,
@@ -6387,7 +6432,8 @@ struct SmartAnnotationEditor: View {
         embeddedCanvasSize: CGSize? = nil,
         embeddedCanvasHorizontalOffset: CGFloat = 0,
         onCancel: @escaping () -> Void,
-        onComplete: @escaping () -> Void
+        onComplete: @escaping () -> Void,
+        onDoubleClickCanvas: (() -> Void)? = nil
     ) {
         self.image = image
         self.language = language
@@ -6399,6 +6445,7 @@ struct SmartAnnotationEditor: View {
         self.embeddedCanvasHorizontalOffset = embeddedCanvasHorizontalOffset
         self.onCancel = onCancel
         self.onComplete = onComplete
+        self.onDoubleClickCanvas = onDoubleClickCanvas
     }
 
     /// Vertical space the embedded chrome adds above/below the canvas.
@@ -6720,10 +6767,23 @@ struct SmartAnnotationEditor: View {
                         return
                     }
                     let location = clamped(value.location, to: fitted)
+                    // 双击确认只认落在空白处的第二击；点到已有标注按普通
+                    // 选中/编辑处理，避免"选中后再点一下"误触关闭。
+                    if editingIndex == nil, isConfirmingDoubleClick(at: location) {
+                        confirmDoubleClick()
+                        return
+                    }
+                    let wasClick = isClickGesture(start: dragStart, end: location)
                     if editingIndex != nil {
                         finishAnnotationEdit(at: normalized(location, in: fitted))
+                        lastClick = wasClick
+                            ? AnnotationClickRecord(time: .now, location: location, effect: nil)
+                            : nil
                     } else {
-                        finishDrag(location, fitted: fitted)
+                        let effect = finishDrag(location, fitted: fitted, isClick: wasClick)
+                        lastClick = wasClick
+                            ? AnnotationClickRecord(time: .now, location: location, effect: effect)
+                            : nil
                     }
                 })
         }
@@ -6880,9 +6940,10 @@ struct SmartAnnotationEditor: View {
         )
     }
 
-    private func finishDrag(_ end: CGPoint, fitted: CGRect) {
+    @discardableResult
+    private func finishDrag(_ end: CGPoint, fitted: CGRect, isClick: Bool) -> Task<Void, Never>? {
         guard let start = dragStart, fitted.contains(start), fitted.contains(end) else {
-            resetDrag(); return
+            resetDrag(); return nil
         }
         let rect = CGRect(
             x: min(start.x, end.x),
@@ -6890,51 +6951,120 @@ struct SmartAnnotationEditor: View {
             width: abs(end.x - start.x),
             height: abs(end.y - start.y)
         )
+        // 点击式落点动作（序号/文字/橡皮擦等）在双击确认开启时延迟到双击
+        // 窗口之后提交，让"双击画布确认复制"能取消第一次点击的副作用。
+        func commit(_ action: @escaping () -> Void) -> Task<Void, Never>? {
+            guard isClick, onDoubleClickCanvas != nil else {
+                action()
+                return nil
+            }
+            return Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(NSEvent.doubleClickInterval * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                action()
+            }
+        }
         switch model.tool {
         case .rectangle:
-            if rect.width > 3, rect.height > 3 { model.append(.rectangle(normalized(rect, in: fitted))) }
+            if rect.width > 3, rect.height > 3 {
+                return commit { model.append(.rectangle(normalized(rect, in: fitted))) }
+            }
         case .filledRectangle:
-            if rect.width > 3, rect.height > 3 { model.append(.filledRectangle(normalized(rect, in: fitted))) }
+            if rect.width > 3, rect.height > 3 {
+                return commit { model.append(.filledRectangle(normalized(rect, in: fitted))) }
+            }
         case .ellipse:
-            if rect.width > 3, rect.height > 3 { model.append(.ellipse(normalized(rect, in: fitted))) }
+            if rect.width > 3, rect.height > 3 {
+                return commit { model.append(.ellipse(normalized(rect, in: fitted))) }
+            }
         case .blur:
-            if rect.width > 3, rect.height > 3 { model.append(.blur(normalized(rect, in: fitted))) }
+            if rect.width > 3, rect.height > 3 {
+                return commit { model.append(.blur(normalized(rect, in: fitted))) }
+            }
         case .spotlight:
-            if rect.width > 3, rect.height > 3 { model.append(.spotlight(normalized(rect, in: fitted))) }
+            if rect.width > 3, rect.height > 3 {
+                return commit { model.append(.spotlight(normalized(rect, in: fitted))) }
+            }
         case .crop:
-            if rect.width > 3, rect.height > 3 { model.append(.crop(normalized(rect, in: fitted))) }
+            if rect.width > 3, rect.height > 3 {
+                return commit { model.append(.crop(normalized(rect, in: fitted))) }
+            }
         case .arrow, .line, .highlighter:
             if hypot(end.x - start.x, end.y - start.y) > 4 {
                 let startPoint = normalized(start, in: fitted)
                 let endPoint = normalized(end, in: fitted)
                 switch model.tool {
-                case .arrow: model.append(.arrow(startPoint, endPoint))
-                case .line: model.append(.line(startPoint, endPoint))
-                case .highlighter: model.append(.highlighter(startPoint, endPoint))
+                case .arrow: return commit { model.append(.arrow(startPoint, endPoint)) }
+                case .line: return commit { model.append(.line(startPoint, endPoint)) }
+                case .highlighter: return commit { model.append(.highlighter(startPoint, endPoint)) }
                 default: break
                 }
             }
         case .pencil:
             let points = (dragPoints + [end]).map { normalized($0, in: fitted) }
-            if points.count > 1 { model.append(.pencil(points)) }
+            if points.count > 1 {
+                return commit { model.append(.pencil(points)) }
+            }
         case .counter:
-            model.append(.counter(model.nextCounter, normalized(end, in: fitted)))
+            return commit { model.append(.counter(model.nextCounter, normalized(end, in: fitted))) }
         case .eraser:
             // iShot-style eraser: a click deletes the annotation under the
             // pointer as one undoable step.
-            if let index = model.selectAnnotation(at: normalized(end, in: fitted), tolerance: 0.03) {
-                model.removeAnnotation(at: index)
+            let point = normalized(end, in: fitted)
+            return commit {
+                if let index = model.selectAnnotation(at: point, tolerance: 0.03) {
+                    model.removeAnnotation(at: index)
+                }
             }
         case .text:
-            textPoint = normalized(end, in: fitted)
-            pendingTextTool = .text
-            showingTextEntry = true
+            return commit {
+                textPoint = normalized(end, in: fitted)
+                pendingTextTool = .text
+                showingTextEntry = true
+            }
         case .watermark:
-            textPoint = normalized(end, in: fitted)
-            pendingTextTool = .watermark
-            showingTextEntry = true
+            return commit {
+                textPoint = normalized(end, in: fitted)
+                pendingTextTool = .watermark
+                showingTextEntry = true
+            }
         }
         resetDrag()
+        return nil
+    }
+
+    // MARK: 双击画布确认（复制并关闭）
+
+    /// 起止点几乎重合的手势视为"点击"而非拖动。
+    private func isClickGesture(start: CGPoint?, end: CGPoint) -> Bool {
+        guard let start else { return false }
+        return hypot(end.x - start.x, end.y - start.y) < 6
+    }
+
+    /// 两次点击间隔与距离都在系统双击范围内，且上一次也是点击式手势。
+    private func isConfirmingDoubleClick(at location: CGPoint) -> Bool {
+        guard onDoubleClickCanvas != nil, let last = lastClick else { return false }
+        return Date().timeIntervalSince(last.time) <= NSEvent.doubleClickInterval
+            && hypot(location.x - last.location.x, location.y - last.location.y) <= 12
+    }
+
+    /// 双击确认：撤销第一次点击的待提交副作用，丢弃进行中的编辑，
+    /// 然后交给宿主执行"复制并关闭"。
+    private func confirmDoubleClick() {
+        lastClick?.effect?.cancel()
+        lastClick = nil
+        cancelActiveEdit()
+        resetDrag()
+        onDoubleClickCanvas?()
+    }
+
+    private func cancelActiveEdit() {
+        model.cancelEditing()
+        editingIndex = nil
+        editingStart = nil
+        editingOriginal = nil
+        editingOriginalBounds = nil
+        editingHandle = nil
     }
 
     private func resetDrag() {
