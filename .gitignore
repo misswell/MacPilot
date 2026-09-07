@@ -8,3 +8,5 @@ bridge-artifacts/
 cert/
 OctoPilot-*.zip
 MacPilot-*.zip
+.zcode/**
+drafts/**
