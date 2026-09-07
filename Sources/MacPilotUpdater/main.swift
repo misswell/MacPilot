@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import MacPilotUpdaterSupport
 
 private enum UpdaterError: LocalizedError {
     case invalidArguments
@@ -69,7 +70,73 @@ private func launch(_ application: URL) throws {
     }
 }
 
+private func runPlugInKit(arguments: [String]) throws -> String {
+    let process = Process()
+    let pipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+    process.arguments = arguments
+    process.standardOutput = pipe
+    process.standardError = pipe
+    try process.run()
+    process.waitUntilExit()
+
+    let output = String(
+        decoding: pipe.fileHandleForReading.readDataToEndOfFile(),
+        as: UTF8.self
+    )
+    guard process.terminationStatus == 0 else {
+        throw NSError(
+            domain: "MacPilotUpdater.PlugInKit",
+            code: Int(process.terminationStatus),
+            userInfo: [NSLocalizedDescriptionKey: output.trimmingCharacters(in: .whitespacesAndNewlines)]
+        )
+    }
+    return output
+}
+
+private func finderSyncWasEnabled() -> Bool {
+    guard let output = try? runPlugInKit(arguments: [
+        "-m", "-p", "com.apple.FinderSync",
+        "-i", FinderSyncRegistration.extensionBundleIdentifier
+    ]) else {
+        return false
+    }
+    return FinderSyncRegistration.isElectedForUse(in: output)
+}
+
+private func refreshFinderSyncRegistration(
+    at applicationURL: URL,
+    restoreEnabledElection: Bool,
+    logURL: URL
+) {
+    let commands = FinderSyncRegistration.registrationArguments(
+        for: applicationURL,
+        restoreEnabledElection: restoreEnabledElection
+    )
+    var succeeded = 0
+
+    for arguments in commands {
+        do {
+            _ = try runPlugInKit(arguments: arguments)
+            succeeded += 1
+        } catch {
+            appendLog(
+                "FinderSync registration command failed (\(arguments.joined(separator: " "))): \(error.localizedDescription)",
+                to: logURL
+            )
+        }
+    }
+
+    if succeeded == commands.count {
+        appendLog(
+            "FinderSync registration refreshed (use election restored: \(restoreEnabledElection))",
+            to: logURL
+        )
+    }
+}
+
 private func install(_ arguments: UpdaterArguments) throws {
+    let finderSyncWasEnabled = finderSyncWasEnabled()
     try waitForParent(arguments.parentPID)
 
     let fileManager = FileManager.default
@@ -87,11 +154,21 @@ private func install(_ arguments: UpdaterArguments) throws {
             backupItemName: backupName,
             options: .withoutDeletingBackupItem
         )
+        refreshFinderSyncRegistration(
+            at: arguments.destinationApplication,
+            restoreEnabledElection: finderSyncWasEnabled,
+            logURL: arguments.logURL
+        )
         do {
             try launch(arguments.destinationApplication)
         } catch {
             if fileManager.fileExists(atPath: backup.path) {
                 _ = try? fileManager.replaceItemAt(arguments.destinationApplication, withItemAt: backup)
+                refreshFinderSyncRegistration(
+                    at: arguments.destinationApplication,
+                    restoreEnabledElection: finderSyncWasEnabled,
+                    logURL: arguments.logURL
+                )
                 try? launch(arguments.destinationApplication)
             }
             throw error

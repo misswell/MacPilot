@@ -14,7 +14,11 @@ let package = Package(
             name: "MacPilot",
             dependencies: ["MacPilotRightClickKit"]
         ),
-        .executableTarget(name: "MacPilotUpdater"),
+        .executableTarget(
+            name: "MacPilotUpdater",
+            dependencies: ["MacPilotUpdaterSupport"]
+        ),
+        .target(name: "MacPilotUpdaterSupport"),
         .target(
             name: "MacPilotRightClickKit",
             linkerSettings: [
@@ -52,6 +56,10 @@ let package = Package(
                 "MacPilotFinderSync",
                 "MacPilotRightClickKit"
             ]
+        ),
+        .testTarget(
+            name: "MacPilotUpdaterSupportTests",
+            dependencies: ["MacPilotUpdaterSupport"]
         )
     ]
 )
