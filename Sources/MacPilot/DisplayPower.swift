@@ -7,18 +7,30 @@
 //  screen" action.
 //
 
+import Foundation
 import IOKit
 import IOKit.pwr_mgt
 
 enum DisplayPower {
-    /// Blacks the display immediately by asking IODisplayWrangler to idle.
-    /// Any keyboard or mouse input wakes it again; no privacy permission is
-    /// required for the registry write.
+    /// Blacks the display immediately. Keyboard or mouse input wakes it again.
+    /// IODisplayWrangler's IORequestIdle registry write returns success but is
+    /// silently ignored on modern macOS, so go through pmset, whose
+    /// displaysleepnow still works.
     static func sleepDisplay() {
-        let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IOService:/IOResources/IODisplayWrangler")
-        guard entry != 0 else { return }
-        IORegistryEntrySetCFProperty(entry, "IORequestIdle" as CFString, kCFBooleanTrue)
-        IOObjectRelease(entry)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+            process.arguments = ["displaysleepnow"]
+            do {
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus != 0 {
+                    NSLog("MacPilot: pmset displaysleepnow failed status=%d", process.terminationStatus)
+                }
+            } catch {
+                NSLog("MacPilot: pmset displaysleepnow launch failed error=\(error.localizedDescription)")
+            }
+        }
     }
 
     /// Wakes a slept display by declaring local user activity.
