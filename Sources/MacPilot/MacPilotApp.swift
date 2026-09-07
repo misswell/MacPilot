@@ -23,6 +23,7 @@ struct MacPilotApp: App {
 
         MenuBarExtra {
             MenuBarView(
+                awake: model.awake,
                 pictureInPicture: model.pictureInPicture,
                 screenRecording: model.screenRecording,
                 inputSources: model.inputSources,
@@ -31,7 +32,7 @@ struct MacPilotApp: App {
                 clipboard: model.clipboard
             ).environmentObject(model)
         } label: {
-            Image(systemName: model.isEnforcing ? "timer" : "pause.circle")
+            Image(systemName: model.awake.isActive ? "sun.max.fill" : (model.isEnforcing ? "timer" : "pause.circle"))
         }
         .menuBarExtraStyle(.menu)
     }
@@ -408,7 +409,22 @@ enum AppText {
         "showApp": "显示 MacPilot", "quitApp": "退出 MacPilot", "enabledStatus": "MacPilot：已启用",
         "disabledStatus": "MacPilot：已停用", "disableApp": "停用 MacPilot", "enableApp": "启用 MacPilot",
         "loginError": "无法更新登录启动项：%@", "aboutAutomation": "自动化", "manageRules": "管理应用规则和界面偏好。", "githubProject": "GitHub 项目", "githubProjectDescription": "在 GitHub 查看 MacPilot 的源代码、版本发布和问题反馈。", "githubProjectLink": "github.com/%@",
-        "quitsIn": "将在 %d 分钟后退出"
+        "quitsIn": "将在 %d 分钟后退出",
+        "awake": "保持唤醒", "awakeSubtitle": "控制 Mac 的睡眠行为，并根据需要保持系统运行。",
+        "awakeKeepAwake": "保持唤醒", "awakeStop": "停止保持唤醒", "awakeActive": "保持唤醒中",
+        "awakeMultipleSessions": "%d 个 Session 正在保持唤醒", "awakeOpenSettings": "打开 Awake 设置…",
+        "awakeDuration": "保持时长", "awake30Minutes": "30 分钟", "awakeOneHour": "1 小时", "awakeTwoHours": "2 小时", "awakeFourHours": "4 小时", "awakeUnlimited": "无限期",
+        "awakeCustomDuration": "自定义时长", "awakeCustomDurationValue": "%d 分钟", "awakeUntilDate": "直到指定时间",
+        "awakeStartSession": "开始 Session", "awakeSessionDuration": "Session 时长", "awakeDisplaySleepAllowed": "允许显示器休眠",
+        "awakeDisplaySleepHint": "系统保持运行，但显示器仍可按系统设置关闭。", "awakeStart": "开始", "awakeStopAllManual": "停止手动 Session",
+        "awakeSessionDetails": "Session 详情", "awakeNoActiveSession": "当前没有活跃 Session。", "awakeSource": "来源", "awakeManualSource": "手动",
+        "awakeTriggerSource": "自动规则", "awakeStartedAt": "开始时间", "awakeEndsAt": "结束时间", "awakeRunningFor": "已运行 %@",
+        "awakeSystemSleep": "系统休眠", "awakeDisplaySleep": "显示器休眠", "awakePrevented": "已阻止", "awakeAllowed": "允许",
+        "awakeBatteryProtection": "电量保护", "awakeLowBatteryProtection": "低于指定电量时停止保持唤醒",
+        "awakeBatteryProtectionHint": "电量低于此阈值时，所有 Awake Session 都会结束。", "awakeBatteryThresholdValue": "停止阈值：%d%%",
+        "awakeSafetyActive": "电量过低，已停止保持唤醒", "awakePowerState": "电源状态", "awakeBattery": "电量", "awakeBatteryValue": "%d%%",
+        "awakeExternalPower": "外接电源", "awakeCharging": "正在充电", "awakeConnected": "已连接", "awakeDisconnected": "未连接",
+        "awakeYes": "是", "awakeNo": "否", "awakeUnknown": "未知", "awakeAssertionError": "无法保持 Mac 唤醒：%@"
         , "launch": "启动", "launchSubtitle": "在登录后按设定延迟启动应用。", "launchApps": "启动应用",
         "addLaunchApp": "添加启动应用", "addLaunchRule": "添加启动规则", "editLaunchRule": "编辑启动规则",
         "launchRuleDetail": "选择一个应用，并设置从 MacPilot 登录启动开始计算的延迟秒数。",
@@ -716,6 +732,21 @@ enum AppText {
             "disabledStatus": "MacPilot: Disabled", "disableApp": "Disable MacPilot", "enableApp": "Enable MacPilot",
             "loginError": "Couldn’t update the login item: %@", "aboutAutomation": "AUTOMATION", "manageRules": "Manage app rules and interface preferences.", "githubProject": "GitHub Project", "githubProjectDescription": "View MacPilot’s source code, releases, and issue tracker on GitHub.", "githubProjectLink": "github.com/%@",
             "quitsIn": "Quits in %d min",
+            "awake": "Awake", "awakeSubtitle": "Control Mac sleep behavior and keep the system running when needed.",
+            "awakeKeepAwake": "Keep Awake", "awakeStop": "Stop Keeping Awake", "awakeActive": "Keeping Awake",
+            "awakeMultipleSessions": "%d sessions are keeping the Mac awake", "awakeOpenSettings": "Open Awake Settings…",
+            "awakeDuration": "Duration", "awake30Minutes": "30 minutes", "awakeOneHour": "1 hour", "awakeTwoHours": "2 hours", "awakeFourHours": "4 hours", "awakeUnlimited": "Indefinitely",
+            "awakeCustomDuration": "Custom duration", "awakeCustomDurationValue": "%d minutes", "awakeUntilDate": "Until a specific time",
+            "awakeStartSession": "Start a session", "awakeSessionDuration": "Session duration", "awakeDisplaySleepAllowed": "Allow display sleep",
+            "awakeDisplaySleepHint": "The system stays running while the display may still turn off according to System Settings.", "awakeStart": "Start", "awakeStopAllManual": "Stop manual sessions",
+            "awakeSessionDetails": "Session Details", "awakeNoActiveSession": "There are no active sessions.", "awakeSource": "Source", "awakeManualSource": "Manual",
+            "awakeTriggerSource": "Automation", "awakeStartedAt": "Started", "awakeEndsAt": "Ends", "awakeRunningFor": "Running %@",
+            "awakeSystemSleep": "System sleep", "awakeDisplaySleep": "Display sleep", "awakePrevented": "Prevented", "awakeAllowed": "Allowed",
+            "awakeBatteryProtection": "Battery Protection", "awakeLowBatteryProtection": "Stop keeping awake below the battery threshold",
+            "awakeBatteryProtectionHint": "All Awake sessions end when the battery falls below this threshold.", "awakeBatteryThresholdValue": "Stop below: %d%%",
+            "awakeSafetyActive": "Battery too low; Awake sessions were stopped", "awakePowerState": "Power State", "awakeBattery": "Battery", "awakeBatteryValue": "%d%%",
+            "awakeExternalPower": "External power", "awakeCharging": "Charging", "awakeConnected": "Connected", "awakeDisconnected": "Not connected",
+            "awakeYes": "Yes", "awakeNo": "No", "awakeUnknown": "Unknown", "awakeAssertionError": "Could not keep the Mac awake: %@",
             "launch": "Launch", "launchSubtitle": "Launch apps after their configured delay following login.", "launchApps": "LAUNCH APPS",
             "addLaunchApp": "Add launch app", "addLaunchRule": "Add launch rule", "editLaunchRule": "Edit launch rule",
             "launchRuleDetail": "Choose an app and set its delay in seconds from when MacPilot starts at login.",
@@ -994,9 +1025,10 @@ final class MacPilotModel: ObservableObject {
         var windowSwitcher: WindowSwitcherSettings
         var smoothScrolling: SmoothScrollSettings
         var clipboard: ClipboardSettings
+        var awake: AwakeSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings) {
-            version = 19
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings) {
+            version = 20
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -1012,6 +1044,7 @@ final class MacPilotModel: ObservableObject {
             self.windowSwitcher = windowSwitcher
             self.smoothScrolling = smoothScrolling
             self.clipboard = clipboard
+            self.awake = awake
         }
 
         init(from decoder: Decoder) throws {
@@ -1032,6 +1065,7 @@ final class MacPilotModel: ObservableObject {
             windowSwitcher = try container.decodeIfPresent(WindowSwitcherSettings.self, forKey: .windowSwitcher) ?? WindowSwitcherSettings()
             smoothScrolling = try container.decodeIfPresent(SmoothScrollSettings.self, forKey: .smoothScrolling) ?? SmoothScrollSettings()
             clipboard = try container.decodeIfPresent(ClipboardSettings.self, forKey: .clipboard) ?? ClipboardSettings()
+            awake = try container.decodeIfPresent(AwakeSettings.self, forKey: .awake) ?? .standard
         }
     }
 
@@ -1057,6 +1091,7 @@ final class MacPilotModel: ObservableObject {
     let windowSwitcher = WindowSwitcherModel()
     let smoothScrolling = SmoothScrollModel()
     let clipboard = ClipboardModel()
+    let awake = AwakeSessionManager()
     @Published var requestedSection: MainSection?
     /// Set by the menu bar/deep-link shortcut entry so the capture settings
     /// can present the recorder immediately after the main window is opened.
@@ -1125,6 +1160,13 @@ final class MacPilotModel: ObservableObject {
             MainActor.assumeIsolated { clipboard?.shutdown() }
         }
         NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak awake] _ in
+            MainActor.assumeIsolated { awake?.shutdown() }
+        }
+        NotificationCenter.default.addObserver(
             forName: .macPilotDeepLink,
             object: nil,
             queue: .main
@@ -1172,6 +1214,7 @@ final class MacPilotModel: ObservableObject {
         windowSwitcher.persist = { [weak self] in self?.saveIfReady() }
         smoothScrolling.persist = { [weak self] in self?.saveIfReady() }
         clipboard.persist = { [weak self] in self?.saveIfReady() }
+        awake.persist = { [weak self] in self?.saveIfReady() }
         windowSwitcher.language = language
         clipboard.language = language
         ble.startObservingSystemState()
@@ -1869,6 +1912,7 @@ final class MacPilotModel: ObservableObject {
         windowSwitcher.applyLoadedSettings(configuration.windowSwitcher)
         smoothScrolling.applyLoadedSettings(configuration.smoothScrolling)
         clipboard.applyLoadedSettings(configuration.clipboard)
+        awake.applyLoadedSettings(configuration.awake)
     }
 
     private func scheduleInputSourceSave() {
@@ -1902,7 +1946,8 @@ final class MacPilotModel: ObservableObject {
             inputSources: inputSources.settings,
             windowSwitcher: windowSwitcher.settings,
             smoothScrolling: smoothScrolling.settings,
-            clipboard: clipboard.settings
+            clipboard: clipboard.settings,
+            awake: awake.settings
         )
         let data: Data
         do {
@@ -2137,7 +2182,7 @@ final class MacPilotModel: ObservableObject {
     var timeString: String { lastChecked.formatted(.dateTime.hour().minute().locale(language.locale)) }
 }
 
-enum MainSection { case exit, launch, ble, inputSources, compression, capture, screenRecording, pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick, settings }
+enum MainSection { case exit, launch, awake, ble, inputSources, compression, capture, screenRecording, pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick, settings }
 
 struct ContentView: View {
     @EnvironmentObject private var model: MacPilotModel
@@ -2207,6 +2252,8 @@ struct ContentView: View {
             else { rulesList }
         case .launch:
             LaunchRulesView(showingAdd: $showingLaunchAdd, editingRule: $editingLaunchRule)
+        case .awake:
+            AwakeSettingsView(awake: model.awake)
         case .ble:
             BLEUnlockView(ble: model.ble)
         case .inputSources:
@@ -2365,6 +2412,16 @@ struct Sidebar: View {
             }
             .buttonStyle(.plain)
             .background(section == .launch ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            Button { section = .awake } label: {
+                Label(model.t("awake"), systemImage: "sun.max.fill")
+                    .labelStyle(SidebarLabelStyle())
+                    .padding(.vertical, 9).padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(section == .awake ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
             Button { section = .ble } label: {
                 Label(model.t("bleUnlock"), systemImage: "antenna.radiowaves.left.and.right")
@@ -3743,6 +3800,7 @@ struct BLEUnlockView: View {
 struct MenuBarView: View {
     @EnvironmentObject private var model: MacPilotModel
     @Environment(\.openWindow) private var openWindow
+    @ObservedObject var awake: AwakeSessionManager
     @ObservedObject var pictureInPicture: PictureInPictureModel
     @ObservedObject var screenRecording: ScreenRecordingModel
     @ObservedObject var inputSources: InputSourceModel
@@ -3751,6 +3809,7 @@ struct MenuBarView: View {
     @ObservedObject var clipboard: ClipboardModel
 
     init(
+        awake: AwakeSessionManager = AwakeSessionManager(),
         pictureInPicture: PictureInPictureModel,
         screenRecording: ScreenRecordingModel,
         inputSources: InputSourceModel = InputSourceModel(),
@@ -3758,6 +3817,7 @@ struct MenuBarView: View {
         smoothScrolling: SmoothScrollModel = SmoothScrollModel(),
         clipboard: ClipboardModel = ClipboardModel()
     ) {
+        self._awake = ObservedObject(wrappedValue: awake)
         self._pictureInPicture = ObservedObject(wrappedValue: pictureInPicture)
         self._screenRecording = ObservedObject(wrappedValue: screenRecording)
         self._inputSources = ObservedObject(wrappedValue: inputSources)
@@ -3768,6 +3828,11 @@ struct MenuBarView: View {
 
     var body: some View {
         // 移除设置页入口和规则/启动计划管理项，但保留各功能的即时操作。
+        Divider()
+        AwakeMenuView(awake: awake) {
+            model.requestedSection = .awake
+            showMainWindow()
+        }
         if model.ble.settings.isEnabled {
             Divider()
             Button(model.t("bleLockNow")) { model.ble.lockNow() }
