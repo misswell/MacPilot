@@ -90,12 +90,7 @@ struct RightClickSettingsView: View {
                         .font(.subheadline)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
-                        .background(
-                            selectedTab == tab
-                                ? Color.accentColor.opacity(0.12)
-                                : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 8)
-                        )
+                        .background(RightClickSettingsSelectionPill(isSelected: selectedTab == tab))
                     }
                     .buttonStyle(.plain)
                 }

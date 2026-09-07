@@ -4,10 +4,10 @@ import SwiftUI
 //
 // 所有功能页共用同一套视觉语言：
 //  - 页头：30pt 粗体标题 + 副标题
-//  - 内容：毛玻璃卡片（regularMaterial + 连续圆角 16 + 细描边 + 轻阴影）
+//  - 内容：macOS 26 使用 Liquid Glass，macOS 14–25 使用 regularMaterial
 //  - 卡片内小节标题：headline
 
-/// 统一的功能页卡片：毛玻璃材质 + 连续圆角 16 + 细描边 + 轻阴影。
+/// 统一的功能页卡片：macOS 26 使用原生 Liquid Glass，旧系统自动降级为毛玻璃材质。
 struct SettingsCard<Content: View>: View {
     private let content: Content
 
@@ -16,15 +16,56 @@ struct SettingsCard<Content: View>: View {
     }
 
     var body: some View {
+        if #available(macOS 26.0, *) {
+            cardContent
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        } else {
+            cardContent
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(.primary.opacity(0.07))
+                )
+                .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
+        }
+    }
+
+    private var cardContent: some View {
         VStack(alignment: .leading, spacing: 14) { content }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.07))
-            )
-            .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
+    }
+}
+
+extension View {
+    /// Primary actions use the native Liquid Glass emphasis on macOS 26.
+    /// Earlier systems retain the familiar bordered prominent treatment.
+    @ViewBuilder
+    func macPilotProminentButtonStyle() -> some View {
+        if #available(macOS 26.0, *) {
+            buttonStyle(.glassProminent)
+        } else {
+            buttonStyle(.borderedProminent)
+        }
+    }
+}
+
+/// Multi-page feature navigation uses a single adaptive selection treatment.
+/// Liquid Glass remains interactive on macOS 26; older releases use the accent fill.
+struct SettingsSelectionPill: View {
+    let isSelected: Bool
+
+    var body: some View {
+        if #available(macOS 26.0, *), isSelected {
+            Color.clear
+                .glassEffect(
+                    .regular.tint(Color.accentColor.opacity(0.16)).interactive(),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+        } else {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+        }
     }
 }
 

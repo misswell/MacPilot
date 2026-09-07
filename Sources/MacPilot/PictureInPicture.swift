@@ -2986,7 +2986,7 @@ struct PictureInPictureView: View {
             } label: {
                 Label(t("pipCaptureFocused"), systemImage: "plus.rectangle.on.rectangle")
             }
-            .buttonStyle(.borderedProminent)
+            .macPilotProminentButtonStyle()
             .disabled(!pictureInPicture.settings.isEnabled)
         }
         .padding(.horizontal, 36)
@@ -3008,10 +3008,7 @@ struct PictureInPictureView: View {
                         .foregroundStyle(page == item ? Color.accentColor : Color.secondary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
-                        .background(
-                            page == item ? Color.accentColor.opacity(0.12) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 8)
-                        )
+                        .background(SettingsSelectionPill(isSelected: page == item))
                     }
                     .buttonStyle(.plain)
                 }

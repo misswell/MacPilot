@@ -5,12 +5,16 @@
 
 ## 1. 设计语言
 
-MacPilot 的界面统一采用 **「大标题页头 + 毛玻璃卡片」** 的视觉语言：
+MacPilot 的界面统一采用 **「原生侧边栏 + 大标题页头 + 自适应玻璃卡片」** 的视觉语言：
 
+- 主导航使用 `NavigationSplitView` 与原生 `.sidebar` 列表，让 macOS 26 自动呈现最新侧边栏层次。
 - 每个功能页顶部是 **30pt 粗体大标题 + 副标题**。
-- 页面内容按逻辑分组，放入 **毛玻璃卡片（SettingsCard）** 中。
+- 页面内容按逻辑分组，放入 **自适应玻璃卡片（SettingsCard）** 中。
+- macOS 26 使用原生 Liquid Glass；macOS 15–25 使用视觉等价的 `regularMaterial` 降级实现。
 - 卡片内的小节标题使用 `headline`。
 - 不同功能页之间只有内容不同，骨架、间距、材质完全一致。
+
+Liquid Glass 只用于导航、操作和内容分组表面。内容本身保持安静，避免多层玻璃嵌套、过度着色或额外装饰。
 
 ## 2. 设计令牌（Design Tokens）
 
@@ -22,15 +26,17 @@ MacPilot 的界面统一采用 **「大标题页头 + 毛玻璃卡片」** 的�
 | 页头副标题 | 默认正文 + `.foregroundStyle(.secondary)`，与标题间距 5 |
 | 页面外边距 | `.padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)` |
 | 页头与卡片之间 / 卡片之间间距 | `24` |
-| 卡片背景 | `.regularMaterial` |
-| 卡片圆角 | `RoundedRectangle(cornerRadius: 16, style: .continuous)` |
-| 卡片描边 | `.strokeBorder(.primary.opacity(0.07))` |
-| 卡片阴影 | `.shadow(color: .black.opacity(0.035), radius: 8, y: 3)` |
+| 卡片背景 | macOS 26：`.glassEffect(.regular)`；macOS 15–25：`.regularMaterial` |
+| 卡片圆角 | macOS 26：20；macOS 15–25：16，均为 continuous |
+| 卡片描边 | macOS 26：由系统玻璃渲染；macOS 15–25：`.strokeBorder(.primary.opacity(0.07))` |
+| 卡片阴影 | macOS 26：由系统玻璃渲染；macOS 15–25：`.shadow(color: .black.opacity(0.035), radius: 8, y: 3)` |
 | 卡片内边距 | `20` |
 | 卡片内部间距 | `14` |
 | 卡片内小节标题 | `.font(.headline)` |
 | 说明 / 提示文字 | `.font(.subheadline)` 或 `.font(.caption)` + `.foregroundStyle(.secondary)` |
 | 启用类开关 | `.toggleStyle(.switch)` |
+| 主操作按钮 | `macPilotProminentButtonStyle()`（macOS 26 为 `glassProminent`，旧系统为 `borderedProminent`） |
+| 分类选中态 | `SettingsSelectionPill` / `RightClickSettingsSelectionPill` |
 | 设置页滑块 | `SettingsSlider`（轨道高 5、滑块直径 18、控件高 22，accent 已选区间；禁止用带 `step` 的系统 `Slider`，会渲染成刻度线） |
 | 权限 / 警告内联提示框 | 背景 `.orange.opacity(0.1)` + 圆角 10 + 描边 `.orange.opacity(0.35)` |
 
@@ -111,7 +117,7 @@ var body: some View {
 | 多标签 / 多分类功能（画中画分类栏、右键菜单标签页） | **保留**导航栏，但页头、卡片、间距必须与全局一致 |
 | 模态编辑弹窗（RuleEditor、EditAppSheet 等） | 允许使用独立表单/弹窗风格，不强制卡片 |
 | 权限/警告内联提示 | 用「2. 令牌表」中的橙色提示框样式 |
-| 侧边栏（Sidebar） | 保持现有样式，不在本规范范围内 |
+| 侧边栏（Sidebar） | 使用 `NavigationSplitView` + `.sidebar` `List`，不要手写选中背景；按功能域分组 |
 
 ## 6. 文案
 
@@ -125,7 +131,8 @@ var body: some View {
 - [ ] 外边距 `36 / 34 / 30`，卡片间距 `24`
 - [ ] 卡片内小节标题用 `.font(.headline)`，说明文字用 `caption/subheadline` + `secondary`
 - [ ] 启停开关用 `.toggleStyle(.switch)`
+- [ ] 主操作按钮使用 `macPilotProminentButtonStyle()`；多分类选中态使用统一 selection pill
 - [ ] 应用/规则列表用原生全高 `List`（不嵌卡片、不加 `ScrollView`/`minHeight`，避免嵌套滚动条）
 - [ ] 文案走 `AppText`/`AppLocalization`，中英文同步
-- [ ] 深色 / 浅色模式都正常（毛玻璃材质自动适配）
+- [ ] macOS 26 Liquid Glass 与 macOS 15 fallback 都能编译；深色 / 浅色模式正常
 - [ ] `swift build` 通过；`swift test` 无新增失败

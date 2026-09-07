@@ -19,7 +19,7 @@ struct MacPilotApp: App {
             ContentView().environmentObject(model)
                 .frame(minWidth: 900, minHeight: 620)
         }
-        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unified(showsTitle: false))
 
         MenuBarExtra {
             MenuBarView(
@@ -2217,7 +2217,50 @@ final class MacPilotModel: ObservableObject {
     var timeString: String { lastChecked.formatted(.dateTime.hour().minute().locale(language.locale)) }
 }
 
-enum MainSection { case exit, launch, awake, ble, inputSources, compression, capture, screenRecording, pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick, settings }
+enum MainSection: CaseIterable, Hashable, Identifiable {
+    case exit, launch, awake, ble, inputSources, compression, capture, screenRecording
+    case pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick, settings
+
+    var id: Self { self }
+
+    var titleKey: String {
+        switch self {
+        case .exit: "rules"
+        case .launch: "launch"
+        case .awake: "awake"
+        case .ble: "bleUnlock"
+        case .inputSources: "inputSources"
+        case .compression: "fileCompression"
+        case .capture: "screenCapture"
+        case .screenRecording: "scRecording"
+        case .pictureInPicture: "pictureInPicture"
+        case .windowSwitcher: "windowSwitcher"
+        case .smoothScrolling: "smoothScrolling"
+        case .clipboard: "clipboard"
+        case .rightClick: "rightClickMenu"
+        case .settings: "settings"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .exit: "list.bullet.rectangle"
+        case .launch: "play.circle"
+        case .awake: "sun.max.fill"
+        case .ble: "antenna.radiowaves.left.and.right"
+        case .inputSources: "keyboard"
+        case .compression: "archivebox"
+        case .capture: "camera.viewfinder"
+        case .screenRecording: "record.circle"
+        case .pictureInPicture: "pip.enter"
+        case .windowSwitcher: "rectangle.on.rectangle"
+        case .smoothScrolling: "scroll"
+        case .clipboard: "clipboard"
+        case .rightClick: "contextualmenu.and.cursorarrow"
+        case .settings: "gearshape"
+        }
+    }
+}
 
 struct ContentView: View {
     @EnvironmentObject private var model: MacPilotModel
@@ -2229,15 +2272,16 @@ struct ContentView: View {
     @State private var section: MainSection = .exit
 
     var body: some View {
-        HStack(spacing: 0) {
+        NavigationSplitView {
             Sidebar(section: $section)
-            Divider()
+        } detail: {
             VStack(alignment: .leading, spacing: 0) {
                 sectionContent
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
         }
+        .navigationSplitViewStyle(.balanced)
         .sheet(isPresented: $showingAdd) { RuleEditor(rule: nil).environmentObject(model) }
         .sheet(item: $editingRule) { rule in RuleEditor(rule: rule).environmentObject(model) }
         .sheet(isPresented: $showingLaunchAdd) { LaunchRuleEditor(rule: nil).environmentObject(model) }
@@ -2328,7 +2372,7 @@ struct ContentView: View {
             }
             Spacer()
             Button { showingAdd = true } label: { Label(model.t("addApp"), systemImage: "plus") }
-                .buttonStyle(.borderedProminent).controlSize(.large)
+                .macPilotProminentButtonStyle().controlSize(.large)
         }
         .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 22)
     }
@@ -2421,156 +2465,64 @@ private struct SidebarLabelStyle: LabelStyle {
 struct Sidebar: View {
     @EnvironmentObject private var model: MacPilotModel
     @Binding var section: MainSection
+
+    private let automationSections: [MainSection] = [.exit, .launch, .awake, .ble, .inputSources]
+    private let utilitySections: [MainSection] = [
+        .compression, .capture, .screenRecording, .pictureInPicture,
+        .windowSwitcher, .smoothScrolling, .clipboard, .rightClick
+    ]
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "timer").font(.title2.bold()).foregroundStyle(.blue)
+        VStack(spacing: 0) {
+            brandHeader
+            List(selection: selection) {
+                Section { navigationRows(automationSections) }
+                Section { navigationRows(utilitySections) }
+                Section { navigationRows([.settings]) }
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+        }
+        .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 280)
+    }
+
+    private var brandHeader: some View {
+        HStack(spacing: 11) {
+            Image(systemName: "timer")
+                .font(.system(size: 17, weight: .bold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.tint)
+                .frame(width: 34, height: 34)
+                .background(Color.accentColor.opacity(0.13), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
                 Text("MacPilot").font(.headline)
+                Text(AppVersionInfo.current().version.description)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 34)
-            Button { section = .exit } label: {
-                Label(model.t("rules"), systemImage: "list.bullet.rectangle")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .exit ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .launch } label: {
-                Label(model.t("launch"), systemImage: "play.circle")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .launch ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .awake } label: {
-                Label(model.t("awake"), systemImage: "sun.max.fill")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .awake ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .ble } label: {
-                Label(model.t("bleUnlock"), systemImage: "antenna.radiowaves.left.and.right")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .ble ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .inputSources } label: {
-                Label(model.t("inputSources"), systemImage: "keyboard")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .inputSources ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .compression } label: {
-                Label(model.t("fileCompression"), systemImage: "archivebox")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .compression ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .capture } label: {
-                Label(model.t("screenCapture"), systemImage: "camera.viewfinder")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .capture ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .screenRecording } label: {
-                Label(model.t("scRecording"), systemImage: "record.circle")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .screenRecording ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .pictureInPicture } label: {
-                Label(model.t("pictureInPicture"), systemImage: "pip.enter")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .pictureInPicture ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .windowSwitcher } label: {
-                Label(model.t("windowSwitcher"), systemImage: "rectangle.on.rectangle")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .windowSwitcher ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .smoothScrolling } label: {
-                Label(model.t("smoothScrolling"), systemImage: "scroll")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .smoothScrolling ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .clipboard } label: {
-                Label(model.t("clipboard"), systemImage: "clipboard")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .clipboard ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .rightClick } label: {
-                Label(model.t("rightClickMenu"), systemImage: "contextualmenu.and.cursorarrow")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .rightClick ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            Button { section = .settings } label: {
-                Label(model.t("settings"), systemImage: "gearshape")
-                    .labelStyle(SidebarLabelStyle())
-                    .padding(.vertical, 9).padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(section == .settings ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
             Spacer()
         }
-        .frame(width: 230).background(Color(nsColor: .controlBackgroundColor))
+        .padding(.horizontal, 18)
+        .padding(.top, 22)
+        .padding(.bottom, 14)
+    }
+
+    private var selection: Binding<MainSection?> {
+        Binding(
+            get: { section },
+            set: { newValue in
+                if let newValue { section = newValue }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func navigationRows(_ sections: [MainSection]) -> some View {
+        ForEach(sections) { item in
+            Label(model.t(item.titleKey), systemImage: item.systemImage)
+                .labelStyle(SidebarLabelStyle())
+                .tag(item)
+        }
     }
 }
 
@@ -2898,7 +2850,7 @@ struct LaunchRulesView: View {
                 }
                 Spacer()
                 Button { showingAdd = true } label: { Label(model.t("addLaunchApp"), systemImage: "plus") }
-                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .macPilotProminentButtonStyle().controlSize(.large)
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 22)
 
@@ -2958,7 +2910,7 @@ struct LaunchRulesView: View {
                 Button(model.t("cancelLaunches")) { model.cancelScheduledLaunches() }
                     .disabled(model.pendingLaunchCount == 0)
                 Button(model.t("runNow")) { model.runLaunchPlanNow() }
-                    .buttonStyle(.borderedProminent)
+                    .macPilotProminentButtonStyle()
                     .disabled(!model.isLaunchSchedulingEnabled || model.enabledLaunchCount == 0)
             }
         }
