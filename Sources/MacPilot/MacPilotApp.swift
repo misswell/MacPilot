@@ -2540,9 +2540,7 @@ struct Sidebar: View {
         VStack(spacing: 0) {
             brandHeader
             List(selection: selection) {
-                Section { navigationRows(automationSections) }
-                Section { navigationRows(utilitySections) }
-                Section { navigationRows([.settings]) }
+                navigationRows(automationSections + utilitySections + [.settings])
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
