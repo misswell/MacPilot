@@ -42,7 +42,10 @@ final class ScreenRecordingCameraOverlay: NSObject {
             defer: false
         )
         panel.title = Self.windowTitle
-        panel.level = .floating
+        // The recording selection overlay is a screen-saver-level panel. Keep
+        // the camera preview at the same level so enabling the camera from
+        // the ready-to-record pill visibly produces the top-right preview.
+        panel.level = .screenSaver
         panel.isReleasedWhenClosed = false
         panel.isMovableByWindowBackground = true
         panel.backgroundColor = .clear

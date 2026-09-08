@@ -1315,6 +1315,7 @@ final class SmartScreenshotController {
     private let onError: (Error) -> Void
     private let onSelectionRect: (CGRect) -> Void
     private let onRecordingSelection: (CGRect, SmartCaptureSelectionMode) -> Void
+    private let onRecordingSelectionAction: (CGRect, SmartCaptureSelectionMode, AreaSelectionAction) -> Void
     private let onRepeatLastArea: () -> Void
     private let onDelayedAreaCapture: () -> Void
     private let onFullscreenCapture: () -> Void
@@ -1408,6 +1409,7 @@ final class SmartScreenshotController {
         onError: @escaping (Error) -> Void,
         onSelectionRect: @escaping (CGRect) -> Void = { _ in },
         onRecordingSelection: @escaping (CGRect, SmartCaptureSelectionMode) -> Void = { _, _ in },
+        onRecordingSelectionAction: @escaping (CGRect, SmartCaptureSelectionMode, AreaSelectionAction) -> Void = { _, _, _ in },
         onRepeatLastArea: @escaping () -> Void = {},
         shortcutBinding: SmartCaptureShortcutBinding = .default,
         additionalShortcutBindings: [ScreenCaptureShortcutKind: SmartCaptureShortcutBinding] = [:],
@@ -1440,6 +1442,7 @@ final class SmartScreenshotController {
         self.onError = onError
         self.onSelectionRect = onSelectionRect
         self.onRecordingSelection = onRecordingSelection
+        self.onRecordingSelectionAction = onRecordingSelectionAction
         self.onRepeatLastArea = onRepeatLastArea
         self.onDelayedAreaCapture = onDelayedAreaCapture
         self.shortcutBinding = shortcutBinding
@@ -2128,14 +2131,17 @@ final class SmartScreenshotController {
         if let shortcutEventHandler { RemoveEventHandler(shortcutEventHandler) }
     }
 
-    func startSelection(mode: SmartCaptureSelectionMode = .smartElement) {
+    func startSelection(
+        mode: SmartCaptureSelectionMode = .smartElement,
+        recordingConfiguration: RecordingSelectionBarConfiguration? = nil
+    ) {
         // Smart-element, manual/application screenshot and recording
         // selection all use the migrated Snapzy overlay. The remaining modes
         // keep their specialized MacPilot flows because they need a
         // post-capture editor.
         if mode == .smartElement || mode == .manualArea || mode == .applicationWindow ||
             mode == .recordingArea || mode == .recordingApplication {
-            startSnapzySelection(mode: mode)
+            startSnapzySelection(mode: mode, recordingConfiguration: recordingConfiguration)
             return
         }
         guard !isSelecting else { return }
@@ -2292,7 +2298,10 @@ final class SmartScreenshotController {
     }
 
     @discardableResult
-    private func startSnapzySelection(mode: SmartCaptureSelectionMode) -> UUID? {
+    private func startSnapzySelection(
+        mode: SmartCaptureSelectionMode,
+        recordingConfiguration: RecordingSelectionBarConfiguration? = nil
+    ) -> UUID? {
         guard !isSelecting, !SnapzyAreaSelectionController.shared.isPresenting else { return nil }
         guard screenCaptureAccessProvider() else {
             onError(ScreenCaptureError.permissionRequired)
@@ -2317,7 +2326,8 @@ final class SmartScreenshotController {
 
         let sessionID = startSnapzySelection(
             mode: mode,
-            applicationConfiguration: applicationConfiguration
+            applicationConfiguration: applicationConfiguration,
+            recordingConfiguration: recordingConfiguration
         ) {
             try await FrozenAreaCaptureSession.prepare(
                 captureManager: SnapzyScreenCaptureManager.shared,
@@ -2351,6 +2361,7 @@ final class SmartScreenshotController {
     func startSnapzySelection(
         mode: SmartCaptureSelectionMode,
         applicationConfiguration providedApplicationConfiguration: AreaSelectionApplicationConfiguration? = nil,
+        recordingConfiguration: RecordingSelectionBarConfiguration? = nil,
         preparation: @escaping @MainActor () async throws -> FrozenAreaCaptureSession
     ) -> UUID? {
         guard !isSelecting, !SnapzyAreaSelectionController.shared.isPresenting else { return nil }
@@ -2380,8 +2391,10 @@ final class SmartScreenshotController {
                 : nil)
 
         let sessionID = UUID()
-        let presentsPostSelectionActions = mode != .recordingArea
-            && mode != .recordingApplication
+        let isRecordingMode = mode == .recordingArea || mode == .recordingApplication
+        let presentsPostSelectionActions = isRecordingMode
+            ? recordingConfiguration != nil
+            : true
         SnapzyAreaSelectionController.shared.startSelection(
             mode: snapzyMode,
             backdrops: [:],
@@ -2392,6 +2405,7 @@ final class SmartScreenshotController {
                 ? { point in SmartAXTargetQuery.target(at: point) }
                 : nil,
             sessionID: sessionID,
+            recordingConfiguration: recordingConfiguration,
             selectionPreview: presentsPostSelectionActions
                 ? { [weak self] result in
                     self?.handleSnapzySelectionPreview(
@@ -2517,6 +2531,20 @@ final class SmartScreenshotController {
             resetSnapzyPreparationState()
             SnapzyAreaSelectionController.shared.cancelSelection()
             QuickAccessManager.shared.resumeAfterCapture()
+            return
+        }
+        let isRecordingMode = requestedMode == .recordingArea || requestedMode == .recordingApplication
+        if isRecordingMode {
+            // Recording controls do not need the frozen screenshot crop. Keep
+            // the selection alive for non-terminal toggles, and only dismiss
+            // it when the user starts recording or opens full settings.
+            let isTerminal = action == .recordingStart || action == .recordingSettings
+            if isTerminal {
+                resetSnapzyPreparationState()
+                SnapzyAreaSelectionController.shared.dismissSelection()
+                QuickAccessManager.shared.resumeAfterCapture()
+            }
+            onRecordingSelectionAction(result.rect, requestedMode, action)
             return
         }
         if action == .refreshCapture {
@@ -2695,7 +2723,11 @@ final class SmartScreenshotController {
                 case .upload:
                     self.uploadImageToCloud(crop.image)
                 case .newSelection, .adjustSelection, .more,
-                     .toggleRoundedCorners, .toggleShadow, .refreshCapture:
+                     .toggleRoundedCorners, .toggleShadow, .refreshCapture,
+                     .recordingStart, .recordingToggleMicrophone,
+                     .recordingToggleSystemAudio, .recordingToggleQuality,
+                     .recordingToggleCamera, .recordingSettings,
+                     .recordingAspectLandscape, .recordingAspectPortrait:
                     break
                 case .annotate:
                     self.onAreaAnnotateCapture(crop.image, result.rect, .rectangle)

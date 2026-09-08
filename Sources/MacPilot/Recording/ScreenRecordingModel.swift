@@ -378,6 +378,32 @@ final class ScreenRecordingModel: ObservableObject {
         cameraOverlay.show(device: device)
     }
 
+    /// Used by the in-selection recording pill. Selecting the camera button
+    /// uses the first available camera as the compact default; the full
+    /// recording page and floating controller still expose device selection.
+    func toggleCameraOverlayForSelection() {
+        if !selectedCameraName.isEmpty {
+            toggleCameraOverlay(named: selectedCameraName)
+            return
+        }
+        refreshCaptureDeviceLists()
+        guard let device = availableCameras.first else {
+            errorMessage = localized(ScreenRecordingError.cameraPermissionRequired)
+            return
+        }
+        let deviceName = device.localizedName
+        Task { [weak self] in
+            guard let self else { return }
+            let authorized = await Self.requestCameraAccess()
+            guard authorized else {
+                self.errorMessage = self.localized(ScreenRecordingError.cameraPermissionRequired)
+                return
+            }
+            self.refreshCaptureDeviceLists()
+            self.toggleCameraOverlay(named: deviceName)
+        }
+    }
+
     /// Toggles the floating iPhone/iPad preview. Starting an actual device
     /// recording goes through `startDeviceRecording(named:)`.
     func toggleDevicePreview(named deviceName: String) {

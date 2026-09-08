@@ -401,6 +401,7 @@ final class AreaSelectionOverlayView: NSView {
   private var selectionDimensionTextLayer: CATextLayer!
   private var selectionActionBar: AreaSelectionActionBar?
   private var selectionSideActionBar: AreaSelectionSideActionBar?
+  private var recordingSelectionActionBar: NSView?
 
   private enum SelectionHandle: CaseIterable {
     case topLeft
@@ -905,6 +906,50 @@ final class AreaSelectionOverlayView: NSView {
     refreshActiveCursor()
   }
 
+  /// Switches the overlay into the recording-ready state. The frozen display,
+  /// dim mask, selection frame, resize handles, and dimension badge remain
+  /// visible while the recording-specific pill is anchored to the selection.
+  func showRecordingSelectionResult(
+    screenRect: CGRect,
+    configuration: RecordingSelectionBarConfiguration,
+    actionHandler: @escaping (AreaSelectionAction) -> Void
+  ) {
+    removeEmbeddedAnnotationEditor()
+    invalidatePendingElementHoverWork()
+    hoveredElementRect = nil
+    isSelecting = false
+    selectionEnabled = false
+    isShowingSelectionActions = true
+    isSelectionAdjustmentActive = false
+    finalizedSelectionDrag = nil
+    finalizedSelectionRect = convertToLocalRect(screenRect).intersection(bounds)
+    pendingSelectionStartPoint = nil
+    hideMagnifier()
+    hideSizeIndicator()
+    crosshairIndicatorLayer.isHidden = true
+    horizontalCrosshairLayer.isHidden = true
+    verticalCrosshairLayer.isHidden = true
+    updateFinalizedSelectionVisuals()
+
+    removeSelectionActionBars()
+    let actionBar = NSHostingView(
+      rootView: RecordingSelectionActionBarView(
+        configuration: configuration,
+        onAction: actionHandler
+      )
+    )
+    actionBar.frame = CGRect(
+      origin: .zero,
+      size: RecordingSelectionActionBarView.preferredSize
+    )
+    actionBar.wantsLayer = true
+    actionBar.layer?.zPosition = 100
+    recordingSelectionActionBar = actionBar
+    addSubview(actionBar)
+    positionSelectionActionBars()
+    refreshActiveCursor()
+  }
+
   /// Updates the selected frame while it is being moved/resized.  This is
   /// intentionally separate from `showSelectionResult` so the active drag is
   /// not reset when the coordinator broadcasts the new rect to every display.
@@ -1083,8 +1128,10 @@ final class AreaSelectionOverlayView: NSView {
     selectionActionBar?.bindAnnotationSession(nil)
     selectionActionBar?.removeFromSuperview()
     selectionSideActionBar?.removeFromSuperview()
+    recordingSelectionActionBar?.removeFromSuperview()
     selectionActionBar = nil
     selectionSideActionBar = nil
+    recordingSelectionActionBar = nil
   }
 
   private func removeEmbeddedAnnotationEditor() {
@@ -1195,6 +1242,14 @@ final class AreaSelectionOverlayView: NSView {
 
   private func positionSelectionActionBars() {
     guard let rect = finalizedSelectionRect else { return }
+    if let recordingSelectionActionBar {
+      recordingSelectionActionBar.frame = RecordingSelectionBarLayout.resolve(
+        selectionRect: rect,
+        barSize: RecordingSelectionActionBarView.preferredSize,
+        bounds: bounds.size
+      )
+      return
+    }
     // 统一走纯布局求解器：横栏与侧栏永不相交，且都完整落在屏幕内
     // （小选区时两者不再打架）。
     let result = AreaSelectionBarLayout.resolve(

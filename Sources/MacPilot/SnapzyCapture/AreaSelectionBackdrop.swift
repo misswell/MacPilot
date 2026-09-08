@@ -52,6 +52,17 @@ nonisolated enum AreaSelectionAction: Equatable, Sendable {
   /// Re-grabs the selected region from the live screen and refreshes the
   /// frozen backdrop (iShot's 刷新截图). Non-terminal.
   case refreshCapture
+  /// Recording-only actions. The recording selection remains on screen while
+  /// the audio, quality, camera, and settings controls update the recording
+  /// model; start/settings are terminal actions handled by the coordinator.
+  case recordingStart
+  case recordingToggleMicrophone
+  case recordingToggleSystemAudio
+  case recordingToggleQuality
+  case recordingToggleCamera
+  case recordingSettings
+  case recordingAspectLandscape
+  case recordingAspectPortrait
 }
 
 nonisolated enum AreaSelectionInteractionMode {

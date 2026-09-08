@@ -48,6 +48,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
     private var selectedResult: AreaSelectionResult?
     private weak var selectedWindow: AreaSelectionWindow?
     private var selectionMode: SelectionMode = .screenshot
+    private var recordingSelectionConfiguration: RecordingSelectionBarConfiguration?
     private var interactionMode: AreaSelectionInteractionMode = .manualRegion
     private var manualStart: CGPoint?
     private var manualRect: CGRect?
@@ -93,6 +94,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         postSelectionPinShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.postSelectionPin.defaultBinding,
         elementTargetResolver: ((CGPoint) -> CGRect?)? = nil,
         sessionID requestedSessionID: UUID? = nil,
+        recordingConfiguration: RecordingSelectionBarConfiguration? = nil,
         selectionPreview: ((AreaSelectionResult) -> Void)? = nil,
         actionHandler: ((AreaSelectionResult, AreaSelectionAction) -> Void)? = nil,
         completion: @escaping AreaSelectionResultCompletion
@@ -105,6 +107,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         self.selectionPreview = selectionPreview
         self.actionHandler = actionHandler
         self.postSelectionPinShortcut = postSelectionPinShortcut
+        self.recordingSelectionConfiguration = recordingConfiguration
         selectedResult = nil
         selectedWindow = nil
         manualStart = nil
@@ -196,6 +199,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         completion = nil
         selectionPreview = nil
         actionHandler = nil
+        recordingSelectionConfiguration = nil
         selectedResult = nil
         selectedWindow = nil
         manualStart = nil
@@ -221,6 +225,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         completion = nil
         selectionPreview = nil
         actionHandler = nil
+        recordingSelectionConfiguration = nil
         selectedResult = nil
         selectedWindow = nil
         manualStart = nil
@@ -246,6 +251,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         self.completion = nil
         selectionPreview = nil
         actionHandler = nil
+        recordingSelectionConfiguration = nil
         selectedResult = nil
         selectedWindow = nil
         windows.removeAll(keepingCapacity: false)
@@ -294,14 +300,25 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         selectedResult = result
         selectedWindow = window
         for candidate in windows {
-            candidate.overlayView.showSelectionResult(
-                screenRect: result.rect,
-                showsActions: candidate === window,
-                actionHandler: { [weak self, weak candidate] action in
-                    guard let self, let candidate else { return }
-                    self.areaSelectionWindow(candidate, didRequestAction: action)
-                }
-            )
+            let actionHandler: (AreaSelectionAction) -> Void = { [weak self, weak candidate] action in
+                guard let self, let candidate else { return }
+                self.areaSelectionWindow(candidate, didRequestAction: action)
+            }
+            if selectionMode == .recording,
+               candidate === window,
+               let recordingSelectionConfiguration {
+                candidate.overlayView.showRecordingSelectionResult(
+                    screenRect: result.rect,
+                    configuration: recordingSelectionConfiguration,
+                    actionHandler: actionHandler
+                )
+            } else {
+                candidate.overlayView.showSelectionResult(
+                    screenRect: result.rect,
+                    showsActions: candidate === window,
+                    actionHandler: actionHandler
+                )
+            }
         }
         selectionPreview(result)
     }
@@ -357,6 +374,18 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             // the More button opens its own menu and never tears down the HUD.
             return
         }
+        if selectionMode == .recording {
+            switch action {
+            case .recordingAspectLandscape:
+                reframeRecordingSelection(to: 16.0 / 9.0)
+                return
+            case .recordingAspectPortrait:
+                reframeRecordingSelection(to: 9.0 / 16.0)
+                return
+            default:
+                break
+            }
+        }
         if action == .toggleRoundedCorners {
             isRoundedCornersEnabled.toggle()
             syncOutputStyleToggles()
@@ -372,6 +401,22 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             return
         }
         actionHandler(selectedResult, action)
+    }
+
+    private func reframeRecordingSelection(to aspect: CGFloat) {
+        guard let selectedWindow, let selectedResult else { return }
+        let fitted = RecordingRegionFraming.rectFitting(
+            selectedResult.rect,
+            aspect: aspect,
+            in: selectedWindow.frame
+        )
+        guard fitted.width >= 4, fitted.height >= 4,
+              let updated = result(for: .rect(fitted), in: selectedWindow) else { return }
+        self.selectedResult = updated
+        for candidate in windows {
+            candidate.overlayView.updateSelectionResult(screenRect: updated.rect)
+        }
+        selectionPreview?(updated)
     }
 
     private func syncOutputStyleToggles() {

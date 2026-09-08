@@ -514,6 +514,12 @@ final class ScreenCaptureModel: ObservableObject {
     /// Receives the Quartz-space rectangle selected by the shared overlay
     /// when a recording starts in area/application mode.
     var onRecordingSelection: ((CGRect, ScreenRecordingCaptureMode) -> Void)?
+    /// Receives non-terminal recording-bar changes and the final start/settings
+    /// action while the selection overlay is still visible.
+    var onRecordingSelectionAction: ((CGRect, ScreenRecordingCaptureMode, AreaSelectionAction) -> Void)?
+    /// Supplies the current recording preferences to the in-selection bar.
+    /// Kept as a closure so the screenshot model does not own the recorder.
+    var recordingSelectionConfiguration: (() -> RecordingSelectionBarConfiguration?)?
     private var isLoading = false
     private var isDelayedCaptureCounting = false
     private var captureTask: Task<Void, Never>?
@@ -552,6 +558,16 @@ final class ScreenCaptureModel: ObservableObject {
                 return
             }
             self.onRecordingSelection?(quartzRect, recordingMode)
+        },
+        onRecordingSelectionAction: { [weak self] rect, mode, action in
+            guard let self else { return }
+            let recordingMode: ScreenRecordingCaptureMode =
+                mode == .recordingApplication ? .application : .area
+            guard let quartzRect = SmartCaptureCoordinateConversion.quartzRect(fromAppKitRect: rect) else {
+                self.errorMessage = AppText.value("scCaptureCoordinateUnavailable", language: self.language)
+                return
+            }
+            self.onRecordingSelectionAction?(quartzRect, recordingMode, action)
         },
         onRepeatLastArea: { [weak self] in self?.repeatSmartCapture() },
         shortcutBinding: settings.smartCaptureShortcut,
@@ -1080,7 +1096,16 @@ final class ScreenCaptureModel: ObservableObject {
             openScreenCaptureSettings()
             return
         }
-        ensureSmartCapture().startSelection(mode: mode)
+        let recordingConfiguration: RecordingSelectionBarConfiguration? = switch mode {
+        case .recordingArea, .recordingApplication:
+            recordingSelectionConfiguration?()
+        default:
+            nil
+        }
+        ensureSmartCapture().startSelection(
+            mode: mode,
+            recordingConfiguration: recordingConfiguration
+        )
     }
 
     private func presentAreaAnnotation(

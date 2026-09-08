@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 
 extension Notification.Name {
     static let macPilotDeepLink = Notification.Name("MacPilot.deepLink")
+    static let macPilotShowMainWindow = Notification.Name("MacPilot.showMainWindow")
 }
 
 @main
@@ -696,6 +697,23 @@ enum AppText {
         value(key, language: language, arguments: arguments)
     }
 
+    // Kept beside the lookup rather than appended to the intentionally dense
+    // legacy dictionaries above. These labels belong to the recording-ready
+    // pill and stay localized through the same AppText API.
+    private static let recordingSelectionChinese: [String: String] = [
+        "scRecordingQualityHighHint": "高质量，保留细节",
+        "scRecordingQualityLowHint": "小体积，更省空间",
+        "scRecordingCameraToggle": "摄像头叠加",
+        "scRecordingPrepareSettings": "录屏设置",
+    ]
+
+    private static let recordingSelectionEnglish: [String: String] = [
+        "scRecordingQualityHighHint": "High quality · preserve detail",
+        "scRecordingQualityLowHint": "Small file · save space",
+        "scRecordingCameraToggle": "Camera overlay",
+        "scRecordingPrepareSettings": "Recording settings",
+    ]
+
     static func value(_ key: String, language: AppLanguage, arguments: [CVarArg]) -> String {
         let useChinese: Bool
         switch language {
@@ -703,7 +721,9 @@ enum AppText {
         case .english: useChinese = false
         case .system: useChinese = Locale.autoupdatingCurrent.language.languageCode?.identifier == "zh"
         }
-        let template = useChinese ? (chinese[key] ?? key) : (english[key] ?? key)
+        let template = useChinese
+            ? (chinese[key] ?? recordingSelectionChinese[key] ?? key)
+            : (english[key] ?? recordingSelectionEnglish[key] ?? key)
         return arguments.isEmpty ? template : String(format: template, locale: language.locale, arguments: arguments)
     }
 
@@ -1219,6 +1239,17 @@ final class MacPilotModel: ObservableObject {
         fileCompression.persist = { [weak self] in self?.saveIfReady() }
         screenCapture.persist = { [weak self] in self?.saveIfReady() }
         screenRecording.persist = { [weak self] in self?.saveIfReady() }
+        screenCapture.recordingSelectionConfiguration = { [weak screenRecording] in
+            guard let screenRecording else { return nil }
+            guard screenRecording.settings.showsPrepareBar else { return nil }
+            return RecordingSelectionBarConfiguration(
+                language: screenRecording.language,
+                capturesMicrophone: screenRecording.settings.capturesMicrophone,
+                capturesSystemAudio: screenRecording.settings.capturesSystemAudio,
+                videoQuality: screenRecording.settings.videoQuality,
+                cameraEnabled: !screenRecording.selectedCameraName.isEmpty
+            )
+        }
         screenRecording.isShortcutInUse = { [weak screenCapture] binding in
             guard let screenCapture else { return false }
             return ScreenCaptureShortcutKind.allCases.contains {
@@ -1230,6 +1261,27 @@ final class MacPilotModel: ObservableObject {
         }
         screenCapture.onRecordingSelection = { [weak self] rect, _ in
             self?.screenRecording.prepareRecording(captureRect: rect)
+        }
+        screenCapture.onRecordingSelectionAction = { [weak self] rect, _, action in
+            guard let self else { return }
+            switch action {
+            case .recordingStart:
+                self.screenRecording.start(captureRect: rect)
+            case .recordingToggleMicrophone:
+                self.screenRecording.setCapturesMicrophone(!self.screenRecording.settings.capturesMicrophone)
+            case .recordingToggleSystemAudio:
+                self.screenRecording.setCapturesSystemAudio(!self.screenRecording.settings.capturesSystemAudio)
+            case .recordingToggleQuality:
+                let next: ScreenRecordingVideoQuality = self.screenRecording.settings.videoQuality == .high ? .low : .high
+                self.screenRecording.setVideoQuality(next)
+            case .recordingToggleCamera:
+                self.screenRecording.toggleCameraOverlayForSelection()
+            case .recordingSettings:
+                self.requestedSection = .screenRecording
+                NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
+            default:
+                break
+            }
         }
         screenRecording.onCompleted = { [weak self] url in
             self?.screenCapture.showRecordingQuickAccess(url: url)
@@ -2270,6 +2322,7 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
 
 struct ContentView: View {
     @EnvironmentObject private var model: MacPilotModel
+    @Environment(\.openWindow) private var openWindow
     @State private var showingAdd = false
     @State private var editingRule: QuitRule?
     @State private var showingLaunchAdd = false
@@ -2316,6 +2369,10 @@ struct ContentView: View {
             if let s = newValue { section = s; model.requestedSection = nil }
         }
         .onAppear { if let s = model.requestedSection { section = s } }
+        .onReceive(NotificationCenter.default.publisher(for: .macPilotShowMainWindow)) { _ in
+            openWindow(id: "main")
+            DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
+        }
         .overlay {
             if isDropTarget {
                 RoundedRectangle(cornerRadius: 14)

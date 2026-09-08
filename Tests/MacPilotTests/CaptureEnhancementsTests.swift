@@ -251,5 +251,24 @@ struct CaptureEnhancementsTests {
         model.setShowsPrepareBar(true)
         #expect(model.settings.showsPrepareBar == true)
     }
-}
 
+    @Test @MainActor func recordingSelectionBarStaysInsideTheDisplay() {
+        let bounds = CGSize(width: 1920, height: 1080)
+        let barSize = RecordingSelectionActionBarView.preferredSize
+
+        let below = RecordingSelectionBarLayout.resolve(
+            selectionRect: CGRect(x: 500, y: 500, width: 640, height: 360),
+            barSize: barSize,
+            bounds: bounds
+        )
+        #expect(CGRect(origin: .zero, size: bounds).contains(below))
+
+        let nearBottom = RecordingSelectionBarLayout.resolve(
+            selectionRect: CGRect(x: 500, y: 16, width: 640, height: 180),
+            barSize: barSize,
+            bounds: bounds
+        )
+        #expect(CGRect(origin: .zero, size: bounds).contains(nearBottom))
+        #expect(nearBottom.minY >= 196)
+    }
+}
