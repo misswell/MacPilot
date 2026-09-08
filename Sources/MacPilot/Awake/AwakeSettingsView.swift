@@ -305,18 +305,13 @@ struct AwakeMenuView: View {
 
     var body: some View {
         Section {
-            Button {
-                awake.toggleManualSession()
-            } label: {
-                Label(
-                    awake.hasManualSession ? model.t("awakeStop") : model.t("awakeKeepAwake"),
-                    systemImage: awake.hasManualSession ? "stop.circle" : "sun.max.fill"
-                )
-            }
-
             if awake.isActive {
                 Text(statusText)
                     .foregroundStyle(.secondary)
+                if let expiryText {
+                    Text(expiryText)
+                        .foregroundStyle(.secondary)
+                }
                 Button(model.t("awakeStopAllManual"), action: awake.endAllManualSessions)
                     .disabled(!awake.hasManualSession)
             }
@@ -340,8 +335,6 @@ struct AwakeMenuView: View {
                 Button(model.t("awakeUnlimited")) { _ = awake.startManualSession() }
             }
 
-            Button(model.t("awakeUntilDate"), action: openSettings)
-
             Button(model.t("awakeOpenSettings"), action: openSettings)
         } header: {
             Label(model.t("awake"), systemImage: "sun.max.fill")
@@ -352,5 +345,11 @@ struct AwakeMenuView: View {
         if awake.safetyProtectionActive { return model.t("awakeSafetyActive") }
         if awake.activeSessionCount == 1 { return model.t("awakeActive") }
         return model.t("awakeMultipleSessions", awake.activeSessionCount)
+    }
+
+    private var expiryText: String? {
+        guard let date = awake.activeSessions.compactMap(\.expectedEndAt).min() else { return nil }
+        let formattedDate = date.formatted(.dateTime.month(.abbreviated).day().hour().minute().locale(model.language.locale))
+        return "\(model.t("awakeEndsAt")) \(formattedDate)"
     }
 }
