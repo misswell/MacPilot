@@ -227,7 +227,7 @@ struct AccessibilityRecoveryRequest {
 
     static func consume(
         from defaults: UserDefaults = .standard,
-        legacyDefaults: UserDefaults? = UserDefaults(suiteName: AppIdentity.legacyBundleIdentifier)
+        legacyDefaults: UserDefaults? = nil
     ) -> Bool {
         if consumeKey(from: defaults) { return true }
         guard let legacyDefaults, legacyDefaults !== defaults else { return false }
@@ -1159,22 +1159,14 @@ final class MacPilotModel: ObservableObject {
     private var lastScheduledBootSession: String?
     private var isLoading = false
     private let configurationURL: URL
-    private let legacyConfigurationURLs: [URL]
     private let configurationWriteQueue = DispatchQueue(
         label: "com.misswell.macpilot.configuration-write",
         qos: .utility
     )
 
-    private static let legacyUserDefaultsSources: [(suiteName: String, rulesKey: String, enforcementKey: String, languageKey: String)] = [
-        ("com.octoqit.app", "OctoQuit.rules.v2", "OctoQuit.enforcing", "OctoQuit.language"),
-        ("com.misswell.octopilot", "OctoPilot.rules.v2", "OctoPilot.enforcing", "OctoPilot.language"),
-        ("com.misswell.octopilot", "OctoQuit.rules.v2", "OctoQuit.enforcing", "OctoQuit.language")
-    ]
-
     init() {
         awakeTriggers = AwakeTriggerEngine(sessionManager: awake)
         configurationURL = Self.defaultConfigurationURL()
-        legacyConfigurationURLs = Self.legacyConfigurationURLs()
         isLoading = true
         load()
         isLoading = false
@@ -1957,34 +1949,10 @@ final class MacPilotModel: ObservableObject {
             return
         }
 
-        for url in legacyConfigurationURLs {
-            if let data = try? Data(contentsOf: url),
-               let configuration = try? JSONDecoder().decode(StoredConfiguration.self, from: data) {
-                apply(configuration)
-                return
-            }
-        }
-
-        // One-time migration from versions that used UserDefaults.
-        for source in Self.legacyUserDefaultsSources {
-            let defaults = UserDefaults(suiteName: source.suiteName) ?? .standard
-            var didLoad = false
-            if let enforcing = defaults.object(forKey: source.enforcementKey) as? Bool {
-                isEnforcing = enforcing
-                didLoad = true
-            }
-            if let storedLanguage = defaults.string(forKey: source.languageKey),
-               let decodedLanguage = AppLanguage(rawValue: storedLanguage) {
-                language = decodedLanguage
-                didLoad = true
-            }
-            if let data = defaults.data(forKey: source.rulesKey),
-               let saved = try? JSONDecoder().decode([QuitRule].self, from: data) {
-                rules = saved
-                didLoad = true
-            }
-            if didLoad { return }
-        }
+        // Do not probe OctoPilot/OctoQuit configuration files or preference
+        // suites during startup. macOS treats those locations as another
+        // app's data and may show a consent dialog after every signed update.
+        // Users can still import supported files through an explicit action.
     }
 
     private func apply(_ configuration: StoredConfiguration) {
@@ -2231,13 +2199,6 @@ final class MacPilotModel: ObservableObject {
         let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return applicationSupport.appendingPathComponent(AppIdentity.configurationDirectoryName, isDirectory: true)
             .appendingPathComponent("config.json")
-    }
-
-    private static func legacyConfigurationURLs() -> [URL] {
-        let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return AppIdentity.legacyConfigurationDirectoryNames.map {
-            applicationSupport.appendingPathComponent($0, isDirectory: true).appendingPathComponent("config.json")
-        }
     }
 
     private static func bootSessionIdentifier() -> String {

@@ -15,7 +15,7 @@ Do not read the extension's sandbox from the main app to collect logs: that
 could itself trigger a data-access prompt. System events use the category
 `PermissionDiagnostics`. No keys, message payloads, or database contents are logged.
 
-## Confirmed on 2026-09-08, installed version 1.1.281
+## Confirmed on 2026-09-08, installed versions 1.1.281 and 1.1.282
 
 At 22:59:47 local time, a live capture recorded an actual `AUTHREQ_PROMPTING`
 for `kTCCServiceSystemPolicyAppData`, subject `com.misswell.macpilot`, PID 15041.
@@ -28,7 +28,14 @@ The repair moves SwiftData out of the protected App Group and leaves the
 App Group only for the authenticated IPC key. The App Group identifier now
 uses the Developer Team ID prefix (`U8U443D7ZL.com.misswell.macpilot.rightclick`),
 which macOS can validate for a Developer ID app without a provisioning profile.
-The first launch copies the old store with SQLite's backup API, including WAL
-transactions, into `~/Library/Application Support/MacPilot/RightClick/`.
-If the old store cannot be read, it is preserved and the UI exposes an explicit
-retry; the app never replaces it with an empty database.
+Version 1.1.282 still probed the old App Group during its first-launch
+migration, which reproduced the prompt. The follow-up repair stops all
+protected App Group access during startup. It may copy only the unprotected
+Application Support fallback automatically; the old store remains untouched
+and can be recovered only through the explicit Settings action. The recovery
+action may ask for consent once, while ordinary launches and updates do not
+probe that path.
+
+The startup path also no longer probes OctoPilot/OctoQuit configuration files
+or preference suites. Those legacy imports must be user-initiated if they are
+needed; signed updates must not silently inspect another app's data.
