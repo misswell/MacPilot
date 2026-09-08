@@ -2340,7 +2340,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
         }
-        .navigationSplitViewStyle(.balanced)
+        .navigationSplitViewStyle(.prominentDetail)
         .sheet(isPresented: $showingAdd) { RuleEditor(rule: nil).environmentObject(model) }
         .sheet(item: $editingRule) { rule in RuleEditor(rule: rule).environmentObject(model) }
         .sheet(isPresented: $showingLaunchAdd) { LaunchRuleEditor(rule: nil).environmentObject(model) }
