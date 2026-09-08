@@ -3,6 +3,23 @@ import Testing
 @testable import MacPilotUpdaterSupport
 
 struct FinderSyncRegistrationTests {
+    @Test func refreshRemovesTheExistingExtensionBeforeAddingTheReplacement() {
+        let appURL = URL(fileURLWithPath: "/Applications/MacPilot.app")
+        let extensionPath = "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"
+
+        #expect(
+            FinderSyncRegistration.registrationArguments(
+                for: appURL,
+                registeredExtensionPaths: [extensionPath],
+                restoreEnabledElection: true
+            ) == [
+                ["-r", extensionPath],
+                ["-a", extensionPath],
+                ["-e", "use", "-i", FinderSyncRegistration.extensionBundleIdentifier]
+            ]
+        )
+    }
+
     @Test func enabledExtensionRestoresUseElectionAfterReplacement() {
         let appURL = URL(fileURLWithPath: "/Applications/MacPilot.app")
 
@@ -11,6 +28,7 @@ struct FinderSyncRegistrationTests {
                 for: appURL,
                 restoreEnabledElection: true
             ) == [
+                ["-r", "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"],
                 ["-a", "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"],
                 ["-e", "use", "-i", FinderSyncRegistration.extensionBundleIdentifier]
             ]
@@ -25,6 +43,7 @@ struct FinderSyncRegistrationTests {
                 for: appURL,
                 restoreEnabledElection: false
             ) == [
+                ["-r", "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"],
                 ["-a", "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"]
             ]
         )
@@ -40,6 +59,20 @@ struct FinderSyncRegistrationTests {
             !FinderSyncRegistration.isElectedForUse(
                 in: "     com.misswell.macpilot.finder-sync(1.1.263)"
             )
+        )
+    }
+
+    @Test func registeredPathsExtractAllDuplicateExtensionRecords() {
+        let output = """
+        +    com.misswell.macpilot.finder-sync(1.1.278)\tOLD-UUID\t/Applications/OctoPilot.app/Contents/PlugIns/FinderSync.appex
+             com.misswell.macpilot.finder-sync(1.1.279)\tNEW-UUID\t/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex
+        """
+
+        #expect(
+            FinderSyncRegistration.registeredExtensionPaths(in: output) == [
+                "/Applications/OctoPilot.app/Contents/PlugIns/FinderSync.appex",
+                "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"
+            ]
         )
     }
 }

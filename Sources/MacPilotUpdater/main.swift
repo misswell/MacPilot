@@ -94,13 +94,15 @@ private func runPlugInKit(arguments: [String]) throws -> String {
     return output
 }
 
-private func finderSyncWasEnabled() -> Bool {
-    guard let output = try? runPlugInKit(arguments: [
-        "-m", "-p", "com.apple.FinderSync",
+private func finderSyncRegistrationOutput() -> String? {
+    try? runPlugInKit(arguments: [
+        "-m", "-v", "-p", "com.apple.FinderSync",
         "-i", FinderSyncRegistration.extensionBundleIdentifier
-    ]) else {
-        return false
-    }
+    ])
+}
+
+private func finderSyncWasEnabled() -> Bool {
+    guard let output = finderSyncRegistrationOutput() else { return false }
     return FinderSyncRegistration.isElectedForUse(in: output)
 }
 
@@ -109,8 +111,11 @@ private func refreshFinderSyncRegistration(
     restoreEnabledElection: Bool,
     logURL: URL
 ) {
+    let registeredPaths = finderSyncRegistrationOutput()
+        .map(FinderSyncRegistration.registeredExtensionPaths(in:)) ?? []
     let commands = FinderSyncRegistration.registrationArguments(
         for: applicationURL,
+        registeredExtensionPaths: registeredPaths,
         restoreEnabledElection: restoreEnabledElection
     )
     var succeeded = 0
