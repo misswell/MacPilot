@@ -30,6 +30,32 @@ struct RecentRegressionTests {
         #expect(model.annotations == [.counter(1, CGPoint(x: 0.5, y: 0.5))])
     }
 
+    @Test @MainActor func textEntryUsesContentSizedFieldAtClickAnchor() throws {
+        let model = SmartAnnotationModel(initialTool: .text)
+        let window = try makeAnnotationWindow(model: model)
+        defer { window.close() }
+
+        let clickPoint = CGPoint(x: 74, y: 82)
+        click(in: window, at: clickPoint, eventNumber: 30)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let field = try #require(textFields(in: window.contentView).first)
+        let frame = field.convert(field.bounds, to: window.contentView)
+
+        #expect(frame.width < 48)
+        #expect(abs(frame.minX - clickPoint.x) <= 2.5)
+
+        field.window?.makeFirstResponder(field)
+        field.currentEditor()?.insertText("MacPilot")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let typedField = try #require(textFields(in: window.contentView).first)
+        let typedFrame = typedField.convert(typedField.bounds, to: window.contentView)
+        #expect(typedFrame.width > frame.width)
+        #expect(abs(typedFrame.minX - frame.minX) <= 2.5)
+        #expect(abs(typedFrame.maxY - frame.maxY) <= 2.5)
+    }
+
     @Test @MainActor func editedLineWidthBecomesTheNextAnnotationDefault() {
         let model = SmartAnnotationModel(initialTool: .line)
         model.append(.line(CGPoint(x: 0.1, y: 0.1), CGPoint(x: 0.3, y: 0.3)))
@@ -173,6 +199,32 @@ struct RecentRegressionTests {
             window.sendEvent(event)
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         }
+    }
+
+    @MainActor
+    private func click(in window: NSWindow, at location: CGPoint, eventNumber: Int) {
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        for (type, number) in [(NSEvent.EventType.leftMouseDown, eventNumber), (.leftMouseUp, eventNumber + 1)] {
+            guard let event = NSEvent.mouseEvent(
+                with: type,
+                location: location,
+                modifierFlags: [],
+                timestamp: timestamp,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: number,
+                clickCount: 1,
+                pressure: type == .leftMouseUp ? 0 : 1
+            ) else { continue }
+            window.sendEvent(event)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+    }
+
+    @MainActor
+    private func textFields(in view: NSView?) -> [NSTextField] {
+        guard let view else { return [] }
+        return (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap { textFields(in: $0) }
     }
 
     private func makeImage(width: Int, height: Int) -> CGImage? {

@@ -6776,6 +6776,23 @@ struct SmartAnnotationEditor: View {
         "\(Int((opacity * 100).rounded()))%"
     }
 
+    nonisolated static func inlineTextFieldSize(
+        for text: String,
+        style: SmartAnnotationStyle
+    ) -> CGSize {
+        let font = NSFont.boldSystemFont(ofSize: inlineTextFontSize(for: style))
+        let measured = (text as NSString).size(withAttributes: [.font: font])
+        let height = max(measured.height, font.ascender - font.descender + font.leading)
+        return CGSize(
+            width: max(2, ceil(measured.width) + 2),
+            height: ceil(height) + 2
+        )
+    }
+
+    nonisolated private static func inlineTextFontSize(for style: SmartAnnotationStyle) -> CGFloat {
+        18 * max(0.75, min(1.5, style.lineWidth / 3))
+    }
+
     private func annotationCanvas(in availableSize: CGSize) -> some View {
         let fitted = fittedRect(
             imageSize: CGSize(width: image.width, height: image.height),
@@ -7187,15 +7204,14 @@ struct SmartAnnotationEditor: View {
     private func inlineTextEditorCapsule(in fitted: CGRect) -> some View {
         if showingTextEntry {
             let anchor = denormalized(textPoint, in: fitted)
+            let fieldSize = Self.inlineTextFieldSize(for: pendingText, style: model.currentStyle)
             TextField(AppText.value("scText", language: language), text: $pendingText)
                 .textFieldStyle(.plain)
-                .font(.system(size: 15, weight: .medium))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(minWidth: 96, alignment: .leading)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .font(.system(size: Self.inlineTextFontSize(for: model.currentStyle), weight: .bold))
+                .frame(width: fieldSize.width, height: fieldSize.height, alignment: .leading)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: fieldSize.height * 0.4, style: .continuous))
                 .shadow(color: Color.black.opacity(0.28), radius: 3, y: 1)
-                .offset(x: anchor.x, y: anchor.y - 17)
+                .offset(x: anchor.x, y: anchor.y - fieldSize.height)
                 .focused($inlineTextFocused)
                 .onSubmit(commitInlineText)
                 .onExitCommand { cancelInlineText() }
