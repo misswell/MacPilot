@@ -90,6 +90,49 @@ struct SoftwareRelease: Equatable {
             sha256: sha256
         )
     }
+
+    /// GitHub's public API is rate-limited by the caller's shared IP. When
+    /// that limit is exhausted, the public release page still exposes the
+    /// verified asset links and digests without requiring authentication.
+    static func decodeGitHubAssetsHTML(
+        _ data: Data,
+        tagName: String,
+        architecture: AppArchitecture = .current
+    ) throws -> SoftwareRelease {
+        guard let version = SoftwareVersion(tagName) else {
+            throw SoftwareUpdateError.invalidRelease
+        }
+        let expectedNames = AppIdentity.archiveNames(
+            for: version.description,
+            architecture: architecture
+        )
+        let html = String(decoding: data, as: UTF8.self)
+        let pattern = #"href="(/[^"]+/releases/download/[^/]+/([^"/]+\.zip))"[\s\S]*?sha256:([0-9a-fA-F]{64})"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            throw SoftwareUpdateError.invalidRelease
+        }
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        let assets = regex.matches(in: html, range: range).compactMap { match -> (String, URL, String)? in
+            guard let pathRange = Range(match.range(at: 1), in: html),
+                  let nameRange = Range(match.range(at: 2), in: html),
+                  let digestRange = Range(match.range(at: 3), in: html),
+                  let url = URL(string: "https://github.com\(html[pathRange])") else {
+                return nil
+            }
+            return (String(html[nameRange]), url, String(html[digestRange]).lowercased())
+        }
+        guard let asset = expectedNames.lazy
+            .compactMap({ expectedName in assets.first { $0.0 == expectedName } })
+            .first else {
+            throw SoftwareUpdateError.missingVerifiedArchive
+        }
+        return SoftwareRelease(
+            version: version,
+            releaseNotes: "",
+            archiveURL: asset.1,
+            sha256: asset.2
+        )
+    }
 }
 
 enum SoftwareUpdateError: Error, Equatable {
@@ -216,6 +259,7 @@ enum SoftwareUpdateState: Equatable {
 @MainActor
 final class SoftwareUpdater: ObservableObject {
     static let latestReleaseURL = URL(string: "https://api.github.com/repos/\(AppIdentity.githubRepository)/releases/latest")!
+    static let latestReleasePageURL = URL(string: "https://github.com/\(AppIdentity.githubRepository)/releases/latest")!
 
     @Published private(set) var state: SoftwareUpdateState = .idle
     let currentVersion: String
@@ -269,10 +313,42 @@ final class SoftwareUpdater: ObservableObject {
         request.setValue("MacPilot/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 20
         let (data, response) = try await session.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+        guard let statusCode = (response as? HTTPURLResponse)?.statusCode else {
+            throw SoftwareUpdateError.invalidResponse
+        }
+        if statusCode == 403 {
+            return try await fetchLatestReleaseFromWeb()
+        }
+        guard statusCode == 200 else {
             throw SoftwareUpdateError.invalidResponse
         }
         return try SoftwareRelease.decodeGitHubResponse(data)
+    }
+
+    private func fetchLatestReleaseFromWeb() async throws -> SoftwareRelease {
+        var latestRequest = URLRequest(url: Self.latestReleasePageURL)
+        latestRequest.setValue("MacPilot/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        latestRequest.timeoutInterval = 20
+        let (_, latestResponse) = try await session.data(for: latestRequest)
+        guard (latestResponse as? HTTPURLResponse)?.statusCode == 200,
+              let finalURL = latestResponse.url,
+              let tagName = finalURL.pathComponents.last,
+              !tagName.isEmpty,
+              tagName != "latest" else {
+            throw SoftwareUpdateError.invalidResponse
+        }
+
+        guard let assetsURL = URL(string: "https://github.com/\(AppIdentity.githubRepository)/releases/expanded_assets/\(tagName)") else {
+            throw SoftwareUpdateError.invalidResponse
+        }
+        var assetsRequest = URLRequest(url: assetsURL)
+        assetsRequest.setValue("MacPilot/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        assetsRequest.timeoutInterval = 20
+        let (assetsData, assetsResponse) = try await session.data(for: assetsRequest)
+        guard (assetsResponse as? HTTPURLResponse)?.statusCode == 200 else {
+            throw SoftwareUpdateError.invalidResponse
+        }
+        return try SoftwareRelease.decodeGitHubAssetsHTML(assetsData, tagName: tagName)
     }
 
     private func launchInstaller(for package: VerifiedUpdatePackage) throws {

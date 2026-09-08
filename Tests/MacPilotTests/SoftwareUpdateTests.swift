@@ -113,6 +113,24 @@ struct SoftwareUpdateTests {
         #expect(release.sha256 == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
     }
 
+    @Test func decodesReleaseAssetsFromGitHubWebPage() throws {
+        let html = """
+        <a href="/misswell/MacPilot/releases/download/v1.2.3/MacPilot-1.2.3-arm64-macos.zip">
+        <span>MacPilot for Apple Silicon</span>
+        <span>sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789</span>
+        """
+
+        let release = try SoftwareRelease.decodeGitHubAssetsHTML(
+            Data(html.utf8),
+            tagName: "v1.2.3",
+            architecture: .arm64
+        )
+
+        #expect(release.version == SoftwareVersion("1.2.3"))
+        #expect(release.archiveURL.absoluteString == "https://github.com/misswell/MacPilot/releases/download/v1.2.3/MacPilot-1.2.3-arm64-macos.zip")
+        #expect(release.sha256 == "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+    }
+
     @Test func fallsBackToUniversalArchiveWhenArchitectureAssetIsMissing() throws {
         let json = """
         {
