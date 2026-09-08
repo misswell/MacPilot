@@ -2455,8 +2455,14 @@ struct ContentView: View {
     }
 
     private var rulesList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(model.t("apps"))
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.horizontal, 36)
+
         List {
-            Section {
                 ForEach(model.rules) { rule in
                     RuleRow(
                         rule: rule,
@@ -2474,17 +2480,12 @@ struct ContentView: View {
                         .listRowSeparator(.hidden)
                 }
                 .onMove(perform: model.move)
-            } header: {
-                Text(model.t("apps"))
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .textCase(nil)
-            }
         }
         .listStyle(.inset(alternatesRowBackgrounds: false))
         .scrollContentBackground(.hidden)
         .padding(.horizontal, 22)
         .padding(.bottom, 20)
+        }
     }
 
     private func acceptDrop(_ providers: [NSItemProvider]) -> Bool {
