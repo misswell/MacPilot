@@ -138,14 +138,19 @@ private enum MessageSecretStore {
     static func key() -> Data { resolvedKey }
 
     private static func loadOrCreate() -> Data {
-        guard let container = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: RightClickConstants.appGroupIdentifier
-        ) else {
+        guard let container = PermissionDiagnostics.containerURL(reason: "ipc-key") else {
+            PermissionDiagnostics.record("ipc-key.fallback reason=container-unavailable")
             return fallbackKey
         }
         let url = container.appendingPathComponent(fileName)
-        if let existing = try? Data(contentsOf: url), existing.count == keySize {
-            return existing
+        PermissionDiagnostics.record("ipc-key.read.begin")
+        do {
+            let existing = try Data(contentsOf: url)
+            PermissionDiagnostics.record("ipc-key.read.end valid=\(existing.count == keySize)")
+            if existing.count == keySize { return existing }
+        } catch {
+            let failure = error as NSError
+            PermissionDiagnostics.record("ipc-key.read.end domain=\(failure.domain) code=\(failure.code)")
         }
 
         var generated = Data(count: keySize)
@@ -155,14 +160,19 @@ private enum MessageSecretStore {
         guard status == errSecSuccess else { return fallbackKey }
 
         do {
+            PermissionDiagnostics.record("ipc-key.create.begin")
             try generated.write(to: url, options: .withoutOverwriting)
             try? FileManager.default.setAttributes(
                 [.posixPermissions: 0o600],
                 ofItemAtPath: url.path
             )
+            PermissionDiagnostics.record("ipc-key.create.end success=true")
             return generated
         } catch {
+            let failure = error as NSError
+            PermissionDiagnostics.record("ipc-key.create.end success=false domain=\(failure.domain) code=\(failure.code)")
             guard let winner = try? Data(contentsOf: url), winner.count == keySize else {
+                PermissionDiagnostics.record("ipc-key.fallback reason=read-or-create-failed")
                 return fallbackKey
             }
             return winner

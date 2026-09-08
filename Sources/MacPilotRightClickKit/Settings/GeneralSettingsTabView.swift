@@ -27,12 +27,39 @@ struct GeneralSettingsTabView: View {
     @State private var showDirImporter = false
     @State private var wrongFold = false
     @State private var showAlert = false
+    @AppStorage(RightClickStoreMigration.pendingKey) private var migrationPending = false
+    @State private var migrationRestored = false
+    @State private var migrationRunning = false
 
     let messager = Messager.shared
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                if migrationPending || migrationRestored {
+                    RightClickSettingsCard {
+                        Text(appLocalized: "Restore Previous Menu Settings")
+                            .font(.headline)
+                        if migrationRestored {
+                            Text(appLocalized: "Previous settings were copied safely. Reopen MacPilot to load them.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text(appLocalized: "Your previous settings are preserved. Migration needs access to the old store. Until restored, menu changes are temporary. Retrying may ask for permission once.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Button(AppLocalization.localized("Retry Migration")) {
+                                migrationRunning = true
+                                Task {
+                                    migrationRestored = await Task.detached {
+                                        RightClickStoreMigration.prepare(retry: true)
+                                    }.value
+                                    migrationRunning = false
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(migrationRunning)
+                        }
+                    }
+                }
                 // MARK: - 第一组：主要控制
                 RightClickSettingsCard {
                     Text(appLocalized: "Main Controls")

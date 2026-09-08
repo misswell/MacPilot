@@ -20,25 +20,15 @@ class SharedDataManager {
     )
 
     static var sharedModelContainer: ModelContainer = {
-        // 候选数据库路径：
-        // 1. App Group 共享目录 —— 只有沙盒进程（如 Finder 扩展）可写；
-        //    非沙盒主 App 访问会被 TCC 拒绝（errno 1），必须跳过。
-        // 2. 本地 Application Support —— 非沙盒主 App 使用。
-        let fallbackDirectory = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        )[0].appendingPathComponent("MacPilot/RightClick", isDirectory: true)
-
-        var candidates: [(url: URL, label: String)] = []
-        if let containerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: appGroupIdentifier
-        ), FileManager.default.isWritableFile(atPath: containerURL.path) {
-            candidates.append((containerURL.appendingPathComponent("RClickDatabase.sqlite"), "App Group"))
-        }
-        candidates.append((fallbackDirectory.appendingPathComponent("RClickDatabase.sqlite"), "Application Support"))
+        // FinderSync never reads this database. Only its IPC key needs an
+        // App Group. A failed migration uses memory, never an empty persistent
+        // replacement that would hide or overwrite the user's old store.
+        let candidates: [(url: URL, label: String)] = RightClickStoreMigration.prepare()
+            ? [(RightClickStoreMigration.destination, "Application Support v2")] : []
 
         var lastError: Error?
         for candidate in candidates {
+            PermissionDiagnostics.record("database.open.begin store=\(candidate.label)")
             do {
                 try FileManager.default.createDirectory(
                     at: candidate.url.deletingLastPathComponent(),
@@ -63,11 +53,11 @@ class SharedDataManager {
                     configurations: configuration
                 )
 
-                if candidate.label == "Application Support" {
-                    logger.warning("App Group 不可写；使用本地 right-click 数据库: \(candidate.url.path)")
-                }
+                PermissionDiagnostics.record("database.open.end store=\(candidate.label) success=true")
                 return container
             } catch {
+                let failure = error as NSError
+                PermissionDiagnostics.record("database.open.end store=\(candidate.label) success=false domain=\(failure.domain) code=\(failure.code)")
                 lastError = error
                 logger.error("ModelContainer 初始化失败（\(candidate.label)）: \(error.localizedDescription)")
             }

@@ -42,6 +42,8 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
     override init() {
         super.init()
 
+        PermissionDiagnostics.record("findersync.start")
+
         logger.info("MacPilotFinderSync launched from \(Bundle.main.bundlePath)")
 
         // 设置监听目录（全盘监听）

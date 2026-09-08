@@ -38,6 +38,7 @@ public final class RightClickMenuCoordinator {
     public init() {}
 
     public func start() {
+        PermissionDiagnostics.record("coordinator.start")
         logger.info("RightClickMenuCoordinator.start() called")
 
         // 监听菜单配置更新通知（设置页 toggle 动作时触发）

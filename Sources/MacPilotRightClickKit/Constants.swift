@@ -13,7 +13,9 @@ import Foundation
 public enum RightClickConstants {
     /// 主程序与 FinderSync 扩展共享配置的 App Group。
     /// 与资源里的 entitlements（com.apple.security.application-groups）保持一致。
-    public static let appGroupIdentifier = "group.com.misswell.macpilot.rightclick"
+    // Developer ID distributions without provisioning profiles must use the
+    // signing team's prefix for macOS to validate container ownership.
+    public static let appGroupIdentifier = "U8U443D7ZL.com.misswell.macpilot.rightclick"
 }
 
 public enum Constants {

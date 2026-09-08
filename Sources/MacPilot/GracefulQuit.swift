@@ -5,9 +5,9 @@
 //  Terminating another app with `NSRunningApplication.terminate()` delivers
 //  a quit Apple Event, and quit events are subject to the Automation
 //  privacy consent on recent macOS releases — the first terminate after a
-//  relaunch would otherwise pop the "wants to access data from other apps"
-//  dialog. Ask the system for consent with `askUser = false` first: when
-//  the event is exempt or already permitted use the graceful terminate,
+//  relaunch may otherwise request permission to control the target app.
+//  This is distinct from App Group data-access consent.
+//  Check with `askUser = false`: only when already permitted use graceful terminate,
 //  otherwise fall back to SIGTERM, which needs no privacy grant between
 //  same-user processes.
 //
@@ -15,6 +15,7 @@
 import AppKit
 import ApplicationServices
 import Darwin
+import MacPilotRightClickKit
 
 enum AutomationQuitStrategy: Equatable {
     case graceful
@@ -33,6 +34,7 @@ func automationQuitStrategy(for status: OSStatus) -> AutomationQuitStrategy {
 func quitWithoutAutomationPrompt(_ application: NSRunningApplication) {
     let pid = application.processIdentifier
     guard pid > 0 else { return }
+    PermissionDiagnostics.record("quit.preflight.begin targetPID=\(pid)")
 
     var processID = pid
     var target = AEAddressDesc()
@@ -42,6 +44,7 @@ func quitWithoutAutomationPrompt(_ application: NSRunningApplication) {
         MemoryLayout<pid_t>.size,
         &target
     ) == noErr else {
+        PermissionDiagnostics.record("quit.preflight.descriptor-failed targetPID=\(pid) strategy=signal")
         kill(pid, SIGTERM)
         return
     }
@@ -56,6 +59,7 @@ func quitWithoutAutomationPrompt(_ application: NSRunningApplication) {
         kAEQuitApplication,
         false
     )
+    PermissionDiagnostics.record("quit.preflight.end targetPID=\(pid) status=\(consent) strategy=\(automationQuitStrategy(for: consent))")
     if automationQuitStrategy(for: consent) == .graceful {
         application.terminate()
     } else {
