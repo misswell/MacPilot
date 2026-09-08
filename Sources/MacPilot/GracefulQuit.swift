@@ -16,6 +16,18 @@ import AppKit
 import ApplicationServices
 import Darwin
 
+enum AutomationQuitStrategy: Equatable {
+    case graceful
+    case signal
+}
+
+/// Only an explicit `noErr` proves that sending the quit Apple Event is safe.
+/// Every other status must avoid `NSRunningApplication.terminate()`, including
+/// statuses that are not normally expected from the permission preflight.
+func automationQuitStrategy(for status: OSStatus) -> AutomationQuitStrategy {
+    status == noErr ? .graceful : .signal
+}
+
 /// Quits `application` without surfacing the automation consent dialog.
 @MainActor
 func quitWithoutAutomationPrompt(_ application: NSRunningApplication) {
@@ -35,16 +47,16 @@ func quitWithoutAutomationPrompt(_ application: NSRunningApplication) {
     }
     defer { AEDisposeDesc(&target) }
 
-    // noErr: consent already granted; errAEEventNotHandled: this event does
-    // not require automation consent. Anything else means the graceful
-    // terminate would surface the dialog, so fall back to SIGTERM.
+    // Only noErr means the quit event is already permitted. In particular,
+    // errAEEventWouldRequireUserConsent and every unexpected status must use
+    // SIGTERM so this path can never trigger an Automation prompt.
     let consent = AEDeterminePermissionToAutomateTarget(
         &target,
         kCoreEventClass,
         kAEQuitApplication,
         false
     )
-    if consent == noErr || consent == errAEEventNotHandled {
+    if automationQuitStrategy(for: consent) == .graceful {
         application.terminate()
     } else {
         kill(pid, SIGTERM)
