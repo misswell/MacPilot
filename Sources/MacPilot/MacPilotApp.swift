@@ -4036,7 +4036,9 @@ struct SettingsView: View {
                         Text(model.t("english")).tag(AppLanguage.english)
                         Text(model.t("simplifiedChinese")).tag(AppLanguage.simplifiedChinese)
                     }
-                    .labelsHidden().pickerStyle(.segmented).frame(maxWidth: .infinity)
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 220, alignment: .leading)
                 }
                 SettingsCard {
                     Text(model.t("configFile")).font(.headline)
