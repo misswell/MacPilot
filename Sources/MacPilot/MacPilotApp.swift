@@ -3905,9 +3905,6 @@ struct MenuBarView: View {
             Button(model.t("scSmartCaptureNow")) {
                 deferCaptureAction { model.screenCapture.startSmartCapture() }
             }
-            Button(model.t("scDelayedCapture")) {
-                deferCaptureAction { model.screenCapture.startDelayedAreaCapture() }
-            }
         }
         if pictureInPicture.settings.isEnabled {
             Divider()
