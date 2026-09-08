@@ -304,7 +304,7 @@ struct AwakeMenuView: View {
     let openSettings: () -> Void
 
     var body: some View {
-        Section {
+        Group {
             if awake.isActive {
                 Text(statusText)
                     .foregroundStyle(.secondary)
@@ -336,8 +336,6 @@ struct AwakeMenuView: View {
             }
 
             Button(model.t("awakeOpenSettings"), action: openSettings)
-        } header: {
-            Label(model.t("awake"), systemImage: "sun.max.fill")
         }
     }
 
