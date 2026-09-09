@@ -99,7 +99,8 @@ struct AwakeSettingsView: View {
                             AwakeSessionDetailRow(
                                 session: session,
                                 now: context.date,
-                                triggerName: triggerName(for: session.source)
+                                triggerName: awakeTriggerName(for: session.source, triggerEngine: triggerEngine),
+                                onStop: { stopAwakeSession(session, awake: awake, triggerEngine: triggerEngine) }
                             )
                             if session.id != awake.activeSessions.last?.id {
                                 Divider()
@@ -231,6 +232,7 @@ private struct AwakeSessionDetailRow: View {
     let session: AwakeSession
     let now: Date
     let triggerName: String?
+    let onStop: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -241,6 +243,8 @@ private struct AwakeSessionDetailRow: View {
                 Text(model.t("awakeRunningFor", durationString))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Button(model.t("awakeStopSession"), role: .destructive, action: onStop)
+                    .buttonStyle(.borderless)
             }
             detailLine(model.t("awakeSource"), value: sourceDescription)
             detailLine(model.t("awakeStartedAt"), value: dateDescription(session.startedAt))
@@ -259,20 +263,7 @@ private struct AwakeSessionDetailRow: View {
     }
 
     private var sourceDescription: String {
-        switch session.source {
-        case .manual:
-            return model.t("awakeManualSource")
-        case .trigger:
-            return triggerName ?? model.t("awakeTriggerSource")
-        case .application(let bundleID):
-            return bundleID
-        case .process(let name):
-            return name
-        case .file(let url):
-            return url.lastPathComponent
-        case .automation(let identifier):
-            return identifier
-        }
+        awakeSessionSourceDescription(session.source, triggerName: triggerName, model: model)
     }
 
     private var durationString: String {
@@ -312,6 +303,15 @@ struct AwakeMenuView: View {
                     Text(expiryText)
                         .foregroundStyle(.secondary)
                 }
+                Menu(model.t("awakeActiveSessions")) {
+                    ForEach(Array(awake.activeSessions.enumerated()), id: \.element.id) { index, session in
+                        Button {
+                            stopAwakeSession(session, awake: awake, triggerEngine: triggerEngine)
+                        } label: {
+                            Text(sessionMenuDescription(session, number: index + 1))
+                        }
+                    }
+                }
                 Button(model.t("awakeStopAllManual"), action: awake.endAllManualSessions)
                     .disabled(!awake.hasManualSession)
             }
@@ -321,9 +321,9 @@ struct AwakeMenuView: View {
                 ForEach(triggerEngine.triggers) { trigger in
                     Label(
                         trigger.name,
-                        systemImage: triggerEngine.runtimeState(for: trigger.id).sessionActive ? "sun.max.fill" : "circle"
+                        systemImage: triggerStatusIcon(for: trigger.id)
                     )
-                    .foregroundStyle(trigger.enabled ? .primary : .secondary)
+                    .foregroundStyle(triggerStatusColor(for: trigger))
                 }
             }
 
@@ -349,5 +349,70 @@ struct AwakeMenuView: View {
         guard let date = awake.activeSessions.compactMap(\.expectedEndAt).min() else { return nil }
         let formattedDate = date.formatted(.dateTime.month(.abbreviated).day().hour().minute().locale(model.language.locale))
         return "\(model.t("awakeEndsAt")) \(formattedDate)"
+    }
+
+    private func sessionMenuDescription(_ session: AwakeSession, number: Int) -> String {
+        let source = awakeSessionSourceDescription(
+            session.source,
+            triggerName: awakeTriggerName(for: session.source, triggerEngine: triggerEngine),
+            model: model
+        )
+        let startedAt = session.startedAt.formatted(
+            .dateTime.hour().minute().second().locale(model.language.locale)
+        )
+        return model.t("awakeStopSessionMenuItem", number, source, startedAt)
+    }
+
+    private func triggerStatusIcon(for id: UUID) -> String {
+        let state = triggerEngine.runtimeState(for: id)
+        if state.sessionActive { return "sun.max.fill" }
+        if state.sessionStoppedByUser { return "pause.circle.fill" }
+        return "circle"
+    }
+
+    private func triggerStatusColor(for trigger: AwakeTrigger) -> Color {
+        guard trigger.enabled else { return .secondary }
+        return triggerEngine.runtimeState(for: trigger.id).sessionStoppedByUser ? .orange : .primary
+    }
+}
+
+@MainActor
+private func awakeTriggerName(for source: SessionSource, triggerEngine: AwakeTriggerEngine) -> String? {
+    guard case .trigger(let id) = source else { return nil }
+    return triggerEngine.trigger(for: id)?.name
+}
+
+@MainActor
+private func awakeSessionSourceDescription(
+    _ source: SessionSource,
+    triggerName: String?,
+    model: MacPilotModel
+) -> String {
+    switch source {
+    case .manual:
+        return model.t("awakeManualSource")
+    case .trigger:
+        return triggerName ?? model.t("awakeTriggerSource")
+    case .application(let bundleID):
+        return bundleID
+    case .process(let name):
+        return name
+    case .file(let url):
+        return url.lastPathComponent
+    case .automation(let identifier):
+        return identifier
+    }
+}
+
+@MainActor
+private func stopAwakeSession(
+    _ session: AwakeSession,
+    awake: AwakeSessionManager,
+    triggerEngine: AwakeTriggerEngine
+) {
+    if case .trigger = session.source {
+        triggerEngine.stopSession(session.id)
+    } else {
+        awake.endSession(session.id)
     }
 }

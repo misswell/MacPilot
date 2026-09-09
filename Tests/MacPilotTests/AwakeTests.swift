@@ -142,6 +142,14 @@ struct AwakeTests {
         #expect(AppText.value("awake", language: .english) == "Awake")
         #expect(AppText.value("awakeDisplaySleepAllowed", language: .simplifiedChinese) == "允许显示器休眠")
         #expect(AppText.value("awakeDisplaySleepAllowed", language: .english) == "Allow display sleep")
+        #expect(AppText.value("awakeStopSession", language: .simplifiedChinese) == "停止此 Session")
+        #expect(AppText.value("awakeStopSession", language: .english) == "Stop this session")
+        #expect(AppText.value("awakeActiveSessions", language: .simplifiedChinese) == "活跃 Session")
+        #expect(AppText.value("awakeActiveSessions", language: .english) == "Active sessions")
+        #expect(AppText.value("awakeStopSessionMenuItem", language: .simplifiedChinese, 2, "手动", "10:20:30") == "停止第 2 个 Session：手动 · 开始时间 10:20:30")
+        #expect(AppText.value("awakeStopSessionMenuItem", language: .english, 2, "Manual", "10:20:30") == "Stop session 2: Manual · Started 10:20:30")
+        #expect(AppText.value("awakeSessionStopped", language: .simplifiedChinese) == "已手动停止")
+        #expect(AppText.value("awakeSessionStopped", language: .english) == "Stopped manually")
     }
 
     @Test func settingsRoundTripPreservesBatteryProtectionAndDefaultPolicy() throws {
@@ -256,6 +264,44 @@ struct AwakeTriggerTests {
         processProvider.setState(.unknown)
         #expect(manager.activeSessionCount == 0)
         #expect(assertionController.lastState == .inactive)
+    }
+
+    @Test func stoppingTriggerSessionKeepsItStoppedUntilConditionChanges() throws {
+        let assertionController = TestAssertionController()
+        let powerProvider = TriggerTestPowerStateProvider()
+        let manager = AwakeSessionManager(assertionController: assertionController, powerStateProvider: powerProvider)
+        let processProvider = TriggerTestProcessStateProvider()
+        let engine = AwakeTriggerEngine(
+            sessionManager: manager,
+            powerStateProvider: powerProvider,
+            applicationStateProvider: TriggerTestApplicationStateProvider(),
+            processStateProvider: processProvider,
+            displayStateProvider: TriggerTestDisplayStateProvider()
+        )
+        defer {
+            engine.shutdown()
+            manager.shutdown()
+        }
+
+        let trigger = AwakeTrigger(name: "Claude", conditions: [.processRunning(name: "claude")])
+        let runningState = ProcessState(runningNames: ["claude"], runningExecutablePaths: [])
+        engine.applyLoadedTriggers([trigger])
+        processProvider.setState(runningState)
+        let sessionID = try #require(manager.activeSessions.first?.id)
+
+        engine.stopSession(sessionID)
+        #expect(manager.activeSessionCount == 0)
+        #expect(!engine.runtimeState(for: trigger.id).sessionActive)
+        #expect(engine.runtimeState(for: trigger.id).sessionStoppedByUser)
+        #expect(assertionController.lastState == .inactive)
+
+        processProvider.setState(runningState)
+        #expect(manager.activeSessionCount == 0)
+
+        processProvider.setState(.unknown)
+        #expect(!engine.runtimeState(for: trigger.id).sessionStoppedByUser)
+        processProvider.setState(runningState)
+        #expect(manager.activeSessionCount == 1)
     }
 
     @Test func powerAndDisplayTriggersUseSharedStateProviders() {

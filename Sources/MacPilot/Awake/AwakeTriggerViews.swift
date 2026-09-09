@@ -133,16 +133,16 @@ private struct AwakeTriggerRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: runtimeState.sessionActive ? "sun.max.fill" : "wand.and.stars")
-                .foregroundStyle(runtimeState.sessionActive ? .green : .secondary)
+            Image(systemName: statusIcon)
+                .foregroundStyle(statusColor)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     Text(trigger.name).font(.body.weight(.medium))
                     if runtimeState.conditionMatched {
-                        Text(model.t("awakeConditionMatched"))
+                        Text(model.t(runtimeState.sessionStoppedByUser ? "awakeSessionStopped" : "awakeConditionMatched"))
                             .font(.caption2)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(runtimeState.sessionStoppedByUser ? .orange : .green)
                     }
                 }
                 Text(conditionSummary)
@@ -162,6 +162,18 @@ private struct AwakeTriggerRow: View {
             }
             .menuStyle(.borderlessButton)
         }
+    }
+
+    private var statusIcon: String {
+        if runtimeState.sessionActive { return "sun.max.fill" }
+        if runtimeState.sessionStoppedByUser { return "pause.circle.fill" }
+        return "wand.and.stars"
+    }
+
+    private var statusColor: Color {
+        if runtimeState.sessionActive { return .green }
+        if runtimeState.sessionStoppedByUser { return .orange }
+        return .secondary
     }
 
     private var conditionSummary: String {

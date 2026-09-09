@@ -6,6 +6,7 @@ import OSLog
 struct TriggerRuntimeState: Equatable, Sendable {
     var conditionMatched = false
     var sessionActive = false
+    var sessionStoppedByUser = false
     var matchingSince: Date?
     var unmatchingSince: Date?
     var lastTransitionAt: Date?
@@ -139,6 +140,21 @@ final class AwakeTriggerEngine: ObservableObject {
         evaluateAll()
     }
 
+    /// Stops the current session without disabling the trigger. A matching
+    /// trigger stays stopped until its condition becomes inactive.
+    func stopSession(_ id: UUID) {
+        guard let session = sessionManager.activeSessions.first(where: { $0.id == id }) else { return }
+        sessionManager.endSession(id)
+        guard case .trigger(let triggerID) = session.source,
+              var runtime = runtimeStates[triggerID] else { return }
+        runtime.sessionActive = false
+        runtime.sessionStoppedByUser = true
+        runtime.matchingSince = nil
+        runtime.unmatchingSince = nil
+        runtime.lastTransitionAt = now()
+        runtimeStates[triggerID] = runtime
+    }
+
     func shutdown() {
         guard !isShutdown else { return }
         isShutdown = true
@@ -240,7 +256,10 @@ final class AwakeTriggerEngine: ObservableObject {
 
         if matches {
             runtime.unmatchingSince = nil
-            if !runtime.sessionActive && !sessionManager.safetyProtectionActive {
+            if runtime.sessionStoppedByUser {
+                runtime.matchingSince = nil
+                cancelPendingTask(for: id)
+            } else if !runtime.sessionActive && !sessionManager.safetyProtectionActive {
                 if trigger.timingPolicy.activationDelay == 0 {
                     activateTrigger(id, trigger: trigger, runtime: &runtime)
                 } else {
@@ -259,6 +278,7 @@ final class AwakeTriggerEngine: ObservableObject {
             }
         } else {
             runtime.matchingSince = nil
+            runtime.sessionStoppedByUser = false
             if runtime.sessionActive {
                 if trigger.timingPolicy.deactivationDelay == 0 {
                     deactivateTrigger(id, runtime: &runtime)
