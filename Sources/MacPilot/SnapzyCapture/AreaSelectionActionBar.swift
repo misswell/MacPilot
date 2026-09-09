@@ -49,6 +49,7 @@ final class AreaSelectionActionBar: NSView {
   private var shapeSegmented: NSSegmentedControl?
   private var fillCheckbox: NSButton?
   private var colorWell: NSColorWell?
+  private var optionsCollapseButton: NSButton?
   private var swatchButtons: [NSButton] = []
   private var toolDisplayButtons: [SmartAnnotationTool: NSButton] = [:]
   private var groupMainButtons: [ToolGroup: NSButton] = [:]
@@ -56,6 +57,7 @@ final class AreaSelectionActionBar: NSView {
   /// annotation on the canvas swaps `model.tool` outside the bar, so
   /// `syncWithModel` rebuilds the row whenever this drifts.
   private var optionsRowTool: SmartAnnotationTool?
+  private var optionsRowCollapsed = false
 
   private enum ToolGroup: CaseIterable {
     case shape
@@ -112,7 +114,8 @@ final class AreaSelectionActionBar: NSView {
 
     rootStack.orientation = .vertical
     rootStack.alignment = .leading
-    rootStack.spacing = 4
+    rootStack.spacing = 8
+    rootStack.detachesHiddenViews = true
     rootStack.edgeInsets = NSEdgeInsets(top: 5, left: 8, bottom: 5, right: 8)
     rootStack.translatesAutoresizingMaskIntoConstraints = false
     addSubview(rootStack)
@@ -133,8 +136,8 @@ final class AreaSelectionActionBar: NSView {
 
   override var intrinsicContentSize: NSSize {
     let optionsVisible = !(optionsRow?.isHidden ?? true)
-    let height: CGFloat = optionsVisible
-      ? Self.primaryRowHeight + 4 + Self.optionsRowHeight
+    let contentHeight: CGFloat = optionsVisible
+      ? Self.primaryRowHeight + Self.rowSpacing + Self.optionsRowHeight
       : Self.primaryRowHeight
     // 宽度跟随实际内容：空闲时橡皮/撤销隐藏，标注会话中它们出现，
     // 固定宽度会导致标注模式下内容溢出、空闲时右侧留白。
@@ -142,11 +145,15 @@ final class AreaSelectionActionBar: NSView {
     let primaryWidth = primaryRow?.fittingSize.width ?? 0
     let optionsWidth = optionsVisible ? (optionsRow?.fittingSize.width ?? 0) : 0
     let width = max(primaryWidth, optionsWidth) + insets.left + insets.right
-    return NSSize(width: max(240, width), height: height)
+    return NSSize(
+      width: max(240, width),
+      height: contentHeight + insets.top + insets.bottom
+    )
   }
 
   private static let primaryRowHeight: CGFloat = 38
-  private static let optionsRowHeight: CGFloat = 34
+  private static let rowSpacing: CGFloat = 8
+  private static let optionsRowHeight: CGFloat = 36
 
   // MARK: - Annotation Session Binding
 
@@ -360,7 +367,9 @@ final class AreaSelectionActionBar: NSView {
     widthValueLabel = nil
     widthSlider = nil
     colorWell = nil
+    optionsCollapseButton = nil
     swatchButtons.removeAll()
+    optionsRowCollapsed = false
 
     guard let model = annotationBinding?.model else {
       optionsRowTool = nil
@@ -373,7 +382,7 @@ final class AreaSelectionActionBar: NSView {
     row.orientation = .horizontal
     row.alignment = .centerY
     row.spacing = 8
-    row.edgeInsets = NSEdgeInsets(top: 2, left: 22, bottom: 2, right: 8)
+    row.edgeInsets = NSEdgeInsets(top: 4, left: 22, bottom: 4, right: 8)
 
     switch model.tool {
     case .rectangle, .filledRectangle, .ellipse:
@@ -406,11 +415,33 @@ final class AreaSelectionActionBar: NSView {
       break
     }
 
+    if !row.arrangedSubviews.isEmpty {
+      let collapseButton = makeOptionsCollapseButton()
+      row.addArrangedSubview(collapseButton)
+      optionsCollapseButton = collapseButton
+    }
     row.translatesAutoresizingMaskIntoConstraints = false
-    row.isHidden = row.arrangedSubviews.isEmpty
+    row.isHidden = row.arrangedSubviews.isEmpty || optionsRowCollapsed
     optionsRow = row
     rootStack.addArrangedSubview(row)
     invalidateIntrinsicContentSize()
+  }
+
+  private func makeOptionsCollapseButton() -> NSButton {
+    let symbol = NSImage(
+      systemSymbolName: "xmark",
+      accessibilityDescription: AppText.value("scAnnotationHideOptions", language: .system)
+    )?.withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+    let button = NSButton(
+      image: symbol ?? NSImage(),
+      target: self,
+      action: #selector(hideOptionsPressed(_:))
+    )
+    configureBarButton(button, tooltipKey: "scAnnotationHideOptions")
+    button.contentTintColor = NSColor.white.withAlphaComponent(0.72)
+    button.widthAnchor.constraint(equalToConstant: 24).isActive = true
+    button.heightAnchor.constraint(equalToConstant: 24).isActive = true
+    return button
   }
 
   private func makeShapeSwitch(_ model: SmartAnnotationModel) -> NSView {
@@ -728,9 +759,13 @@ final class AreaSelectionActionBar: NSView {
 
   private func selectTool(_ tool: SmartAnnotationTool) {
     if let model = annotationBinding?.model {
+      let wasAlreadySelected = model.tool == tool
       model.selectTool(tool)
       // The tool-drift check inside syncWithModel rebuilds the options row.
       syncWithModel()
+      if wasAlreadySelected {
+        toggleOptionsRow()
+      }
       return
     }
     guard let mapped = Self.areaSelectionTool(for: tool) else { return }
@@ -808,6 +843,22 @@ final class AreaSelectionActionBar: NSView {
   }
 
   // MARK: - Options Row Handlers
+
+  @objc private func hideOptionsPressed(_ sender: NSButton) {
+    guard let optionsRow, optionsCollapseButton != nil else { return }
+    optionsRowCollapsed = true
+    optionsRow.isHidden = true
+    invalidateIntrinsicContentSize()
+    layoutDidChange?()
+  }
+
+  private func toggleOptionsRow() {
+    guard let optionsRow, optionsCollapseButton != nil else { return }
+    optionsRowCollapsed.toggle()
+    optionsRow.isHidden = optionsRowCollapsed
+    invalidateIntrinsicContentSize()
+    layoutDidChange?()
+  }
 
   @objc private func shapeSegmentChanged(_ sender: NSSegmentedControl) {
     guard let model = annotationBinding?.model else { return }

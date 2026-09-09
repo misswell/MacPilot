@@ -956,6 +956,51 @@ struct SnapzyCaptureTests {
         #expect(startedSessions.isEmpty)
     }
 
+    @Test @MainActor func annotationOptionsRowCanBeCollapsedAndReopened() throws {
+        _ = NSApplication.shared
+        let bar = AreaSelectionActionBar { _ in }
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        bar.bindAnnotationSession(.init(model: model) { _ in })
+
+        func buttons(in view: NSView) -> [NSButton] {
+            view.subviews.flatMap { subview in
+                (subview as? NSButton).map { [$0] } ?? buttons(in: subview)
+            }
+        }
+
+        let rootStack = try #require(bar.subviews.compactMap { $0 as? NSStackView }.first)
+        let optionsRow = try #require(rootStack.arrangedSubviews.last)
+        let collapseButton = try #require(
+            buttons(in: optionsRow).first {
+                $0.toolTip == AppText.value("scAnnotationHideOptions", language: .system)
+            }
+        )
+        #expect(!optionsRow.isHidden)
+
+        let expandedHeight = bar.intrinsicContentSize.height
+        collapseButton.performClick(nil)
+        #expect(optionsRow.isHidden)
+        let collapsedHeight = bar.intrinsicContentSize.height
+        #expect(expandedHeight - collapsedHeight >= 44)
+
+        let rectangleButton = try #require(
+            buttons(in: bar).first {
+                $0.toolTip == AppText.value("scAnnotationRectangle", language: .system)
+            }
+        )
+        rectangleButton.performClick(nil)
+        #expect(!optionsRow.isHidden)
+    }
+
+    @Test func emptyTextEntryFieldHasAnEditableTarget() {
+        let size = SmartAnnotationEditor.inlineTextFieldSize(
+            for: "",
+            style: .default(for: .text)
+        )
+        #expect(size.width >= 40)
+        #expect(size.height >= 28)
+    }
+
     @Test @MainActor func bindingTheSessionRevealsTheEraserAndUndoControls() throws {
         let bar = AreaSelectionActionBar { _ in }
 

@@ -6784,8 +6784,10 @@ struct SmartAnnotationEditor: View {
         let measured = (text as NSString).size(withAttributes: [.font: font])
         let height = max(measured.height, font.ascender - font.descender + font.leading)
         return CGSize(
-            width: max(2, ceil(measured.width) + 2),
-            height: ceil(height) + 2
+            // Keep an empty field large enough to receive the first click;
+            // once text is entered it grows with the measured content.
+            width: max(40, ceil(measured.width) + 12),
+            height: max(28, ceil(height) + 6)
         )
     }
 
@@ -7134,17 +7136,16 @@ struct SmartAnnotationEditor: View {
                 rollback: model.undo
             )
         case .text:
-            return commit {
-                textPoint = normalized(end, in: fitted)
-                pendingTextTool = .text
-                showingTextEntry = true
-            }
+            // Text needs to become editable immediately. Delaying this click
+            // for the canvas double-click-to-copy gesture leaves the user
+            // typing before a field exists, so every character is lost.
+            textPoint = normalized(end, in: fitted)
+            pendingTextTool = .text
+            showingTextEntry = true
         case .watermark:
-            return commit {
-                textPoint = normalized(end, in: fitted)
-                pendingTextTool = .watermark
-                showingTextEntry = true
-            }
+            textPoint = normalized(end, in: fitted)
+            pendingTextTool = .watermark
+            showingTextEntry = true
         }
         return nil
     }
@@ -7215,10 +7216,10 @@ struct SmartAnnotationEditor: View {
                 .focused($inlineTextFocused)
                 .onSubmit(commitInlineText)
                 .onExitCommand { cancelInlineText() }
-                .onChange(of: showingTextEntry) { _, isActive in
-                    guard isActive else { return }
+                .onAppear {
                     pendingText = ""
                     DispatchQueue.main.async {
+                        guard showingTextEntry else { return }
                         inlineTextFocused = true
                     }
                 }
