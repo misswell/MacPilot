@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md)
 
-A native macOS menu-bar app that helps you manage distracting apps automatically. Each app can have independent rules to:
+A native macOS menu-bar app with a tiny footprint and very low memory use while it stays in the menu bar. MacPilot helps you manage distracting apps automatically. Each app can have independent rules to:
 
 - hide after a period of inactivity;
 - close its closable windows after inactivity while leaving its process running;
@@ -14,6 +14,8 @@ It can also launch selected apps after a per-app delay following login. Each lau
 Rules, launch plans, and preferences persist in `~/Library/Application Support/MacPilot/config.json`. This file is independent from the app bundle, so updating or replacing `MacPilot.app` preserves your configuration. On first launch, MacPilot automatically migrates compatible configuration from the previous version without modifying the original file. You can also see and reveal the exact path in Settings.
 
 You can pick a running app or browse for an `.app` bundle, reorder rules, pause enforcement globally, and choose Start at Login from the menu-bar menu.
+
+MacPilot is intentionally lightweight: it has a very small app footprint, uses very little memory while running, ships without a bundled cross-platform runtime, and lets you disable each feature independently.
 
 ## BLE Unlock
 
@@ -85,7 +87,7 @@ MacPilot includes a Finder Sync extension that adds configurable actions to Find
 
 ## Performance and Resource Usage
 
-MacPilot is built with native Swift/SwiftUI and macOS system APIs, without a bundled cross-platform runtime. Its long-lived data paths are designed to keep memory bounded:
+MacPilot's core design choice is lightweight residency: a very small app footprint and very low memory use while it runs. It is built with native Swift/SwiftUI and macOS system APIs, without a bundled cross-platform runtime. Its long-lived data paths are designed to keep memory bounded:
 
 - Clipboard images and content larger than 64 KB are stored as files under Application Support. The history model keeps only type, filename, and size metadata, and reads the content on demand.
 - Screenshot copies use a file-backed, lazy pasteboard provider. PNG data is generated only when another app requests it, then released after the request.
