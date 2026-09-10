@@ -456,7 +456,10 @@ enum AppText {
         "awakeBundleID": "Bundle ID", "awakeProcessName": "进程名称", "awakeExecutablePath": "可执行文件路径",
         "awakeSystemSleepToggle": "阻止系统休眠", "awakeDisplaySleepToggle": "阻止显示器休眠",
         "awakeActivationDelay": "启动延迟（秒）", "awakeDeactivationDelay": "停止延迟（秒）",
-        "awakeConditionMatched": "条件已满足", "awakeSessionStopped": "已手动停止", "awakeConditionNotMatched": "条件未满足"
+        "awakeConditionMatched": "条件已满足", "awakeSessionStopped": "已手动停止", "awakeConditionNotMatched": "条件未满足",
+        "awakeDefaultSession": "默认会话", "awakeDefaultSessionHint": "自动开启的会话会使用这里的默认时长设置。",
+        "awakeDefaultDuration": "默认时长", "awakeAutoStartOnLaunch": "App 启动时自动开启默认会话",
+        "awakeAutoStartOnWake": "从睡眠唤醒时自动开启默认会话", "awakeStartDefaultSession": "开始默认会话"
         , "launch": "启动", "launchSubtitle": "在登录后按设定延迟启动应用。", "launchApps": "启动应用",
         "addLaunchApp": "添加启动应用", "addLaunchRule": "添加启动规则", "editLaunchRule": "编辑启动规则",
         "launchRuleDetail": "选择一个应用，并设置从 MacPilot 登录启动开始计算的延迟秒数。",
@@ -811,6 +814,9 @@ enum AppText {
             "awakeSystemSleepToggle": "Prevent system sleep", "awakeDisplaySleepToggle": "Prevent display sleep",
             "awakeActivationDelay": "Activation delay (seconds)", "awakeDeactivationDelay": "Deactivation delay (seconds)",
             "awakeConditionMatched": "Condition matched", "awakeSessionStopped": "Stopped manually", "awakeConditionNotMatched": "Condition not matched",
+            "awakeDefaultSession": "Default Session", "awakeDefaultSessionHint": "Sessions that start automatically use the default duration here.",
+            "awakeDefaultDuration": "Default duration", "awakeAutoStartOnLaunch": "Start the default session when the app launches",
+            "awakeAutoStartOnWake": "Start the default session when waking from sleep", "awakeStartDefaultSession": "Start Default Session",
             "launch": "Launch", "launchSubtitle": "Launch apps after their configured delay following login.", "launchApps": "LAUNCH APPS",
             "addLaunchApp": "Add launch app", "addLaunchRule": "Add launch rule", "editLaunchRule": "Edit launch rule",
             "launchRuleDetail": "Choose an app and set its delay in seconds from when MacPilot starts at login.",
@@ -1188,6 +1194,7 @@ final class MacPilotModel: ObservableObject {
         isLoading = true
         load()
         isLoading = false
+        awake.startDefaultSessionOnLaunchIfEnabled()
         save()
         refreshLoginItemState()
         startObservingWorkspace()

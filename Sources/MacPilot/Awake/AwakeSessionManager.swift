@@ -84,6 +84,36 @@ final class AwakeSessionManager: ObservableObject {
         startManualSession(endCondition: .date(date))
     }
 
+    /// Starts the default session: the persisted default duration (or
+    /// manual end when unlimited) with the shared default policy.
+    @discardableResult
+    func startDefaultSession() -> UUID {
+        startSession(
+            source: .manual,
+            endCondition: settings.defaultSession.endCondition,
+            policy: settings.defaultPolicy
+        )
+    }
+
+    /// Called once by `MacPilotModel` after the stored configuration loads.
+    /// Auto-start only fills an idle state, so repeated calls are no-ops.
+    @discardableResult
+    func startDefaultSessionOnLaunchIfEnabled() -> UUID? {
+        guard settings.defaultSession.autoStartOnLaunch, activeSessions.isEmpty else { return nil }
+        logger.notice("Auto-starting default session on launch")
+        return startDefaultSession()
+    }
+
+    /// Runs when the Mac wakes from sleep: stale sessions expire first, then
+    /// the default session starts only when nothing else keeps the Mac awake.
+    func handleSystemWake() {
+        guard !isShutdown else { return }
+        refreshPowerState()
+        guard settings.defaultSession.autoStartOnWake, activeSessions.isEmpty else { return }
+        logger.notice("Auto-starting default session after system wake")
+        _ = startDefaultSession()
+    }
+
     func toggleManualSession() {
         if hasManualSession {
             endAllManualSessions()
@@ -280,7 +310,7 @@ final class AwakeSessionManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.refreshPowerState()
+                self?.handleSystemWake()
             }
         })
 

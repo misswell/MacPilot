@@ -168,6 +168,119 @@ struct AwakeTests {
 
         #expect(decoded == settings)
     }
+
+    @Test func defaultSessionSettingsDecodeWithBackwardCompatibleDefaults() throws {
+        let decoded = try JSONDecoder().decode(AwakeDefaultSessionSettings.self, from: Data("{}".utf8))
+        #expect(decoded == .standard)
+
+        let settings = AwakeSettings(
+            defaultSession: AwakeDefaultSessionSettings(durationMinutes: 0, autoStartOnLaunch: true, autoStartOnWake: true)
+        )
+        let roundTrip = try JSONDecoder().decode(AwakeSettings.self, from: JSONEncoder().encode(settings))
+        #expect(roundTrip == settings)
+    }
+
+    @Test func defaultSessionUsesConfiguredDurationOrRunsUntilManuallyEnded() {
+        var currentDate = Date(timeIntervalSince1970: 30_000)
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: TestPowerStateProvider(),
+            now: { currentDate }
+        )
+        defer { manager.shutdown() }
+
+        var settings = manager.settings
+        settings.defaultSession.durationMinutes = 30
+        manager.applyLoadedSettings(settings)
+
+        let timedID = manager.startDefaultSession()
+        #expect(manager.sessions.first(where: { $0.id == timedID })?.expectedEndAt == currentDate.addingTimeInterval(1_800))
+
+        settings.defaultSession.durationMinutes = 0
+        manager.applyLoadedSettings(settings)
+        let unlimitedID = manager.startDefaultSession()
+        #expect(manager.sessions.first(where: { $0.id == unlimitedID })?.expectedEndAt == nil)
+    }
+
+    @Test func launchAutoStartStartsOneDefaultSessionOnlyWhenEnabled() {
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: TestPowerStateProvider()
+        )
+        defer { manager.shutdown() }
+
+        #expect(manager.startDefaultSessionOnLaunchIfEnabled() == nil)
+
+        var settings = manager.settings
+        settings.defaultSession.autoStartOnLaunch = true
+        settings.defaultSession.durationMinutes = 45
+        manager.applyLoadedSettings(settings)
+
+        #expect(manager.startDefaultSessionOnLaunchIfEnabled() != nil)
+        #expect(manager.activeSessionCount == 1)
+        #expect(manager.startDefaultSessionOnLaunchIfEnabled() == nil)
+        #expect(manager.activeSessionCount == 1)
+    }
+
+    @Test func wakeAutoStartsDefaultSessionOnlyWhenIdleAndEnabled() {
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: TestPowerStateProvider()
+        )
+        defer { manager.shutdown() }
+
+        var settings = manager.settings
+        settings.defaultSession.autoStartOnWake = true
+        settings.defaultSession.durationMinutes = 30
+        manager.applyLoadedSettings(settings)
+
+        manager.handleSystemWake()
+        #expect(manager.activeSessionCount == 1)
+
+        manager.handleSystemWake()
+        #expect(manager.activeSessionCount == 1)
+
+        settings.defaultSession.autoStartOnWake = false
+        manager.endAllSessions()
+        manager.applyLoadedSettings(settings)
+        manager.handleSystemWake()
+        #expect(manager.activeSessionCount == 0)
+    }
+
+    @Test func wakeExpiresStaleSessionsBeforeAutoStartingTheDefaultSession() {
+        var currentDate = Date(timeIntervalSince1970: 40_000)
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: TestPowerStateProvider(),
+            now: { currentDate }
+        )
+        defer { manager.shutdown() }
+
+        var settings = manager.settings
+        settings.defaultSession.autoStartOnWake = true
+        settings.defaultSession.durationMinutes = 60
+        manager.applyLoadedSettings(settings)
+
+        _ = manager.startManualSession(duration: 30 * 60)
+        currentDate = currentDate.addingTimeInterval(31 * 60)
+        manager.handleSystemWake()
+
+        #expect(manager.activeSessionCount == 1)
+        #expect(manager.activeSessions.first?.endCondition == .duration(60 * 60))
+    }
+
+    @Test func appTextLocalizesDefaultSessionLabels() {
+        #expect(AppText.value("awakeDefaultSession", language: .simplifiedChinese) == "默认会话")
+        #expect(AppText.value("awakeDefaultSession", language: .english) == "Default Session")
+        #expect(AppText.value("awakeDefaultDuration", language: .simplifiedChinese) == "默认时长")
+        #expect(AppText.value("awakeDefaultDuration", language: .english) == "Default duration")
+        #expect(AppText.value("awakeAutoStartOnLaunch", language: .simplifiedChinese) == "App 启动时自动开启默认会话")
+        #expect(AppText.value("awakeAutoStartOnLaunch", language: .english) == "Start the default session when the app launches")
+        #expect(AppText.value("awakeAutoStartOnWake", language: .simplifiedChinese) == "从睡眠唤醒时自动开启默认会话")
+        #expect(AppText.value("awakeAutoStartOnWake", language: .english) == "Start the default session when waking from sleep")
+        #expect(AppText.value("awakeStartDefaultSession", language: .simplifiedChinese) == "开始默认会话")
+        #expect(AppText.value("awakeStartDefaultSession", language: .english) == "Start Default Session")
+    }
 }
 
 @MainActor

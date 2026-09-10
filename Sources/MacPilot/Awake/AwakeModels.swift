@@ -293,22 +293,70 @@ struct AwakeSafetyPolicy: Codable, Equatable, Sendable {
     }
 }
 
+/// Settings for the default Awake session that can start automatically
+/// when the app launches or when the Mac wakes from sleep.
+struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
+    /// 0 means the session runs until it is ended manually.
+    var durationMinutes: Int
+    var autoStartOnLaunch: Bool
+    var autoStartOnWake: Bool
+
+    static let standard = AwakeDefaultSessionSettings(
+        durationMinutes: 60,
+        autoStartOnLaunch: false,
+        autoStartOnWake: false
+    )
+
+    init(durationMinutes: Int = 60, autoStartOnLaunch: Bool = false, autoStartOnWake: Bool = false) {
+        self.durationMinutes = max(0, durationMinutes)
+        self.autoStartOnLaunch = autoStartOnLaunch
+        self.autoStartOnWake = autoStartOnWake
+    }
+
+    var endCondition: SessionEndCondition {
+        durationMinutes > 0 ? .duration(TimeInterval(durationMinutes) * 60) : .manual
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case durationMinutes
+        case autoStartOnLaunch
+        case autoStartOnWake
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            durationMinutes: try container.decodeIfPresent(Int.self, forKey: .durationMinutes) ?? 60,
+            autoStartOnLaunch: try container.decodeIfPresent(Bool.self, forKey: .autoStartOnLaunch) ?? false,
+            autoStartOnWake: try container.decodeIfPresent(Bool.self, forKey: .autoStartOnWake) ?? false
+        )
+    }
+}
+
 struct AwakeSettings: Codable, Equatable, Sendable {
     var defaultPolicy: SessionPolicy
+    var defaultSession: AwakeDefaultSessionSettings
     var safetyPolicy: AwakeSafetyPolicy
 
     static let standard = AwakeSettings(
         defaultPolicy: .standard,
+        defaultSession: .standard,
         safetyPolicy: .standard
     )
 
-    init(defaultPolicy: SessionPolicy = .standard, safetyPolicy: AwakeSafetyPolicy = .standard) {
+    init(
+        defaultPolicy: SessionPolicy = .standard,
+        defaultSession: AwakeDefaultSessionSettings = .standard,
+        safetyPolicy: AwakeSafetyPolicy = .standard
+    ) {
         self.defaultPolicy = defaultPolicy
+        self.defaultSession = defaultSession
         self.safetyPolicy = safetyPolicy
     }
 
     private enum CodingKeys: String, CodingKey {
         case defaultPolicy
+        case defaultSession
         case safetyPolicy
     }
 
@@ -316,6 +364,7 @@ struct AwakeSettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             defaultPolicy: try container.decodeIfPresent(SessionPolicy.self, forKey: .defaultPolicy) ?? .standard,
+            defaultSession: try container.decodeIfPresent(AwakeDefaultSessionSettings.self, forKey: .defaultSession) ?? .standard,
             safetyPolicy: try container.decodeIfPresent(AwakeSafetyPolicy.self, forKey: .safetyPolicy) ?? .standard
         )
     }

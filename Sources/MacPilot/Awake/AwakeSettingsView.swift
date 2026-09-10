@@ -12,6 +12,28 @@ private enum AwakeSessionPreset: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+private enum AwakeDefaultDurationPreset: String, CaseIterable, Identifiable {
+    case unlimited
+    case thirtyMinutes
+    case oneHour
+    case twoHours
+    case fourHours
+    case customDuration
+
+    var id: String { rawValue }
+
+    var minutes: Int? {
+        switch self {
+        case .unlimited: 0
+        case .thirtyMinutes: 30
+        case .oneHour: 60
+        case .twoHours: 120
+        case .fourHours: 240
+        case .customDuration: nil
+        }
+    }
+}
+
 struct AwakeSettingsView: View {
     @EnvironmentObject private var model: MacPilotModel
     @ObservedObject var awake: AwakeSessionManager
@@ -31,6 +53,7 @@ struct AwakeSettingsView: View {
 
                 sessionControlCard
                 sessionDetailsCard
+                defaultSessionCard
                 AwakeTriggerListView(triggerEngine: triggerEngine)
                 batteryProtectionCard
                 powerStateCard
@@ -118,6 +141,42 @@ struct AwakeSettingsView: View {
         }
     }
 
+    private var defaultSessionCard: some View {
+        SettingsCard {
+            Text(model.t("awakeDefaultSession")).font(.headline)
+            Text(model.t("awakeDefaultSessionHint"))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Picker(model.t("awakeDefaultDuration"), selection: defaultDurationBinding) {
+                Text(model.t("awakeUnlimited")).tag(AwakeDefaultDurationPreset.unlimited)
+                Text(model.t("awake30Minutes")).tag(AwakeDefaultDurationPreset.thirtyMinutes)
+                Text(model.t("awakeOneHour")).tag(AwakeDefaultDurationPreset.oneHour)
+                Text(model.t("awakeTwoHours")).tag(AwakeDefaultDurationPreset.twoHours)
+                Text(model.t("awakeFourHours")).tag(AwakeDefaultDurationPreset.fourHours)
+                Text(model.t("awakeCustomDuration")).tag(AwakeDefaultDurationPreset.customDuration)
+            }
+
+            if defaultDurationPreset == .customDuration {
+                HStack {
+                    Text(model.t("awakeCustomDuration"))
+                    Spacer()
+                    TextField(model.t("awakeCustomDuration"), value: customDurationMinutesBinding, format: .number)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 90)
+                }
+            }
+
+            Toggle(model.t("awakeAutoStartOnLaunch"), isOn: autoStartOnLaunchBinding)
+                .toggleStyle(.switch)
+            Toggle(model.t("awakeAutoStartOnWake"), isOn: autoStartOnWakeBinding)
+                .toggleStyle(.switch)
+
+            Button(model.t("awakeStartDefaultSession")) { _ = awake.startDefaultSession() }
+                .macPilotProminentButtonStyle()
+        }
+    }
+
     private var batteryProtectionCard: some View {
         SettingsCard {
             Text(model.t("awakeBatteryProtection")).font(.headline)
@@ -164,6 +223,54 @@ struct AwakeSettingsView: View {
             get: { !awake.settings.defaultPolicy.preventDisplaySleep },
             set: { value in
                 awake.updateSettings { $0.defaultPolicy.preventDisplaySleep = !value }
+            }
+        )
+    }
+
+    private var defaultDurationPreset: AwakeDefaultDurationPreset {
+        switch awake.settings.defaultSession.durationMinutes {
+        case 0: .unlimited
+        case 30: .thirtyMinutes
+        case 60: .oneHour
+        case 120: .twoHours
+        case 240: .fourHours
+        default: .customDuration
+        }
+    }
+
+    private var defaultDurationBinding: Binding<AwakeDefaultDurationPreset> {
+        Binding(
+            get: { defaultDurationPreset },
+            set: { preset in
+                guard let minutes = preset.minutes else { return }
+                awake.updateSettings { $0.defaultSession.durationMinutes = minutes }
+            }
+        )
+    }
+
+    private var customDurationMinutesBinding: Binding<Int> {
+        Binding(
+            get: { max(1, awake.settings.defaultSession.durationMinutes) },
+            set: { value in
+                awake.updateSettings { $0.defaultSession.durationMinutes = max(1, value) }
+            }
+        )
+    }
+
+    private var autoStartOnLaunchBinding: Binding<Bool> {
+        Binding(
+            get: { awake.settings.defaultSession.autoStartOnLaunch },
+            set: { value in
+                awake.updateSettings { $0.defaultSession.autoStartOnLaunch = value }
+            }
+        )
+    }
+
+    private var autoStartOnWakeBinding: Binding<Bool> {
+        Binding(
+            get: { awake.settings.defaultSession.autoStartOnWake },
+            set: { value in
+                awake.updateSettings { $0.defaultSession.autoStartOnWake = value }
             }
         )
     }
