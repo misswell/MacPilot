@@ -33,9 +33,27 @@ struct MacPilotApp: App {
                 clipboard: model.clipboard
             ).environmentObject(model)
         } label: {
-            Image(systemName: model.awake.isActive ? "sun.max.fill" : (model.isEnforcing ? "timer" : "pause.circle"))
+            MenuBarIconView(awake: model.awake, model: model)
         }
         .menuBarExtraStyle(.menu)
+    }
+}
+
+enum MenuBarIcon {
+    static func systemImage(awakeActive: Bool, enforcing: Bool) -> String {
+        awakeActive ? "sun.max.fill" : (enforcing ? "timer" : "pause.circle")
+    }
+}
+
+private struct MenuBarIconView: View {
+    @ObservedObject var awake: AwakeSessionManager
+    @ObservedObject var model: MacPilotModel
+
+    var body: some View {
+        Image(systemName: MenuBarIcon.systemImage(
+            awakeActive: awake.isActive,
+            enforcing: model.isEnforcing
+        ))
     }
 }
 

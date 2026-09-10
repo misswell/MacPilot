@@ -4,6 +4,12 @@ import Testing
 
 @MainActor
 struct AwakeTests {
+    @Test func menuBarIconReflectsAwakeSessionState() {
+        #expect(MenuBarIcon.systemImage(awakeActive: true, enforcing: false) == "sun.max.fill")
+        #expect(MenuBarIcon.systemImage(awakeActive: false, enforcing: true) == "timer")
+        #expect(MenuBarIcon.systemImage(awakeActive: false, enforcing: false) == "pause.circle")
+    }
+
     @Test func standardPolicyAllowsDisplaySleepWhileBlockingSystemSleep() {
         #expect(SessionPolicy.standard.preventSystemSleep)
         #expect(!SessionPolicy.standard.preventDisplaySleep)
