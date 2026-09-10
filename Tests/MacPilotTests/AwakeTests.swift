@@ -310,7 +310,7 @@ struct AwakeTests {
         #expect(manager.activeSessions.isEmpty)
 
         // Pausing during sleep resumes the countdown after wake.
-        settings.defaultSession.endCalculation = .pausesDuringSleep
+        settings.defaultPolicy.endCalculation = .pausesDuringSleep
         manager.applyLoadedSettings(settings)
         let pausedID = manager.startDefaultSession()
         let endBeforeSleep = manager.sessions.first(where: { $0.id == pausedID })?.expectedEndAt
@@ -325,26 +325,27 @@ struct AwakeTests {
         )
     }
 
-    @Test func forcedSleepEndsAllSessionsOnlyWhenEnabled() {
+    @Test func forcedSleepEndsOnlyTheSessionsOptedIn() {
         let manager = AwakeSessionManager(
             assertionController: TestAssertionController(),
             powerStateProvider: TestPowerStateProvider()
         )
         defer { manager.shutdown() }
 
-        var settings = manager.settings
-        settings.defaultSession.durationMinutes = 0
-        manager.applyLoadedSettings(settings)
-
-        _ = manager.startDefaultSession()
+        _ = manager.startManualSession(endCondition: .duration(3_600))
         manager.handleSystemSleep()
         #expect(manager.activeSessionCount == 1)
 
-        settings.defaultSession.endOnForcedSleep = true
-        manager.applyLoadedSettings(settings)
-        _ = manager.startDefaultSession()
+        // Only the session whose policy opted into forced sleep ends.
+        _ = manager.startSession(
+            source: .manual,
+            endCondition: .duration(3_600),
+            policy: SessionPolicy(endOnForcedSleep: true)
+        )
+        #expect(manager.activeSessionCount == 2)
         manager.handleSystemSleep()
-        #expect(manager.activeSessionCount == 0)
+        #expect(manager.activeSessionCount == 1)
+        #expect(manager.activeSessions.allSatisfy { !$0.policy.endOnForcedSleep })
     }
 
     @Test func externalPowerCanSuppressLowBatteryTermination() {
@@ -442,7 +443,7 @@ struct AwakeTests {
         defer { manager.shutdown() }
 
         var settings = manager.settings
-        settings.defaultSession.allowSystemSleepWhenDisplayOff = true
+        settings.defaultPolicy.allowSystemSleepWhenDisplayOff = true
         manager.applyLoadedSettings(settings)
         _ = manager.startManualSession()
         #expect(assertionController.lastState.preventSystemSleep)
@@ -453,10 +454,48 @@ struct AwakeTests {
         manager.handleDisplaysDidWake()
         #expect(assertionController.lastState.preventSystemSleep)
 
-        settings.defaultSession.allowSystemSleepWhenDisplayOff = false
+        // A running session keeps the policy it was started with, so the
+        // strict behavior applies only to sessions started afterwards.
+        settings.defaultPolicy.allowSystemSleepWhenDisplayOff = false
         manager.applyLoadedSettings(settings)
         manager.handleDisplaysDidSleep()
+        #expect(!assertionController.lastState.preventSystemSleep)
+
+        manager.handleDisplaysDidWake()
+        manager.endAllSessions()
+        _ = manager.startManualSession()
+        manager.handleDisplaysDidSleep()
         #expect(assertionController.lastState.preventSystemSleep)
+    }
+
+    @Test func displayOffReleasesSleepPreventionOnlyWhenEverySessionAllowsIt() throws {
+        let assertionController = TestAssertionController()
+        let manager = AwakeSessionManager(
+            assertionController: assertionController,
+            powerStateProvider: TestPowerStateProvider()
+        )
+        defer { manager.shutdown() }
+
+        // One session allows sleep with the display off, one does not.
+        _ = manager.startSession(
+            source: .manual,
+            endCondition: .duration(3_600),
+            policy: SessionPolicy(allowSystemSleepWhenDisplayOff: true)
+        )
+        _ = manager.startSession(
+            source: .manual,
+            endCondition: .duration(3_600),
+            policy: SessionPolicy()
+        )
+
+        manager.handleDisplaysDidSleep()
+        #expect(assertionController.lastState.preventSystemSleep)
+
+        // Once the strict session ends, the remaining session may sleep.
+        let strictID = try #require(manager.activeSessions.first(where: { !$0.policy.allowSystemSleepWhenDisplayOff })?.id)
+        manager.endSession(strictID)
+        manager.handleDisplaysDidSleep()
+        #expect(!assertionController.lastState.preventSystemSleep)
     }
 
     @Test func screenSaverDeferralStopsAtTheAllowedIdleWindow() {
@@ -624,6 +663,39 @@ struct AwakeTriggerTests {
         #expect(!engine.runtimeState(for: trigger.id).sessionStoppedByUser)
         processProvider.setState(runningState)
         #expect(manager.activeSessionCount == 1)
+    }
+
+    @Test func triggerSessionsCarryTheirConfiguredPolicy() {
+        let assertionController = TestAssertionController()
+        let powerProvider = TriggerTestPowerStateProvider()
+        let manager = AwakeSessionManager(
+            assertionController: assertionController,
+            powerStateProvider: powerProvider
+        )
+        let processProvider = TriggerTestProcessStateProvider()
+        let engine = AwakeTriggerEngine(
+            sessionManager: manager,
+            powerStateProvider: powerProvider,
+            applicationStateProvider: TriggerTestApplicationStateProvider(),
+            processStateProvider: processProvider,
+            displayStateProvider: TriggerTestDisplayStateProvider()
+        )
+        defer {
+            engine.shutdown()
+            manager.shutdown()
+        }
+
+        let policy = SessionPolicy(preventDisplaySleep: true, endCalculation: .pausesDuringSleep)
+        let trigger = AwakeTrigger(
+            name: "Claude",
+            conditions: [.processRunning(name: "claude")],
+            sessionPolicy: policy
+        )
+        engine.applyLoadedTriggers([trigger])
+        processProvider.setState(ProcessState(runningNames: ["claude"], runningExecutablePaths: []))
+
+        #expect(manager.activeSessions.first?.policy == policy)
+        #expect(assertionController.lastState.preventDisplaySleep)
     }
 
     @Test func powerAndDisplayTriggersUseSharedStateProviders() {

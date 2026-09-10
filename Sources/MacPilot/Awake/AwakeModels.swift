@@ -192,6 +192,13 @@ struct SessionPolicy: Codable, Equatable, Sendable {
     var screenSaverPolicy: ScreenSaverPolicy
     var lockPolicy: LockPolicy
     var mouseMovementPolicy: MouseMovementPolicy
+    /// How this session's timed countdown reacts to system sleep.
+    var endCalculation: SessionEndCalculation
+    var endOnForcedSleep: Bool
+    var allowSystemSleepWhenDisplayOff: Bool
+    var blockScreenSaver: Bool
+    /// Idle minutes after which this session lifts the screen-saver block.
+    var screenSaverIdleMinutes: Int
 
     static let standard = SessionPolicy(
         preventSystemSleep: true,
@@ -208,7 +215,12 @@ struct SessionPolicy: Codable, Equatable, Sendable {
         preventClosedLidSleep: Bool = false,
         screenSaverPolicy: ScreenSaverPolicy = .systemDefault,
         lockPolicy: LockPolicy = .systemDefault,
-        mouseMovementPolicy: MouseMovementPolicy = .disabled
+        mouseMovementPolicy: MouseMovementPolicy = .disabled,
+        endCalculation: SessionEndCalculation = .timer,
+        endOnForcedSleep: Bool = false,
+        allowSystemSleepWhenDisplayOff: Bool = false,
+        blockScreenSaver: Bool = false,
+        screenSaverIdleMinutes: Int = 45
     ) {
         self.preventSystemSleep = preventSystemSleep
         self.preventDisplaySleep = preventDisplaySleep
@@ -216,6 +228,11 @@ struct SessionPolicy: Codable, Equatable, Sendable {
         self.screenSaverPolicy = screenSaverPolicy
         self.lockPolicy = lockPolicy
         self.mouseMovementPolicy = mouseMovementPolicy
+        self.endCalculation = endCalculation
+        self.endOnForcedSleep = endOnForcedSleep
+        self.allowSystemSleepWhenDisplayOff = allowSystemSleepWhenDisplayOff
+        self.blockScreenSaver = blockScreenSaver
+        self.screenSaverIdleMinutes = min(max(screenSaverIdleMinutes, 5), 180)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -225,6 +242,11 @@ struct SessionPolicy: Codable, Equatable, Sendable {
         case screenSaverPolicy
         case lockPolicy
         case mouseMovementPolicy
+        case endCalculation
+        case endOnForcedSleep
+        case allowSystemSleepWhenDisplayOff
+        case blockScreenSaver
+        case screenSaverIdleMinutes
     }
 
     init(from decoder: Decoder) throws {
@@ -235,7 +257,12 @@ struct SessionPolicy: Codable, Equatable, Sendable {
             preventClosedLidSleep: try container.decodeIfPresent(Bool.self, forKey: .preventClosedLidSleep) ?? false,
             screenSaverPolicy: try container.decodeIfPresent(ScreenSaverPolicy.self, forKey: .screenSaverPolicy) ?? .systemDefault,
             lockPolicy: try container.decodeIfPresent(LockPolicy.self, forKey: .lockPolicy) ?? .systemDefault,
-            mouseMovementPolicy: try container.decodeIfPresent(MouseMovementPolicy.self, forKey: .mouseMovementPolicy) ?? .disabled
+            mouseMovementPolicy: try container.decodeIfPresent(MouseMovementPolicy.self, forKey: .mouseMovementPolicy) ?? .disabled,
+            endCalculation: try container.decodeIfPresent(SessionEndCalculation.self, forKey: .endCalculation) ?? .timer,
+            endOnForcedSleep: try container.decodeIfPresent(Bool.self, forKey: .endOnForcedSleep) ?? false,
+            allowSystemSleepWhenDisplayOff: try container.decodeIfPresent(Bool.self, forKey: .allowSystemSleepWhenDisplayOff) ?? false,
+            blockScreenSaver: try container.decodeIfPresent(Bool.self, forKey: .blockScreenSaver) ?? false,
+            screenSaverIdleMinutes: try container.decodeIfPresent(Int.self, forKey: .screenSaverIdleMinutes) ?? 45
         )
     }
 }
@@ -302,17 +329,13 @@ enum SessionEndCalculation: String, Codable, Equatable, Sendable {
 }
 
 /// Settings for the default Awake session that can start automatically
-/// when the app launches or when the Mac wakes from sleep. These defaults
-/// govern every session kind the manager starts.
+/// when the app launches or when the Mac wakes from sleep. Per-session
+/// behavior options live on `SessionPolicy`; these settings cover the
+/// session duration, battery warnings, power-adapter behavior, and the
+/// automatic starts that apply to every session kind.
 struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
     /// 0 means the session runs until it is ended manually.
     var durationMinutes: Int
-    var endCalculation: SessionEndCalculation
-    var endOnForcedSleep: Bool
-    var allowSystemSleepWhenDisplayOff: Bool
-    var blockScreenSaver: Bool
-    /// Idle minutes after which the screen-saver block is lifted.
-    var screenSaverIdleMinutes: Int
     var warnBeforeBatteryTermination: Bool
     var ignoreBatteryLevelOnExternalPower: Bool
     var restartOnPowerReconnect: Bool
@@ -323,11 +346,6 @@ struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
 
     init(
         durationMinutes: Int = 60,
-        endCalculation: SessionEndCalculation = .timer,
-        endOnForcedSleep: Bool = false,
-        allowSystemSleepWhenDisplayOff: Bool = false,
-        blockScreenSaver: Bool = false,
-        screenSaverIdleMinutes: Int = 45,
         warnBeforeBatteryTermination: Bool = false,
         ignoreBatteryLevelOnExternalPower: Bool = true,
         restartOnPowerReconnect: Bool = false,
@@ -335,11 +353,6 @@ struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
         autoStartOnWake: Bool = false
     ) {
         self.durationMinutes = max(0, durationMinutes)
-        self.endCalculation = endCalculation
-        self.endOnForcedSleep = endOnForcedSleep
-        self.allowSystemSleepWhenDisplayOff = allowSystemSleepWhenDisplayOff
-        self.blockScreenSaver = blockScreenSaver
-        self.screenSaverIdleMinutes = min(max(screenSaverIdleMinutes, 5), 180)
         self.warnBeforeBatteryTermination = warnBeforeBatteryTermination
         self.ignoreBatteryLevelOnExternalPower = ignoreBatteryLevelOnExternalPower
         self.restartOnPowerReconnect = restartOnPowerReconnect
@@ -353,11 +366,6 @@ struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case durationMinutes
-        case endCalculation
-        case endOnForcedSleep
-        case allowSystemSleepWhenDisplayOff
-        case blockScreenSaver
-        case screenSaverIdleMinutes
         case warnBeforeBatteryTermination
         case ignoreBatteryLevelOnExternalPower
         case restartOnPowerReconnect
@@ -369,11 +377,6 @@ struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             durationMinutes: try container.decodeIfPresent(Int.self, forKey: .durationMinutes) ?? 60,
-            endCalculation: try container.decodeIfPresent(SessionEndCalculation.self, forKey: .endCalculation) ?? .timer,
-            endOnForcedSleep: try container.decodeIfPresent(Bool.self, forKey: .endOnForcedSleep) ?? false,
-            allowSystemSleepWhenDisplayOff: try container.decodeIfPresent(Bool.self, forKey: .allowSystemSleepWhenDisplayOff) ?? false,
-            blockScreenSaver: try container.decodeIfPresent(Bool.self, forKey: .blockScreenSaver) ?? false,
-            screenSaverIdleMinutes: try container.decodeIfPresent(Int.self, forKey: .screenSaverIdleMinutes) ?? 45,
             warnBeforeBatteryTermination: try container.decodeIfPresent(Bool.self, forKey: .warnBeforeBatteryTermination) ?? false,
             ignoreBatteryLevelOnExternalPower: try container.decodeIfPresent(Bool.self, forKey: .ignoreBatteryLevelOnExternalPower) ?? true,
             restartOnPowerReconnect: try container.decodeIfPresent(Bool.self, forKey: .restartOnPowerReconnect) ?? false,

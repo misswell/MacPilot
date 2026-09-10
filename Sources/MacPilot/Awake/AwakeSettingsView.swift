@@ -181,9 +181,9 @@ struct AwakeSettingsView: View {
             sectionLabel(model.t("awakeScreenSaver"))
             Toggle(model.t("awakeBlockScreenSaver"), isOn: blockScreenSaverBinding)
                 .toggleStyle(.switch)
-            if awake.settings.defaultSession.blockScreenSaver {
+            if awake.settings.defaultPolicy.blockScreenSaver {
                 Slider(value: screenSaverIdleBinding, in: 5...180, step: 5)
-                Text(model.t("awakeScreenSaverAllowsAfter", awake.settings.defaultSession.screenSaverIdleMinutes))
+                Text(model.t("awakeScreenSaverAllowsAfter", awake.settings.defaultPolicy.screenSaverIdleMinutes))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(model.t("awakeScreenSaverAccessibilityHint"))
@@ -323,45 +323,45 @@ struct AwakeSettingsView: View {
 
     private var endCalculationBinding: Binding<SessionEndCalculation> {
         Binding(
-            get: { awake.settings.defaultSession.endCalculation },
+            get: { awake.settings.defaultPolicy.endCalculation },
             set: { value in
-                awake.updateSettings { $0.defaultSession.endCalculation = value }
+                awake.updateSettings { $0.defaultPolicy.endCalculation = value }
             }
         )
     }
 
     private var endOnForcedSleepBinding: Binding<Bool> {
         Binding(
-            get: { awake.settings.defaultSession.endOnForcedSleep },
+            get: { awake.settings.defaultPolicy.endOnForcedSleep },
             set: { value in
-                awake.updateSettings { $0.defaultSession.endOnForcedSleep = value }
+                awake.updateSettings { $0.defaultPolicy.endOnForcedSleep = value }
             }
         )
     }
 
     private var allowSystemSleepWhenDisplayOffBinding: Binding<Bool> {
         Binding(
-            get: { awake.settings.defaultSession.allowSystemSleepWhenDisplayOff },
+            get: { awake.settings.defaultPolicy.allowSystemSleepWhenDisplayOff },
             set: { value in
-                awake.updateSettings { $0.defaultSession.allowSystemSleepWhenDisplayOff = value }
+                awake.updateSettings { $0.defaultPolicy.allowSystemSleepWhenDisplayOff = value }
             }
         )
     }
 
     private var blockScreenSaverBinding: Binding<Bool> {
         Binding(
-            get: { awake.settings.defaultSession.blockScreenSaver },
+            get: { awake.settings.defaultPolicy.blockScreenSaver },
             set: { value in
-                awake.updateSettings { $0.defaultSession.blockScreenSaver = value }
+                awake.updateSettings { $0.defaultPolicy.blockScreenSaver = value }
             }
         )
     }
 
     private var screenSaverIdleBinding: Binding<Double> {
         Binding(
-            get: { Double(awake.settings.defaultSession.screenSaverIdleMinutes) },
+            get: { Double(awake.settings.defaultPolicy.screenSaverIdleMinutes) },
             set: { value in
-                awake.updateSettings { $0.defaultSession.screenSaverIdleMinutes = Int(value.rounded()) }
+                awake.updateSettings { $0.defaultPolicy.screenSaverIdleMinutes = Int(value.rounded()) }
             }
         )
     }
@@ -469,8 +469,12 @@ private struct AwakeSessionDetailRow: View {
                 Text(model.t("awakeRunningFor", durationString))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button(model.t("awakeStopSession"), role: .destructive, action: onStop)
-                    .buttonStyle(.borderless)
+                Button(role: .destructive, action: onStop) {
+                    Label(model.t("awakeStopSession"), systemImage: "stop.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(.red)
             }
             detailLine(model.t("awakeSource"), value: sourceDescription)
             detailLine(model.t("awakeStartedAt"), value: dateDescription(session.startedAt))

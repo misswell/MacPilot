@@ -260,6 +260,30 @@ struct AwakeTriggerEditorView: View {
                             .toggleStyle(.switch)
                         Toggle(model.t("awakeDisplaySleepToggle"), isOn: policyBinding(\.preventDisplaySleep))
                             .toggleStyle(.switch)
+                        Toggle(model.t("awakeAllowSystemSleepWhenDisplayOff"), isOn: policyBinding(\.allowSystemSleepWhenDisplayOff))
+                            .toggleStyle(.switch)
+                        Toggle(model.t("awakeEndOnForcedSleep"), isOn: policyBinding(\.endOnForcedSleep))
+                            .toggleStyle(.switch)
+
+                        Picker(model.t("awakeEndCalculation"), selection: endCalculationBinding) {
+                            Text(model.t("awakeEndCalculationTimer")).tag(SessionEndCalculation.timer)
+                            Text(model.t("awakeEndCalculationAwakeTime")).tag(SessionEndCalculation.pausesDuringSleep)
+                        }
+
+                        Toggle(model.t("awakeBlockScreenSaver"), isOn: policyBinding(\.blockScreenSaver))
+                            .toggleStyle(.switch)
+                        if draft.sessionPolicy.blockScreenSaver {
+                            Stepper(
+                                model.t("awakeScreenSaverAllowsAfter", draft.sessionPolicy.screenSaverIdleMinutes),
+                                value: screenSaverIdleBinding,
+                                in: 5...180,
+                                step: 5
+                            )
+                            Text(model.t("awakeScreenSaverAccessibilityHint"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
                         TextField(
                             model.t("awakeActivationDelay"),
                             value: timingBinding(\.activationDelay),
@@ -382,6 +406,20 @@ struct AwakeTriggerEditorView: View {
         Binding(
             get: { draft.sessionPolicy[keyPath: keyPath] },
             set: { draft.sessionPolicy[keyPath: keyPath] = $0 }
+        )
+    }
+
+    private var endCalculationBinding: Binding<SessionEndCalculation> {
+        Binding(
+            get: { draft.sessionPolicy.endCalculation },
+            set: { draft.sessionPolicy.endCalculation = $0 }
+        )
+    }
+
+    private var screenSaverIdleBinding: Binding<Int> {
+        Binding(
+            get: { draft.sessionPolicy.screenSaverIdleMinutes },
+            set: { draft.sessionPolicy.screenSaverIdleMinutes = $0 }
         )
     }
 

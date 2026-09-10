@@ -112,15 +112,13 @@ final class AwakeSessionManager: ObservableObject {
         return startDefaultSession()
     }
 
-    /// Runs when the Mac wakes from sleep: duration sessions resume first
-    /// (their countdown may pause during sleep), stale sessions expire, then
-    /// the default session starts only when nothing keeps the Mac awake.
+    /// Runs when the Mac wakes from sleep: sessions configured to pause
+    /// during sleep resume their countdown first, stale sessions expire,
+    /// then the default session starts only when nothing keeps the Mac awake.
     func handleSystemWake() {
         guard !isShutdown else { return }
         if let sleepStartedAt {
-            if settings.defaultSession.endCalculation == .pausesDuringSleep {
-                shiftActiveDurationSessions(by: now().timeIntervalSince(sleepStartedAt))
-            }
+            shiftActiveDurationSessions(by: now().timeIntervalSince(sleepStartedAt))
             self.sleepStartedAt = nil
         }
         refreshPowerState()
@@ -129,22 +127,22 @@ final class AwakeSessionManager: ObservableObject {
         _ = startDefaultSession()
     }
 
-    /// Runs when the Mac is about to sleep. Forced-sleep mode ends every
-    /// active session; otherwise sessions survive and timed sessions may
-    /// pause their countdown depending on the end-time calculation.
+    /// Runs when the Mac is about to sleep. Sessions opted into
+    /// end-on-forced-sleep end now; the others survive and timed sessions
+    /// may pause their countdown depending on their end-time calculation.
     func handleSystemSleep() {
         guard !isShutdown else { return }
         sleepStartedAt = now()
-        if settings.defaultSession.endOnForcedSleep {
-            logger.notice("Ending all sessions because the Mac is about to sleep")
-            endAllSessions()
-        } else {
-            refreshDesiredState()
+        let forcedIDs = activeSessions.filter { $0.policy.endOnForcedSleep }.map(\.id)
+        for id in forcedIDs { markSessionEnded(id) }
+        if !forcedIDs.isEmpty {
+            logger.notice("Forced sleep ended \(forcedIDs.count, privacy: .public) session(s)")
         }
+        refreshDesiredState()
     }
 
-    /// The display went off. When the display-off mode allows it, system
-    /// sleep prevention is released until the display wakes again.
+    /// The display went off. Sessions that allow it release system sleep
+    /// prevention until the display wakes again.
     func handleDisplaysDidSleep() {
         isDisplayAsleep = true
         applyAssertionsForDisplayChange()
@@ -156,16 +154,16 @@ final class AwakeSessionManager: ObservableObject {
     }
 
     private func applyAssertionsForDisplayChange() {
-        guard settings.defaultSession.allowSystemSleepWhenDisplayOff, !isShutdown, isActive else { return }
+        guard !isShutdown, isActive else { return }
         applyAssertions()
     }
 
     private func shiftActiveDurationSessions(by interval: TimeInterval) {
         guard interval > 0 else { return }
         for index in sessions.indices where sessions[index].state == .active {
-            if case .duration = sessions[index].endCondition {
-                sessions[index].startedAt = sessions[index].startedAt.addingTimeInterval(interval)
-            }
+            guard case .duration = sessions[index].endCondition else { continue }
+            guard sessions[index].policy.endCalculation == .pausesDuringSleep else { continue }
+            sessions[index].startedAt = sessions[index].startedAt.addingTimeInterval(interval)
         }
     }
 
@@ -314,11 +312,13 @@ final class AwakeSessionManager: ObservableObject {
     }
 
     func deferScreenSaverIfEnabled() {
-        guard settings.defaultSession.blockScreenSaver, !activeSessions.isEmpty, !isShutdown else { return }
+        guard !isShutdown else { return }
+        let blocking = activeSessions.filter { $0.policy.blockScreenSaver }
+        guard let allowedAfterMinutes = blocking.map(\.policy.screenSaverIdleMinutes).min() else { return }
         let idleSeconds = AwakeIdleInput.sessionIdleSeconds()
         if AwakeIdleInput.shouldDeferScreenSaver(
             idleSeconds: idleSeconds,
-            allowedAfterMinutes: settings.defaultSession.screenSaverIdleMinutes,
+            allowedAfterMinutes: allowedAfterMinutes,
             systemIdleLimitSeconds: AwakeIdleInput.systemScreenSaverIdleSeconds()
         ) {
             AwakeIdleInput.postIdleDeferringMouseEvent(logger: logger)
@@ -327,7 +327,12 @@ final class AwakeSessionManager: ObservableObject {
 
     private func applyAssertions() {
         let active = activeSessions
-        let displayOffReleasesSystemSleep = settings.defaultSession.allowSystemSleepWhenDisplayOff && isDisplayAsleep
+        // System sleep prevention is released while the display is off only
+        // when every session that prevents system sleep allows it.
+        let allAllowSleepWithDisplayOff = active
+            .filter { $0.policy.preventSystemSleep }
+            .allSatisfy { $0.policy.allowSystemSleepWhenDisplayOff }
+        let displayOffReleasesSystemSleep = isDisplayAsleep && allAllowSleepWithDisplayOff
         let desired = DesiredAwakeState(
             preventSystemSleep: active.contains { $0.policy.preventSystemSleep } && !displayOffReleasesSystemSleep,
             preventDisplaySleep: active.contains { $0.policy.preventDisplaySleep },
