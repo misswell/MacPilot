@@ -18,10 +18,16 @@ final class AwakeSessionManager: ObservableObject {
     private let logger = Logger(subsystem: "com.misswell.macpilot", category: "Awake.Session")
     private let assertionController: any AwakeAssertionControlling
     private let powerStateProvider: any AwakePowerStateProviding
+    private let notifyBatteryWarning: (Int) -> Void
     private let now: () -> Date
     private var maintenanceTask: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
     private var powerMonitoringToken: UUID?
+    private var powerReconnectToken: UUID?
+    private var lastOnExternalPower: Bool?
+    private var sleepStartedAt: Date?
+    private var isDisplayAsleep = false
+    private var warnedBatteryThreshold = false
     private var isShutdown = false
 
     /// Called by `MacPilotModel` when the user-facing Awake preferences change.
@@ -30,10 +36,12 @@ final class AwakeSessionManager: ObservableObject {
     init(
         assertionController: any AwakeAssertionControlling = AwakeAssertionController(),
         powerStateProvider: any AwakePowerStateProviding = PowerStateProvider(),
+        notifyBatteryWarning: @escaping (Int) -> Void = { AwakeNotifications.showBatteryWarning(threshold: $0) },
         now: @escaping () -> Date = { Date() }
     ) {
         self.assertionController = assertionController
         self.powerStateProvider = powerStateProvider
+        self.notifyBatteryWarning = notifyBatteryWarning
         self.now = now
         powerState = powerStateProvider.currentPowerState()
         installSystemObservers()
@@ -104,14 +112,61 @@ final class AwakeSessionManager: ObservableObject {
         return startDefaultSession()
     }
 
-    /// Runs when the Mac wakes from sleep: stale sessions expire first, then
-    /// the default session starts only when nothing else keeps the Mac awake.
+    /// Runs when the Mac wakes from sleep: duration sessions resume first
+    /// (their countdown may pause during sleep), stale sessions expire, then
+    /// the default session starts only when nothing keeps the Mac awake.
     func handleSystemWake() {
         guard !isShutdown else { return }
+        if let sleepStartedAt {
+            if settings.defaultSession.endCalculation == .pausesDuringSleep {
+                shiftActiveDurationSessions(by: now().timeIntervalSince(sleepStartedAt))
+            }
+            self.sleepStartedAt = nil
+        }
         refreshPowerState()
         guard settings.defaultSession.autoStartOnWake, activeSessions.isEmpty else { return }
         logger.notice("Auto-starting default session after system wake")
         _ = startDefaultSession()
+    }
+
+    /// Runs when the Mac is about to sleep. Forced-sleep mode ends every
+    /// active session; otherwise sessions survive and timed sessions may
+    /// pause their countdown depending on the end-time calculation.
+    func handleSystemSleep() {
+        guard !isShutdown else { return }
+        sleepStartedAt = now()
+        if settings.defaultSession.endOnForcedSleep {
+            logger.notice("Ending all sessions because the Mac is about to sleep")
+            endAllSessions()
+        } else {
+            refreshDesiredState()
+        }
+    }
+
+    /// The display went off. When the display-off mode allows it, system
+    /// sleep prevention is released until the display wakes again.
+    func handleDisplaysDidSleep() {
+        isDisplayAsleep = true
+        applyAssertionsForDisplayChange()
+    }
+
+    func handleDisplaysDidWake() {
+        isDisplayAsleep = false
+        applyAssertionsForDisplayChange()
+    }
+
+    private func applyAssertionsForDisplayChange() {
+        guard settings.defaultSession.allowSystemSleepWhenDisplayOff, !isShutdown, isActive else { return }
+        applyAssertions()
+    }
+
+    private func shiftActiveDurationSessions(by interval: TimeInterval) {
+        guard interval > 0 else { return }
+        for index in sessions.indices where sessions[index].state == .active {
+            if case .duration = sessions[index].endCondition {
+                sessions[index].startedAt = sessions[index].startedAt.addingTimeInterval(interval)
+            }
+        }
     }
 
     func toggleManualSession() {
@@ -151,6 +206,7 @@ final class AwakeSessionManager: ObservableObject {
         expireSessions(at: now())
         applySafetyPolicy()
         applyAssertions()
+        deferScreenSaverIfEnabled()
         scheduleMaintenance()
     }
 
@@ -165,12 +221,14 @@ final class AwakeSessionManager: ObservableObject {
         guard updated != settings else { return }
         settings = updated
         persist?()
+        updatePowerReconnectMonitoring()
         refreshPowerState()
     }
 
     func applyLoadedSettings(_ newSettings: AwakeSettings) {
         settings = newSettings
         powerState = powerStateProvider.currentPowerState()
+        updatePowerReconnectMonitoring()
         refreshDesiredState()
     }
 
@@ -180,6 +238,10 @@ final class AwakeSessionManager: ObservableObject {
         maintenanceTask?.cancel()
         maintenanceTask = nil
         stopPowerMonitoring()
+        if let token = powerReconnectToken {
+            powerReconnectToken = nil
+            powerStateProvider.removeMonitoringObserver(token)
+        }
         for observer in observers {
             NotificationCenter.default.removeObserver(observer)
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
@@ -209,9 +271,13 @@ final class AwakeSessionManager: ObservableObject {
     private func applySafetyPolicy() {
         let wasActive = safetyProtectionActive
         safetyProtectionActive = isBelowBatteryThreshold
-        guard safetyProtectionActive else { return }
+        guard safetyProtectionActive else {
+            updateBatteryWarning()
+            return
+        }
         let activeIDs = activeSessions.map(\.id)
         for id in activeIDs { markSessionEnded(id) }
+        warnedBatteryThreshold = false
         if !activeIDs.isEmpty || !wasActive {
             logger.notice("Low-battery safety policy ended \(activeIDs.count, privacy: .public) session(s)")
         }
@@ -220,13 +286,50 @@ final class AwakeSessionManager: ObservableObject {
     private var isBelowBatteryThreshold: Bool {
         guard settings.safetyPolicy.lowBatteryProtectionEnabled,
               let batteryLevel = powerState.batteryLevel else { return false }
+        if settings.defaultSession.ignoreBatteryLevelOnExternalPower, powerState.onExternalPower { return false }
         return batteryLevel < Double(settings.safetyPolicy.minimumBatteryLevel)
+    }
+
+    /// Internal for tests: whether the low-battery warning notification is
+    /// due right now (level inside the 5-point window above the threshold).
+    var isBatteryWarningDue: Bool {
+        guard settings.defaultSession.warnBeforeBatteryTermination,
+              settings.safetyPolicy.lowBatteryProtectionEnabled,
+              !activeSessions.isEmpty,
+              !warnedBatteryThreshold,
+              !(settings.defaultSession.ignoreBatteryLevelOnExternalPower && powerState.onExternalPower),
+              let batteryLevel = powerState.batteryLevel else { return false }
+        return batteryLevel < Double(settings.safetyPolicy.minimumBatteryLevel + 5)
+    }
+
+    private func updateBatteryWarning() {
+        if let batteryLevel = powerState.batteryLevel,
+           batteryLevel > Double(settings.safetyPolicy.minimumBatteryLevel + 10) {
+            warnedBatteryThreshold = false
+        }
+        guard isBatteryWarningDue else { return }
+        warnedBatteryThreshold = true
+        logger.notice("Battery is approaching the low-power threshold")
+        notifyBatteryWarning(settings.safetyPolicy.minimumBatteryLevel)
+    }
+
+    func deferScreenSaverIfEnabled() {
+        guard settings.defaultSession.blockScreenSaver, !activeSessions.isEmpty, !isShutdown else { return }
+        let idleSeconds = AwakeIdleInput.sessionIdleSeconds()
+        if AwakeIdleInput.shouldDeferScreenSaver(
+            idleSeconds: idleSeconds,
+            allowedAfterMinutes: settings.defaultSession.screenSaverIdleMinutes,
+            systemIdleLimitSeconds: AwakeIdleInput.systemScreenSaverIdleSeconds()
+        ) {
+            AwakeIdleInput.postIdleDeferringMouseEvent(logger: logger)
+        }
     }
 
     private func applyAssertions() {
         let active = activeSessions
+        let displayOffReleasesSystemSleep = settings.defaultSession.allowSystemSleepWhenDisplayOff && isDisplayAsleep
         let desired = DesiredAwakeState(
-            preventSystemSleep: active.contains { $0.policy.preventSystemSleep },
+            preventSystemSleep: active.contains { $0.policy.preventSystemSleep } && !displayOffReleasesSystemSleep,
             preventDisplaySleep: active.contains { $0.policy.preventDisplaySleep },
             preventClosedLidSleep: active.contains { $0.policy.preventClosedLidSleep }
         )
@@ -255,6 +358,7 @@ final class AwakeSessionManager: ObservableObject {
                 self.expireSessions(at: self.now())
                 self.applySafetyPolicy()
                 self.applyAssertions()
+                self.deferScreenSaverIfEnabled()
 
                 guard !self.activeSessions.isEmpty else {
                     self.maintenanceTask = nil
@@ -289,12 +393,37 @@ final class AwakeSessionManager: ObservableObject {
         powerStateProvider.removeMonitoringObserver(token)
     }
 
+    /// Keeps a power observer alive even without active sessions when the
+    /// power-reconnect auto-start is enabled.
+    private func updatePowerReconnectMonitoring() {
+        let required = settings.defaultSession.restartOnPowerReconnect && !isShutdown
+        if required, powerReconnectToken == nil {
+            lastOnExternalPower = powerStateProvider.currentPowerState().onExternalPower
+            powerReconnectToken = powerStateProvider.addMonitoringObserver { [weak self] in
+                self?.handlePowerSourceChange()
+            }
+        } else if !required, let token = powerReconnectToken {
+            powerReconnectToken = nil
+            lastOnExternalPower = nil
+            powerStateProvider.removeMonitoringObserver(token)
+        }
+    }
+
     private func handlePowerSourceChange() {
-        guard !isShutdown, isActive else { return }
+        guard !isShutdown else { return }
+        let wasOnExternalPower = lastOnExternalPower ?? powerState.onExternalPower
         powerState = powerStateProvider.currentPowerState()
+        lastOnExternalPower = powerState.onExternalPower
         expireSessions(at: now())
         applySafetyPolicy()
         applyAssertions()
+        deferScreenSaverIfEnabled()
+        if settings.defaultSession.restartOnPowerReconnect,
+           !wasOnExternalPower, powerState.onExternalPower,
+           activeSessions.isEmpty {
+            logger.notice("Power adapter reconnected; starting default session")
+            _ = startDefaultSession()
+        }
         if activeSessions.isEmpty {
             maintenanceTask?.cancel()
             maintenanceTask = nil
@@ -320,7 +449,27 @@ final class AwakeSessionManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.refreshDesiredState()
+                self?.handleSystemSleep()
+            }
+        })
+
+        observers.append(workspaceCenter.addObserver(
+            forName: NSWorkspace.screensDidSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleDisplaysDidSleep()
+            }
+        })
+
+        observers.append(workspaceCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleDisplaysDidWake()
             }
         })
 

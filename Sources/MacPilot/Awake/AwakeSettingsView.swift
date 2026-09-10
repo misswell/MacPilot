@@ -55,7 +55,6 @@ struct AwakeSettingsView: View {
                 sessionDetailsCard
                 defaultSessionCard
                 AwakeTriggerListView(triggerEngine: triggerEngine)
-                batteryProtectionCard
                 powerStateCard
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
@@ -65,9 +64,6 @@ struct AwakeSettingsView: View {
     private var sessionControlCard: some View {
         SettingsCard {
             Text(model.t("awakeStartSession")).font(.headline)
-            Text(model.t("awakeDisplaySleepHint"))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
 
             Picker(model.t("awakeSessionDuration"), selection: $selectedPreset) {
                 Text(model.t("awakeUnlimited")).tag(AwakeSessionPreset.unlimited)
@@ -95,9 +91,6 @@ struct AwakeSettingsView: View {
                     displayedComponents: [.date, .hourAndMinute]
                 )
             }
-
-            Toggle(model.t("awakeDisplaySleepAllowed"), isOn: displaySleepAllowedBinding)
-                .toggleStyle(.switch)
 
             HStack {
                 Button(model.t("awakeStart"), action: startSelectedSession)
@@ -167,6 +160,69 @@ struct AwakeSettingsView: View {
                 }
             }
 
+            Picker(model.t("awakeEndCalculation"), selection: endCalculationBinding) {
+                Text(model.t("awakeEndCalculationTimer")).tag(SessionEndCalculation.timer)
+                Text(model.t("awakeEndCalculationAwakeTime")).tag(SessionEndCalculation.pausesDuringSleep)
+            }
+
+            sectionLabel(model.t("awakeForceSleep"))
+            Toggle(model.t("awakeEndOnForcedSleep"), isOn: endOnForcedSleepBinding)
+                .toggleStyle(.switch)
+
+            sectionLabel(model.t("awakeDisplaySection"))
+            Toggle(model.t("awakeDisplaySleepAllowed"), isOn: displaySleepAllowedBinding)
+                .toggleStyle(.switch)
+            Text(model.t("awakeDisplaySleepHint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle(model.t("awakeAllowSystemSleepWhenDisplayOff"), isOn: allowSystemSleepWhenDisplayOffBinding)
+                .toggleStyle(.switch)
+
+            sectionLabel(model.t("awakeScreenSaver"))
+            Toggle(model.t("awakeBlockScreenSaver"), isOn: blockScreenSaverBinding)
+                .toggleStyle(.switch)
+            if awake.settings.defaultSession.blockScreenSaver {
+                Slider(value: screenSaverIdleBinding, in: 5...180, step: 5)
+                Text(model.t("awakeScreenSaverAllowsAfter", awake.settings.defaultSession.screenSaverIdleMinutes))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(model.t("awakeScreenSaverAccessibilityHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            sectionLabel(model.t("awakeBatteryProtection"))
+            Toggle(
+                model.t("awakeEndSessionBelowBattery", awake.settings.safetyPolicy.minimumBatteryLevel),
+                isOn: batteryProtectionBinding
+            )
+            .toggleStyle(.switch)
+            if awake.settings.safetyPolicy.lowBatteryProtectionEnabled {
+                HStack(spacing: 12) {
+                    Slider(value: batteryThresholdBinding, in: 10...50, step: 1)
+                    Text("\(awake.settings.safetyPolicy.minimumBatteryLevel)%")
+                        .monospacedDigit()
+                        .frame(width: 44, alignment: .trailing)
+                }
+                Toggle(model.t("awakeWarnBeforeBatteryEnd"), isOn: warnBeforeBatteryEndBinding)
+                    .toggleStyle(.switch)
+                Text(model.t("awakeBatteryProtectionHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            sectionLabel(model.t("awakePowerAdapterSection"))
+            Toggle(model.t("awakeIgnoreBatteryOnPower"), isOn: ignoreBatteryOnPowerBinding)
+                .toggleStyle(.switch)
+            Toggle(model.t("awakeRestartOnPowerReconnect"), isOn: restartOnPowerReconnectBinding)
+                .toggleStyle(.switch)
+            if awake.settings.defaultSession.restartOnPowerReconnect {
+                Text(model.t("awakeRestartUsesDefaultDuration"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            sectionLabel(model.t("awakeAutoStart"))
             Toggle(model.t("awakeAutoStartOnLaunch"), isOn: autoStartOnLaunchBinding)
                 .toggleStyle(.switch)
             Toggle(model.t("awakeAutoStartOnWake"), isOn: autoStartOnWakeBinding)
@@ -177,21 +233,11 @@ struct AwakeSettingsView: View {
         }
     }
 
-    private var batteryProtectionCard: some View {
-        SettingsCard {
-            Text(model.t("awakeBatteryProtection")).font(.headline)
-            Toggle(model.t("awakeLowBatteryProtection"), isOn: batteryProtectionBinding)
-                .toggleStyle(.switch)
-            Text(model.t("awakeBatteryProtectionHint"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if awake.settings.safetyPolicy.lowBatteryProtectionEnabled {
-                Stepper(value: batteryThresholdBinding, in: 10...50) {
-                    Text(model.t("awakeBatteryThresholdValue", awake.settings.safetyPolicy.minimumBatteryLevel))
-                }
-            }
-        }
+    private func sectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.subheadline)
+            .fontWeight(.semibold)
+            .padding(.top, 2)
     }
 
     private var powerStateCard: some View {
@@ -275,6 +321,51 @@ struct AwakeSettingsView: View {
         )
     }
 
+    private var endCalculationBinding: Binding<SessionEndCalculation> {
+        Binding(
+            get: { awake.settings.defaultSession.endCalculation },
+            set: { value in
+                awake.updateSettings { $0.defaultSession.endCalculation = value }
+            }
+        )
+    }
+
+    private var endOnForcedSleepBinding: Binding<Bool> {
+        Binding(
+            get: { awake.settings.defaultSession.endOnForcedSleep },
+            set: { value in
+                awake.updateSettings { $0.defaultSession.endOnForcedSleep = value }
+            }
+        )
+    }
+
+    private var allowSystemSleepWhenDisplayOffBinding: Binding<Bool> {
+        Binding(
+            get: { awake.settings.defaultSession.allowSystemSleepWhenDisplayOff },
+            set: { value in
+                awake.updateSettings { $0.defaultSession.allowSystemSleepWhenDisplayOff = value }
+            }
+        )
+    }
+
+    private var blockScreenSaverBinding: Binding<Bool> {
+        Binding(
+            get: { awake.settings.defaultSession.blockScreenSaver },
+            set: { value in
+                awake.updateSettings { $0.defaultSession.blockScreenSaver = value }
+            }
+        )
+    }
+
+    private var screenSaverIdleBinding: Binding<Double> {
+        Binding(
+            get: { Double(awake.settings.defaultSession.screenSaverIdleMinutes) },
+            set: { value in
+                awake.updateSettings { $0.defaultSession.screenSaverIdleMinutes = Int(value.rounded()) }
+            }
+        )
+    }
+
     private var batteryProtectionBinding: Binding<Bool> {
         Binding(
             get: { awake.settings.safetyPolicy.lowBatteryProtectionEnabled },
@@ -284,11 +375,39 @@ struct AwakeSettingsView: View {
         )
     }
 
-    private var batteryThresholdBinding: Binding<Int> {
+    private var batteryThresholdBinding: Binding<Double> {
         Binding(
-            get: { awake.settings.safetyPolicy.minimumBatteryLevel },
+            get: { Double(awake.settings.safetyPolicy.minimumBatteryLevel) },
             set: { value in
-                awake.updateSettings { $0.safetyPolicy.minimumBatteryLevel = value }
+                awake.updateSettings { $0.safetyPolicy.minimumBatteryLevel = Int(value.rounded()) }
+            }
+        )
+    }
+
+    private var warnBeforeBatteryEndBinding: Binding<Bool> {
+        Binding(
+            get: { awake.settings.defaultSession.warnBeforeBatteryTermination },
+            set: { value in
+                if value { AwakeNotifications.requestAuthorization() }
+                awake.updateSettings { $0.defaultSession.warnBeforeBatteryTermination = value }
+            }
+        )
+    }
+
+    private var ignoreBatteryOnPowerBinding: Binding<Bool> {
+        Binding(
+            get: { awake.settings.defaultSession.ignoreBatteryLevelOnExternalPower },
+            set: { value in
+                awake.updateSettings { $0.defaultSession.ignoreBatteryLevelOnExternalPower = value }
+            }
+        )
+    }
+
+    private var restartOnPowerReconnectBinding: Binding<Bool> {
+        Binding(
+            get: { awake.settings.defaultSession.restartOnPowerReconnect },
+            set: { value in
+                awake.updateSettings { $0.defaultSession.restartOnPowerReconnect = value }
             }
         )
     }

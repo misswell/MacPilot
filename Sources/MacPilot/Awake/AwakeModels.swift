@@ -293,22 +293,56 @@ struct AwakeSafetyPolicy: Codable, Equatable, Sendable {
     }
 }
 
+/// How a timed session computes its end while the Mac sleeps.
+enum SessionEndCalculation: String, Codable, Equatable, Sendable {
+    /// The countdown keeps running in wall-clock time.
+    case timer
+    /// The countdown pauses while the Mac is asleep and resumes on wake.
+    case pausesDuringSleep
+}
+
 /// Settings for the default Awake session that can start automatically
-/// when the app launches or when the Mac wakes from sleep.
+/// when the app launches or when the Mac wakes from sleep. These defaults
+/// govern every session kind the manager starts.
 struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
     /// 0 means the session runs until it is ended manually.
     var durationMinutes: Int
+    var endCalculation: SessionEndCalculation
+    var endOnForcedSleep: Bool
+    var allowSystemSleepWhenDisplayOff: Bool
+    var blockScreenSaver: Bool
+    /// Idle minutes after which the screen-saver block is lifted.
+    var screenSaverIdleMinutes: Int
+    var warnBeforeBatteryTermination: Bool
+    var ignoreBatteryLevelOnExternalPower: Bool
+    var restartOnPowerReconnect: Bool
     var autoStartOnLaunch: Bool
     var autoStartOnWake: Bool
 
-    static let standard = AwakeDefaultSessionSettings(
-        durationMinutes: 60,
-        autoStartOnLaunch: false,
-        autoStartOnWake: false
-    )
+    static let standard = AwakeDefaultSessionSettings()
 
-    init(durationMinutes: Int = 60, autoStartOnLaunch: Bool = false, autoStartOnWake: Bool = false) {
+    init(
+        durationMinutes: Int = 60,
+        endCalculation: SessionEndCalculation = .timer,
+        endOnForcedSleep: Bool = false,
+        allowSystemSleepWhenDisplayOff: Bool = false,
+        blockScreenSaver: Bool = false,
+        screenSaverIdleMinutes: Int = 45,
+        warnBeforeBatteryTermination: Bool = false,
+        ignoreBatteryLevelOnExternalPower: Bool = true,
+        restartOnPowerReconnect: Bool = false,
+        autoStartOnLaunch: Bool = false,
+        autoStartOnWake: Bool = false
+    ) {
         self.durationMinutes = max(0, durationMinutes)
+        self.endCalculation = endCalculation
+        self.endOnForcedSleep = endOnForcedSleep
+        self.allowSystemSleepWhenDisplayOff = allowSystemSleepWhenDisplayOff
+        self.blockScreenSaver = blockScreenSaver
+        self.screenSaverIdleMinutes = min(max(screenSaverIdleMinutes, 5), 180)
+        self.warnBeforeBatteryTermination = warnBeforeBatteryTermination
+        self.ignoreBatteryLevelOnExternalPower = ignoreBatteryLevelOnExternalPower
+        self.restartOnPowerReconnect = restartOnPowerReconnect
         self.autoStartOnLaunch = autoStartOnLaunch
         self.autoStartOnWake = autoStartOnWake
     }
@@ -319,6 +353,14 @@ struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case durationMinutes
+        case endCalculation
+        case endOnForcedSleep
+        case allowSystemSleepWhenDisplayOff
+        case blockScreenSaver
+        case screenSaverIdleMinutes
+        case warnBeforeBatteryTermination
+        case ignoreBatteryLevelOnExternalPower
+        case restartOnPowerReconnect
         case autoStartOnLaunch
         case autoStartOnWake
     }
@@ -327,6 +369,14 @@ struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             durationMinutes: try container.decodeIfPresent(Int.self, forKey: .durationMinutes) ?? 60,
+            endCalculation: try container.decodeIfPresent(SessionEndCalculation.self, forKey: .endCalculation) ?? .timer,
+            endOnForcedSleep: try container.decodeIfPresent(Bool.self, forKey: .endOnForcedSleep) ?? false,
+            allowSystemSleepWhenDisplayOff: try container.decodeIfPresent(Bool.self, forKey: .allowSystemSleepWhenDisplayOff) ?? false,
+            blockScreenSaver: try container.decodeIfPresent(Bool.self, forKey: .blockScreenSaver) ?? false,
+            screenSaverIdleMinutes: try container.decodeIfPresent(Int.self, forKey: .screenSaverIdleMinutes) ?? 45,
+            warnBeforeBatteryTermination: try container.decodeIfPresent(Bool.self, forKey: .warnBeforeBatteryTermination) ?? false,
+            ignoreBatteryLevelOnExternalPower: try container.decodeIfPresent(Bool.self, forKey: .ignoreBatteryLevelOnExternalPower) ?? true,
+            restartOnPowerReconnect: try container.decodeIfPresent(Bool.self, forKey: .restartOnPowerReconnect) ?? false,
             autoStartOnLaunch: try container.decodeIfPresent(Bool.self, forKey: .autoStartOnLaunch) ?? false,
             autoStartOnWake: try container.decodeIfPresent(Bool.self, forKey: .autoStartOnWake) ?? false
         )

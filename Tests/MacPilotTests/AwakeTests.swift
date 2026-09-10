@@ -280,6 +280,209 @@ struct AwakeTests {
         #expect(AppText.value("awakeAutoStartOnWake", language: .english) == "Start the default session when waking from sleep")
         #expect(AppText.value("awakeStartDefaultSession", language: .simplifiedChinese) == "开始默认会话")
         #expect(AppText.value("awakeStartDefaultSession", language: .english) == "Start Default Session")
+        #expect(AppText.value("awakeEndCalculation", language: .simplifiedChinese) == "计算结束时间")
+        #expect(AppText.value("awakeEndCalculation", language: .english) == "End Time Calculation")
+        #expect(AppText.value("awakeEndSessionBelowBattery", language: .simplifiedChinese, 15) == "当电量低于 15% 时结束会话")
+        #expect(AppText.value("awakeEndSessionBelowBattery", language: .english, 15) == "End the session below 15% battery")
+        #expect(AppText.value("awakePowerAdapterSection", language: .simplifiedChinese) == "电源适配器")
+        #expect(AppText.value("awakePowerAdapterSection", language: .english) == "Power Adapter")
+    }
+
+    @Test func sleepShiftsTimedSessionsOnlyWhenPausingDuringSleepIsConfigured() {
+        var currentDate = Date(timeIntervalSince1970: 50_000)
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: TestPowerStateProvider(),
+            now: { currentDate }
+        )
+        defer { manager.shutdown() }
+
+        var settings = manager.settings
+        settings.defaultSession.durationMinutes = 60
+        manager.applyLoadedSettings(settings)
+
+        // With the plain timer the countdown keeps running while asleep.
+        _ = manager.startDefaultSession()
+        currentDate = currentDate.addingTimeInterval(30 * 60)
+        manager.handleSystemSleep()
+        currentDate = currentDate.addingTimeInterval(45 * 60)
+        manager.handleSystemWake()
+        #expect(manager.activeSessions.isEmpty)
+
+        // Pausing during sleep resumes the countdown after wake.
+        settings.defaultSession.endCalculation = .pausesDuringSleep
+        manager.applyLoadedSettings(settings)
+        let pausedID = manager.startDefaultSession()
+        let endBeforeSleep = manager.sessions.first(where: { $0.id == pausedID })?.expectedEndAt
+        manager.handleSystemSleep()
+        currentDate = currentDate.addingTimeInterval(45 * 60)
+        manager.handleSystemWake()
+
+        #expect(manager.activeSessions.contains { $0.id == pausedID })
+        #expect(
+            manager.sessions.first(where: { $0.id == pausedID })?.expectedEndAt
+                == endBeforeSleep.map { $0.addingTimeInterval(45 * 60) }
+        )
+    }
+
+    @Test func forcedSleepEndsAllSessionsOnlyWhenEnabled() {
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: TestPowerStateProvider()
+        )
+        defer { manager.shutdown() }
+
+        var settings = manager.settings
+        settings.defaultSession.durationMinutes = 0
+        manager.applyLoadedSettings(settings)
+
+        _ = manager.startDefaultSession()
+        manager.handleSystemSleep()
+        #expect(manager.activeSessionCount == 1)
+
+        settings.defaultSession.endOnForcedSleep = true
+        manager.applyLoadedSettings(settings)
+        _ = manager.startDefaultSession()
+        manager.handleSystemSleep()
+        #expect(manager.activeSessionCount == 0)
+    }
+
+    @Test func externalPowerCanSuppressLowBatteryTermination() {
+        let powerProvider = TriggerTestPowerStateProvider()
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: powerProvider
+        )
+        defer { manager.shutdown() }
+
+        var settings = manager.settings
+        settings.safetyPolicy.lowBatteryProtectionEnabled = true
+        settings.safetyPolicy.minimumBatteryLevel = 30
+        manager.applyLoadedSettings(settings)
+
+        powerProvider.state = PowerState(batteryLevel: 10, charging: false, onExternalPower: true)
+        _ = manager.startManualSession()
+        manager.refreshPowerState()
+        #expect(manager.isActive)
+        #expect(!manager.safetyProtectionActive)
+
+        settings.defaultSession.ignoreBatteryLevelOnExternalPower = false
+        manager.applyLoadedSettings(settings)
+        #expect(!manager.isActive)
+        #expect(manager.safetyProtectionActive)
+    }
+
+    @Test func batteryWarningIsDueNearTheThreshold() {
+        let powerProvider = TriggerTestPowerStateProvider()
+        powerProvider.state = PowerState(batteryLevel: 18, charging: false, onExternalPower: false)
+        var warnings: [Int] = []
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: powerProvider,
+            notifyBatteryWarning: { warnings.append($0) }
+        )
+        defer { manager.shutdown() }
+
+        var settings = manager.settings
+        settings.safetyPolicy.lowBatteryProtectionEnabled = true
+        settings.safetyPolicy.minimumBatteryLevel = 15
+        settings.defaultSession.warnBeforeBatteryTermination = true
+        manager.applyLoadedSettings(settings)
+
+        _ = manager.startManualSession()
+        #expect(warnings == [15])
+        #expect(!manager.isBatteryWarningDue)
+        manager.refreshPowerState()
+        #expect(warnings == [15])
+
+        powerProvider.state = PowerState(batteryLevel: 18, charging: false, onExternalPower: true)
+        manager.refreshPowerState()
+        #expect(!manager.isBatteryWarningDue)
+        #expect(warnings == [15])
+
+        powerProvider.state = PowerState(batteryLevel: 18, charging: false, onExternalPower: false)
+        settings.defaultSession.warnBeforeBatteryTermination = false
+        manager.applyLoadedSettings(settings)
+        #expect(!manager.isBatteryWarningDue)
+        #expect(warnings == [15])
+    }
+
+    @Test func powerReconnectStartsDefaultSessionFromDisconnectedState() {
+        let powerProvider = TriggerTestPowerStateProvider()
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: powerProvider
+        )
+        defer { manager.shutdown() }
+
+        var settings = manager.settings
+        settings.defaultSession.restartOnPowerReconnect = true
+        settings.defaultSession.durationMinutes = 30
+        manager.applyLoadedSettings(settings)
+
+        powerProvider.setState(PowerState(batteryLevel: 80, charging: true, onExternalPower: true))
+        #expect(manager.activeSessionCount == 1)
+        #expect(manager.activeSessions.first?.endCondition == .duration(30 * 60))
+
+        manager.endAllSessions()
+        powerProvider.setState(PowerState(batteryLevel: 80, charging: true, onExternalPower: true))
+        #expect(manager.activeSessionCount == 0)
+
+        powerProvider.setState(PowerState(batteryLevel: 80, charging: false, onExternalPower: false))
+        powerProvider.setState(PowerState(batteryLevel: 80, charging: true, onExternalPower: true))
+        #expect(manager.activeSessionCount == 1)
+    }
+
+    @Test func displayOffReleasesSystemSleepPreventionOnlyWhenAllowed() {
+        let assertionController = TestAssertionController()
+        let manager = AwakeSessionManager(
+            assertionController: assertionController,
+            powerStateProvider: TestPowerStateProvider()
+        )
+        defer { manager.shutdown() }
+
+        var settings = manager.settings
+        settings.defaultSession.allowSystemSleepWhenDisplayOff = true
+        manager.applyLoadedSettings(settings)
+        _ = manager.startManualSession()
+        #expect(assertionController.lastState.preventSystemSleep)
+
+        manager.handleDisplaysDidSleep()
+        #expect(!assertionController.lastState.preventSystemSleep)
+
+        manager.handleDisplaysDidWake()
+        #expect(assertionController.lastState.preventSystemSleep)
+
+        settings.defaultSession.allowSystemSleepWhenDisplayOff = false
+        manager.applyLoadedSettings(settings)
+        manager.handleDisplaysDidSleep()
+        #expect(assertionController.lastState.preventSystemSleep)
+    }
+
+    @Test func screenSaverDeferralStopsAtTheAllowedIdleWindow() {
+        // Near the system idle limit and inside the allowed window: defer.
+        #expect(AwakeIdleInput.shouldDeferScreenSaver(
+            idleSeconds: 20 * 60 - 10,
+            allowedAfterMinutes: 45,
+            systemIdleLimitSeconds: 20 * 60
+        ))
+        // The allowed idle window elapsed: the screen saver may run.
+        #expect(!AwakeIdleInput.shouldDeferScreenSaver(
+            idleSeconds: 46 * 60,
+            allowedAfterMinutes: 45,
+            systemIdleLimitSeconds: 20 * 60
+        ))
+        // The screen saver is disabled or its limit is unknown/too short.
+        #expect(!AwakeIdleInput.shouldDeferScreenSaver(
+            idleSeconds: 10 * 60,
+            allowedAfterMinutes: 45,
+            systemIdleLimitSeconds: nil
+        ))
+        #expect(!AwakeIdleInput.shouldDeferScreenSaver(
+            idleSeconds: 10 * 60,
+            allowedAfterMinutes: 45,
+            systemIdleLimitSeconds: 30
+        ))
     }
 }
 
