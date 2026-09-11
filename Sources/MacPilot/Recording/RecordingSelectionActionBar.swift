@@ -209,10 +209,16 @@ struct RecordingSelectionActionBarView: View {
 
 /// Pure placement for the recording pill. It follows the same below/above
 /// convention as the screenshot HUD and clamps the full control to the
-/// display even for very small selections near an edge.
+/// display even for very small selections near an edge. When the selection
+/// is fullscreen (or close to it) the pill cannot fit outside on either
+/// vertical side, so it is placed deliberately inside the selection near its
+/// bottom edge — centered, with a comfortable inset — instead of being
+/// clamped across the selection border and resize handles.
 nonisolated enum RecordingSelectionBarLayout {
     static let gap: CGFloat = 16
     static let edgeMargin: CGFloat = 8
+    /// 全屏/近全屏时操作栏收进选区内侧的底边距。
+    static let insideInset: CGFloat = 20
 
     static func resolve(selectionRect: CGRect, barSize: CGSize, bounds: CGSize) -> CGRect {
         let maxX = max(edgeMargin, bounds.width - barSize.width - edgeMargin)
@@ -223,9 +229,18 @@ nonisolated enum RecordingSelectionBarLayout {
         let proposedY = preferBelow
             ? selectionRect.minY - gap - barSize.height
             : selectionRect.maxY + gap
-        return CGRect(
+        let frame = CGRect(
             x: min(maxX, max(edgeMargin, selectionRect.midX - barSize.width / 2)),
             y: min(maxY, max(edgeMargin, proposedY)),
+            width: barSize.width,
+            height: barSize.height
+        )
+        // 上下都放不下时，夹回屏幕会让操作栏压进选区甚至骑跨边框；
+        // 此时改为收进选区内侧底部：水平居中并留出舒适边距。
+        guard frame.intersects(selectionRect) else { return frame }
+        return CGRect(
+            x: min(maxX, max(edgeMargin, selectionRect.midX - barSize.width / 2)),
+            y: min(maxY, max(edgeMargin, selectionRect.minY + insideInset)),
             width: barSize.width,
             height: barSize.height
         )

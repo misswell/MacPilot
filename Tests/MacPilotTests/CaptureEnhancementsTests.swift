@@ -271,4 +271,43 @@ struct CaptureEnhancementsTests {
         #expect(CGRect(origin: .zero, size: bounds).contains(nearBottom))
         #expect(nearBottom.minY >= 196)
     }
+
+    @Test @MainActor func recordingSelectionBarMovesInsideForFullscreenSelection() {
+        let bounds = CGSize(width: 1920, height: 1080)
+        let barSize = RecordingSelectionActionBarView.preferredSize
+
+        let fullscreen = RecordingSelectionBarLayout.resolve(
+            selectionRect: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            barSize: barSize,
+            bounds: bounds
+        )
+
+        // 操作栏完整落在屏幕内、收进选区内侧底部并水平居中，不再贴死屏幕边缘
+        #expect(CGRect(origin: .zero, size: bounds).contains(fullscreen))
+        #expect(fullscreen.minY >= RecordingSelectionBarLayout.insideInset)
+        #expect(abs(fullscreen.midX - bounds.width / 2) < 0.5)
+    }
+
+    @Test @MainActor func recordingSelectionBarDoesNotStraddleNearFullscreenSelection() {
+        let bounds = CGSize(width: 1920, height: 1080)
+        let barSize = RecordingSelectionActionBarView.preferredSize
+
+        // 底部仅留 20pt 的近全屏选区：操作栏不得骑跨底边
+        let bottomSelection = CGRect(x: 0, y: 20, width: 1920, height: 1060)
+        let nearBottomFullscreen = RecordingSelectionBarLayout.resolve(
+            selectionRect: bottomSelection,
+            barSize: barSize,
+            bounds: bounds
+        )
+        #expect(bottomSelection.contains(nearBottomFullscreen))
+
+        // 顶部仅留 20pt 的近全屏选区：同样收进选区内侧
+        let topSelection = CGRect(x: 0, y: 0, width: 1920, height: 1060)
+        let nearTopFullscreen = RecordingSelectionBarLayout.resolve(
+            selectionRect: topSelection,
+            barSize: barSize,
+            bounds: bounds
+        )
+        #expect(topSelection.contains(nearTopFullscreen))
+    }
 }
