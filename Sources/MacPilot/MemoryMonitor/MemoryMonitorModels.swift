@@ -32,16 +32,48 @@ enum AppMemoryGrouper {
             var bundleName: String?
         }
 
-        var families: [String: [Member]] = [:]
+        // 第一遍：应用包进程按包名锚定家族，其余进程先收集为独立成员。
+        var bundleEntries: [String: (anchor: (path: String, name: String), samples: [ProcessMemorySample])] = [:]
+        var standalone: [ProcessMemorySample] = []
         for sample in samples {
-            let bundlePath = sample.executablePath.flatMap { appBundlePath(ofExecutable: $0) }
-            let bundleName = bundlePath.map { displayName(ofBundlePath: $0) }
-            let member = Member(sample: sample, bundlePath: bundlePath, bundleName: bundleName)
-            let key = familyKey(
-                sample: sample,
-                bundleName: bundleName
-            )
-            families[key, default: []].append(member)
+            if let path = sample.executablePath, let bundlePath = appBundlePath(ofExecutable: path) {
+                let name = displayName(ofBundlePath: bundlePath)
+                let key = name.lowercased()
+                if bundleEntries[key] == nil {
+                    bundleEntries[key] = (anchor: (path: bundlePath, name: name), samples: [])
+                }
+                bundleEntries[key]?.samples.append(sample)
+            } else {
+                standalone.append(sample)
+            }
+        }
+
+        var families: [String: [Member]] = [:]
+        for (key, entry) in bundleEntries {
+            families[key] = entry.samples.map {
+                Member(sample: $0, bundlePath: entry.anchor.path, bundleName: entry.anchor.name)
+            }
+        }
+
+        // 第二遍：独立进程优先按「路径中出现主应用同名目录」归入该应用
+        // （如 <App>/runtime/node 这类包外运行时辅助进程），否则按名称家族
+        // 归组。系统路径进程不参与该匹配，避免被误并进第三方应用。
+        for sample in standalone {
+            var matchedAnchor: (path: String, name: String)?
+            if let path = sample.executablePath, !isSystemExecutablePath(path) {
+                matchedAnchor = bundleEntries.values
+                    .filter { pathContainsAppName(path, appName: $0.anchor.name) }
+                    .max { $0.anchor.name.count < $1.anchor.name.count }?
+                    .anchor
+            }
+            if let anchor = matchedAnchor {
+                families[anchor.name.lowercased(), default: []].append(
+                    Member(sample: sample, bundlePath: anchor.path, bundleName: anchor.name)
+                )
+            } else {
+                let key = familyKey(of: sample)
+                families[key, default: []].append(Member(sample: sample, bundlePath: nil, bundleName: nil))
+            }
         }
 
         let usages = families.map { key, members -> AppMemoryUsage in
@@ -107,14 +139,27 @@ enum AppMemoryGrouper {
         return name.lowercased()
     }
 
+    /// 独立进程的路径中出现与主应用同名（或以其加空格/连字符/下划线开头）
+    /// 的目录时，视为该应用的附属进程，如 <App>/runtime/node。
+    static func pathContainsAppName(_ path: String, appName: String) -> Bool {
+        let target = appName.lowercased()
+        guard !target.isEmpty else { return false }
+        return path.split(separator: "/").contains { component in
+            let lowered = component.lowercased()
+            return lowered == target
+                || lowered.hasPrefix(target + " ")
+                || lowered.hasPrefix(target + "-")
+                || lowered.hasPrefix(target + "_")
+        }
+    }
+
     /// 系统自带进程不参与家族归并，避免把无关系统组件聚到一起。
     static func isSystemExecutablePath(_ path: String) -> Bool {
         path.hasPrefix("/System/") || path.hasPrefix("/usr/")
             || path.hasPrefix("/sbin/") || path.hasPrefix("/private/")
     }
 
-    private static func familyKey(sample: ProcessMemorySample, bundleName: String?) -> String {
-        if let bundleName { return bundleName.lowercased() }
+    private static func familyKey(of sample: ProcessMemorySample) -> String {
         if let path = sample.executablePath, isSystemExecutablePath(path) {
             return sample.name.lowercased()
         }

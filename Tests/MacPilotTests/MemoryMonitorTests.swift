@@ -86,6 +86,53 @@ struct MemoryMonitorTests {
         #expect(grouped[0].footprintBytes == 30)
     }
 
+    @Test func runtimeHelpersUnderAppNamedDirectoryRollIntoApp() {
+        let grouped = AppMemoryGrouper.group([
+            sample(
+                1,
+                "deepseek-harness-desk",
+                path: "/Applications/DeepSeek Harness Desk.app/Contents/MacOS/deepseek-harness-desk",
+                100
+            ),
+            // 包外运行时辅助进程：路径中含主应用同名目录，应归入该应用
+            sample(
+                2,
+                "node",
+                path: "/Users/dev/Library/Application Support/DeepSeek Harness Desk/runtime/node/24.19.0/bin/node",
+                400
+            ),
+            // 无关的 node 进程保持独立
+            sample(3, "node", path: "/opt/homebrew/bin/node", 50),
+        ])
+
+        #expect(grouped.count == 2)
+        let app = grouped.first { $0.name == "DeepSeek Harness Desk" }
+        #expect(app?.processCount == 2)
+        #expect(app?.footprintBytes == 500)
+        let node = grouped.first { $0.name == "node" }
+        #expect(node?.processCount == 1)
+        #expect(node?.footprintBytes == 50)
+    }
+
+    @Test func pathContainsAppNameRequiresWholeComponentOrWordPrefix() {
+        #expect(AppMemoryGrouper.pathContainsAppName(
+            "/Users/dev/Library/Application Support/DeepSeek Harness Desk/runtime/node/bin/node",
+            appName: "DeepSeek Harness Desk"
+        ))
+        #expect(AppMemoryGrouper.pathContainsAppName(
+            "/Users/dev/apps/DeepSeek Harness Desk Helper/runtime",
+            appName: "DeepSeek Harness Desk"
+        ))
+        #expect(!AppMemoryGrouper.pathContainsAppName(
+            "/Users/dev/tools/deepseek-harness-deskplus/node",
+            appName: "DeepSeek Harness Desk"
+        ))
+        #expect(!AppMemoryGrouper.pathContainsAppName(
+            "/opt/homebrew/bin/node",
+            appName: "DeepSeek Harness Desk"
+        ))
+    }
+
     @Test func groupsAreSortedByMemoryDescending() {
         let grouped = AppMemoryGrouper.group([
             sample(1, "small", path: "/Users/dev/tools/small", 10),
