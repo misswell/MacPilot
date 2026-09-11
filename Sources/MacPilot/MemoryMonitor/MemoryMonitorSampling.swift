@@ -5,25 +5,43 @@ import Foundation
 /// 读取不到占用（如其他用户或 root 进程）的进程会被跳过。
 enum ProcessMemorySampler {
     static func sample() -> [ProcessMemorySample] {
-        let estimated = proc_listallpids(nil, 0)
-        guard estimated > 0 else { return [] }
-        var pids = [pid_t](repeating: 0, count: Int(estimated) + 16)
-        let count = pids.withUnsafeMutableBufferPointer { buffer in
-            proc_listallpids(buffer.baseAddress, Int32(buffer.count) * Int32(MemoryLayout<pid_t>.size))
-        }
-        guard count > 0 else { return [] }
-
+        let entries = processEntries()
         var samples: [ProcessMemorySample] = []
-        samples.reserveCapacity(Int(count))
-        for pid in pids.prefix(Int(count)) where pid > 0 {
-            guard let footprint = physicalFootprint(of: pid) else { continue }
+        samples.reserveCapacity(entries.count)
+        for entry in entries {
+            let pid = entry.kp_proc.p_pid
+            guard pid > 0, let footprint = physicalFootprint(of: pid) else { continue }
             let path = executablePath(of: pid)
-            let name = path.map { ($0 as NSString).lastPathComponent } ?? shortProcessName(of: pid)
+            let name = path.map { ($0 as NSString).lastPathComponent } ?? commandName(of: entry)
             samples.append(
-                ProcessMemorySample(pid: pid, name: name, executablePath: path, footprintBytes: footprint)
+                ProcessMemorySample(
+                    pid: pid,
+                    name: name.isEmpty ? "\(pid)" : name,
+                    executablePath: path,
+                    footprintBytes: footprint,
+                    startedAt: Self.date(from: entry.kp_proc.p_starttime)
+                )
             )
         }
         return samples
+    }
+
+    /// 一次 sysctl 拿到全部进程的 pid、命令名与启动时间。
+    /// 两次调用之间进程数可能增长，缓冲区按 10% 余量放大。
+    private static func processEntries() -> [kinfo_proc] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size = 0
+        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else { return [] }
+        let entryStride = MemoryLayout<kinfo_proc>.stride
+        var entries = [kinfo_proc](repeating: kinfo_proc(), count: size / entryStride + 16)
+        var actualSize = entries.count * entryStride
+        guard sysctl(&mib, 4, &entries, &actualSize, nil, 0) == 0, actualSize > 0 else { return [] }
+        return Array(entries.prefix(actualSize / entryStride))
+    }
+
+    private static func date(from timeval: timeval) -> Date? {
+        guard timeval.tv_sec > 0 else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(timeval.tv_sec) + TimeInterval(timeval.tv_usec) / 1_000_000)
     }
 
     /// libproc 的路径缓冲区上限（libproc.h: PROC_PIDPATHINFO_MAXSIZE）。
@@ -54,11 +72,10 @@ enum ProcessMemorySampler {
         return string(fromNullTerminated: buffer)
     }
 
-    private static func shortProcessName(of pid: pid_t) -> String {
-        var buffer = [CChar](repeating: 0, count: 2 * Int(MAXCOMLEN))
-        _ = proc_name(pid, &buffer, UInt32(buffer.count))
-        let name = string(fromNullTerminated: buffer)
-        return name.isEmpty ? "\(pid)" : name
+    private static func commandName(of entry: kinfo_proc) -> String {
+        withUnsafeBytes(of: entry.kp_proc.p_comm) { raw in
+            String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
+        }
     }
 
     private static func string(fromNullTerminated buffer: [CChar]) -> String {
@@ -89,6 +106,10 @@ struct SystemMemorySnapshot: Equatable, Sendable {
     let cachedFilesBytes: UInt64
     let swapUsedBytes: UInt64
     let pressure: PressureLevel
+    /// 系统开机时间（now − uptime）。
+    let bootDate: Date
+    /// 本次开机已运行的秒数。
+    let uptimeInterval: TimeInterval
 }
 
 /// 系统级内存统计，口径对齐活动监视器：
@@ -105,6 +126,7 @@ enum SystemMemoryReader {
         let compressedBytes = vm.compressedPages * pageSize
         let cachedFilesBytes = (vm.externalPages + vm.speculativePages) * pageSize
         let usedBytes = appBytes + wiredBytes + compressedBytes
+        let uptime = ProcessInfo.processInfo.systemUptime
         return SystemMemorySnapshot(
             physicalBytes: physicalBytes,
             usedBytes: usedBytes,
@@ -113,7 +135,9 @@ enum SystemMemoryReader {
             compressedBytes: compressedBytes,
             cachedFilesBytes: cachedFilesBytes,
             swapUsedBytes: swapUsedBytes(),
-            pressure: memoryPressure(usedBytes: usedBytes, physicalBytes: physicalBytes)
+            pressure: memoryPressure(usedBytes: usedBytes, physicalBytes: physicalBytes),
+            bootDate: Date().addingTimeInterval(-uptime),
+            uptimeInterval: uptime
         )
     }
 

@@ -7,9 +7,16 @@ struct MemoryMonitorTests {
         _ pid: Int32,
         _ name: String,
         path: String? = nil,
-        _ bytes: UInt64
+        _ bytes: UInt64,
+        startedAt: Date? = nil
     ) -> ProcessMemorySample {
-        ProcessMemorySample(pid: pid, name: name, executablePath: path, footprintBytes: bytes)
+        ProcessMemorySample(
+            pid: pid,
+            name: name,
+            executablePath: path,
+            footprintBytes: bytes,
+            startedAt: startedAt
+        )
     }
 
     @Test func bundleHelpersAndCliProcessesRollIntoOneApp() {
@@ -131,6 +138,33 @@ struct MemoryMonitorTests {
             "/opt/homebrew/bin/node",
             appName: "DeepSeek Harness Desk"
         ))
+    }
+
+    @Test func groupTracksEarliestProcessStartTime() {
+        let now = Date()
+        let grouped = AppMemoryGrouper.group([
+            sample(
+                1,
+                "ZCode",
+                path: "/Applications/ZCode.app/Contents/MacOS/ZCode",
+                100,
+                startedAt: now.addingTimeInterval(-3_600)
+            ),
+            sample(
+                2,
+                "zcode-cli",
+                path: "/Users/dev/.zcode/cli/zcode-cli",
+                200,
+                startedAt: now.addingTimeInterval(-86_400)
+            ),
+            sample(3, "lonely", path: "/Users/dev/tools/lonely", 10, startedAt: nil),
+        ])
+
+        #expect(grouped.count == 2)
+        // 运行时长取家族内最早启动的进程
+        let app = grouped.first { $0.name == "ZCode" }
+        #expect(app?.earliestStartedAt == now.addingTimeInterval(-86_400))
+        #expect(grouped.first { $0.name == "lonely" }?.earliestStartedAt == nil)
     }
 
     @Test func groupsAreSortedByMemoryDescending() {

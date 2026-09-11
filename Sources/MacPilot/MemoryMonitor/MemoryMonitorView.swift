@@ -75,6 +75,14 @@ struct MemoryMonitorView: View {
                     MemoryByteFormatter.string(fromBytes: snapshot.swapUsedBytes)
                 )
                 pressureValue(snapshot.pressure)
+                overviewValue(
+                    model.t("bootedAt"),
+                    snapshot.bootDate.formatted(date: .abbreviated, time: .shortened)
+                )
+                overviewValue(
+                    model.t("uptime"),
+                    MemoryDurationFormatter.string(fromInterval: snapshot.uptimeInterval)
+                )
             }
         }
     }
@@ -231,13 +239,7 @@ private struct AppMemoryRow: View {
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
             appIcon
             VStack(alignment: .leading, spacing: 5) {
-                (Text(app.name).font(.body.weight(.semibold))
-                    + Text("  \(model.t("processCount", app.processCount))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                )
-                .lineLimit(1)
-                .truncationMode(.tail)
+                labelText
                 gauge
             }
             // 固定数值列宽：所有行的内存值右对齐，占比条终点一致
@@ -261,6 +263,11 @@ private struct AppMemoryRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .layoutPriority(1)
+            if let interval = process.runningDurationInterval {
+                Text(MemoryDurationFormatter.string(fromInterval: interval))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
             Text("PID \(process.pid)")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.tertiary)
@@ -307,6 +314,20 @@ private struct AppMemoryRow: View {
 
     private func gaugeWidth(available: CGFloat) -> CGFloat {
         max(3, available * fraction)
+    }
+
+    /// 标题行：应用名 + 进程数 + 运行时长（取家族内最早启动的进程）。
+    private var labelText: Text {
+        var text = Text(app.name).font(.body.weight(.semibold))
+            + Text("  \(model.t("processCount", app.processCount))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        if let interval = app.runningDurationInterval {
+            text = text + Text("  \(model.t("appRunningFor", MemoryDurationFormatter.string(fromInterval: interval)))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        return text
     }
 
     private var helpText: String {

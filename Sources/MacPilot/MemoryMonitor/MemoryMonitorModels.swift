@@ -6,8 +6,14 @@ struct ProcessMemorySample: Identifiable, Equatable, Sendable {
     let name: String
     let executablePath: String?
     let footprintBytes: UInt64
+    /// 进程启动时间；读取不到时为 nil。
+    let startedAt: Date?
 
     var id: Int32 { pid }
+
+    var runningDurationInterval: TimeInterval? {
+        startedAt.map { max(0, Date().timeIntervalSince($0)) }
+    }
 }
 
 /// 按软件维度聚合后的内存占用：同一应用的 Helper、XPC、CLI 子进程会合并到一条。
@@ -17,9 +23,24 @@ struct AppMemoryUsage: Identifiable, Equatable, Sendable {
     let bundlePath: String?
     let footprintBytes: UInt64
     let processes: [ProcessMemorySample]
+    /// 家族内最早启动的进程时间，用于展示该软件的运行时长。
+    let earliestStartedAt: Date?
 
     var id: String { familyKey }
     var processCount: Int { processes.count }
+
+    var runningDurationInterval: TimeInterval? {
+        earliestStartedAt.map { max(0, Date().timeIntervalSince($0)) }
+    }
+}
+
+/// 运行时长的本地化展示：天/小时两档，超过分钟量级向下截断。
+enum MemoryDurationFormatter {
+    static func string(fromInterval interval: TimeInterval) -> String {
+        guard interval > 0 else { return "-" }
+        return Duration.seconds(interval)
+            .formatted(.units(allowed: [.days, .hours, .minutes], width: .wide, maximumUnitCount: 2))
+    }
 }
 
 /// 把分散的进程聚合到「软件」维度的纯逻辑，独立于采样便于测试。
@@ -81,6 +102,7 @@ enum AppMemoryGrouper {
                 .map(\.sample)
                 .sorted { $0.footprintBytes > $1.footprintBytes }
             let total = processes.reduce(0) { $0 + $1.footprintBytes }
+            let earliestStartedAt = processes.compactMap(\.startedAt).min()
             // 有应用包的成员决定展示名与图标；纯 CLI 家族使用最短的成员名。
             let primaryBundle = members
                 .compactMap { member -> (path: String, name: String, bytes: UInt64)? in
@@ -94,7 +116,8 @@ enum AppMemoryGrouper {
                     name: primaryBundle.name,
                     bundlePath: primaryBundle.path,
                     footprintBytes: total,
-                    processes: processes
+                    processes: processes,
+                    earliestStartedAt: earliestStartedAt
                 )
             }
             let shortestName = members
@@ -105,7 +128,8 @@ enum AppMemoryGrouper {
                 name: shortestName,
                 bundlePath: nil,
                 footprintBytes: total,
-                processes: processes
+                processes: processes,
+                earliestStartedAt: earliestStartedAt
             )
         }
         return usages.sorted { $0.footprintBytes > $1.footprintBytes }
