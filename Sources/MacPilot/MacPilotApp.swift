@@ -749,7 +749,10 @@ enum AppText {
     private static let memoryMonitorChinese: [String: String] = [
         "memoryMonitor": "内存监控",
         "memoryMonitorSubtitle": "实时查看各软件占用的内存，同一应用的多个进程会自动汇总。",
-        "memoryOverview": "系统内存",
+        "memoryOverview": "系统概览",
+        "bootedAt": "开机于",
+        "uptime": "已运行",
+        "appRunningFor": "运行 %@",
         "physicalMemory": "物理内存",
         "usedMemory": "已使用内存",
         "appMemory": "App 内存",
@@ -776,7 +779,10 @@ enum AppText {
     private static let memoryMonitorEnglish: [String: String] = [
         "memoryMonitor": "Memory Monitor",
         "memoryMonitorSubtitle": "See how much memory each app uses; scattered processes are rolled up per app.",
-        "memoryOverview": "System Memory",
+        "memoryOverview": "System Overview",
+        "bootedAt": "Booted",
+        "uptime": "Uptime",
+        "appRunningFor": "running %@",
         "physicalMemory": "Physical Memory",
         "usedMemory": "Memory Used",
         "appMemory": "App Memory",
@@ -905,7 +911,7 @@ enum AppText {
             "awakeRestartOnPowerReconnect": "Start a new session when the power adapter reconnects", "awakeRestartUsesDefaultDuration": "Uses the default duration",
             "awakeAutoStart": "Automatic Start",
             "awakeNotifyBatteryTitle": "MacPilot: Battery running low", "awakeNotifyBatteryBody": "The battery is about to drop below %d%% and the Awake sessions will end.",
-            "launch": "Launch", "launchSubtitle": "Launch apps after their configured delay following login.", "launchApps": "LAUNCH APPS",
+            "launch": "Launch", "launchSubtitle": "Launch apps after their configured delay following login.", "launchApps": "Launch Apps",
             "addLaunchApp": "Add launch app", "addLaunchRule": "Add launch rule", "editLaunchRule": "Edit launch rule",
             "launchRuleDetail": "Choose an app and set its delay in seconds from when MacPilot starts at login.",
             "launchAfter": "Launch %d sec after login", "delaySeconds": "Delay in seconds", "launchVisibility": "After launch",
@@ -3001,8 +3007,14 @@ struct LaunchRulesView: View {
             if model.launchRules.isEmpty {
                 EmptyLaunchRulesView(addRule: { showingAdd = true })
             } else {
-                List {
-                    Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(model.t("launchApps"))
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                        .accessibilityAddTraits(.isHeader)
+                        .padding(.horizontal, 36)
+
+                    List {
                         ForEach(model.launchRules) { rule in
                             LaunchRuleRow(
                                 rule: rule,
@@ -3019,16 +3031,12 @@ struct LaunchRulesView: View {
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
                         }
-                    } header: {
-                        Text(model.t("launchApps"))
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                            .textCase(nil)
                     }
+                    .listStyle(.inset(alternatesRowBackgrounds: false))
+                    .scrollContentBackground(.hidden)
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 20)
                 }
-                .listStyle(.inset(alternatesRowBackgrounds: false))
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, 22).padding(.bottom, 20)
             }
         }
     }
@@ -3944,6 +3952,8 @@ private struct MemoryMonitorMenuSection: View {
                     overviewRow(model.t("compressedMemory"), system.compressedBytes)
                     overviewRow(model.t("cachedFiles"), system.cachedFilesBytes)
                     overviewRow(model.t("swapUsed"), system.swapUsedBytes)
+                    Text("\(model.t("bootedAt")): \(system.bootDate.formatted(date: .abbreviated, time: .shortened))")
+                    Text("\(model.t("uptime")): \(MemoryDurationFormatter.string(fromInterval: system.uptimeInterval))")
                     Text("\(model.t("memoryPressure")): \(model.t(system.pressure.labelKey))")
                 }
             }

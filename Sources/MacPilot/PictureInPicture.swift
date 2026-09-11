@@ -2919,9 +2919,12 @@ struct PictureInPictureView: View {
     @State private var page: PiPSettingsPage = .general
 
     var body: some View {
-        VStack(spacing: 0) {
+        // 分类栏结构对齐 Finder 右键菜单设置页：页头 → 分类 tab → 分隔线 → 内容，
+        // 间距统一由 VStack spacing 20 提供。
+        VStack(alignment: .leading, spacing: 20) {
             dashboardHeader
             categoryBar
+            Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     HStack(spacing: 10) {
@@ -2948,7 +2951,6 @@ struct PictureInPictureView: View {
                     pageContent
                 }
                 .padding(.horizontal, 36)
-                .padding(.top, 24)
                 .padding(.bottom, 30)
             }
         }
@@ -2991,7 +2993,6 @@ struct PictureInPictureView: View {
         }
         .padding(.horizontal, 36)
         .padding(.top, 34)
-        .padding(.bottom, 18)
     }
 
     private var categoryBar: some View {
@@ -3004,8 +3005,7 @@ struct PictureInPictureView: View {
                             Text(t(item.titleKey))
                                 .lineLimit(1)
                         }
-                        .font(.subheadline.weight(page == item ? .semibold : .regular))
-                        .foregroundStyle(page == item ? Color.accentColor : Color.secondary)
+                        .font(.subheadline)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
                         .background(SettingsSelectionPill(isSelected: page == item))
@@ -3014,9 +3014,7 @@ struct PictureInPictureView: View {
                 }
             }
             .padding(.horizontal, 36)
-            .padding(.vertical, 8)
         }
-        .overlay(alignment: .bottom) { Divider() }
     }
 
     @ViewBuilder
