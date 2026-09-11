@@ -593,7 +593,8 @@ final class ScreenCaptureModel: ObservableObject {
         onOCRCapture: { [weak self] image in self?.handleOCRCapture(image) },
         onScrollingCapture: { [weak self] image in self?.handleSmartCapture(image) },
         onObjectCutoutCapture: { [weak self] image in self?.handleObjectCutout(image) },
-        onDelayedAreaCapture: { [weak self] in self?.startDelayedAreaCapture() }
+        onDelayedAreaCapture: { [weak self] in self?.startDelayedAreaCapture() },
+        onQuickCopySave: { [weak self] image in self?.saveSmartCaptureQuickCopy(image) }
         )
     }
 
@@ -1365,6 +1366,75 @@ final class ScreenCaptureModel: ObservableObject {
                 _ = await QuickAccessManager.shared.pinScreenshot(url: saved.url)
             }
         }
+    }
+
+    /// 双击快速复制后的自动落盘：沿用常规截图的输出目录、格式与命名，
+    /// 并把结果计入截图历史与磁盘占用统计。
+    func saveSmartCaptureQuickCopy(_ image: CGImage) {
+        let configuration = ScreenCaptureSaveConfiguration(
+            outputFolder: smartCaptureOutputFolder(),
+            imageFormat: settings.imageFormat,
+            quality: settings.quality
+        )
+        let sendableImage = SendableScreenCaptureImage(value: image)
+        let imageWidth = image.width
+        let imageHeight = image.height
+        let language = language
+        Task.detached(priority: .utility) { [weak self] in
+            do {
+                let savedImage = try autoreleasepool {
+                    try ScreenCaptureStorage.save(
+                        image: sendableImage,
+                        displayIndex: nil,
+                        date: Date(),
+                        configuration: configuration
+                    )
+                }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.recordQuickCopySave(
+                        savedImage,
+                        imageWidth: imageWidth,
+                        imageHeight: imageHeight
+                    )
+                    SmartCaptureSaveToast.shared.showSaved(url: savedImage.url, language: language)
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    Self.logger.error(
+                        "Quick copy auto save failed: \(error.localizedDescription, privacy: .public)"
+                    )
+                    SmartCaptureSaveToast.shared.showFailure(error: error, language: language)
+                    self?.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func recordQuickCopySave(
+        _ saved: ScreenCaptureSavedImage,
+        imageWidth: Int,
+        imageHeight: Int
+    ) {
+        lastCaptureDate = Date()
+        lastCaptureSize = saved.size
+        captureCount += 1
+        screenshotCount += 1
+        totalDiskUsage += saved.size
+        diskUsageRevision += 1
+        captureHistory.removeAll { $0.url == saved.url }
+        captureHistory.insert(
+            SmartCaptureHistoryItem(
+                url: saved.url,
+                width: imageWidth,
+                height: imageHeight,
+                byteCount: saved.size
+            ),
+            at: 0
+        )
+        captureHistory = Array(captureHistory.prefix(60))
+        SmartCaptureHistoryStore.save(captureHistory)
+        errorMessage = nil
     }
 
     private func handleOCRCapture(_ image: CGImage) {

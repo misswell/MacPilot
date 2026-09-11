@@ -1307,12 +1307,140 @@ final class ImageHostingUploadHUD {
     }
 }
 
+/// 双击快速复制后自动落盘的轻提示：不抢焦点、不拦截鼠标，自动消失。
+@MainActor
+final class SmartCaptureSaveToast {
+    static let shared = SmartCaptureSaveToast()
+
+    private var panel: NSPanel?
+    private var titleLabel: NSTextField?
+    private var detailLabel: NSTextField?
+    private var dismissTask: Task<Void, Never>?
+
+    func showSaved(url: URL, language: AppLanguage) {
+        show(
+            title: AppText.value("scQuickCopySavedTitle", language: language),
+            detail: AppText.value("scQuickCopySavedDetail", language: language, url.path),
+            autoDismissAfter: 4
+        )
+    }
+
+    func showFailure(error: Error, language: AppLanguage) {
+        show(
+            title: AppText.value("scQuickCopySaveFailedTitle", language: language),
+            detail: error.localizedDescription,
+            autoDismissAfter: 6
+        )
+    }
+
+    private func show(title: String, detail: String, autoDismissAfter seconds: Int) {
+        let panel = makePanelIfNeeded()
+        titleLabel?.stringValue = title
+        detailLabel?.stringValue = detail
+        panel.alphaValue = 1
+        position(panel)
+        panel.orderFrontRegardless()
+        scheduleDismiss(after: seconds)
+    }
+
+    private func makePanelIfNeeded() -> NSPanel {
+        if let panel { return panel }
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 92),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = true
+        panel.isReleasedWhenClosed = false
+
+        let effectView = NSVisualEffectView()
+        effectView.material = .hudWindow
+        effectView.blendingMode = .withinWindow
+        effectView.state = .active
+        effectView.wantsLayer = true
+        effectView.layer?.cornerRadius = 14
+        effectView.layer?.masksToBounds = true
+
+        let titleLabel = NSTextField(labelWithString: "")
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = .labelColor
+        titleLabel.alignment = .center
+
+        let detailLabel = NSTextField(labelWithString: "")
+        detailLabel.font = .systemFont(ofSize: 12)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.alignment = .center
+        detailLabel.lineBreakMode = .byCharWrapping
+        detailLabel.maximumNumberOfLines = 3
+
+        let stack = NSStackView(views: [titleLabel, detailLabel])
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 14, left: 18, bottom: 14, right: 18)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        effectView.addSubview(stack)
+        panel.contentView = effectView
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: effectView.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
+        ])
+
+        self.panel = panel
+        self.titleLabel = titleLabel
+        self.detailLabel = detailLabel
+        return panel
+    }
+
+    private func position(_ panel: NSPanel) {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            panel.center()
+            return
+        }
+        let visibleFrame = screen.visibleFrame
+        panel.setFrameOrigin(NSPoint(
+            x: visibleFrame.midX - panel.frame.width / 2,
+            y: visibleFrame.maxY - panel.frame.height - 42
+        ))
+    }
+
+    private func scheduleDismiss(after seconds: Int) {
+        dismissTask?.cancel()
+        dismissTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(seconds))
+            } catch {
+                return
+            }
+            self?.dismiss()
+        }
+    }
+
+    private func dismiss() {
+        dismissTask?.cancel()
+        dismissTask = nil
+        panel?.orderOut(nil)
+    }
+}
+
 @MainActor
 final class SmartScreenshotController {
     nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     private let language: () -> AppLanguage
     private let onCapture: (CGImage) -> Void
     private let onError: (Error) -> Void
+    /// 双击快速复制后的自动落盘回调；nil 时仅复制不保存。
+    private let onQuickCopySave: ((CGImage) -> Void)?
     private let onSelectionRect: (CGRect) -> Void
     private let onRecordingSelection: (CGRect, SmartCaptureSelectionMode) -> Void
     private let onRecordingSelectionAction: (CGRect, SmartCaptureSelectionMode, AreaSelectionAction) -> Void
@@ -1435,11 +1563,13 @@ final class SmartScreenshotController {
             }
         },
         shortcutRegistrationAttempt: (() -> SmartCaptureShortcutError?)? = nil,
-        pinClipboardShortcutOverride: (() -> Void)? = nil
+        pinClipboardShortcutOverride: (() -> Void)? = nil,
+        onQuickCopySave: ((CGImage) -> Void)? = nil
     ) {
         self.language = language
         self.onCapture = onCapture
         self.onError = onError
+        self.onQuickCopySave = onQuickCopySave
         self.onSelectionRect = onSelectionRect
         self.onRecordingSelection = onRecordingSelection
         self.onRecordingSelectionAction = onRecordingSelectionAction
@@ -2977,8 +3107,9 @@ final class SmartScreenshotController {
             onClose: { [weak self] in
                 self?.inlineAnnotationControllers.removeValue(forKey: id)
             },
-            onQuickCopy: { annotated in
+            onQuickCopy: { [weak self] annotated in
                 SmartCaptureClipboard.copy(image: annotated)
+                self?.onQuickCopySave?(annotated)
             }
         )
         inlineAnnotationControllers[id] = controller

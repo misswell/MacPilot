@@ -601,6 +601,35 @@ struct ScreenCaptureTests {
         return context.makeImage()
     }
 
+    @Test @MainActor func quickCopyAutoSaveWritesFileAndRecordsStats() async throws {
+        let model = ScreenCaptureModel()
+        model.setSmartCaptureEnabled(false)
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macpilot-quickcopy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        model.setOutputFolder(folder)
+
+        let image = try #require(makeTestImage(width: 12, height: 9, color: .systemBlue))
+        model.saveSmartCaptureQuickCopy(image)
+
+        // 落盘在后台任务执行，轮询等待历史记录出现
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline, model.captureHistory.isEmpty {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(model.screenshotCount == 1)
+        #expect(model.captureHistory.count == 1)
+        let item = try #require(model.captureHistory.first)
+        #expect(item.width == 12)
+        #expect(item.height == 9)
+        #expect(item.byteCount > 0)
+        #expect(FileManager.default.fileExists(atPath: item.path))
+        // 保存到指定输出目录下按日期命名的子目录中
+        #expect(item.url.deletingLastPathComponent().path.hasPrefix(folder.path))
+    }
+
     @Test func selectionGeometryNormalizesBothDragDirections() {
         #expect(SmartCaptureSelectionGeometry.rect(from: CGPoint(x: 40, y: 80), to: CGPoint(x: 10, y: 20)) == CGRect(x: 10, y: 20, width: 30, height: 60))
         #expect(SmartCaptureSelectionGeometry.isMeaningful(CGRect(x: 0, y: 0, width: 4, height: 4)))

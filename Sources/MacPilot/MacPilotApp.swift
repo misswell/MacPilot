@@ -795,6 +795,18 @@ enum AppText {
         "lastUpdated": "Updated %@",
     ]
 
+    private static let screenCaptureFeedbackChinese: [String: String] = [
+        "scQuickCopySavedTitle": "已复制并保存",
+        "scQuickCopySavedDetail": "截图已保存到：%@",
+        "scQuickCopySaveFailedTitle": "自动保存失败",
+    ]
+
+    private static let screenCaptureFeedbackEnglish: [String: String] = [
+        "scQuickCopySavedTitle": "Copied & Saved",
+        "scQuickCopySavedDetail": "Screenshot saved to: %@",
+        "scQuickCopySaveFailedTitle": "Auto Save Failed",
+    ]
+
     static func value(_ key: String, language: AppLanguage, arguments: [CVarArg]) -> String {
         let useChinese: Bool
         switch language {
@@ -803,8 +815,8 @@ enum AppText {
         case .system: useChinese = Locale.autoupdatingCurrent.language.languageCode?.identifier == "zh"
         }
         let template = useChinese
-            ? (chinese[key] ?? recordingSelectionChinese[key] ?? memoryMonitorChinese[key] ?? key)
-            : (english[key] ?? recordingSelectionEnglish[key] ?? memoryMonitorEnglish[key] ?? key)
+            ? (chinese[key] ?? recordingSelectionChinese[key] ?? memoryMonitorChinese[key] ?? screenCaptureFeedbackChinese[key] ?? key)
+            : (english[key] ?? recordingSelectionEnglish[key] ?? memoryMonitorEnglish[key] ?? screenCaptureFeedbackEnglish[key] ?? key)
         return arguments.isEmpty ? template : String(format: template, locale: language.locale, arguments: arguments)
     }
 
