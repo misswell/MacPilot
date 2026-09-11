@@ -202,6 +202,41 @@ struct AwakeTests {
         #expect(manager.sessions.first(where: { $0.id == unlimitedID })?.expectedEndAt == nil)
     }
 
+    @Test func defaultSessionHonorsUntilDatePreset() {
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: TestPowerStateProvider()
+        )
+        defer { manager.shutdown() }
+
+        let endDate = Date().addingTimeInterval(600)
+        var settings = manager.settings
+        settings.defaultSession.usesUntilDate = true
+        settings.defaultSession.untilDate = endDate
+        manager.applyLoadedSettings(settings)
+
+        let id = manager.startDefaultSession()
+        #expect(manager.sessions.first(where: { $0.id == id })?.expectedEndAt == endDate)
+    }
+
+    @Test func expiredUntilDateFallsBackToManualEnd() {
+        let manager = AwakeSessionManager(
+            assertionController: TestAssertionController(),
+            powerStateProvider: TestPowerStateProvider()
+        )
+        defer { manager.shutdown() }
+
+        var settings = manager.settings
+        settings.defaultSession.usesUntilDate = true
+        settings.defaultSession.untilDate = Date().addingTimeInterval(-60)
+        manager.applyLoadedSettings(settings)
+
+        let id = manager.startDefaultSession()
+        let session = manager.sessions.first(where: { $0.id == id })
+        #expect(session?.endCondition == .manual)
+        #expect(session?.expectedEndAt == nil)
+    }
+
     @Test func launchAutoStartStartsOneDefaultSessionOnlyWhenEnabled() {
         let manager = AwakeSessionManager(
             assertionController: TestAssertionController(),
@@ -278,8 +313,8 @@ struct AwakeTests {
         #expect(AppText.value("awakeAutoStartOnLaunch", language: .english) == "Start the default session when the app launches")
         #expect(AppText.value("awakeAutoStartOnWake", language: .simplifiedChinese) == "从睡眠唤醒时自动开启默认会话")
         #expect(AppText.value("awakeAutoStartOnWake", language: .english) == "Start the default session when waking from sleep")
-        #expect(AppText.value("awakeStartDefaultSession", language: .simplifiedChinese) == "开始默认会话")
-        #expect(AppText.value("awakeStartDefaultSession", language: .english) == "Start Default Session")
+        #expect(AppText.value("awakeSessionConfig", language: .simplifiedChinese) == "Session 配置")
+        #expect(AppText.value("awakeSessionConfig", language: .english) == "Session Setup")
         #expect(AppText.value("awakeEndCalculation", language: .simplifiedChinese) == "计算结束时间")
         #expect(AppText.value("awakeEndCalculation", language: .english) == "End Time Calculation")
         #expect(AppText.value("awakeEndSessionBelowBattery", language: .simplifiedChinese, 15) == "当电量低于 15% 时结束会话")

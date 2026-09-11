@@ -336,6 +336,11 @@ enum SessionEndCalculation: String, Codable, Equatable, Sendable {
 struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
     /// 0 means the session runs until it is ended manually.
     var durationMinutes: Int
+    /// When set, the default session ends at this absolute date instead of
+    /// using `durationMinutes`（「直到指定时间」预设）。
+    var usesUntilDate: Bool
+    /// `nil` 直到用户选择该预设并指定日期；过期日期按手动结束处理。
+    var untilDate: Date?
     var warnBeforeBatteryTermination: Bool
     var ignoreBatteryLevelOnExternalPower: Bool
     var restartOnPowerReconnect: Bool
@@ -346,6 +351,8 @@ struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
 
     init(
         durationMinutes: Int = 60,
+        usesUntilDate: Bool = false,
+        untilDate: Date? = nil,
         warnBeforeBatteryTermination: Bool = false,
         ignoreBatteryLevelOnExternalPower: Bool = true,
         restartOnPowerReconnect: Bool = false,
@@ -353,6 +360,8 @@ struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
         autoStartOnWake: Bool = false
     ) {
         self.durationMinutes = max(0, durationMinutes)
+        self.usesUntilDate = usesUntilDate
+        self.untilDate = untilDate
         self.warnBeforeBatteryTermination = warnBeforeBatteryTermination
         self.ignoreBatteryLevelOnExternalPower = ignoreBatteryLevelOnExternalPower
         self.restartOnPowerReconnect = restartOnPowerReconnect
@@ -361,11 +370,18 @@ struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
     }
 
     var endCondition: SessionEndCondition {
-        durationMinutes > 0 ? .duration(TimeInterval(durationMinutes) * 60) : .manual
+        guard usesUntilDate else {
+            return durationMinutes > 0 ? .duration(TimeInterval(durationMinutes) * 60) : .manual
+        }
+        // 日期缺失或已过时退回手动结束，自动启动不会得到一个立刻过期的会话。
+        guard let untilDate, untilDate > Date() else { return .manual }
+        return .date(untilDate)
     }
 
     private enum CodingKeys: String, CodingKey {
         case durationMinutes
+        case usesUntilDate
+        case untilDate
         case warnBeforeBatteryTermination
         case ignoreBatteryLevelOnExternalPower
         case restartOnPowerReconnect
@@ -377,6 +393,8 @@ struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             durationMinutes: try container.decodeIfPresent(Int.self, forKey: .durationMinutes) ?? 60,
+            usesUntilDate: try container.decodeIfPresent(Bool.self, forKey: .usesUntilDate) ?? false,
+            untilDate: try container.decodeIfPresent(Date.self, forKey: .untilDate),
             warnBeforeBatteryTermination: try container.decodeIfPresent(Bool.self, forKey: .warnBeforeBatteryTermination) ?? false,
             ignoreBatteryLevelOnExternalPower: try container.decodeIfPresent(Bool.self, forKey: .ignoreBatteryLevelOnExternalPower) ?? true,
             restartOnPowerReconnect: try container.decodeIfPresent(Bool.self, forKey: .restartOnPowerReconnect) ?? false,

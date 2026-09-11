@@ -458,8 +458,9 @@ enum AppText {
         "awakeActivationDelay": "启动延迟（秒）", "awakeDeactivationDelay": "停止延迟（秒）",
         "awakeConditionMatched": "条件已满足", "awakeSessionStopped": "已手动停止", "awakeConditionNotMatched": "条件未满足",
         "awakeDefaultSession": "默认会话", "awakeDefaultSessionHint": "自动开启的会话会使用这里的默认时长设置。",
+        "awakeSessionConfig": "Session 配置", "awakeSessionConfigHint": "这里的配置就是默认会话：手动开始与启动、唤醒后的自动开始使用同一套设置。",
         "awakeDefaultDuration": "默认时长", "awakeAutoStartOnLaunch": "App 启动时自动开启默认会话",
-        "awakeAutoStartOnWake": "从睡眠唤醒时自动开启默认会话", "awakeStartDefaultSession": "开始默认会话",
+        "awakeAutoStartOnWake": "从睡眠唤醒时自动开启默认会话",
         "awakeEndCalculation": "计算结束时间", "awakeEndCalculationTimer": "使用计时器", "awakeEndCalculationAwakeTime": "睡眠期间暂停计时",
         "awakeForceSleep": "强制睡眠", "awakeEndOnForcedSleep": "Mac 强制睡眠时结束会话",
         "awakeDisplaySection": "显示器", "awakeAllowSystemSleepWhenDisplayOff": "当显示器关闭时允许系统睡眠",
@@ -762,6 +763,8 @@ enum AppText {
         "pressureCritical": "严重",
         "appMemoryList": "应用内存占用",
         "processCount": "%d 个进程",
+        "memoryTopApps": "内存占用前十",
+        "memoryMonitorOpen": "打开内存监控…",
         "autoRefresh": "自动刷新",
         "refreshNow": "立即刷新",
         "searchApps": "搜索应用",
@@ -787,6 +790,8 @@ enum AppText {
         "pressureCritical": "Critical",
         "appMemoryList": "App Memory Usage",
         "processCount": "%d processes",
+        "memoryTopApps": "Top 10 by Memory",
+        "memoryMonitorOpen": "Open Memory Monitor…",
         "autoRefresh": "Auto Refresh",
         "refreshNow": "Refresh Now",
         "searchApps": "Search apps",
@@ -887,8 +892,9 @@ enum AppText {
             "awakeActivationDelay": "Activation delay (seconds)", "awakeDeactivationDelay": "Deactivation delay (seconds)",
             "awakeConditionMatched": "Condition matched", "awakeSessionStopped": "Stopped manually", "awakeConditionNotMatched": "Condition not matched",
             "awakeDefaultSession": "Default Session", "awakeDefaultSessionHint": "Sessions that start automatically use the default duration here.",
+            "awakeSessionConfig": "Session Setup", "awakeSessionConfigHint": "These settings are the default session: manual starts and auto-start on launch or wake all share the same configuration.",
             "awakeDefaultDuration": "Default duration", "awakeAutoStartOnLaunch": "Start the default session when the app launches",
-            "awakeAutoStartOnWake": "Start the default session when waking from sleep", "awakeStartDefaultSession": "Start Default Session",
+            "awakeAutoStartOnWake": "Start the default session when waking from sleep",
             "awakeEndCalculation": "End Time Calculation", "awakeEndCalculationTimer": "Use a timer", "awakeEndCalculationAwakeTime": "Pause while the Mac sleeps",
             "awakeForceSleep": "Forced Sleep", "awakeEndOnForcedSleep": "End the session when the Mac is forced to sleep",
             "awakeDisplaySection": "Display", "awakeAllowSystemSleepWhenDisplayOff": "Allow system sleep when the display is off",
@@ -3920,6 +3926,48 @@ struct BLEUnlockView: View {
     }
 }
 
+/// 菜单栏「内存监控」子菜单：系统内存总览 + 占用前十的应用。
+/// 每次展开菜单时同步采样（带短缓存），底部入口跳转到监控页。
+private struct MemoryMonitorMenuSection: View {
+    @EnvironmentObject private var model: MacPilotModel
+    let openMonitor: () -> Void
+
+    var body: some View {
+        let snapshot = MemoryMonitorModel.menuSnapshot()
+        Menu(model.t("memoryMonitor")) {
+            if let system = snapshot.system {
+                Section(model.t("memoryOverview")) {
+                    overviewRow(model.t("physicalMemory"), system.physicalBytes)
+                    overviewRow(model.t("usedMemory"), system.usedBytes)
+                    overviewRow(model.t("appMemory"), system.appBytes)
+                    overviewRow(model.t("wiredMemory"), system.wiredBytes)
+                    overviewRow(model.t("compressedMemory"), system.compressedBytes)
+                    overviewRow(model.t("cachedFiles"), system.cachedFilesBytes)
+                    overviewRow(model.t("swapUsed"), system.swapUsedBytes)
+                    Text("\(model.t("memoryPressure")): \(model.t(system.pressure.labelKey))")
+                }
+            }
+            Divider()
+            Section(model.t("memoryTopApps")) {
+                let topApps = snapshot.apps.prefix(10)
+                if topApps.isEmpty {
+                    Text(model.t("loadingProcesses"))
+                } else {
+                    ForEach(Array(topApps.enumerated()), id: \.offset) { index, app in
+                        Text("\(index + 1). \(app.name) — \(MemoryByteFormatter.string(fromBytes: app.footprintBytes))")
+                    }
+                }
+            }
+            Divider()
+            Button(model.t("memoryMonitorOpen")) { openMonitor() }
+        }
+    }
+
+    private func overviewRow(_ label: String, _ bytes: UInt64) -> some View {
+        Text("\(label): \(MemoryByteFormatter.string(fromBytes: bytes))")
+    }
+}
+
 struct MenuBarView: View {
     @EnvironmentObject private var model: MacPilotModel
     @Environment(\.openWindow) private var openWindow
@@ -3997,6 +4045,11 @@ struct MenuBarView: View {
                 deferCaptureAction { model.screenRecording.start() }
             }
             .disabled(screenRecording.state != .idle || screenRecording.isDeviceRecording)
+        }
+        Divider()
+        MemoryMonitorMenuSection {
+            model.requestedSection = .memoryMonitor
+            showMainWindow()
         }
         Divider()
         Button(model.t("turnOffScreenNow")) {

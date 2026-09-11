@@ -1,17 +1,5 @@
 import SwiftUI
 
-private enum AwakeSessionPreset: String, CaseIterable, Identifiable {
-    case unlimited
-    case thirtyMinutes
-    case oneHour
-    case twoHours
-    case fourHours
-    case customDuration
-    case untilDate
-
-    var id: String { rawValue }
-}
-
 private enum AwakeDefaultDurationPreset: String, CaseIterable, Identifiable {
     case unlimited
     case thirtyMinutes
@@ -19,6 +7,7 @@ private enum AwakeDefaultDurationPreset: String, CaseIterable, Identifiable {
     case twoHours
     case fourHours
     case customDuration
+    case untilDate
 
     var id: String { rawValue }
 
@@ -29,7 +18,7 @@ private enum AwakeDefaultDurationPreset: String, CaseIterable, Identifiable {
         case .oneHour: 60
         case .twoHours: 120
         case .fourHours: 240
-        case .customDuration: nil
+        case .customDuration, .untilDate: nil
         }
     }
 }
@@ -39,10 +28,6 @@ struct AwakeSettingsView: View {
     @ObservedObject var awake: AwakeSessionManager
     @ObservedObject var triggerEngine: AwakeTriggerEngine
 
-    @State private var selectedPreset: AwakeSessionPreset = .unlimited
-    @State private var customMinutes = 60
-    @State private var untilDate = Date().addingTimeInterval(60 * 60)
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -51,9 +36,8 @@ struct AwakeSettingsView: View {
                     Text(model.t("awakeSubtitle")).foregroundStyle(.secondary)
                 }
 
-                sessionControlCard
+                sessionCard
                 sessionDetailsCard
-                defaultSessionCard
                 AwakeTriggerListView(triggerEngine: triggerEngine)
                 powerStateCard
             }
@@ -61,93 +45,23 @@ struct AwakeSettingsView: View {
         }
     }
 
-    private var sessionControlCard: some View {
+    /// 统一的 Session 卡片：这里的全部配置就是「默认会话」——手动开始与
+    /// 启动、唤醒后的自动开始使用同一套设置，只有一处需要维护。
+    private var sessionCard: some View {
         SettingsCard {
-            Text(model.t("awakeStartSession")).font(.headline)
-
-            Picker(model.t("awakeSessionDuration"), selection: $selectedPreset) {
-                Text(model.t("awakeUnlimited")).tag(AwakeSessionPreset.unlimited)
-                Text(model.t("awake30Minutes")).tag(AwakeSessionPreset.thirtyMinutes)
-                Text(model.t("awakeOneHour")).tag(AwakeSessionPreset.oneHour)
-                Text(model.t("awakeTwoHours")).tag(AwakeSessionPreset.twoHours)
-                Text(model.t("awakeFourHours")).tag(AwakeSessionPreset.fourHours)
-                Text(model.t("awakeCustomDuration")).tag(AwakeSessionPreset.customDuration)
-                Text(model.t("awakeUntilDate")).tag(AwakeSessionPreset.untilDate)
-            }
-
-            if selectedPreset == .customDuration {
-                HStack {
-                    Text(model.t("awakeCustomDuration"))
-                    Spacer()
-                    TextField(model.t("awakeCustomDuration"), value: $customMinutes, format: .number)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 90)
-                }
-            } else if selectedPreset == .untilDate {
-                DatePicker(
-                    model.t("awakeUntilDate"),
-                    selection: $untilDate,
-                    in: Date()...,
-                    displayedComponents: [.date, .hourAndMinute]
-                )
-            }
-
-            HStack {
-                Button(model.t("awakeStart"), action: startSelectedSession)
-                    .macPilotProminentButtonStyle()
-                if awake.hasManualSession {
-                    Button(model.t("awakeStop"), action: awake.endAllManualSessions)
-                }
-            }
-        }
-    }
-
-    private var sessionDetailsCard: some View {
-        SettingsCard {
-            Text(model.t("awakeSessionDetails")).font(.headline)
-            if awake.activeSessions.isEmpty {
-                Label(model.t("awakeNoActiveSession"), systemImage: "moon.zzz")
-                    .foregroundStyle(.secondary)
-            } else {
-                TimelineView(.periodic(from: Date(), by: 1)) { context in
-                    VStack(alignment: .leading, spacing: 14) {
-                        ForEach(awake.activeSessions) { session in
-                            AwakeSessionDetailRow(
-                                session: session,
-                                now: context.date,
-                                triggerName: awakeTriggerName(for: session.source, triggerEngine: triggerEngine),
-                                onStop: { stopAwakeSession(session, awake: awake, triggerEngine: triggerEngine) }
-                            )
-                            if session.id != awake.activeSessions.last?.id {
-                                Divider()
-                            }
-                        }
-                    }
-                }
-            }
-            if awake.safetyProtectionActive {
-                warningBanner(Label(model.t("awakeSafetyActive"), systemImage: "battery.25"))
-            }
-            if let failure = awake.lastAssertionFailure {
-                warningBanner(Label(model.t("awakeAssertionError", failure.code), systemImage: "exclamationmark.triangle.fill"))
-            }
-        }
-    }
-
-    private var defaultSessionCard: some View {
-        SettingsCard {
-            Text(model.t("awakeDefaultSession")).font(.headline)
-            Text(model.t("awakeDefaultSessionHint"))
+            Text(model.t("awakeSessionConfig")).font(.headline)
+            Text(model.t("awakeSessionConfigHint"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            Picker(model.t("awakeDefaultDuration"), selection: defaultDurationBinding) {
+            Picker(model.t("awakeSessionDuration"), selection: defaultDurationBinding) {
                 Text(model.t("awakeUnlimited")).tag(AwakeDefaultDurationPreset.unlimited)
                 Text(model.t("awake30Minutes")).tag(AwakeDefaultDurationPreset.thirtyMinutes)
                 Text(model.t("awakeOneHour")).tag(AwakeDefaultDurationPreset.oneHour)
                 Text(model.t("awakeTwoHours")).tag(AwakeDefaultDurationPreset.twoHours)
                 Text(model.t("awakeFourHours")).tag(AwakeDefaultDurationPreset.fourHours)
                 Text(model.t("awakeCustomDuration")).tag(AwakeDefaultDurationPreset.customDuration)
+                Text(model.t("awakeUntilDate")).tag(AwakeDefaultDurationPreset.untilDate)
             }
 
             if defaultDurationPreset == .customDuration {
@@ -157,6 +71,21 @@ struct AwakeSettingsView: View {
                     TextField(model.t("awakeCustomDuration"), value: customDurationMinutesBinding, format: .number)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 90)
+                }
+            } else if defaultDurationPreset == .untilDate {
+                DatePicker(
+                    model.t("awakeUntilDate"),
+                    selection: untilDateBinding,
+                    in: Date()...,
+                    displayedComponents: [.date, .hourAndMinute]
+                )
+            }
+
+            HStack {
+                Button(model.t("awakeStartSession")) { _ = awake.startDefaultSession() }
+                    .macPilotProminentButtonStyle()
+                if awake.hasManualSession {
+                    Button(model.t("awakeStop"), action: awake.endAllManualSessions)
                 }
             }
 
@@ -227,9 +156,38 @@ struct AwakeSettingsView: View {
                 .toggleStyle(.switch)
             Toggle(model.t("awakeAutoStartOnWake"), isOn: autoStartOnWakeBinding)
                 .toggleStyle(.switch)
+        }
+    }
 
-            Button(model.t("awakeStartDefaultSession")) { _ = awake.startDefaultSession() }
-                .macPilotProminentButtonStyle()
+    private var sessionDetailsCard: some View {
+        SettingsCard {
+            Text(model.t("awakeSessionDetails")).font(.headline)
+            if awake.activeSessions.isEmpty {
+                Label(model.t("awakeNoActiveSession"), systemImage: "moon.zzz")
+                    .foregroundStyle(.secondary)
+            } else {
+                TimelineView(.periodic(from: Date(), by: 1)) { context in
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(awake.activeSessions) { session in
+                            AwakeSessionDetailRow(
+                                session: session,
+                                now: context.date,
+                                triggerName: awakeTriggerName(for: session.source, triggerEngine: triggerEngine),
+                                onStop: { stopAwakeSession(session, awake: awake, triggerEngine: triggerEngine) }
+                            )
+                            if session.id != awake.activeSessions.last?.id {
+                                Divider()
+                            }
+                        }
+                    }
+                }
+            }
+            if awake.safetyProtectionActive {
+                warningBanner(Label(model.t("awakeSafetyActive"), systemImage: "battery.25"))
+            }
+            if let failure = awake.lastAssertionFailure {
+                warningBanner(Label(model.t("awakeAssertionError", failure.code), systemImage: "exclamationmark.triangle.fill"))
+            }
         }
     }
 
@@ -274,13 +232,14 @@ struct AwakeSettingsView: View {
     }
 
     private var defaultDurationPreset: AwakeDefaultDurationPreset {
+        if awake.settings.defaultSession.usesUntilDate { return .untilDate }
         switch awake.settings.defaultSession.durationMinutes {
-        case 0: .unlimited
-        case 30: .thirtyMinutes
-        case 60: .oneHour
-        case 120: .twoHours
-        case 240: .fourHours
-        default: .customDuration
+        case 0: return .unlimited
+        case 30: return .thirtyMinutes
+        case 60: return .oneHour
+        case 120: return .twoHours
+        case 240: return .fourHours
+        default: return .customDuration
         }
     }
 
@@ -288,8 +247,32 @@ struct AwakeSettingsView: View {
         Binding(
             get: { defaultDurationPreset },
             set: { preset in
-                guard let minutes = preset.minutes else { return }
-                awake.updateSettings { $0.defaultSession.durationMinutes = minutes }
+                awake.updateSettings { settings in
+                    settings.defaultSession.usesUntilDate = preset == .untilDate
+                    if preset == .untilDate {
+                        // 切换预设时补一个未过期的默认日期，避免隐性落到手动结束
+                        let fallback = Date().addingTimeInterval(60 * 60)
+                        let existing = settings.defaultSession.untilDate ?? fallback
+                        settings.defaultSession.untilDate = max(existing, Date().addingTimeInterval(60))
+                    }
+                    if preset != .untilDate, let minutes = preset.minutes {
+                        settings.defaultSession.durationMinutes = minutes
+                    }
+                }
+            }
+        )
+    }
+
+    private var untilDateBinding: Binding<Date> {
+        Binding(
+            get: {
+                max(
+                    awake.settings.defaultSession.untilDate ?? Date().addingTimeInterval(60 * 60),
+                    Date()
+                )
+            },
+            set: { value in
+                awake.updateSettings { $0.defaultSession.untilDate = value }
             }
         )
     }
@@ -433,24 +416,6 @@ struct AwakeSettingsView: View {
             )
     }
 
-    private func startSelectedSession() {
-        switch selectedPreset {
-        case .unlimited:
-            _ = awake.startManualSession()
-        case .thirtyMinutes:
-            _ = awake.startManualSession(duration: 30 * 60)
-        case .oneHour:
-            _ = awake.startManualSession(duration: 60 * 60)
-        case .twoHours:
-            _ = awake.startManualSession(duration: 2 * 60 * 60)
-        case .fourHours:
-            _ = awake.startManualSession(duration: 4 * 60 * 60)
-        case .customDuration:
-            _ = awake.startManualSession(duration: TimeInterval(max(1, customMinutes) * 60))
-        case .untilDate:
-            _ = awake.startManualSession(until: untilDate)
-        }
-    }
 }
 
 private struct AwakeSessionDetailRow: View {
