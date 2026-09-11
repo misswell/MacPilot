@@ -259,24 +259,26 @@ private struct AppMemoryRow: View {
         .accessibilityLabel("\(app.name), \(model.t("processCount", app.processCount)), \(MemoryByteFormatter.string(fromBytes: app.footprintBytes))")
     }
 
-    /// 明细行左缘对齐名称列：箭头 14 + 间距 10 + 图标 26 + 间距 12 = 62。
+    /// 明细行左缘对齐名称列（箭头 14 + 间距 10 + 图标 26 + 间距 12 = 62），
+    /// 进程名靠前，PID 作为次要信息内联跟随，右缘与主行数值列对齐。
     private func processRow(_ process: ProcessMemorySample) -> some View {
-        HStack(spacing: 8) {
-            Text(model.t("processPIDValue", process.pid))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.tertiary)
-                .frame(width: 76, alignment: .leading)
+        HStack(spacing: 10) {
             Text(process.name)
                 .font(.callout)
+                .foregroundStyle(.primary.opacity(0.78))
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Spacer(minLength: 12)
+                .layoutPriority(1)
+            Text("PID \(process.pid)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 16)
             Text(MemoryByteFormatter.string(fromBytes: process.footprintBytes))
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
         .padding(.leading, 62)
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
     }
 
     @ViewBuilder
