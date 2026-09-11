@@ -175,6 +175,25 @@ struct MemoryMonitorTests {
         #expect(!AppMemoryGrouper.isSystemExecutablePath("/Users/dev/.zcode/cli/zcode-cli"))
     }
 
+    @Test @MainActor func menuSnapshotSamplesAppsAndSystemMemory() {
+        let snapshot = MemoryMonitorModel.menuSnapshot(maxAge: 0)
+
+        #expect(snapshot.system != nil)
+        #expect(!snapshot.apps.isEmpty)
+        // 应用按内存从大到小排序，供菜单前十展示
+        #expect(zip(snapshot.apps, snapshot.apps.dropFirst()).allSatisfy {
+            $0.footprintBytes >= $1.footprintBytes
+        })
+    }
+
+    @Test @MainActor func menuSnapshotReusesCachedSampleWithinTTL() {
+        let first = MemoryMonitorModel.menuSnapshot(maxAge: 60)
+        let second = MemoryMonitorModel.menuSnapshot(maxAge: 60)
+
+        #expect(first.apps == second.apps)
+        #expect(first.system == second.system)
+    }
+
     @Test func samplerReadsLiveProcessesAndSystemSnapshot() throws {
         let samples = ProcessMemorySampler.sample()
         #expect(samples.count > 10)

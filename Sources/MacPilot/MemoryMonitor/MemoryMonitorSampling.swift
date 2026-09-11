@@ -71,6 +71,14 @@ struct SystemMemorySnapshot: Equatable, Sendable {
         case normal = 1
         case warning = 2
         case critical = 3
+
+        var labelKey: String {
+            switch self {
+            case .normal: "pressureNormal"
+            case .warning: "pressureWarning"
+            case .critical: "pressureCritical"
+            }
+        }
     }
 
     let physicalBytes: UInt64

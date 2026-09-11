@@ -102,7 +102,7 @@ struct MemoryMonitorView: View {
             Spacer(minLength: 8)
             HStack(spacing: 6) {
                 Circle().fill(color(for: pressure)).frame(width: 8, height: 8)
-                Text(model.t(pressureLabelKey(for: pressure)))
+                Text(model.t(pressure.labelKey))
                     .font(.subheadline.monospacedDigit().weight(.medium))
             }
         }
@@ -114,14 +114,6 @@ struct MemoryMonitorView: View {
         case .normal: .green
         case .warning: .orange
         case .critical: .red
-        }
-    }
-
-    private func pressureLabelKey(for pressure: SystemMemorySnapshot.PressureLevel) -> String {
-        switch pressure {
-        case .normal: "pressureNormal"
-        case .warning: "pressureWarning"
-        case .critical: "pressureCritical"
         }
     }
 
