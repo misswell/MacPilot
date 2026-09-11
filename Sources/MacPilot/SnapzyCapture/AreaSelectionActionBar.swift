@@ -136,9 +136,14 @@ final class AreaSelectionActionBar: NSView {
 
   override var intrinsicContentSize: NSSize {
     let optionsVisible = !(optionsRow?.isHidden ?? true)
-    let contentHeight: CGFloat = optionsVisible
-      ? Self.primaryRowHeight + Self.rowSpacing + Self.optionsRowHeight
-      : Self.primaryRowHeight
+    // 高度按行的实际内容计算：主行按钮最高 28pt、选项行随控件而定。
+    // 之前写死 38/36pt 行高会让声明的尺寸大于内容，NSStackView 顶部
+    // 对齐时多余空间全部落到工具条底部，看起来上下留白不对称。
+    let primaryHeight = primaryRow?.fittingSize.height ?? 0
+    let optionsHeight = optionsVisible ? (optionsRow?.fittingSize.height ?? 0) : 0
+    let contentHeight = optionsHeight > 0
+      ? primaryHeight + Self.rowSpacing + optionsHeight
+      : primaryHeight
     // 宽度跟随实际内容：空闲时橡皮/撤销隐藏，标注会话中它们出现，
     // 固定宽度会导致标注模式下内容溢出、空闲时右侧留白。
     let insets = rootStack.edgeInsets
@@ -151,9 +156,7 @@ final class AreaSelectionActionBar: NSView {
     )
   }
 
-  private static let primaryRowHeight: CGFloat = 38
   private static let rowSpacing: CGFloat = 8
-  private static let optionsRowHeight: CGFloat = 36
 
   // MARK: - Annotation Session Binding
 

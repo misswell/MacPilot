@@ -981,7 +981,8 @@ struct SnapzyCaptureTests {
         collapseButton.performClick(nil)
         #expect(optionsRow.isHidden)
         let collapsedHeight = bar.intrinsicContentSize.height
-        #expect(expandedHeight - collapsedHeight >= 44)
+        // 收起前后的差值 = 选项行实际内容高度 + 行间距（intrinsic 高度按真实内容计算）
+        #expect(expandedHeight - collapsedHeight >= optionsRow.fittingSize.height + 8)
 
         let rectangleButton = try #require(
             buttons(in: bar).first {
