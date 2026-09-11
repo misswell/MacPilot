@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import Testing
 @testable import MacPilot
@@ -293,5 +294,54 @@ struct ClipboardHistoryTests {
         #expect(item.isImage)
         #expect(thumbnail.pixelSize.width <= 80)
         #expect(thumbnail.pixelSize.height <= 80)
+    }
+
+    @Test func keyboardNavigationScrollFollowsSelection() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipboard-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
+
+        let history = makeHistory(url: url)
+        history.add(makeItem("first"))
+        history.add(makeItem("second"))
+        history.add(makeItem("third"))
+
+        history.selectFirst()
+        #expect(history.scrollFollowItemID == history.items[0].id)
+
+        history.moveSelectionDown()
+        #expect(history.selectedIndex == 1)
+        #expect(history.scrollFollowItemID == history.items[1].id)
+
+        history.moveSelectionUp()
+        #expect(history.selectedIndex == 0)
+        #expect(history.scrollFollowItemID == history.items[0].id)
+    }
+
+    @Test func hoverSelectionMovesHighlightWithoutScrollFollow() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipboard-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
+
+        let history = makeHistory(url: url)
+        history.add(makeItem("first"))
+        history.add(makeItem("second"))
+        history.selectFirst()
+
+        // 鼠标悬停只移动高亮，不触发滚动跟随，避免列表在光标下连跳
+        history.selectItem(at: 1)
+        #expect(history.selectedIndex == 1)
+        #expect(history.scrollFollowItemID == history.items[0].id)
+
+        // 悬停到同一行不产生多余的变更通知
+        var changeCount = 0
+        let observer = history.objectWillChange.sink { _ in changeCount += 1 }
+        defer { observer.cancel() }
+        history.selectItem(at: 1)
+        #expect(changeCount == 0)
     }
 }

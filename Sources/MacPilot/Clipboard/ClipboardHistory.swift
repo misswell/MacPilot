@@ -19,6 +19,10 @@ final class ClipboardHistory: ObservableObject {
         didSet { updateFilteredItems() }
     }
     @Published var selectedIndex: Int = 0
+    /// 需要把选中项滚进视野时更新（键盘/快捷键导航、删除）。
+    /// 鼠标悬停只改 selectedIndex、不触发滚动跟随：列表在光标下方滚动
+    /// 会让光标重新命中其他行，形成「选中→滚动→再选中」的连跳。
+    @Published private(set) var scrollFollowItemID: ClipboardItem.ID?
     @Published var pinsAtTop: Bool = true {
         didSet { updateFilteredItems() }
     }
@@ -134,6 +138,7 @@ final class ClipboardHistory: ObservableObject {
     func deleteSelected() {
         guard let selected = selectedItem else { return }
         delete(selected)
+        noteScrollFollow()
     }
 
     /// 清除未固定的历史（保留固定条目）。
@@ -152,6 +157,7 @@ final class ClipboardHistory: ObservableObject {
         items = []
         searchQuery = ""
         selectedIndex = 0
+        scrollFollowItemID = nil
         ClipboardContentStore.deleteAll()
         save()
     }
@@ -172,19 +178,22 @@ final class ClipboardHistory: ObservableObject {
     func moveSelectionUp() {
         guard !items.isEmpty else { return }
         selectedIndex = (selectedIndex - 1 + items.count) % items.count
+        noteScrollFollow()
     }
 
     func moveSelectionDown() {
         guard !items.isEmpty else { return }
         selectedIndex = (selectedIndex + 1) % items.count
+        noteScrollFollow()
     }
 
     func selectFirst() {
         selectedIndex = 0
+        noteScrollFollow()
     }
 
     func selectItem(at index: Int) {
-        guard items.indices.contains(index) else { return }
+        guard items.indices.contains(index), index != selectedIndex else { return }
         selectedIndex = index
     }
 
@@ -194,6 +203,7 @@ final class ClipboardHistory: ObservableObject {
         guard unpinned.indices.contains(index) else { return }
         guard let itemIndex = items.firstIndex(where: { $0.id == unpinned[index].id }) else { return }
         selectedIndex = itemIndex
+        noteScrollFollow()
     }
 
     /// 选择固定字母为 pin 的条目（字母快捷键）。
@@ -204,10 +214,16 @@ final class ClipboardHistory: ObservableObject {
         }
         guard let itemIndex = items.firstIndex(where: { $0.id == item.id }) else { return false }
         selectedIndex = itemIndex
+        noteScrollFollow()
         return true
     }
 
     // MARK: - Helpers
+
+    /// 键盘/快捷键把选中项移出视野时，让面板把新选中项滚进视野。
+    private func noteScrollFollow() {
+        scrollFollowItemID = selectedItem?.id
+    }
 
     private func trimToLimit() {
         let unpinned = allItems.filter { !$0.isPinned }

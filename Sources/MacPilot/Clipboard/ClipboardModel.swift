@@ -55,8 +55,13 @@ final class ClipboardModel: ObservableObject {
     var persist: (() -> Void)?
 
     private var panel: ClipboardPanel?
+    private var historyObservation: AnyCancellable?
 
     init() {
+        // history 是独立的 ObservableObject，视图只观察本模型；
+        // 不桥接的话，选中移动、搜索过滤、条目增删都不会触发界面刷新。
+        historyObservation = history.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
         monitor.settingsProvider = { [weak self] in self?.settings ?? ClipboardSettings() }
         monitor.onNewCopy { [weak self] item in
             self?.history.add(item)

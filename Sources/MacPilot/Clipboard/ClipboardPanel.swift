@@ -327,10 +327,10 @@ struct ClipboardPanelContent: View {
                 .padding(.horizontal, Self.horizontalPadding)
                 .padding(.vertical, 2)
             }
-            .onChange(of: model.history.selectedIndex) { _, newIndex in
-                guard let item = model.history.selectedItem else { return }
+            .onChange(of: model.history.scrollFollowItemID) { _, itemID in
+                guard let itemID else { return }
                 withAnimation(.easeOut(duration: 0.12)) {
-                    proxy.scrollTo(item.id, anchor: .center)
+                    proxy.scrollTo(itemID, anchor: .center)
                 }
             }
             .scrollContentBackground(.hidden)
