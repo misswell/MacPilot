@@ -53,6 +53,14 @@ Clipboard History keeps recent copied content available from a searchable panel:
 - Pin important items, remove individual entries, clear unpinned history, and configure the history limit.
 - Text, images, URLs, and other supported pasteboard content are deduplicated and persisted across launches.
 
+## Memory Monitor
+
+The **Memory Monitor** shows how much physical memory each app uses in real time:
+
+- Scattered processes of the same app (helpers, XPC services, CLI children…) are rolled up into a single row; expand it to inspect each process.
+- A system overview covers physical, used, app, wired, compressed, cached-file, and swap usage plus the current memory pressure level.
+- It refreshes every 3 seconds by default and can be paused or refreshed manually; values match Activity Monitor's Memory column.
+
 ## Window Switcher
 
 The **Window Switcher** provides fast keyboard navigation across application windows:

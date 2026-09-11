@@ -745,6 +745,58 @@ enum AppText {
         "scRecordingPrepareSettings": "Recording settings",
     ]
 
+    private static let memoryMonitorChinese: [String: String] = [
+        "memoryMonitor": "内存监控",
+        "memoryMonitorSubtitle": "实时查看各软件占用的内存，同一应用的多个进程会自动汇总。",
+        "memoryOverview": "系统内存",
+        "physicalMemory": "物理内存",
+        "usedMemory": "已使用内存",
+        "appMemory": "App 内存",
+        "wiredMemory": "联机内存",
+        "compressedMemory": "已压缩",
+        "cachedFiles": "已缓存文件",
+        "swapUsed": "已使用的交换",
+        "memoryPressure": "内存压力",
+        "pressureNormal": "正常",
+        "pressureWarning": "偏高",
+        "pressureCritical": "严重",
+        "appMemoryList": "应用内存占用",
+        "processCount": "%d 个进程",
+        "processPIDValue": "PID %d",
+        "autoRefresh": "自动刷新",
+        "refreshNow": "立即刷新",
+        "searchApps": "搜索应用",
+        "noMatchingApps": "没有匹配的应用。",
+        "loadingProcesses": "正在读取进程…",
+        "lastUpdated": "更新于 %@",
+    ]
+
+    private static let memoryMonitorEnglish: [String: String] = [
+        "memoryMonitor": "Memory Monitor",
+        "memoryMonitorSubtitle": "See how much memory each app uses; scattered processes are rolled up per app.",
+        "memoryOverview": "System Memory",
+        "physicalMemory": "Physical Memory",
+        "usedMemory": "Memory Used",
+        "appMemory": "App Memory",
+        "wiredMemory": "Wired",
+        "compressedMemory": "Compressed",
+        "cachedFiles": "Cached Files",
+        "swapUsed": "Swap Used",
+        "memoryPressure": "Memory Pressure",
+        "pressureNormal": "Normal",
+        "pressureWarning": "Warning",
+        "pressureCritical": "Critical",
+        "appMemoryList": "App Memory Usage",
+        "processCount": "%d processes",
+        "processPIDValue": "PID %d",
+        "autoRefresh": "Auto Refresh",
+        "refreshNow": "Refresh Now",
+        "searchApps": "Search apps",
+        "noMatchingApps": "No matching apps.",
+        "loadingProcesses": "Reading processes…",
+        "lastUpdated": "Updated %@",
+    ]
+
     static func value(_ key: String, language: AppLanguage, arguments: [CVarArg]) -> String {
         let useChinese: Bool
         switch language {
@@ -753,8 +805,8 @@ enum AppText {
         case .system: useChinese = Locale.autoupdatingCurrent.language.languageCode?.identifier == "zh"
         }
         let template = useChinese
-            ? (chinese[key] ?? recordingSelectionChinese[key] ?? key)
-            : (english[key] ?? recordingSelectionEnglish[key] ?? key)
+            ? (chinese[key] ?? recordingSelectionChinese[key] ?? memoryMonitorChinese[key] ?? key)
+            : (english[key] ?? recordingSelectionEnglish[key] ?? memoryMonitorEnglish[key] ?? key)
         return arguments.isEmpty ? template : String(format: template, locale: language.locale, arguments: arguments)
     }
 
@@ -1186,6 +1238,7 @@ final class MacPilotModel: ObservableObject {
     let clipboard = ClipboardModel()
     let awake = AwakeSessionManager()
     let awakeTriggers: AwakeTriggerEngine
+    let memoryMonitor = MemoryMonitorModel()
     @Published var requestedSection: MainSection?
     /// Set by the menu bar/deep-link shortcut entry so the capture settings
     /// can present the recorder immediately after the main window is opened.
@@ -2283,7 +2336,8 @@ final class MacPilotModel: ObservableObject {
 
 enum MainSection: CaseIterable, Hashable, Identifiable {
     case exit, launch, awake, ble, inputSources, compression, capture, screenRecording
-    case pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick, settings
+    case pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick
+    case memoryMonitor, settings
 
     var id: Self { self }
 
@@ -2302,6 +2356,7 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
         case .smoothScrolling: "smoothScrolling"
         case .clipboard: "clipboard"
         case .rightClick: "rightClickMenu"
+        case .memoryMonitor: "memoryMonitor"
         case .settings: "settings"
         }
     }
@@ -2321,6 +2376,7 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
         case .smoothScrolling: "scroll"
         case .clipboard: "clipboard"
         case .rightClick: "contextualmenu.and.cursorarrow"
+        case .memoryMonitor: "memorychip"
         case .settings: "gearshape"
         }
     }
@@ -2428,6 +2484,8 @@ struct ContentView: View {
             ClipboardSettingsView(clipboard: model.clipboard)
         case .rightClick:
             RightClickMenuSettingsView()
+        case .memoryMonitor:
+            MemoryMonitorView(monitor: model.memoryMonitor)
         case .settings:
             SettingsView()
         }
@@ -2539,7 +2597,7 @@ struct Sidebar: View {
     private let automationSections: [MainSection] = [.exit, .launch, .awake, .ble, .inputSources]
     private let utilitySections: [MainSection] = [
         .compression, .capture, .screenRecording, .pictureInPicture,
-        .windowSwitcher, .smoothScrolling, .clipboard, .rightClick
+        .windowSwitcher, .smoothScrolling, .clipboard, .rightClick, .memoryMonitor
     ]
 
     var body: some View {
