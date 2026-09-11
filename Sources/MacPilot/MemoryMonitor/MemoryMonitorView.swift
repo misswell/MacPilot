@@ -129,31 +129,34 @@ struct MemoryMonitorView: View {
 
     private var listControls: some View {
         HStack(spacing: 12) {
-            Text(model.t("appMemoryList"))
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-            if let lastUpdated = monitor.lastUpdated {
-                Text(
-                    model.t(
-                        "lastUpdated",
-                        lastUpdated.formatted(date: .omitted, time: .standard)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.t("appMemoryList"))
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                if let lastUpdated = monitor.lastUpdated {
+                    Text(
+                        model.t(
+                            "lastUpdated",
+                            lastUpdated.formatted(date: .omitted, time: .standard)
+                        )
                     )
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 16)
             TextField(model.t("searchApps"), text: $searchText)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 190)
+                .frame(width: 180)
             Toggle(model.t("autoRefresh"), isOn: $autoRefresh)
                 .toggleStyle(.switch)
-                .controlSize(.small)
+                .fixedSize()
             Button {
                 monitor.refresh()
             } label: {
                 Label(model.t("refreshNow"), systemImage: "arrow.clockwise")
             }
+            .fixedSize()
         }
         .padding(.horizontal, 36)
         .padding(.bottom, 12)
@@ -180,7 +183,7 @@ struct MemoryMonitorView: View {
                 let maxBytes = monitor.apps.first?.footprintBytes ?? 0
                 ForEach(filteredApps) { app in
                     AppMemoryRow(app: app, maxBytes: maxBytes, usedBytes: monitor.systemMemory?.usedBytes)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                        .listRowInsets(EdgeInsets(top: 7, leading: 14, bottom: 7, trailing: 14))
                         .listRowSeparator(.hidden)
                 }
             }
@@ -242,9 +245,10 @@ private struct AppMemoryRow: View {
                     .truncationMode(.tail)
                     gauge
                 }
-                Spacer(minLength: 16)
+                // 固定数值列宽：所有行的内存值右对齐，占比条终点一致
                 Text(MemoryByteFormatter.string(fromBytes: app.footprintBytes))
                     .font(.body.monospacedDigit().weight(.medium))
+                    .frame(minWidth: 88, alignment: .trailing)
                     .help(helpText)
             }
             .contentShape(Rectangle())
