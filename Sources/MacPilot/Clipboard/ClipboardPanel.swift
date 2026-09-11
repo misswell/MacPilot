@@ -144,14 +144,16 @@ final class ClipboardPanel: NSPanel {
             model.history.moveSelectionDown()
             return nil
         case UInt16(kVK_Delete), UInt16(kVK_ForwardDelete):
+            // 搜索框聚焦时退格用于编辑搜索词，不删除历史条目。
+            guard !isSearchFocused else { return event }
             model.history.deleteSelected()
             return nil
         default:
             break
         }
 
-        // 数字键 1-9 选择第 N 条未固定条目。
-        if let digit = Self.digit(for: keyCode) {
+        // 数字键 1-9 选择第 N 条未固定条目；搜索框聚焦时放行用于输入。
+        if !isSearchFocused, let digit = Self.digit(for: keyCode) {
             model.history.selectUnpinnedItem(at: digit)
             return nil
         }
@@ -249,7 +251,9 @@ struct ClipboardPanelContent: View {
         .onAppear {
             model.history.selectFirst()
             if model.settings.showSearch {
-                searchFocused = true
+                // 延迟一拍再聚焦：open() 会在异步块里把宿主视图设为
+                // first responder，同步设置焦点会被它覆盖，搜索框就无法输入。
+                DispatchQueue.main.async { searchFocused = true }
             }
         }
     }
