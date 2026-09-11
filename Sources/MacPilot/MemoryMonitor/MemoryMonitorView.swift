@@ -205,6 +205,7 @@ struct MemoryMonitorView: View {
 }
 
 /// 单个应用的内存行：图标 + 名称与占比条 + 总占用；展开可看每个进程的明细。
+/// 不用 DisclosureGroup：系统箭头的垂直对齐不受控，这里自绘折叠箭头保证居中。
 private struct AppMemoryRow: View {
     @EnvironmentObject private var model: MacPilotModel
     let app: AppMemoryUsage
@@ -213,48 +214,69 @@ private struct AppMemoryRow: View {
     @State private var isExpanded = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            ForEach(app.processes) { process in
-                HStack(spacing: 8) {
-                    Text(model.t("processPIDValue", process.pid))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 76, alignment: .leading)
-                    Text(process.name)
-                        .font(.callout)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 12)
-                    Text(MemoryByteFormatter.string(fromBytes: process.footprintBytes))
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.leading, 38)
-                .padding(.vertical, 2)
+        VStack(alignment: .leading, spacing: 2) {
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) { isExpanded.toggle() }
+            } label: {
+                labelContent
             }
-        } label: {
-            HStack(spacing: 12) {
-                appIcon
-                VStack(alignment: .leading, spacing: 5) {
-                    (Text(app.name).font(.body.weight(.semibold))
-                        + Text("  \(model.t("processCount", app.processCount))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    )
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    gauge
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                ForEach(app.processes) { process in
+                    processRow(process)
                 }
-                // 固定数值列宽：所有行的内存值右对齐，占比条终点一致
-                Text(MemoryByteFormatter.string(fromBytes: app.footprintBytes))
-                    .font(.body.monospacedDigit().weight(.medium))
-                    .frame(minWidth: 88, alignment: .trailing)
-                    .help(helpText)
             }
-            .contentShape(Rectangle())
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(app.name), \(model.t("processCount", app.processCount)), \(MemoryByteFormatter.string(fromBytes: app.footprintBytes))")
         }
+    }
+
+    private var labelContent: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "chevron.forward")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            appIcon
+            VStack(alignment: .leading, spacing: 5) {
+                (Text(app.name).font(.body.weight(.semibold))
+                    + Text("  \(model.t("processCount", app.processCount))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                )
+                .lineLimit(1)
+                .truncationMode(.tail)
+                gauge
+            }
+            // 固定数值列宽：所有行的内存值右对齐，占比条终点一致
+            Text(MemoryByteFormatter.string(fromBytes: app.footprintBytes))
+                .font(.body.monospacedDigit().weight(.medium))
+                .frame(minWidth: 88, alignment: .trailing)
+                .help(helpText)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(app.name), \(model.t("processCount", app.processCount)), \(MemoryByteFormatter.string(fromBytes: app.footprintBytes))")
+    }
+
+    /// 明细行左缘对齐名称列：箭头 14 + 间距 10 + 图标 26 + 间距 12 = 62。
+    private func processRow(_ process: ProcessMemorySample) -> some View {
+        HStack(spacing: 8) {
+            Text(model.t("processPIDValue", process.pid))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(width: 76, alignment: .leading)
+            Text(process.name)
+                .font(.callout)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 12)
+            Text(MemoryByteFormatter.string(fromBytes: process.footprintBytes))
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.leading, 62)
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder
