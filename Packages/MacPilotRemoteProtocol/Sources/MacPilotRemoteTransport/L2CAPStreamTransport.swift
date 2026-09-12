@@ -26,6 +26,13 @@ public final class L2CAPStreamTransport: RemoteTransport {
         self.pump = StreamPump(input: channel.inputStream, output: channel.outputStream)
     }
 
+    /// The pump only ever needed a stream pair; `CBL2CAPChannel` is just how the
+    /// pair arrives in production. This seam exists so the short-write and close
+    /// paths can be driven from a test instead of only on a real device.
+    init(input: InputStream, output: OutputStream) {
+        self.pump = StreamPump(input: input, output: output)
+    }
+
     public func start() {
         pump.onChunk = { data in
             Task { @MainActor [weak self] in self?.onReceive?(data) }
