@@ -413,3 +413,32 @@ Refusing authorization request for service kTCCServiceBluetoothAlways
 ```
 
 必须走 LaunchServices（`open -a`）让归属落到探针自己身上，才会弹询问框。另外**每重新编译一次 cdhash 就变**，TCC 会重新评估，评估期间 CoreBluetooth 同样一个回调都不投递——这一点曾经让我误判出一个「首次 start 不发布 PSM」的假 bug，追了三轮才排掉。**结论：`RemoteBLEPeripheral` 没有 bug。**
+
+## 二十六、AWDL 端到端实测通过（v1.1.305）
+
+### 通过的证据：四重独立确认
+
+条件：手机 Wi-Fi **开着但不连任何网络**、蓝牙**关闭**、App **完全重启**。
+
+| 来源 | 读数 |
+|---|---|
+| App 自己的传输诊断 | `connection ready kind=network link=awdl0` |
+| 独立 socket 守望（netstat） | `fe80::109c:73ff:.43847 ← fe80::c87a:b0ff:.53658 ESTABLISHED` |
+| lsof 完整 scope | `[fe80:11::109c:73ff:fe03:41dc]:43847 → [fe80:11::c87a:b0ff:feaf:c141]:53658`，`0x11` = 17 = **awdl0** |
+| IPv6 邻居表 | 连接前 awdl0 上**只有 Mac 自己**（`permanent`）；连接后多出 `fe80::c87a:b0ff:feaf:c141%awdl0`（iPhone 的 MAC `ca:7a:b0:af:c1:41`） |
+
+握手 `event=auth latency=355ms`（同一局域网内是 70ms——AWDL 慢一些但完全可用），并且 `client hello name=iPhone paired=true`，**不需要重新配对**。
+
+**结论：AWDL 端到端成立。** `includePeerToPeer` + Bonjour 这条路真的走通了，不需要任何 IP/端口输入（`tests` 里那 7 个套件保证的正是这类不变量）。诊断 UI 报出的 `awdl0` 与独立读到的接口索引 17 严格一致，说明「当前传输 + 接口」这个诊断本身是可信的。
+
+### 流程发现：换网后必须「彻底重启 App」，切回前台不够
+
+前两次尝试全部失败，而且 Mac 侧 `ndp` 显示 **awdl0 上从来没有出现过任何对端**——手机的 AWDL 流量根本没发出来。第三次改成**从后台卡片上滑彻底关掉 App、再重新打开**，两分钟内就连上了。
+
+区别在于：去「设置」里改网络会让 iOS 挂起 App，**切回前台只是「恢复」**，它内部那个已经失败的 `NWBrowser` 和连接状态可能一直是旧的。**恢复 ≠ 重新开始。**
+
+这是个真实的用户可见限制，写在这里以免以后当成玄学：
+
+> 手机换了网络之后，如果遥控 App 一直连不上，**彻底退出重开一次**，而不是切回前台等它自己恢复。
+
+（顺带确认：`Networking/RemoteDiscoveryService.swift` 的 `includePeerToPeer = true` 与 `.bonjourWithTXTRecord` 组合是正确的，Mac 侧 `RemoteControlServer` 的监听和连接也都开了 P2P；这条链路两头都没有代码改动需要做。）
