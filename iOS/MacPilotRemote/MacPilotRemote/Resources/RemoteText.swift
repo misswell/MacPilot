@@ -48,6 +48,10 @@ enum RemoteText {
         "retry": "重试",
         "openSystemSettings": "打开系统设置",
         "localNetworkHint": "需要允许「本地网络」权限才能发现 MacPilot。",
+        "unrecognizedServiceHint": "发现了本地服务但读不到它的信息，可能对方版本不兼容。请把 MacPilot 更新到最新版。",
+        "foundUnpaired": "发现 MacPilot",
+        "foundUnpairedDetail": "已找到「%@」，去「设备」页点「配对」即可开始使用。",
+        "goToPairing": "去配对",
 
         "actionLock": "锁屏",
         "actionDisplayOff": "黑屏",
@@ -139,6 +143,10 @@ enum RemoteText {
         "retry": "Retry",
         "openSystemSettings": "Open Settings",
         "localNetworkHint": "Local Network access is required to find MacPilot.",
+        "unrecognizedServiceHint": "Found a local service but could not read its details, which usually means a version mismatch. Update MacPilot on your Mac.",
+        "foundUnpaired": "MacPilot found",
+        "foundUnpairedDetail": "Found \"%@\". Open the Devices tab and tap Pair to get started.",
+        "goToPairing": "Pair now",
 
         "actionLock": "Lock",
         "actionDisplayOff": "Blank",

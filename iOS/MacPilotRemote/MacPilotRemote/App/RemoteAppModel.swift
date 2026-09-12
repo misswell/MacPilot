@@ -20,6 +20,11 @@ final class RemoteAppModel: ObservableObject {
 
     @Published private(set) var connectionState: RemoteConnectionState = .idle
     @Published private(set) var discoveredMacs: [DiscoveredMac] = []
+    /// Mirrored from `discovery` because a nested `ObservableObject` does not
+    /// republish its changes through this model, so views reading it directly
+    /// would never refresh.
+    @Published private(set) var localNetworkDenied = false
+    @Published private(set) var unrecognizedServiceCount = 0
     @Published private(set) var macState: MacRemoteState?
     @Published private(set) var latencyMs: Int?
     @Published private(set) var errorKey: String?
@@ -142,6 +147,8 @@ final class RemoteAppModel: ObservableObject {
 
     private func handleDiscovery(_ macs: [DiscoveredMac]) {
         discoveredMacs = macs
+        localNetworkDenied = discovery.isPermissionDenied
+        unrecognizedServiceCount = discovery.unrecognizedServiceCount
         if metrics.discoveryLatencyMs == nil, !macs.isEmpty, let started = discoveryStartedAt {
             metrics.discoveryLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
         }

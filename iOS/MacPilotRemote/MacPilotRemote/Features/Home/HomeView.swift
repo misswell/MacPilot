@@ -5,6 +5,7 @@ import SwiftUI
 /// connection is already in place.
 struct HomeView: View {
     @EnvironmentObject private var appModel: RemoteAppModel
+    @Binding var selectedTab: RootTab
 
     private let columns = [
         GridItem(.flexible(), spacing: 14),
@@ -152,19 +153,46 @@ struct HomeView: View {
 
     // MARK: - Disconnected
 
+    /// The Mac Bonjour can see but that has not been paired yet.
+    private var unpairedMac: DiscoveredMac? {
+        appModel.discoveredMacs.first { !appModel.store.isPaired(id: $0.id) }
+    }
+
+    /// Explains why no Mac is reachable. Order matters: a discovered-but-unpaired
+    /// Mac is the common case and must not be reported as "not found", which
+    /// made a working browse look like a broken network.
+    private var disconnectedTitle: String {
+        if unpairedMac != nil { return appModel.text("foundUnpaired") }
+        return appModel.text("noMac")
+    }
+
+    private var disconnectedDetail: String {
+        if appModel.localNetworkDenied {
+            return appModel.text("localNetworkHint")
+        }
+        if let mac = unpairedMac {
+            return appModel.text("foundUnpairedDetail", mac.name)
+        }
+        if appModel.unrecognizedServiceCount > 0 {
+            return appModel.text("unrecognizedServiceHint")
+        }
+        return appModel.text("noMacDetail")
+    }
+
     private var disconnectedPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(appModel.text("noMac")).font(.headline)
-            Text(appModel.discovery.isPermissionDenied
-                 ? appModel.text("localNetworkHint")
-                 : appModel.text("noMacDetail"))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            Text(disconnectedTitle).font(.headline)
+            Text(disconnectedDetail).font(.subheadline).foregroundStyle(.secondary)
 
             HStack(spacing: 10) {
-                Button(appModel.text("retry")) { appModel.retry() }
-                    .buttonStyle(.borderedProminent)
-                if appModel.discovery.isPermissionDenied {
+                if unpairedMac != nil {
+                    Button(appModel.text("goToPairing")) { selectedTab = .devices }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button(appModel.text("retry")) { appModel.retry() }
+                        .buttonStyle(.borderedProminent)
+                }
+                if appModel.localNetworkDenied {
                     Button(appModel.text("openSystemSettings")) { openSystemSettings() }
                         .buttonStyle(.bordered)
                 }
