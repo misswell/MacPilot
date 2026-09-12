@@ -37,6 +37,7 @@ MACPILOT_EXT_ARCHS="${ARCHS[*]}" "$ROOT/Scripts/build-findersync.sh"
 REXT_PRODUCT="$ROOT/build/FinderSync"
 BIN="$BIN_DIR/MacPilot"
 UPDATER_BIN="$BIN_DIR/MacPilotUpdater"
+HELPER_BIN="$BIN_DIR/MacPilotPowerHelper"
 OCCLUSION_PATCH_BIN="$BIN_DIR/libMacPilotOcclusionPatch.dylib"
 xcrun clang -dynamiclib -O2 "${PATCH_ARCH_ARGS[@]}" \
     -mmacosx-version-min=14.0 -framework AppKit \
@@ -67,9 +68,16 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_EXECUTABLE_NAME"
 cp "$UPDATER_BIN" "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
+cp "$HELPER_BIN" "$APP/Contents/MacOS/MacPilotPowerHelper"
 cp "$OCCLUSION_PATCH_BIN" "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# SMAppService.daemon(plistName:) requires the LaunchDaemon plist inside the
+# bundle at Contents/Library/LaunchDaemons. The helper keeps the same name and
+# Mach service in bridge mode so one registration serves both identities.
+mkdir -p "$APP/Contents/Library/LaunchDaemons"
+cp Resources/com.misswell.macpilot.powerhelper.plist \
+    "$APP/Contents/Library/LaunchDaemons/com.misswell.macpilot.powerhelper.plist"
 if [[ -d "$ROOT/Resources/zh-Hans.lproj" ]]; then
     cp -R "$ROOT/Resources/zh-Hans.lproj" "$APP/Contents/Resources/"
 fi
@@ -145,7 +153,12 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
     # requirement through --deep would incorrectly give MacPilotUpdater the
     # MacPilot bundle identifier and invalidate the nested signature.
     REXT_ENTITLEMENTS="$ROOT/FinderSync/Resources/FinderSync.entitlements"
+    HELPER_ENTITLEMENTS="$ROOT/Resources/MacPilotPowerHelper.entitlements"
+    # Nested code is signed inside-out: the privileged helper first, then the
+    # FinderSync appex, the updater, the injected dylib, and finally the app.
     if [[ "$SIGNING_IDENTITY" == "-" ]]; then
+        codesign --force --entitlements "$HELPER_ENTITLEMENTS" \
+            --sign - "$APP/Contents/MacOS/MacPilotPowerHelper"
         codesign --force --entitlements "$REXT_ENTITLEMENTS" \
             --sign - "$REXT_APPEX"
         codesign --force --sign - "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
@@ -154,6 +167,8 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
         codesign --force --entitlements "$ENTITLEMENTS" \
             --sign - "$APP"
     else
+        codesign --force --options runtime --entitlements "$HELPER_ENTITLEMENTS" \
+            --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/MacPilotPowerHelper"
         codesign --force --options runtime --entitlements "$REXT_ENTITLEMENTS" \
             --sign "$SIGNING_IDENTITY" "$REXT_APPEX"
         codesign --force --options runtime --sign "$SIGNING_IDENTITY" \

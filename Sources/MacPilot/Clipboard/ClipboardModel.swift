@@ -154,7 +154,13 @@ final class ClipboardModel: ObservableObject {
     func setHotkey(_ binding: SmartCaptureShortcutBinding) {
         guard binding != settings.hotkey else { return }
         settings.hotkey = binding.isValid ? binding : ClipboardSettings.defaultHotkey
-        hotKeyCenter.updateBinding(settings.hotkey)
+        // Editing the shortcut while the feature is off must not register a
+        // system-wide hot key that swallows the combination for nothing.
+        if settings.isEnabled {
+            hotKeyCenter.updateBinding(settings.hotkey)
+        } else {
+            hotKeyCenter.stop()
+        }
         persist?()
     }
 

@@ -35,14 +35,23 @@ public final class RightClickMenuCoordinator {
     /// 最大重试次数
     private let maxRunningMessageRetryCount: Int = 6
 
+    /// Cap for the "observe directories" re-arm loop. Without it a Finder
+    /// extension that never enables itself makes the coordinator retry every
+    /// three seconds for the whole life of the app.
+    private static let maxObserveDirRetryCount: Int = 20
+
+    private var configObserver: NSObjectProtocol?
+    private var observeDirTask: Task<Void, Never>?
+
     public init() {}
 
     public func start() {
+        guard configObserver == nil else { return }
         PermissionDiagnostics.record("coordinator.start")
         logger.info("RightClickMenuCoordinator.start() called")
 
         // 监听菜单配置更新通知（设置页 toggle 动作时触发）
-        NotificationCenter.default.addObserver(
+        configObserver = NotificationCenter.default.addObserver(
             forName: .menuConfigShouldUpdate,
             object: nil,
             queue: .main
@@ -106,11 +115,15 @@ public final class RightClickMenuCoordinator {
     func sendObserveDirMessage() {
         let directories: [String] = []
         messager.sendRunningNotification(directories: directories)
-        if !pluginRunning {
-            Task { @MainActor in
+        guard !pluginRunning else { return }
+        observeDirTask?.cancel()
+        observeDirTask = Task { @MainActor [weak self] in
+            for _ in 0..<Self.maxObserveDirRetryCount {
                 try? await Task.sleep(for: .seconds(3))
-                sendObserveDirMessage()
+                guard let self, !Task.isCancelled, !self.pluginRunning else { return }
+                self.messager.sendRunningNotification(directories: [])
             }
+            self?.logger.debug("Observe-directory retry budget exhausted")
         }
     }
 
@@ -165,6 +178,22 @@ public final class RightClickMenuCoordinator {
             }
             logger.debug("Running message retry completed")
         }
+    }
+
+    /// Tears the coordinator down: removes the config observer and cancels the
+    /// heartbeat / retry loops. Called when the right-click menu is disabled and
+    /// on app termination.
+    public func stop() {
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+            self.configObserver = nil
+        }
+        heartbeatMonitorTask?.cancel()
+        heartbeatMonitorTask = nil
+        observeDirTask?.cancel()
+        observeDirTask = nil
+        pluginRunning = false
+        logger.info("RightClickMenuCoordinator.stop() called")
     }
 
 }

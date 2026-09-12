@@ -629,7 +629,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var manualLock = false
     private var pendingLockSource: ScreenLockHistorySource?
     private var pendingLockSourceExpiresAt = Date.distantPast
-    private var inScreensaver = false
+    /// Maintained by `MacScreenControlService`, which owns the distributed
+    /// screen-saver notifications because the iPhone remote reads them too.
+    private var inScreensaver: Bool { screenControl.screensaverActive }
     private var lastUnlockRequestAt: TimeInterval = 0
     private var lastAutomaticUnlockRequestAt: TimeInterval = 0
     private var lastAutomaticUnlockConfirmationAt: TimeInterval = 0
@@ -780,6 +782,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         log("setEnabled from=\(settings.isEnabled) to=\(enabled)")
         settings.isEnabled = enabled
         if enabled {
+            startObservingSystemState()
             if hasMonitoredDevice {
                 // Toggling the feature is an explicit user action, so this is
                 // the one path allowed to start the first Bluetooth prompt.
@@ -788,6 +791,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             }
         } else {
             stopMonitoring()
+            stopObservingSystemState()
         }
         notifyChange()
     }
@@ -798,11 +802,23 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             return
         }
         logSettings("configuration activation")
+        // System observers are only installed for an enabled feature: while BLE
+        // is off they would keep the process awake for lock/sleep notifications
+        // nothing consumes.
+        startObservingSystemState()
         // Do not create CBCentralManager during launch while Bluetooth access
         // is still undecided.  Creating it here makes every newly installed
         // or identity-mismatched build prompt before the user asks to use BLE.
         ensureCentralManager()
         if hasMonitoredDevice { startConfiguredMonitoring() }
+    }
+
+    /// Releases every runtime resource owned by the feature. Called on app
+    /// termination; disabling the feature goes through `setEnabled(false)`.
+    func shutdown() {
+        stopMonitoring()
+        stopObservingSystemState()
+        screenControl.shutdown()
     }
 
     func setLockRSSI(_ value: Int) { log("setLockRSSI from=\(settings.lockRSSI) to=\(value)"); settings.lockRSSI = value; notifyChange() }
@@ -970,6 +986,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         connected = false
         activeMode = false
         recoveringFromSystemSleep = false
+        // Drop the CoreBluetooth central too: holding it keeps a Bluetooth XPC
+        // session (and its delegate graph) alive for nothing while the feature
+        // is off. `ensureCentralManager()` recreates it on the next enable.
+        if centralMgr != nil {
+            centralMgr?.delegate = nil
+            centralMgr = nil
+        }
     }
 
     private func clearDiscoveredDevices() {
@@ -1937,20 +1960,20 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 self.manualLock = false
             }
         })
-        observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screensaver.didstart"), object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.inScreensaver = true
-                self?.screenControl.screensaverActive = true
-                self?.log("screensaver started")
-            }
-        })
-        observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screensaver.didstop"), object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.inScreensaver = false
-                self?.screenControl.screensaverActive = false
-                self?.log("screensaver stopped")
-            }
-        })
+    }
+
+    /// Removes the observers installed by `startObservingSystemState()`. Safe to
+    /// call repeatedly; used when BLE is switched off and on app termination.
+    func stopObservingSystemState() {
+        guard !observers.isEmpty else { return }
+        let nc = NSWorkspace.shared.notificationCenter
+        let dnc = DistributedNotificationCenter.default()
+        for observer in observers {
+            nc.removeObserver(observer)
+            dnc.removeObserver(observer)
+        }
+        observers.removeAll(keepingCapacity: false)
+        log("removed system observers")
     }
 }
 

@@ -1903,6 +1903,9 @@ final class SmartScreenshotController {
         }
         if let eventTap = shortcutEventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
+            // The mach port must be invalidated or the window-server tap
+            // registration outlives this teardown and every restart adds one.
+            CFMachPortInvalidate(eventTap)
         }
         shortcutEventTapSource = nil
         shortcutEventTap = nil
@@ -1956,6 +1959,7 @@ final class SmartScreenshotController {
         }
         if let eventTap = selectionEventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
+            CFMachPortInvalidate(eventTap)
         }
         selectionEventTapSource = nil
         selectionEventTap = nil

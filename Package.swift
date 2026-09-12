@@ -7,6 +7,8 @@ let package = Package(
     products: [
         .executable(name: "MacPilot", targets: ["MacPilot"]),
         .executable(name: "MacPilotUpdater", targets: ["MacPilotUpdater"]),
+        .executable(name: "MacPilotPowerHelper", targets: ["MacPilotPowerHelper"]),
+        .library(name: "MacPilotPowerIPC", targets: ["MacPilotPowerIPC"]),
         .library(name: "MacPilotOcclusionPatch", type: .dynamic, targets: ["MacPilotOcclusionPatch"])
     ],
     dependencies: [
@@ -18,9 +20,19 @@ let package = Package(
             name: "MacPilot",
             dependencies: [
                 "MacPilotRightClickKit",
+                "MacPilotPowerIPC",
                 .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol"),
                 .product(name: "MacPilotRemoteTransport", package: "MacPilotRemoteProtocol")
             ]
+        ),
+        // Wire protocol shared by the app and its privileged power helper.
+        // Contains only types and pure logic, never privileged operations.
+        .target(name: "MacPilotPowerIPC"),
+        // Root LaunchDaemon providing the `pmset disablesleep` capability.
+        .executableTarget(
+            name: "MacPilotPowerHelper",
+            dependencies: ["MacPilotPowerIPC"],
+            linkerSettings: [.linkedFramework("Security")]
         ),
         .executableTarget(
             name: "MacPilotUpdater",
@@ -57,8 +69,8 @@ let package = Package(
             name: "MacPilotTests",
             dependencies: [
                 "MacPilot",
-                .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol"),
-                .product(name: "MacPilotRemoteTransport", package: "MacPilotRemoteProtocol")
+                "MacPilotPowerIPC",
+                .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol")
             ]
         ),
         .testTarget(

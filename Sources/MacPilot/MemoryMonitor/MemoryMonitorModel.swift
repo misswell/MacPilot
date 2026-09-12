@@ -46,6 +46,12 @@ final class MemoryMonitorModel: ObservableObject {
         refreshLoop = nil
     }
 
+    /// Drops the process-wide menu snapshot so a terminated app does not keep
+    /// the cached `[AppMemoryUsage]` array alive.
+    static func clearMenuCache() {
+        cachedMenuSample = nil
+    }
+
     func refresh() {
         guard !isRefreshing else { return }
         isRefreshing = true

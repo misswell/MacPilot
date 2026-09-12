@@ -1349,6 +1349,13 @@ final class WindowSwitcherModel: ObservableObject {
         persist?()
     }
 
+    /// Synchronous teardown for app termination. `stopRuntime()` already
+    /// cancels tasks and removes the event tap, AX observers and panel.
+    func shutdown() {
+        stopRuntime()
+        isActive = false
+    }
+
     /// Adds or removes an app from the merge-windows list.
     func setMergeApplication(_ bundleIdentifier: String, enabled: Bool) {
         var identifiers = settings.mergeApplicationBundleIdentifiers
@@ -2491,10 +2498,13 @@ final class WindowSwitcherModel: ObservableObject {
     private func removeEventTap() {
         if let eventTapSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
+            CFRunLoopSourceInvalidate(eventTapSource)
         }
         if let eventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
+            CFMachPortInvalidate(eventTap)
         }
+        eventTapContext?.setEventTap(nil)
         eventTapSource = nil
         eventTap = nil
         eventTapContext = nil

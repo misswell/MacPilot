@@ -2359,10 +2359,15 @@ final class PictureInPictureModel: ObservableObject {
     private func removeEventTap() {
         if let source = eventTapSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            CFRunLoopSourceInvalidate(source)
         }
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            // Without invalidating the mach port the tap registration survives
+            // in the window server, and every enable/disable cycle adds another.
+            CFMachPortInvalidate(tap)
         }
+        eventTapContext?.setEventTap(nil)
         eventTapSource = nil
         eventTap = nil
         eventTapContext = nil

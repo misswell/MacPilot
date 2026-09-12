@@ -47,6 +47,7 @@ struct ScreenRecordingPageView: View {
             // User intent: opening the recording page is the first touch of
             // the mobile-device capture surface, so the CMIO allow flag goes
             // here — never at app launch (see AppDelegate policy comment).
+            guard recording.settings.isEnabled else { return }
             ScreenRecordingDeviceDiscovery.enableMobileDeviceScreenCapture()
             recording.refreshCaptureDeviceLists()
             blocklistApps = ScreenBlocklistApp.runningApps()
@@ -99,6 +100,24 @@ struct ScreenRecordingPageView: View {
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                 Button(t("scChangeShortcut")) { editingShortcut = true }
                     .buttonStyle(.bordered)
+            }
+
+            Divider()
+
+            row(t("scRecordingEnabled")) {
+                Toggle("", isOn: Binding(
+                    get: { recording.settings.isEnabled },
+                    set: { recording.setEnabled($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+            }
+
+            if !recording.settings.isEnabled {
+                Text(t("scRecordingDisabledHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Divider()

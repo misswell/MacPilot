@@ -626,6 +626,15 @@ final class QuickAccessManager: ObservableObject {
   /// Pin a saved screenshot URL, creating a transient pin window if no Quick Access item owns it.
   @discardableResult
   func pinScreenshot(url: URL) async -> QuickAccessItem? {
+    guard isEnabled else {
+      DiagnosticLogger.shared.log(
+        .debug,
+        .action,
+        "Quick access pin skipped; feature disabled",
+        context: ["fileName": url.lastPathComponent]
+      )
+      return nil
+    }
     if let existingItem = item(matching: url) {
       pinScreenshot(id: existingItem.id)
       return item(matching: url) ?? existingItem

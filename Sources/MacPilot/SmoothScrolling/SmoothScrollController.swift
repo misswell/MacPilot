@@ -69,13 +69,10 @@ final class SmoothScrollController {
             installWorkspaceObservers()
         }
 
-        if activeSettings.isEnabled {
-            runtime.start()
-        } else {
-            // Reversal-only mode still needs the event tap, but must not keep
-            // a display link or a stale smooth-scroll buffer alive.
-            runtime.stop()
-        }
+        // Never start the display link here. `SmoothScrollRuntime.update(event:)`
+        // starts it lazily on the first accepted wheel event and stops it when
+        // the glide drains, so an idle tap costs nothing between scrolls.
+        runtime.stop()
     }
 
     func deactivate() {

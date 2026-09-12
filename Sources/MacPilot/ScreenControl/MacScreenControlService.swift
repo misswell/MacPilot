@@ -31,12 +31,21 @@ final class MacScreenControlService: ObservableObject {
     var didUnlock: (@MainActor (ScreenControlSource, Date) -> Void)?
 
     /// Notification derived display sleep flag. `isDisplaySleeping` prefers the
-    /// live CoreGraphics query because this flag can go stale.
+    /// live CoreGraphics and blank-state queries because this flag can go stale.
     @Published private(set) var displaySleeping = false
     @Published private(set) var systemSleeping = false
 
     /// Maintained from the distributed screen saver notifications.
     var screensaverActive = false
+
+    /// Distributed screen-saver observers that keep `screensaverActive` fresh.
+    ///
+    /// They live here rather than in `BLEUnlockModel` because the remote unlock
+    /// path also reads `screensaverActive`: keying them off the BLE switch alone
+    /// would silently break remote unlock whenever BLE is switched off. The app
+    /// model installs them only while BLE or the iPhone remote is enabled, so
+    /// neither feature pays for them while both are off.
+    private var screensaverObservers: [NSObjectProtocol] = []
 
     private let logHandler: (String) -> Void
 
@@ -59,7 +68,9 @@ final class MacScreenControlService: ObservableObject {
 
     var hasCredential: Bool { credentials.hasCredential }
 
-    var isDisplaySleeping: Bool { ScreenLockStateReader.displayIsAsleep() }
+    /// A screen MacPilot holds black counts as "off" for the remote UI even
+    /// though the display itself never slept.
+    var isDisplaySleeping: Bool { DisplayPower.isBlanked || ScreenLockStateReader.displayIsAsleep() }
 
     var isSystemSleeping: Bool { systemSleeping }
 
@@ -72,7 +83,7 @@ final class MacScreenControlService: ObservableObject {
             canUnlock: RemoteBooleanState(trusted && credentialsPresent),
             hasCredential: RemoteBooleanState(credentialsPresent),
             accessibilityGranted: RemoteBooleanState(trusted),
-            displaySleeping: RemoteBooleanState(ScreenLockStateReader.displayIsAsleep())
+            displaySleeping: RemoteBooleanState(isDisplaySleeping)
         )
     }
 
@@ -84,17 +95,68 @@ final class MacScreenControlService: ObservableObject {
         if systemSleeping != value { systemSleeping = value }
     }
 
+    /// Installs or removes the distributed screen-saver observers. Idempotent.
+    func setScreensaverObservationEnabled(_ enabled: Bool) {
+        if enabled {
+            guard screensaverObservers.isEmpty else { return }
+            let center = DistributedNotificationCenter.default()
+            screensaverObservers.append(center.addObserver(
+                forName: Notification.Name("com.apple.screensaver.didstart"),
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, !self.screensaverActive else { return }
+                    self.screensaverActive = true
+                    self.log("screensaver started")
+                }
+            })
+            screensaverObservers.append(center.addObserver(
+                forName: Notification.Name("com.apple.screensaver.didstop"),
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.screensaverActive else { return }
+                    self.screensaverActive = false
+                    self.log("screensaver stopped")
+                }
+            })
+            log("screensaver observation started")
+        } else {
+            guard !screensaverObservers.isEmpty else { return }
+            let center = DistributedNotificationCenter.default()
+            for observer in screensaverObservers { center.removeObserver(observer) }
+            screensaverObservers.removeAll(keepingCapacity: false)
+            screensaverActive = false
+            log("screensaver observation stopped")
+        }
+    }
+
+    func shutdown() {
+        setScreensaverObservationEnabled(false)
+    }
+
     // MARK: - Lock
+
+    /// A lock must be visible. Releasing a black screen first keeps the login
+    /// window from appearing behind a display MacPilot is holding at zero
+    /// brightness, and hands the display back to the system's own sleep policy.
+    private func prepareForLock() {
+        if DisplayPower.isBlanked { DisplayPower.unblankDisplay() }
+    }
 
     /// Attributes an imminent lock to `source` without posting any event. Used
     /// by the BLE path, which triggers the lock through the screen saver.
     func markPendingLock(source: ScreenControlSource) {
+        prepareForLock()
         willLock?(source)
     }
 
     /// Posts the lock shortcut synchronously. The BLE path uses this because its
     /// own presence policy already decided when to lock.
     func performLockShortcut(source: ScreenControlSource) {
+        prepareForLock()
         willLock?(source)
         executor.lockScreenShortcut()
     }
@@ -109,6 +171,7 @@ final class MacScreenControlService: ObservableObject {
         }
 
         log("lock requested source=\(source.rawValue)")
+        prepareForLock()
         willLock?(source)
         executor.lockScreenShortcut()
 
@@ -124,30 +187,24 @@ final class MacScreenControlService: ObservableObject {
 
     // MARK: - Display power
 
+    /// Blacks the display without locking the session.
+    ///
+    /// A real display sleep is deliberately not a fallback: on a Mac that
+    /// requires a password as soon as the display turns off (the default) it
+    /// locks the session, which is what MacPilot's separate lock action is for.
+    /// When no display can be blacked the action fails visibly instead of
+    /// silently turning "turn off screen" into "lock".
     func sleepDisplay() async -> ScreenControlResult {
-        if ScreenLockStateReader.displayIsAsleep() || DisplayPower.isBlanked {
+        if isDisplaySleeping {
             return .success(currentState())
         }
-        // Black the screen by dropping the backlight where it can be driven.
-        // A real display sleep is subject to the system's "require password
-        // after the display is turned off" policy, which would make a plain
-        // "turn off screen" also lock the session — surprising, because MacPilot
-        // has a separate lock action.
-        if DisplayPower.blankDisplay() {
-            log("display blanked without sleeping")
-            noteDisplaySleeping(true)
-            return .success(currentState())
+        guard DisplayPower.turnOffScreen() else {
+            log("display off failed reason=noDisplayCouldBeBlacked")
+            return .failure(.displaySleepFailed, state: currentState())
         }
-        log("display sleep requested reason=backlightUnavailable")
-        DisplayPower.sleepDisplay()
-        let asleep = await waitUntil(timeout: 2) { ScreenLockStateReader.displayIsAsleep() }
-        if asleep { noteDisplaySleeping(true) }
-        let state = currentState()
-        guard asleep else {
-            log("display sleep failed reason=displayStillAwake")
-            return .failure(.displaySleepFailed, state: state)
-        }
-        return .success(state)
+        log("display blacked without sleeping")
+        noteDisplaySleeping(true)
+        return .success(currentState())
     }
 
     func wakeDisplay() async -> ScreenControlResult {
@@ -189,7 +246,7 @@ final class MacScreenControlService: ObservableObject {
             return .failure(.credentialNotConfigured, state: currentState())
         }
 
-        if ScreenLockStateReader.displayIsAsleep() || DisplayPower.isBlanked {
+        if isDisplaySleeping {
             log("unlock requested with display off; waking first")
             DisplayPower.wakeDisplay()
             DisplayPower.unblankDisplay()
@@ -211,9 +268,7 @@ final class MacScreenControlService: ObservableObject {
     /// settling time because the login window password field is not ready the
     /// instant the display comes back.
     func wakeAndUnlock(source: ScreenControlSource) async -> ScreenControlResult {
-        if ScreenLockStateReader.current() == .unlocked,
-           !ScreenLockStateReader.displayIsAsleep(),
-           !DisplayPower.isBlanked {
+        if ScreenLockStateReader.current() == .unlocked, !isDisplaySleeping {
             return .success(currentState())
         }
         guard accessibilityGranted else {
@@ -225,7 +280,7 @@ final class MacScreenControlService: ObservableObject {
             return .failure(.credentialNotConfigured, state: currentState())
         }
 
-        if ScreenLockStateReader.displayIsAsleep() || DisplayPower.isBlanked {
+        if isDisplaySleeping {
             log("wakeAndUnlock waking display")
             DisplayPower.wakeDisplay()
             DisplayPower.unblankDisplay()
@@ -274,7 +329,7 @@ final class MacScreenControlService: ObservableObject {
                 return true
             }
 
-            if ScreenLockStateReader.displayIsAsleep() || DisplayPower.isBlanked {
+            if isDisplaySleeping {
                 // A key press can wake the display before the notification
                 // arrives; make sure it is really on before typing.
                 DisplayPower.wakeDisplay()

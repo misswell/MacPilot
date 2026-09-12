@@ -5,6 +5,8 @@ import OSLog
 
 @MainActor
 final class AwakeSessionManager: ObservableObject {
+    /// Upper bound on ended sessions kept for the UI's recent history.
+    private static let maximumRetainedEndedSessions = 20
     // Active sessions are intentionally in-memory. The Awake spec's startup
     // policy says manual sessions do not survive an app restart; wake and
     // clock-change notifications still re-evaluate sessions that remain live.
@@ -15,11 +17,24 @@ final class AwakeSessionManager: ObservableObject {
     @Published private(set) var lastAssertionFailure: AwakeAssertionFailure?
     @Published private(set) var settings = AwakeSettings.standard
 
+    /// Mirrors of the privileged closed-lid service so SwiftUI can observe
+    /// them through this object. `ClosedLidSleepController` itself is not
+    /// observed directly.
+    @Published private(set) var closedLidServiceState: ClosedLidSleepServiceState = .unavailable
+    @Published private(set) var isClosedLidSleepActive = false
+    @Published private(set) var lastClosedLidFailure: ClosedLidSleepFailure?
+    @Published private(set) var isLidClosed = false
+
     private let logger = Logger(subsystem: "com.misswell.macpilot", category: "Awake.Session")
     private let assertionController: any AwakeAssertionControlling
     private let powerStateProvider: any AwakePowerStateProviding
     private let notifyBatteryWarning: (Int) -> Void
     private let now: () -> Date
+    private let closedLidSleepController: (any ClosedLidSleepControlling)?
+    private let lidStateMonitor: (any LidStateMonitoring)?
+    private let displayStateProvider: any AwakeDisplayStateProviding
+    private let sleepDisplay: @MainActor () -> Void
+    private let wakeDisplay: () -> Void
     private var maintenanceTask: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
     private var powerMonitoringToken: UUID?
@@ -29,6 +44,13 @@ final class AwakeSessionManager: ObservableObject {
     private var isDisplayAsleep = false
     private var warnedBatteryThreshold = false
     private var isShutdown = false
+    /// Whether the aggregate closed-lid policy is currently requested, so the
+    /// controller is only toggled on real transitions.
+    private var closedLidSleepRequested = false
+    private var isLidMonitoring = false
+    /// Only wake the display on lid open when MacPilot was the one that slept
+    /// it for this lid close.
+    private var displayWasSleptByMacPilotForLidClose = false
 
     /// Called by `MacPilotModel` when the user-facing Awake preferences change.
     var persist: (() -> Void)?
@@ -37,13 +59,27 @@ final class AwakeSessionManager: ObservableObject {
         assertionController: any AwakeAssertionControlling = AwakeAssertionController(),
         powerStateProvider: any AwakePowerStateProviding = PowerStateProvider(),
         notifyBatteryWarning: @escaping (Int) -> Void = { AwakeNotifications.showBatteryWarning(threshold: $0) },
-        now: @escaping () -> Date = { Date() }
+        now: @escaping () -> Date = { Date() },
+        closedLidSleepController: (any ClosedLidSleepControlling)? = nil,
+        lidStateMonitor: (any LidStateMonitoring)? = nil,
+        displayStateProvider: any AwakeDisplayStateProviding = DisplayStateProvider(),
+        sleepDisplay: @escaping @MainActor () -> Void = DisplayPower.sleepDisplay,
+        wakeDisplay: @escaping () -> Void = DisplayPower.wakeDisplay
     ) {
         self.assertionController = assertionController
         self.powerStateProvider = powerStateProvider
         self.notifyBatteryWarning = notifyBatteryWarning
         self.now = now
+        self.closedLidSleepController = closedLidSleepController
+        self.lidStateMonitor = lidStateMonitor
+        self.displayStateProvider = displayStateProvider
+        self.sleepDisplay = sleepDisplay
+        self.wakeDisplay = wakeDisplay
         powerState = powerStateProvider.currentPowerState()
+        closedLidServiceState = closedLidSleepController?.serviceState ?? .unavailable
+        closedLidSleepController?.onStateChange = { [weak self] in
+            self?.syncClosedLidServiceState()
+        }
         installSystemObservers()
     }
 
@@ -57,6 +93,18 @@ final class AwakeSessionManager: ObservableObject {
     var isSystemAssertionActive: Bool { assertionController.isSystemAssertionActive }
     var isDisplayAssertionActive: Bool { assertionController.isDisplayAssertionActive }
     var sharedPowerStateProvider: any AwakePowerStateProviding { powerStateProvider }
+
+    /// Ask the privileged helper to register, if it is not registered yet.
+    /// Never called at launch; only from the closed-lid UI or the enable flow.
+    func prepareClosedLidService() async {
+        guard let closedLidSleepController else { return }
+        await closedLidSleepController.prepareIfNeeded()
+        syncClosedLidServiceState()
+    }
+
+    func openClosedLidServiceSettings() {
+        closedLidSleepController?.openSystemSettings()
+    }
 
     func startSession(
         source: SessionSource,
@@ -179,6 +227,7 @@ final class AwakeSessionManager: ObservableObject {
         guard let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].state == .active else { return }
         sessions[index].state = .ended
         logger.notice("Session ended: \(id.uuidString, privacy: .public)")
+        pruneEndedSessions()
         refreshDesiredState()
     }
 
@@ -245,6 +294,9 @@ final class AwakeSessionManager: ObservableObject {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
         observers.removeAll()
+        stopLidMonitoring()
+        closedLidSleepController?.shutdown()
+        syncClosedLidServiceState()
         if case .failure(let failure) = assertionController.releaseAll() {
             lastAssertionFailure = failure
         }
@@ -254,6 +306,21 @@ final class AwakeSessionManager: ObservableObject {
         guard let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].state == .active else { return }
         sessions[index].state = .ended
         logger.notice("Session ended: \(id.uuidString, privacy: .public)")
+        pruneEndedSessions()
+    }
+
+    /// Bounds the session array: ended sessions are kept only as a short recent
+    /// history, so a long-running process does not accumulate every session it
+    /// ever started.
+    private func pruneEndedSessions() {
+        let endedCount = sessions.count { $0.state != .active }
+        guard endedCount > Self.maximumRetainedEndedSessions else { return }
+        var remainingToDrop = endedCount - Self.maximumRetainedEndedSessions
+        sessions.removeAll { session in
+            guard remainingToDrop > 0, session.state != .active else { return false }
+            remainingToDrop -= 1
+            return true
+        }
     }
 
     private func expireSessions(at date: Date) {
@@ -327,16 +394,24 @@ final class AwakeSessionManager: ObservableObject {
 
     private func applyAssertions() {
         let active = activeSessions
+        // Keeping the Mac awake with the lid closed only makes sense while the
+        // system itself is prevented from sleeping, so the closed-lid flag
+        // forces system-sleep prevention on.
+        let closedLidSleepPrevented = active.contains { $0.policy.preventClosedLidSleep }
         // System sleep prevention is released while the display is off only
-        // when every session that prevents system sleep allows it.
+        // when every session that prevents system sleep allows it, and never
+        // while the Mac must keep running with the lid closed.
         let allAllowSleepWithDisplayOff = active
             .filter { $0.policy.preventSystemSleep }
             .allSatisfy { $0.policy.allowSystemSleepWhenDisplayOff }
-        let displayOffReleasesSystemSleep = isDisplayAsleep && allAllowSleepWithDisplayOff
+        let displayOffReleasesSystemSleep = isDisplayAsleep
+            && allAllowSleepWithDisplayOff
+            && !closedLidSleepPrevented
         let desired = DesiredAwakeState(
-            preventSystemSleep: active.contains { $0.policy.preventSystemSleep } && !displayOffReleasesSystemSleep,
+            preventSystemSleep: (active.contains { $0.policy.preventSystemSleep } || closedLidSleepPrevented)
+                && !displayOffReleasesSystemSleep,
             preventDisplaySleep: active.contains { $0.policy.preventDisplaySleep },
-            preventClosedLidSleep: active.contains { $0.policy.preventClosedLidSleep }
+            preventClosedLidSleep: closedLidSleepPrevented
         )
         desiredAwakeState = desired
         switch assertionController.apply(desired) {
@@ -346,6 +421,76 @@ final class AwakeSessionManager: ObservableObject {
             lastAssertionFailure = failure
             logger.error("Assertion update failed: \(failure.localizedDescription, privacy: .public)")
         }
+        applyClosedLidSleep(desired.preventClosedLidSleep)
+    }
+
+    // MARK: - Closed-lid sleep
+
+    private func applyClosedLidSleep(_ enabled: Bool) {
+        if enabled != closedLidSleepRequested {
+            closedLidSleepRequested = enabled
+            closedLidSleepController?.setEnabled(enabled)
+            if enabled {
+                startLidMonitoring()
+            } else {
+                stopLidMonitoring()
+            }
+        }
+        syncClosedLidServiceState()
+    }
+
+    private func startLidMonitoring() {
+        guard !isLidMonitoring, let lidStateMonitor else { return }
+        isLidMonitoring = true
+        lidStateMonitor.start { [weak self] state in
+            self?.handleLidStateChange(state)
+        }
+    }
+
+    private func stopLidMonitoring() {
+        guard isLidMonitoring, let lidStateMonitor else { return }
+        isLidMonitoring = false
+        lidStateMonitor.stop()
+        isLidClosed = false
+        displayWasSleptByMacPilotForLidClose = false
+    }
+
+    /// Reacts to a physical lid change. The built-in display is only turned
+    /// off when no external display is attached, and only a display MacPilot
+    /// slept this way is woken again on lid open.
+    private func handleLidStateChange(_ state: LidState) {
+        guard !isShutdown, closedLidSleepRequested else { return }
+        isLidClosed = state == .closed
+        switch state {
+        case .closed:
+            guard !displayWasSleptByMacPilotForLidClose else { return }
+            displayStateProvider.refreshNow()
+            guard displayStateProvider.currentState.externalDisplayCount == 0 else {
+                logger.notice("Lid closed with an external display attached; leaving displays to macOS")
+                return
+            }
+            displayWasSleptByMacPilotForLidClose = true
+            logger.notice("Lid closed; turning off the built-in display")
+            sleepDisplay()
+        case .open:
+            guard displayWasSleptByMacPilotForLidClose else { return }
+            displayWasSleptByMacPilotForLidClose = false
+            logger.notice("Lid opened; waking the display MacPilot turned off")
+            wakeDisplay()
+        case .unknown:
+            break
+        }
+    }
+
+    private func syncClosedLidServiceState() {
+        let newState = closedLidSleepController?.serviceState ?? .unavailable
+        let newActive = closedLidSleepController?.isActive ?? false
+        let newFailure = closedLidSleepController?.lastFailure
+        // Only publish real changes: `applyAssertions()` runs frequently while
+        // a session is counting down.
+        if closedLidServiceState != newState { closedLidServiceState = newState }
+        if isClosedLidSleepActive != newActive { isClosedLidSleepActive = newActive }
+        if lastClosedLidFailure != newFailure { lastClosedLidFailure = newFailure }
     }
 
     private func scheduleMaintenance() {

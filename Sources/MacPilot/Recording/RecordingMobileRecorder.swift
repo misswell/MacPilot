@@ -174,9 +174,10 @@ final class ScreenRecordingMobileRecorder: NSObject {
 
     func stopRecording() {
         guard let output = movieOutput else { return }
-        if captureSession?.isRunning == true {
-            output.stopRecording()
-        }
+        // Always ask the output to stop. Gating on `isRunning` skipped the stop
+        // when the session had already been interrupted, which left the movie
+        // output, the session and its open file retained with no completion.
+        output.stopRecording()
     }
 
     private func handleRecordingFinished(url: URL, error: Error?) {

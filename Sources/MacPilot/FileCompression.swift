@@ -1079,6 +1079,12 @@ final class FolderCompressionModel: ObservableObject {
         updateMonitoring(initialScanRoots: Set(settings.folderPaths))
     }
 
+    /// Synchronous teardown for app termination: stops the FSEvents stream and
+    /// cancels every pending scan task.
+    func shutdown() {
+        stopMonitoring()
+    }
+
     func addFolders(_ urls: [URL]) {
         let paths = urls.map { $0.standardizedFileURL.path }
         guard !paths.isEmpty else { return }

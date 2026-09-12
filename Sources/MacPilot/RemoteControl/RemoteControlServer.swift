@@ -41,9 +41,16 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
     /// Raised when a pairing code becomes visible so the app can show it.
     var onPairingCodePresented: (@MainActor (String, String) -> Void)?
 
+    /// Raised after the server starts or stops so the app can re-evaluate the
+    /// shared screen-state observation (the remote unlock path needs it).
+    var onRunningStateChanged: (@MainActor () -> Void)?
+
     private var listener: NWListener?
     private var connections: [UUID: RemoteConnection] = [:]
     private var isUsingDynamicPort = false
+    /// Whether the lazy BLE central was ever started, so `stop()` never
+    /// instantiates a CoreBluetooth central just to shut it down.
+    private var bleCentralStarted = false
     private let logHandler: (String) -> Void
 
     /// Second link, for when there is no usable network between the two
@@ -116,13 +123,18 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
         }
 
         bleCentral.start()
+        bleCentralStarted = true
+        onRunningStateChanged?()
     }
 
     func stop() {
         listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
-        bleCentral.stop()
+        if bleCentralStarted {
+            bleCentral.stop()
+            bleCentralStarted = false
+        }
         for connection in connections.values {
             connection.close()
         }
@@ -131,6 +143,7 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
         pairingManager.closeWindow()
         status = .stopped
         log("server stopped")
+        onRunningStateChanged?()
     }
 
     /// Restarts the listener, e.g. after the advertised name changed.

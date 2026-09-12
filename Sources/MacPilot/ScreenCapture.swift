@@ -666,8 +666,22 @@ final class ScreenCaptureModel: ObservableObject {
     func activateFromConfiguration() {
         CloudManager.shared.apply(settings: settings.imageHosting)
         captureHistory = SmartCaptureHistoryStore.load()
-        Task { await refreshDiskUsage() }
         updateSmartCaptureRuntime()
+        // The disk-usage walk and the temp-capture sweep are pure filesystem
+        // cost, so a switched-off capture feature skips them at launch and runs
+        // them when the user switches it on.
+        if settings.screenshotEnabled || settings.isEnabled {
+            refreshCaptureHousekeeping()
+        }
+        if settings.screenshotEnabled && settings.isEnabled {
+            checkAndStartCapture()
+        }
+    }
+
+    /// Recursive output-folder statistics plus the orphaned-temp-file sweep,
+    /// together with the QuickAccess annotation wiring they back.
+    private func refreshCaptureHousekeeping() {
+        Task { await refreshDiskUsage() }
         // Snapzy QuickAccess preview: clean orphaned temp captures from earlier
         // sessions, and route the card's "标注" action to the annotation editor.
         TempCaptureManager.shared.cleanupOrphanedFiles()
@@ -678,9 +692,6 @@ final class ScreenCaptureModel: ObservableObject {
                 language: self.language
             )
         }
-        if settings.screenshotEnabled && settings.isEnabled {
-            checkAndStartCapture()
-        }
     }
 
     // MARK: - Settings mutations
@@ -689,6 +700,7 @@ final class ScreenCaptureModel: ObservableObject {
         guard settings.isEnabled != enabled else { return }
         updateSettings { $0.isEnabled = enabled }
         if enabled {
+            refreshCaptureHousekeeping()
             checkAndStartCapture()
         } else {
             stopCaptureLoop()
@@ -791,12 +803,14 @@ final class ScreenCaptureModel: ObservableObject {
     func setSmartCaptureEnabled(_ value: Bool) {
         updateSettings { $0.smartCaptureEnabled = value }
         updateSmartCaptureRuntime()
+        if value { refreshCaptureHousekeeping() }
     }
 
     func setScreenshotEnabled(_ value: Bool) {
         guard settings.screenshotEnabled != value else { return }
         updateSettings { $0.screenshotEnabled = value }
         if value {
+            refreshCaptureHousekeeping()
             updateSmartCaptureRuntime()
             if settings.isEnabled {
                 checkAndStartCapture()

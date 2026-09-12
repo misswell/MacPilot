@@ -331,6 +331,12 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
             refcon: nil,
             compressionSessionOut: &session
         )
+        // The probe session holds a hardware encoder and its buffers until it is
+        // invalidated. Release it on both the success and failure paths; the
+        // function only needs the status code.
+        if let session {
+            VTCompressionSessionInvalidate(session)
+        }
         guard status != noErr else { return }
         let useHEVC = await MainActor.run(body: Self.offerEncoderFallback)
         if useHEVC {
@@ -401,6 +407,7 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
             try? await stream.stopCapture()
         }
         sleepAssertion.release()
+        if writer.status == .writing { writer.cancelWriting() }
         try? FileManager.default.removeItem(at: workURL)
     }
 
@@ -846,8 +853,16 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
     // MARK: - Finishing
 
     private func finalizeWriting() async throws -> URL {
-        try finishInputs()
-
+        do {
+            try finishInputs()
+        } catch {
+            // Finishing the inputs can fail (no frames, stream failure). Leaving
+            // the writer unfinalized keeps the `.recpart` file and its inputs
+            // alive, so cancel the session and drop the partial file first.
+            if writer.status == .writing { writer.cancelWriting() }
+            try? FileManager.default.removeItem(at: workURL)
+            throw error
+        }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             self.writer.finishWriting {
                 if let error = self.writer.error {

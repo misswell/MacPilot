@@ -222,7 +222,7 @@ struct SessionPolicy: Codable, Equatable, Sendable {
         blockScreenSaver: Bool = false,
         screenSaverIdleMinutes: Int = 45
     ) {
-        self.preventSystemSleep = preventSystemSleep
+        self.preventSystemSleep = preventSystemSleep || preventClosedLidSleep
         self.preventDisplaySleep = preventDisplaySleep
         self.preventClosedLidSleep = preventClosedLidSleep
         self.screenSaverPolicy = screenSaverPolicy
@@ -247,6 +247,14 @@ struct SessionPolicy: Codable, Equatable, Sendable {
         case allowSystemSleepWhenDisplayOff
         case blockScreenSaver
         case screenSaverIdleMinutes
+    }
+
+    /// Keeping the Mac running with the lid closed is only meaningful while
+    /// the system itself is prevented from idling to sleep, so the two flags
+    /// can never disagree.
+    mutating func setPreventClosedLidSleep(_ enabled: Bool) {
+        preventClosedLidSleep = enabled
+        if enabled { preventSystemSleep = true }
     }
 
     init(from decoder: Decoder) throws {

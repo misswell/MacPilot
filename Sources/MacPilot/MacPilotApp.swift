@@ -470,6 +470,22 @@ enum AppText {
         "awakePowerAdapterSection": "电源适配器", "awakeIgnoreBatteryOnPower": "如果连接了电源适配器，则忽略电量",
         "awakeRestartOnPowerReconnect": "如果电源适配器重新连接，启动一个新会话", "awakeRestartUsesDefaultDuration": "使用默认时长",
         "awakeAutoStart": "自动开启",
+        "awakeClosedLidSleep": "合盖后继续运行",
+        "awakeClosedLidSleepHint": "合上 MacBook 后关闭内置显示器，但保持系统与后台任务继续运行。",
+        "awakeClosedLidSleepWarning": "合盖运行会增加耗电和发热。运行高负载任务时请保持良好散热，不要将正在运行的 Mac 放入包中。",
+        "awakeClosedLidSleepDetail": "合盖休眠",
+        "awakeClosedLidServiceRequired": "需要允许 MacPilot 后台电源服务，才能阻止 MacBook 合盖休眠。",
+        "awakeClosedLidServiceApprove": "允许后台服务",
+        "awakeClosedLidServiceRequiresApproval": "请在“系统设置 → 通用 → 登录项与扩展”中允许 MacPilot 后台电源服务。",
+        "awakeClosedLidServiceOpenSettings": "打开系统设置",
+        "awakeClosedLidServiceUnavailable": "当前版本无法使用后台电源服务，请使用已签名的正式版本。",
+        "awakeClosedLidServiceReady": "后台电源服务已就绪",
+        "awakeClosedLidServiceEnabling": "正在开启合盖防休眠…",
+        "awakeClosedLidError": "无法保持合盖运行：%@",
+        "awakeAgentPresets": "Agent 预设",
+        "awakeAgentClaudeCode": "Claude Code",
+        "awakeAgentCodex": "Codex",
+        "awakeAgentOpenCode": "OpenCode",
         "awakeNotifyBatteryTitle": "MacPilot：电量不足", "awakeNotifyBatteryBody": "电量即将低于 %d%%，保持唤醒会话即将结束。"
         , "launch": "启动", "launchSubtitle": "在登录后按设定延迟启动应用。", "launchApps": "启动应用",
         "addLaunchApp": "添加启动应用", "addLaunchRule": "添加启动规则", "editLaunchRule": "编辑启动规则",
@@ -630,7 +646,7 @@ enum AppText {
         ,
         "screenCapture": "截屏与贴图", "screenCaptureSubtitle": "使用可自定义快捷键智能识别窗口和界面元素边界，支持贴图、OCR、标注与低资源定时截屏。",
         "scScreenshotEnabled": "启用截图功能", "scScreenshotDisabledHint": "关闭后不再监听截图快捷键、不运行定时截屏，也不会在后台占用截图相关资源。", "scScreenshotDisabled": "截图功能已停用，请先在截图设置中重新启用。",
-        "scRecording": "屏幕录制", "scRecordingStart": "开始录制", "scRecordingStop": "停止录制", "scRecordingPause": "暂停录制", "scRecordingResume": "继续录制", "scRecordingCancel": "取消录制", "scRecordingOpenFolder": "打开录制文件夹", "scRecordingFormat": "格式", "scRecordingCaptureMode": "录制范围", "scRecordingArea": "框选区域", "scRecordingFullscreen": "全屏", "scRecordingApplication": "应用窗口", "scRecordingFPS": "帧率", "scRecordingFPSValue": "%d 帧/秒", "scRecordingCursor": "包含鼠标光标", "scRecordingSystemAudio": "录制系统声音", "scRecordingEncoder": "编码器", "scRecordingEncoderH264": "H.264（兼容性更好）", "scRecordingEncoderHEVC": "HEVC（文件更小）", "scRecordingMicrophone": "录制麦克风", "scRecordingEchoCancellation": "回声消除", "scRecordingMicTrackHint": "麦克风将保存为独立音轨，方便后期剪辑时单独调整音量。", "scRecordingMicPermissionRequired": "需要麦克风权限才能录制麦克风。", "scRecordingAudioMode": "纯音频", "scRecordingAudioFormat": "音频格式", "scRecordingAudioFormatAAC": "AAC", "scRecordingAudioFormatALAC": "ALAC（无损）", "scRecordingAudioFormatFLAC": "FLAC（无损）", "scRecordingAudioQuality": "音质", "scRecordingAudioQualityNormal": "标准 - 128Kbps", "scRecordingAudioQualityGood": "良好 - 192Kbps", "scRecordingAudioQualityHigh": "高 - 256Kbps", "scRecordingAudioQualityExtreme": "极高 - 320Kbps", "scRecordingWithAlpha": "录制透明通道（HEVC With Alpha）", "scRecordingHDR": "录制 HDR（macOS 15+）", "scRecordingHighRes": "Retina 原生分辨率", "scRecordingPixelFormat": "像素格式", "scRecordingPixelAuto": "默认", "scRecordingPixelYUV420p8v": "YUV 4:2:0 8-bit（视频）", "scRecordingPixelYUV420p8f": "YUV 4:2:0 8-bit（全幅）", "scRecordingPixelYUV420p10v": "YUV 4:2:0 10-bit（视频）", "scRecordingPixelYUV420p10f": "YUV 4:2:0 10-bit（全幅）", "scRecordingPixelBGRA": "BGRA 32-bit", "scRecordingBackground": "窗口背景", "scRecordingBackgroundWallpaper": "保留桌面壁纸", "scRecordingBackgroundClear": "透明", "scRecordingBackgroundBlack": "黑色", "scRecordingBackgroundWhite": "白色", "scRecordingBackgroundRed": "红色", "scRecordingBackgroundGreen": "绿色", "scRecordingBackgroundYellow": "黄色", "scRecordingBackgroundOrange": "橙色", "scRecordingBackgroundGray": "灰色", "scRecordingBackgroundBlue": "蓝色", "scRecordingBackgroundCustom": "自定义", "scRecordingCustomBackground": "自定义颜色（#RRGGBB）", "scRecordingVideoQuality": "画质", "scRecordingQualityLow": "低", "scRecordingQualityMedium": "中", "scRecordingQualityHigh": "高", "scRecordingCountdown": "录制前倒计时（秒）", "scRecordingAutoStopMinutes": "定时停止（分钟，0 为关闭）", "scRecordingRemuxAudio": "将麦克风混入主音轨", "scRecordingRemuxHint": "关闭后系统声音与麦克风将保存为两条独立音轨，方便后期分别调整。", "scRecordingMicDevice": "麦克风设备", "scRecordingDucking": "录制时压低系统音量", "scRecordingDuckingMin": "弱", "scRecordingDuckingMid": "中", "scRecordingDuckingMax": "强", "scRecordingHighlightMouse": "鼠标点击高亮", "scRecordingHideDesktopFiles": "隐藏桌面文件", "scRecordingHideControlCenter": "隐藏控制中心图标", "scRecordingIncludeMenuBar": "录制包含菜单栏", "scRecordingExcludeSelf": "录制时排除本应用窗口", "scRecordingPreventSleep": "录制期间防止休眠", "scRecordingShowPreview": "录制完成后显示悬浮预览", "scRecordingShowController": "录制时显示悬浮控制条", "scRecordingPresenterOverlayDelay": "演示者叠加保护延迟（秒）", "scRecordingBlocklist": "应用黑名单", "scRecordingBlocklistHint": "全屏/区域录制时将排除所选应用；录制开始后才启动的应用无法排除。", "scRecordingHotKeys": "录制快捷键", "scRecordingHotKeyStop": "停止录制", "scRecordingHotKeyPauseResume": "暂停/继续", "scRecordingHotKeyStartAudio": "录制系统声音", "scRecordingHotKeyStartScreen": "录制当前屏幕", "scRecordingHotKeyStartWindow": "录制最前窗口", "scRecordingHotKeyStartArea": "框选区域录制", "scRecordingHotKeySaveFrame": "保存当前帧", "scRecordingHotKeyMagnifier": "屏幕放大镜开关", "scRecordingHotKeyOff": "未设置", "scRecordingCameraPermissionRequired": "需要摄像头权限才能使用摄像头或移动设备。", "scRecordingDeviceNotFound": "未找到所选设备。", "scRecordingNoAudio": "没有录到任何音频。", "scRecordingCompletedTitle": "录制完成", "scRecordingCompletedBody": "文件已保存：%@", "scRecordingSaveFailedTitle": "保存失败", "scRecordingSaveFailedBody": "%@", "scRecordingMixingTitle": "正在处理", "scRecordingMixingBody": "正在混音音轨…", "scRecordingFrameSaved": "已保存当前帧", "scRecordingFrameSavedBody": "截图已保存：%@", "scRecordingNoCameras": "未找到摄像头", "scRecordingDeviceLocked": "请解锁设备", "scRecordingEncoderWarningTitle": "编码器警告", "scRecordingEncoderWarningBody": "VideoToolbox 硬件 H.264 编码器不支持当前分辨率。继续使用软件编码会显著增加 CPU 占用。\n\n是否改用 H.265？", "scRecordingEncoderWarningSwitch": "改用 H.265", "scRecordingEncoderWarningContinue": "继续使用 H.264", "scRecordingAudioOnlyHint": "纯音频模式将系统声音（和可选的麦克风）录成音频文件，不录制画面。", "scRecordingSubtitle": "屏幕、窗口与区域录制，支持系统声音与麦克风、摄像头叠加和 iPhone/iPad 录制。", "scRecordingVideoGroup": "画面", "scRecordingAudioGroup": "声音", "scRecordingBehaviorGroup": "录制行为", "scRecordingOutputGroup": "输出", "scRecordingCameraRow": "摄像头", "scRecordingDeviceRow": "iPhone / iPad", "scRecordingCameraHint": "摄像头与设备窗口会作为画面被录进视频；录制中也可通过悬浮控制条随时开关。", "scRecordingStartDeviceRecording": "录制设备画面", "scRecordingToggleShortcut": "主快捷键", "scRecordingAlphaHint": "开启透明通道后将强制使用 HEVC 编码与 MOV 容器。", "scSecondsValue": "%d 秒", "scRecordingCountdownValue": "录制前倒计时：%d 秒", "scRecordingAutoStopValue": "定时停止：%d 分钟（0 为关闭）", "scRecordingPresenterOverlayDelayValue": "演示者叠加保护延迟：%d 秒", "scRecordingCamera": "摄像头与设备", "scRecordingStopDeviceRecording": "停止设备录制", "scRecordingEditHotKey": "设置", "scRecordingClearHotKey": "清除快捷键", "scRecordingBlocklistEmpty": "当前没有可排除的应用。", "scDelayedCaptureShortcut": "延迟截图快捷键", "scDelayedCapture": "延迟截图", "scDelayedCaptureHint": "倒计时结束后自动打开截图选区。", "scDelayedCaptureSeconds": "延迟秒数", "scDelayedCaptureSecondsHint": "倒计时结束后立即框选", "scDelayedCaptureCancel": "取消", "scRecordingMicLevel": "麦克风电平", "scRecordingCancelArmed": "再次点击确认取消录制", "scRecordingRevealInFinder": "在访达中显示", "scRecordingDeleteFile": "删除", "scRecordingCopyFile": "拷贝", "scRecordingClosePreview": "关闭", "scRecordingGIFFPS": "GIF 帧率", "scRecordingGIFWidth": "GIF 最大宽度", "scRecordingGIFWidthValue": "%d px", "scRecordingPrepare": "准备录制", "scRecordingAspectHorizontal": "16:9 横屏", "scRecordingAspectVertical": "9:16 竖屏", "scRecordingShowPrepareBar": "录制前显示准备工具条", "updateTranslocationTitle": "请将 MacPilot 移到「应用程序」文件夹", "updateTranslocationBody": "MacPilot 正在从临时的隔离位置运行，辅助功能、屏幕录制和自动化等授权会因此反复失效。请退出应用，将它拖入「应用程序」文件夹后重新打开。", "scRecordingIdle": "未录制", "scRecordingPreparing": "准备中…", "scRecordingActive": "录制中 %@", "scRecordingPaused": "已暂停 %@", "scRecordingStopping": "正在保存…", "scRecordingLastFile": "最近录制：%@", "scRecordingExportGIF": "导出 GIF", "scRecordingConvertingGIF": "正在生成 GIF…", "scRecordingActions": "录制快捷操作", "scOpen": "打开",
+        "scRecording": "屏幕录制", "scRecordingEnabled": "启用屏幕录制", "scRecordingDisabledHint": "关闭后不注册录制快捷键、不枚举摄像头与麦克风，后台不占用录制相关资源。", "scRecordingStart": "开始录制", "scRecordingStop": "停止录制", "scRecordingPause": "暂停录制", "scRecordingResume": "继续录制", "scRecordingCancel": "取消录制", "scRecordingOpenFolder": "打开录制文件夹", "scRecordingFormat": "格式", "scRecordingCaptureMode": "录制范围", "scRecordingArea": "框选区域", "scRecordingFullscreen": "全屏", "scRecordingApplication": "应用窗口", "scRecordingFPS": "帧率", "scRecordingFPSValue": "%d 帧/秒", "scRecordingCursor": "包含鼠标光标", "scRecordingSystemAudio": "录制系统声音", "scRecordingEncoder": "编码器", "scRecordingEncoderH264": "H.264（兼容性更好）", "scRecordingEncoderHEVC": "HEVC（文件更小）", "scRecordingMicrophone": "录制麦克风", "scRecordingEchoCancellation": "回声消除", "scRecordingMicTrackHint": "麦克风将保存为独立音轨，方便后期剪辑时单独调整音量。", "scRecordingMicPermissionRequired": "需要麦克风权限才能录制麦克风。", "scRecordingAudioMode": "纯音频", "scRecordingAudioFormat": "音频格式", "scRecordingAudioFormatAAC": "AAC", "scRecordingAudioFormatALAC": "ALAC（无损）", "scRecordingAudioFormatFLAC": "FLAC（无损）", "scRecordingAudioQuality": "音质", "scRecordingAudioQualityNormal": "标准 - 128Kbps", "scRecordingAudioQualityGood": "良好 - 192Kbps", "scRecordingAudioQualityHigh": "高 - 256Kbps", "scRecordingAudioQualityExtreme": "极高 - 320Kbps", "scRecordingWithAlpha": "录制透明通道（HEVC With Alpha）", "scRecordingHDR": "录制 HDR（macOS 15+）", "scRecordingHighRes": "Retina 原生分辨率", "scRecordingPixelFormat": "像素格式", "scRecordingPixelAuto": "默认", "scRecordingPixelYUV420p8v": "YUV 4:2:0 8-bit（视频）", "scRecordingPixelYUV420p8f": "YUV 4:2:0 8-bit（全幅）", "scRecordingPixelYUV420p10v": "YUV 4:2:0 10-bit（视频）", "scRecordingPixelYUV420p10f": "YUV 4:2:0 10-bit（全幅）", "scRecordingPixelBGRA": "BGRA 32-bit", "scRecordingBackground": "窗口背景", "scRecordingBackgroundWallpaper": "保留桌面壁纸", "scRecordingBackgroundClear": "透明", "scRecordingBackgroundBlack": "黑色", "scRecordingBackgroundWhite": "白色", "scRecordingBackgroundRed": "红色", "scRecordingBackgroundGreen": "绿色", "scRecordingBackgroundYellow": "黄色", "scRecordingBackgroundOrange": "橙色", "scRecordingBackgroundGray": "灰色", "scRecordingBackgroundBlue": "蓝色", "scRecordingBackgroundCustom": "自定义", "scRecordingCustomBackground": "自定义颜色（#RRGGBB）", "scRecordingVideoQuality": "画质", "scRecordingQualityLow": "低", "scRecordingQualityMedium": "中", "scRecordingQualityHigh": "高", "scRecordingCountdown": "录制前倒计时（秒）", "scRecordingAutoStopMinutes": "定时停止（分钟，0 为关闭）", "scRecordingRemuxAudio": "将麦克风混入主音轨", "scRecordingRemuxHint": "关闭后系统声音与麦克风将保存为两条独立音轨，方便后期分别调整。", "scRecordingMicDevice": "麦克风设备", "scRecordingDucking": "录制时压低系统音量", "scRecordingDuckingMin": "弱", "scRecordingDuckingMid": "中", "scRecordingDuckingMax": "强", "scRecordingHighlightMouse": "鼠标点击高亮", "scRecordingHideDesktopFiles": "隐藏桌面文件", "scRecordingHideControlCenter": "隐藏控制中心图标", "scRecordingIncludeMenuBar": "录制包含菜单栏", "scRecordingExcludeSelf": "录制时排除本应用窗口", "scRecordingPreventSleep": "录制期间防止休眠", "scRecordingShowPreview": "录制完成后显示悬浮预览", "scRecordingShowController": "录制时显示悬浮控制条", "scRecordingPresenterOverlayDelay": "演示者叠加保护延迟（秒）", "scRecordingBlocklist": "应用黑名单", "scRecordingBlocklistHint": "全屏/区域录制时将排除所选应用；录制开始后才启动的应用无法排除。", "scRecordingHotKeys": "录制快捷键", "scRecordingHotKeyStop": "停止录制", "scRecordingHotKeyPauseResume": "暂停/继续", "scRecordingHotKeyStartAudio": "录制系统声音", "scRecordingHotKeyStartScreen": "录制当前屏幕", "scRecordingHotKeyStartWindow": "录制最前窗口", "scRecordingHotKeyStartArea": "框选区域录制", "scRecordingHotKeySaveFrame": "保存当前帧", "scRecordingHotKeyMagnifier": "屏幕放大镜开关", "scRecordingHotKeyOff": "未设置", "scRecordingCameraPermissionRequired": "需要摄像头权限才能使用摄像头或移动设备。", "scRecordingDeviceNotFound": "未找到所选设备。", "scRecordingNoAudio": "没有录到任何音频。", "scRecordingCompletedTitle": "录制完成", "scRecordingCompletedBody": "文件已保存：%@", "scRecordingSaveFailedTitle": "保存失败", "scRecordingSaveFailedBody": "%@", "scRecordingMixingTitle": "正在处理", "scRecordingMixingBody": "正在混音音轨…", "scRecordingFrameSaved": "已保存当前帧", "scRecordingFrameSavedBody": "截图已保存：%@", "scRecordingNoCameras": "未找到摄像头", "scRecordingDeviceLocked": "请解锁设备", "scRecordingEncoderWarningTitle": "编码器警告", "scRecordingEncoderWarningBody": "VideoToolbox 硬件 H.264 编码器不支持当前分辨率。继续使用软件编码会显著增加 CPU 占用。\n\n是否改用 H.265？", "scRecordingEncoderWarningSwitch": "改用 H.265", "scRecordingEncoderWarningContinue": "继续使用 H.264", "scRecordingAudioOnlyHint": "纯音频模式将系统声音（和可选的麦克风）录成音频文件，不录制画面。", "scRecordingSubtitle": "屏幕、窗口与区域录制，支持系统声音与麦克风、摄像头叠加和 iPhone/iPad 录制。", "scRecordingVideoGroup": "画面", "scRecordingAudioGroup": "声音", "scRecordingBehaviorGroup": "录制行为", "scRecordingOutputGroup": "输出", "scRecordingCameraRow": "摄像头", "scRecordingDeviceRow": "iPhone / iPad", "scRecordingCameraHint": "摄像头与设备窗口会作为画面被录进视频；录制中也可通过悬浮控制条随时开关。", "scRecordingStartDeviceRecording": "录制设备画面", "scRecordingToggleShortcut": "主快捷键", "scRecordingAlphaHint": "开启透明通道后将强制使用 HEVC 编码与 MOV 容器。", "scSecondsValue": "%d 秒", "scRecordingCountdownValue": "录制前倒计时：%d 秒", "scRecordingAutoStopValue": "定时停止：%d 分钟（0 为关闭）", "scRecordingPresenterOverlayDelayValue": "演示者叠加保护延迟：%d 秒", "scRecordingCamera": "摄像头与设备", "scRecordingStopDeviceRecording": "停止设备录制", "scRecordingEditHotKey": "设置", "scRecordingClearHotKey": "清除快捷键", "scRecordingBlocklistEmpty": "当前没有可排除的应用。", "scDelayedCaptureShortcut": "延迟截图快捷键", "scDelayedCapture": "延迟截图", "scDelayedCaptureHint": "倒计时结束后自动打开截图选区。", "scDelayedCaptureSeconds": "延迟秒数", "scDelayedCaptureSecondsHint": "倒计时结束后立即框选", "scDelayedCaptureCancel": "取消", "scRecordingMicLevel": "麦克风电平", "scRecordingCancelArmed": "再次点击确认取消录制", "scRecordingRevealInFinder": "在访达中显示", "scRecordingDeleteFile": "删除", "scRecordingCopyFile": "拷贝", "scRecordingClosePreview": "关闭", "scRecordingGIFFPS": "GIF 帧率", "scRecordingGIFWidth": "GIF 最大宽度", "scRecordingGIFWidthValue": "%d px", "scRecordingPrepare": "准备录制", "scRecordingAspectHorizontal": "16:9 横屏", "scRecordingAspectVertical": "9:16 竖屏", "scRecordingShowPrepareBar": "录制前显示准备工具条", "updateTranslocationTitle": "请将 MacPilot 移到「应用程序」文件夹", "updateTranslocationBody": "MacPilot 正在从临时的隔离位置运行，辅助功能、屏幕录制和自动化等授权会因此反复失效。请退出应用，将它拖入「应用程序」文件夹后重新打开。", "scRecordingIdle": "未录制", "scRecordingPreparing": "准备中…", "scRecordingActive": "录制中 %@", "scRecordingPaused": "已暂停 %@", "scRecordingStopping": "正在保存…", "scRecordingLastFile": "最近录制：%@", "scRecordingExportGIF": "导出 GIF", "scRecordingConvertingGIF": "正在生成 GIF…", "scRecordingActions": "录制快捷操作", "scOpen": "打开",
         "scRecordingPermissionRequired": "需要屏幕录制权限才能录制屏幕。", "scRecordingNoDisplay": "没有可录制的显示器。", "scRecordingAlreadyRunning": "屏幕录制已经在进行中。", "scRecordingNotRunning": "当前没有进行中的屏幕录制。", "scRecordingWriterFailed": "无法创建录制文件。", "scRecordingNoVideoFrames": "没有收到可用的视频帧。", "scRecordingStreamFailed": "屏幕录制失败：%@", "scRecordingUnknownError": "屏幕录制失败，请重试。", "scRecordingGIFSourceUnavailable": "无法读取要转换的录制文件。", "scRecordingGIFNoFrames": "录制文件没有可用于 GIF 的画面。", "scRecordingGIFDestinationUnavailable": "无法创建 GIF 输出文件。", "scRecordingGIFFailed": "无法生成 GIF 文件。",
         "scSmartCapture": "智能截图", "scSmartCaptureHint": "移动鼠标自动识别窗口或界面元素，单击截图，Esc 或右键取消。",
         "scSmartCaptureNow": "开始截图", "scAreaCaptureNow": "区域框选截图", "scApplicationWindowCaptureNow": "应用窗口框选截图", "scFullscreenCaptureNow": "全屏截图", "scActiveWindowCaptureNow": "当前窗口截图", "scAreaAnnotateNow": "区域截图并标注", "scOCRCaptureNow": "区域截图并 OCR", "scScrollingCaptureNow": "滚动长截图", "scObjectCutoutNow": "抠图截图", "scEditShortcuts": "修改截图快捷键", "scEnableSmartCapture": "启用全局快捷键", "scChangeShortcut": "修改快捷键",
@@ -953,6 +969,22 @@ enum AppText {
             "awakePowerAdapterSection": "Power Adapter", "awakeIgnoreBatteryOnPower": "Ignore the battery level when a power adapter is connected",
             "awakeRestartOnPowerReconnect": "Start a new session when the power adapter reconnects", "awakeRestartUsesDefaultDuration": "Uses the default duration",
             "awakeAutoStart": "Automatic Start",
+            "awakeClosedLidSleep": "Keep running with lid closed",
+            "awakeClosedLidSleepHint": "Keep the Mac running after the lid is closed while allowing the built-in display to turn off.",
+            "awakeClosedLidSleepWarning": "Running with the lid closed may increase power usage and heat. Keep the Mac well ventilated and do not place it in a bag while tasks are running.",
+            "awakeClosedLidSleepDetail": "Lid sleep",
+            "awakeClosedLidServiceRequired": "MacPilot needs its background power service to keep the MacBook running when the lid is closed.",
+            "awakeClosedLidServiceApprove": "Allow background service",
+            "awakeClosedLidServiceRequiresApproval": "Allow the MacPilot background power service in System Settings → General → Login Items & Extensions.",
+            "awakeClosedLidServiceOpenSettings": "Open System Settings",
+            "awakeClosedLidServiceUnavailable": "The background power service is unavailable in this build. Use a signed release build.",
+            "awakeClosedLidServiceReady": "Background power service ready",
+            "awakeClosedLidServiceEnabling": "Enabling closed-lid sleep prevention…",
+            "awakeClosedLidError": "Could not keep running with the lid closed: %@",
+            "awakeAgentPresets": "Agent presets",
+            "awakeAgentClaudeCode": "Claude Code",
+            "awakeAgentCodex": "Codex",
+            "awakeAgentOpenCode": "OpenCode",
             "awakeNotifyBatteryTitle": "MacPilot: Battery running low", "awakeNotifyBatteryBody": "The battery is about to drop below %d%% and the Awake sessions will end.",
             "launch": "Launch", "launchSubtitle": "Launch apps after their configured delay following login.", "launchApps": "Launch Apps",
             "addLaunchApp": "Add launch app", "addLaunchRule": "Add launch rule", "editLaunchRule": "Edit launch rule",
@@ -1113,7 +1145,7 @@ enum AppText {
             ,
             "screenCapture": "Capture & Pin", "screenCaptureSubtitle": "Use a customizable shortcut to detect window and UI element bounds, then pin, OCR, annotate, or run low-resource scheduled captures.",
             "scScreenshotEnabled": "Enable screenshot capture", "scScreenshotDisabledHint": "Disabling stops screenshot shortcuts, scheduled captures, and screenshot resources in the background.", "scScreenshotDisabled": "Screenshot capture is disabled. Enable it in Screenshot settings first.",
-            "scRecording": "Screen Recording", "scRecordingStart": "Start Recording", "scRecordingStop": "Stop Recording", "scRecordingPause": "Pause Recording", "scRecordingResume": "Resume Recording", "scRecordingCancel": "Cancel Recording", "scRecordingOpenFolder": "Open Recording Folder", "scRecordingFormat": "Format", "scRecordingCaptureMode": "Capture area", "scRecordingArea": "Selected area", "scRecordingFullscreen": "Full screen", "scRecordingApplication": "Application window", "scRecordingFPS": "Frame rate", "scRecordingFPSValue": "%d fps", "scRecordingCursor": "Show cursor", "scRecordingSystemAudio": "Record system audio", "scRecordingEncoder": "Encoder", "scRecordingEncoderH264": "H.264 (Best compatibility)", "scRecordingEncoderHEVC": "HEVC (Smaller files)", "scRecordingMicrophone": "Record microphone", "scRecordingEchoCancellation": "Echo cancellation", "scRecordingMicTrackHint": "The microphone is saved as a separate audio track so it can be adjusted independently while editing.", "scRecordingMicPermissionRequired": "Microphone permission is required to record the microphone.", "scRecordingAudioMode": "Audio only", "scRecordingAudioFormat": "Audio format", "scRecordingAudioFormatAAC": "AAC", "scRecordingAudioFormatALAC": "ALAC (Lossless)", "scRecordingAudioFormatFLAC": "FLAC (Lossless)", "scRecordingAudioQuality": "Audio quality", "scRecordingAudioQualityNormal": "Normal - 128Kbps", "scRecordingAudioQualityGood": "Good - 192Kbps", "scRecordingAudioQualityHigh": "High - 256Kbps", "scRecordingAudioQualityExtreme": "Extreme - 320Kbps", "scRecordingWithAlpha": "Record with alpha channel (HEVC With Alpha)", "scRecordingHDR": "Record HDR (macOS 15+)", "scRecordingHighRes": "Retina native resolution", "scRecordingPixelFormat": "Pixel format", "scRecordingPixelAuto": "Automatic", "scRecordingPixelYUV420p8v": "YUV 4:2:0 8-bit (Video)", "scRecordingPixelYUV420p8f": "YUV 4:2:0 8-bit (Full)", "scRecordingPixelYUV420p10v": "YUV 4:2:0 10-bit (Video)", "scRecordingPixelYUV420p10f": "YUV 4:2:0 10-bit (Full)", "scRecordingPixelBGRA": "BGRA 32-bit", "scRecordingBackground": "Window background", "scRecordingBackgroundWallpaper": "Keep wallpaper", "scRecordingBackgroundClear": "Transparent", "scRecordingBackgroundBlack": "Black", "scRecordingBackgroundWhite": "White", "scRecordingBackgroundRed": "Red", "scRecordingBackgroundGreen": "Green", "scRecordingBackgroundYellow": "Yellow", "scRecordingBackgroundOrange": "Orange", "scRecordingBackgroundGray": "Gray", "scRecordingBackgroundBlue": "Blue", "scRecordingBackgroundCustom": "Custom", "scRecordingCustomBackground": "Custom color (#RRGGBB)", "scRecordingVideoQuality": "Quality", "scRecordingQualityLow": "Low", "scRecordingQualityMedium": "Medium", "scRecordingQualityHigh": "High", "scRecordingCountdown": "Delay before recording (seconds)", "scRecordingAutoStopMinutes": "Auto stop after (minutes, 0 = off)", "scRecordingRemuxAudio": "Record microphone to main track", "scRecordingRemuxHint": "When off, system audio and the microphone are saved as two separate tracks.", "scRecordingMicDevice": "Microphone", "scRecordingDucking": "Duck other audio while recording", "scRecordingDuckingMin": "Min", "scRecordingDuckingMid": "Mid", "scRecordingDuckingMax": "Max", "scRecordingHighlightMouse": "Highlight the mouse cursor", "scRecordingHideDesktopFiles": "Exclude files on desktop", "scRecordingHideControlCenter": "Hide Control Center icons", "scRecordingIncludeMenuBar": "Include menu bar in recording", "scRecordingExcludeSelf": "Exclude this app's windows while recording", "scRecordingPreventSleep": "Prevent Mac from sleeping while recording", "scRecordingShowPreview": "Show floating preview after recording", "scRecordingShowController": "Show floating controller while recording", "scRecordingPresenterOverlayDelay": "Presenter Overlay safe delay (seconds)", "scRecordingBlocklist": "App blocklist", "scRecordingBlocklistHint": "Fullscreen and area recordings exclude the selected apps; apps launched after recording starts cannot be excluded.", "scRecordingHotKeys": "Recording hot keys", "scRecordingHotKeyStop": "Stop recording", "scRecordingHotKeyPauseResume": "Pause / Resume", "scRecordingHotKeyStartAudio": "Record system audio", "scRecordingHotKeyStartScreen": "Record current screen", "scRecordingHotKeyStartWindow": "Record topmost window", "scRecordingHotKeyStartArea": "Select area to record", "scRecordingHotKeySaveFrame": "Save current frame", "scRecordingHotKeyMagnifier": "Toggle screen magnifier", "scRecordingHotKeyOff": "Not set", "scRecordingCameraPermissionRequired": "Camera permission is required to use the camera or a mobile device.", "scRecordingDeviceNotFound": "The selected device could not be found.", "scRecordingNoAudio": "No audio was captured.", "scRecordingCompletedTitle": "Recording Completed", "scRecordingCompletedBody": "File saved to: %@", "scRecordingSaveFailedTitle": "Failed to save file", "scRecordingSaveFailedBody": "%@", "scRecordingMixingTitle": "Still Processing", "scRecordingMixingBody": "Mixing audio track…", "scRecordingFrameSaved": "Frame Saved", "scRecordingFrameSavedBody": "Screenshot saved to: %@", "scRecordingNoCameras": "No Cameras Found", "scRecordingDeviceLocked": "Please unlock!", "scRecordingEncoderWarningTitle": "Encoder Warning", "scRecordingEncoderWarningBody": "The VideoToolbox H.264 hardware encoder doesn't support the current resolution. Continuing with a software encoder will significantly increase CPU usage.\n\nWould you like to use H.265 instead?", "scRecordingEncoderWarningSwitch": "Use H.265", "scRecordingEncoderWarningContinue": "Continue with H.264", "scRecordingAudioOnlyHint": "Audio-only mode records system audio (and optionally the microphone) into an audio file without video.", "scRecordingSubtitle": "Record the screen, a window, or an area with system audio, microphone, camera overlay, and iPhone/iPad capture.", "scRecordingVideoGroup": "Video", "scRecordingAudioGroup": "Audio", "scRecordingBehaviorGroup": "Recording Behavior", "scRecordingOutputGroup": "Output", "scRecordingCameraRow": "Camera", "scRecordingDeviceRow": "iPhone / iPad", "scRecordingCameraHint": "The camera and device windows are captured into the recording; toggle them any time from the floating controller.", "scRecordingStartDeviceRecording": "Record Device Screen", "scRecordingToggleShortcut": "Primary Shortcut", "scRecordingAlphaHint": "Alpha recording always uses the HEVC codec and the MOV container.", "scSecondsValue": "%d s", "scRecordingCountdownValue": "Delay before recording: %d s", "scRecordingAutoStopValue": "Auto stop after: %d min (0 = off)", "scRecordingPresenterOverlayDelayValue": "Presenter Overlay safe delay: %d s", "scRecordingCamera": "Camera & Devices", "scRecordingStopDeviceRecording": "Stop Device Recording", "scRecordingEditHotKey": "Set", "scRecordingClearHotKey": "Clear Hot Key", "scRecordingBlocklistEmpty": "No excludable apps are running.", "scDelayedCaptureShortcut": "Delayed Capture Shortcut", "scDelayedCapture": "Delayed Capture", "scDelayedCaptureHint": "Opens the capture selector after a countdown.", "scDelayedCaptureSeconds": "Delay (seconds)", "scDelayedCaptureSecondsHint": "draws the selection when it ends", "scDelayedCaptureCancel": "Cancel", "scRecordingMicLevel": "Microphone level", "scRecordingCancelArmed": "Click again to cancel the recording", "scRecordingRevealInFinder": "Show in Finder", "scRecordingDeleteFile": "Delete", "scRecordingCopyFile": "Copy", "scRecordingClosePreview": "Close", "scRecordingGIFFPS": "GIF frame rate", "scRecordingGIFWidth": "GIF maximum width", "scRecordingGIFWidthValue": "%d px", "scRecordingPrepare": "Ready to Record", "scRecordingAspectHorizontal": "16:9 landscape", "scRecordingAspectVertical": "9:16 portrait", "scRecordingShowPrepareBar": "Show the ready-to-record bar before recording", "updateTranslocationTitle": "Move MacPilot to the Applications folder", "updateTranslocationBody": "MacPilot is running from a temporary translocated location, which makes Accessibility, Screen Recording, and Automation grants fail repeatedly. Quit the app, drag it into the Applications folder, and reopen it.", "scRecordingIdle": "Idle", "scRecordingPreparing": "Preparing…", "scRecordingActive": "Recording %@", "scRecordingPaused": "Paused %@", "scRecordingStopping": "Saving…", "scRecordingLastFile": "Last recording: %@", "scRecordingExportGIF": "Export GIF", "scRecordingConvertingGIF": "Converting to GIF…", "scRecordingActions": "Recording Actions", "scOpen": "Open",
+            "scRecording": "Screen Recording", "scRecordingEnabled": "Enable screen recording", "scRecordingDisabledHint": "Disabling unregisters recording hot keys and stops enumerating cameras and microphones, so nothing runs in the background.", "scRecordingStart": "Start Recording", "scRecordingStop": "Stop Recording", "scRecordingPause": "Pause Recording", "scRecordingResume": "Resume Recording", "scRecordingCancel": "Cancel Recording", "scRecordingOpenFolder": "Open Recording Folder", "scRecordingFormat": "Format", "scRecordingCaptureMode": "Capture area", "scRecordingArea": "Selected area", "scRecordingFullscreen": "Full screen", "scRecordingApplication": "Application window", "scRecordingFPS": "Frame rate", "scRecordingFPSValue": "%d fps", "scRecordingCursor": "Show cursor", "scRecordingSystemAudio": "Record system audio", "scRecordingEncoder": "Encoder", "scRecordingEncoderH264": "H.264 (Best compatibility)", "scRecordingEncoderHEVC": "HEVC (Smaller files)", "scRecordingMicrophone": "Record microphone", "scRecordingEchoCancellation": "Echo cancellation", "scRecordingMicTrackHint": "The microphone is saved as a separate audio track so it can be adjusted independently while editing.", "scRecordingMicPermissionRequired": "Microphone permission is required to record the microphone.", "scRecordingAudioMode": "Audio only", "scRecordingAudioFormat": "Audio format", "scRecordingAudioFormatAAC": "AAC", "scRecordingAudioFormatALAC": "ALAC (Lossless)", "scRecordingAudioFormatFLAC": "FLAC (Lossless)", "scRecordingAudioQuality": "Audio quality", "scRecordingAudioQualityNormal": "Normal - 128Kbps", "scRecordingAudioQualityGood": "Good - 192Kbps", "scRecordingAudioQualityHigh": "High - 256Kbps", "scRecordingAudioQualityExtreme": "Extreme - 320Kbps", "scRecordingWithAlpha": "Record with alpha channel (HEVC With Alpha)", "scRecordingHDR": "Record HDR (macOS 15+)", "scRecordingHighRes": "Retina native resolution", "scRecordingPixelFormat": "Pixel format", "scRecordingPixelAuto": "Automatic", "scRecordingPixelYUV420p8v": "YUV 4:2:0 8-bit (Video)", "scRecordingPixelYUV420p8f": "YUV 4:2:0 8-bit (Full)", "scRecordingPixelYUV420p10v": "YUV 4:2:0 10-bit (Video)", "scRecordingPixelYUV420p10f": "YUV 4:2:0 10-bit (Full)", "scRecordingPixelBGRA": "BGRA 32-bit", "scRecordingBackground": "Window background", "scRecordingBackgroundWallpaper": "Keep wallpaper", "scRecordingBackgroundClear": "Transparent", "scRecordingBackgroundBlack": "Black", "scRecordingBackgroundWhite": "White", "scRecordingBackgroundRed": "Red", "scRecordingBackgroundGreen": "Green", "scRecordingBackgroundYellow": "Yellow", "scRecordingBackgroundOrange": "Orange", "scRecordingBackgroundGray": "Gray", "scRecordingBackgroundBlue": "Blue", "scRecordingBackgroundCustom": "Custom", "scRecordingCustomBackground": "Custom color (#RRGGBB)", "scRecordingVideoQuality": "Quality", "scRecordingQualityLow": "Low", "scRecordingQualityMedium": "Medium", "scRecordingQualityHigh": "High", "scRecordingCountdown": "Delay before recording (seconds)", "scRecordingAutoStopMinutes": "Auto stop after (minutes, 0 = off)", "scRecordingRemuxAudio": "Record microphone to main track", "scRecordingRemuxHint": "When off, system audio and the microphone are saved as two separate tracks.", "scRecordingMicDevice": "Microphone", "scRecordingDucking": "Duck other audio while recording", "scRecordingDuckingMin": "Min", "scRecordingDuckingMid": "Mid", "scRecordingDuckingMax": "Max", "scRecordingHighlightMouse": "Highlight the mouse cursor", "scRecordingHideDesktopFiles": "Exclude files on desktop", "scRecordingHideControlCenter": "Hide Control Center icons", "scRecordingIncludeMenuBar": "Include menu bar in recording", "scRecordingExcludeSelf": "Exclude this app's windows while recording", "scRecordingPreventSleep": "Prevent Mac from sleeping while recording", "scRecordingShowPreview": "Show floating preview after recording", "scRecordingShowController": "Show floating controller while recording", "scRecordingPresenterOverlayDelay": "Presenter Overlay safe delay (seconds)", "scRecordingBlocklist": "App blocklist", "scRecordingBlocklistHint": "Fullscreen and area recordings exclude the selected apps; apps launched after recording starts cannot be excluded.", "scRecordingHotKeys": "Recording hot keys", "scRecordingHotKeyStop": "Stop recording", "scRecordingHotKeyPauseResume": "Pause / Resume", "scRecordingHotKeyStartAudio": "Record system audio", "scRecordingHotKeyStartScreen": "Record current screen", "scRecordingHotKeyStartWindow": "Record topmost window", "scRecordingHotKeyStartArea": "Select area to record", "scRecordingHotKeySaveFrame": "Save current frame", "scRecordingHotKeyMagnifier": "Toggle screen magnifier", "scRecordingHotKeyOff": "Not set", "scRecordingCameraPermissionRequired": "Camera permission is required to use the camera or a mobile device.", "scRecordingDeviceNotFound": "The selected device could not be found.", "scRecordingNoAudio": "No audio was captured.", "scRecordingCompletedTitle": "Recording Completed", "scRecordingCompletedBody": "File saved to: %@", "scRecordingSaveFailedTitle": "Failed to save file", "scRecordingSaveFailedBody": "%@", "scRecordingMixingTitle": "Still Processing", "scRecordingMixingBody": "Mixing audio track…", "scRecordingFrameSaved": "Frame Saved", "scRecordingFrameSavedBody": "Screenshot saved to: %@", "scRecordingNoCameras": "No Cameras Found", "scRecordingDeviceLocked": "Please unlock!", "scRecordingEncoderWarningTitle": "Encoder Warning", "scRecordingEncoderWarningBody": "The VideoToolbox H.264 hardware encoder doesn't support the current resolution. Continuing with a software encoder will significantly increase CPU usage.\n\nWould you like to use H.265 instead?", "scRecordingEncoderWarningSwitch": "Use H.265", "scRecordingEncoderWarningContinue": "Continue with H.264", "scRecordingAudioOnlyHint": "Audio-only mode records system audio (and optionally the microphone) into an audio file without video.", "scRecordingSubtitle": "Record the screen, a window, or an area with system audio, microphone, camera overlay, and iPhone/iPad capture.", "scRecordingVideoGroup": "Video", "scRecordingAudioGroup": "Audio", "scRecordingBehaviorGroup": "Recording Behavior", "scRecordingOutputGroup": "Output", "scRecordingCameraRow": "Camera", "scRecordingDeviceRow": "iPhone / iPad", "scRecordingCameraHint": "The camera and device windows are captured into the recording; toggle them any time from the floating controller.", "scRecordingStartDeviceRecording": "Record Device Screen", "scRecordingToggleShortcut": "Primary Shortcut", "scRecordingAlphaHint": "Alpha recording always uses the HEVC codec and the MOV container.", "scSecondsValue": "%d s", "scRecordingCountdownValue": "Delay before recording: %d s", "scRecordingAutoStopValue": "Auto stop after: %d min (0 = off)", "scRecordingPresenterOverlayDelayValue": "Presenter Overlay safe delay: %d s", "scRecordingCamera": "Camera & Devices", "scRecordingStopDeviceRecording": "Stop Device Recording", "scRecordingEditHotKey": "Set", "scRecordingClearHotKey": "Clear Hot Key", "scRecordingBlocklistEmpty": "No excludable apps are running.", "scDelayedCaptureShortcut": "Delayed Capture Shortcut", "scDelayedCapture": "Delayed Capture", "scDelayedCaptureHint": "Opens the capture selector after a countdown.", "scDelayedCaptureSeconds": "Delay (seconds)", "scDelayedCaptureSecondsHint": "draws the selection when it ends", "scDelayedCaptureCancel": "Cancel", "scRecordingMicLevel": "Microphone level", "scRecordingCancelArmed": "Click again to cancel the recording", "scRecordingRevealInFinder": "Show in Finder", "scRecordingDeleteFile": "Delete", "scRecordingCopyFile": "Copy", "scRecordingClosePreview": "Close", "scRecordingGIFFPS": "GIF frame rate", "scRecordingGIFWidth": "GIF maximum width", "scRecordingGIFWidthValue": "%d px", "scRecordingPrepare": "Ready to Record", "scRecordingAspectHorizontal": "16:9 landscape", "scRecordingAspectVertical": "9:16 portrait", "scRecordingShowPrepareBar": "Show the ready-to-record bar before recording", "updateTranslocationTitle": "Move MacPilot to the Applications folder", "updateTranslocationBody": "MacPilot is running from a temporary translocated location, which makes Accessibility, Screen Recording, and Automation grants fail repeatedly. Quit the app, drag it into the Applications folder, and reopen it.", "scRecordingIdle": "Idle", "scRecordingPreparing": "Preparing…", "scRecordingActive": "Recording %@", "scRecordingPaused": "Paused %@", "scRecordingStopping": "Saving…", "scRecordingLastFile": "Last recording: %@", "scRecordingExportGIF": "Export GIF", "scRecordingConvertingGIF": "Converting to GIF…", "scRecordingActions": "Recording Actions", "scOpen": "Open",
             "scRecordingPermissionRequired": "Screen Recording permission is required to record the screen.", "scRecordingNoDisplay": "No display is available to record.", "scRecordingAlreadyRunning": "A screen recording is already running.", "scRecordingNotRunning": "There is no active screen recording.", "scRecordingWriterFailed": "The recording file could not be created.", "scRecordingNoVideoFrames": "No usable video frames were received.", "scRecordingStreamFailed": "Screen recording failed: %@", "scRecordingUnknownError": "Screen recording failed. Try again.", "scRecordingGIFSourceUnavailable": "The recording file could not be read.", "scRecordingGIFNoFrames": "The recording has no frames that can be used for a GIF.", "scRecordingGIFDestinationUnavailable": "The GIF output file could not be created.", "scRecordingGIFFailed": "The GIF file could not be generated.",
             "scSmartCapture": "Smart Capture", "scSmartCaptureHint": "Move the pointer to detect a window or UI element, click to capture, or press Escape/right-click to cancel.",
             "scSmartCaptureNow": "Start Capture", "scAreaCaptureNow": "Capture Area", "scApplicationWindowCaptureNow": "Capture Application Window", "scFullscreenCaptureNow": "Capture Full Screen", "scActiveWindowCaptureNow": "Capture Current Window", "scAreaAnnotateNow": "Capture and Annotate", "scOCRCaptureNow": "Capture Area and OCR", "scScrollingCaptureNow": "Scrolling Screenshot", "scObjectCutoutNow": "Object Cutout", "scEditShortcuts": "Edit Screenshot Shortcuts", "scEnableSmartCapture": "Enable the global shortcut", "scChangeShortcut": "Change Shortcut",
@@ -1347,7 +1379,10 @@ final class MacPilotModel: ObservableObject {
     let windowSwitcher = WindowSwitcherModel()
     let smoothScrolling = SmoothScrollModel()
     let clipboard = ClipboardModel()
-    let awake = AwakeSessionManager()
+    /// Awake sessions plus the privileged closed-lid power service. The
+    /// service is never registered at launch; it only registers when the user
+    /// first turns on "keep running with lid closed".
+    let awake: AwakeSessionManager
     let awakeTriggers: AwakeTriggerEngine
     let memoryMonitor = MemoryMonitorModel()
     /// iPhone remote control. Lazily created so it can reference `self` for
@@ -1371,6 +1406,10 @@ final class MacPilotModel: ObservableObject {
     private var safetyCheckTask: Task<Void, Never>?
     private var inputSourceSaveTask: Task<Void, Never>?
     private var workspaceObservers: [NSObjectProtocol] = []
+    /// Tokens for observers that live as long as the app (termination, deep
+    /// links). Stored so `shutdown()` can remove them deterministically.
+    private var lifetimeObservers: [NSObjectProtocol] = []
+    private var hasShutdown = false
     private var lastScheduledBootSession: String?
     private var isLoading = false
     private let configurationURL: URL
@@ -1380,6 +1419,10 @@ final class MacPilotModel: ObservableObject {
     )
 
     init() {
+        awake = AwakeSessionManager(
+            closedLidSleepController: ClosedLidSleepController(),
+            lidStateMonitor: LidStateMonitor()
+        )
         awakeTriggers = AwakeTriggerEngine(sessionManager: awake)
         configurationURL = Self.defaultConfigurationURL()
         isLoading = true
@@ -1392,64 +1435,38 @@ final class MacPilotModel: ObservableObject {
         remoteControl.onPairingCodePresented = { [weak self] code, clientName in
             self?.presentRemotePairingCode(code: code, clientName: clientName)
         }
+        remoteControl.onRunningStateChanged = { [weak self] in
+            self?.refreshScreenStateObservation()
+        }
         if remoteDeviceStore.settings.isEnabled {
             remoteControl.start()
         }
         startSafetyChecks()
-        NotificationCenter.default.addObserver(
+        // One observer owns every teardown path. `willTerminate` is delivered
+        // synchronously on the main thread, so `shutdown()` must stay
+        // synchronous: scheduling it in a `Task` loses the work at exit.
+        lifetimeObservers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
             queue: .main
-        ) { [weak screenCapture] _ in
-            Task { @MainActor in screenCapture?.shutdown() }
-        }
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification,
-            object: nil,
-            queue: .main
-        ) { [weak screenRecording] _ in
-            Task { @MainActor in screenRecording?.shutdown() }
-        }
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification,
-            object: nil,
-            queue: .main
-        ) { [weak smoothScrolling] _ in
-            Task { @MainActor in smoothScrolling?.shutdown() }
-        }
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification,
-            object: nil,
-            queue: .main
-        ) { [weak clipboard] _ in
-            MainActor.assumeIsolated { clipboard?.shutdown() }
-        }
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification,
-            object: nil,
-            queue: .main
-        ) { [weak awake] _ in
-            MainActor.assumeIsolated { awake?.shutdown() }
-        }
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification,
-            object: nil,
-            queue: .main
-        ) { [weak awakeTriggers] _ in
-            MainActor.assumeIsolated { awakeTriggers?.shutdown() }
-        }
-        NotificationCenter.default.addObserver(
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.shutdown() }
+        })
+        lifetimeObservers.append(NotificationCenter.default.addObserver(
             forName: .macPilotDeepLink,
             object: nil,
             queue: .main
         ) { [weak self] notification in
             guard let url = notification.object as? URL else { return }
             Task { @MainActor in self?.handleDeepLink(url) }
-        }
+        })
         evaluateRules()
         scheduleLaunchPlanForCurrentBootIfNeeded()
         clearLegacyAccessibilityRecoveryRequest()
-        ble.persist = { [weak self] in self?.saveIfReady() }
+        ble.persist = { [weak self] in
+            self?.saveIfReady()
+            self?.refreshScreenStateObservation()
+        }
         fileCompression.persist = { [weak self] in self?.saveIfReady() }
         screenCapture.persist = { [weak self] in self?.saveIfReady() }
         screenRecording.persist = { [weak self] in self?.saveIfReady() }
@@ -1522,8 +1539,10 @@ final class MacPilotModel: ObservableObject {
         awakeTriggers.persist = { [weak self] in self?.saveIfReady() }
         windowSwitcher.language = language
         clipboard.language = language
-        ble.startObservingSystemState()
+        // BLE installs its own observers from `activateFromConfiguration()`; the
+        // shared screen-saver observation covers both BLE and the iPhone remote.
         ble.activateFromConfiguration()
+        refreshScreenStateObservation()
         fileCompression.activateFromConfiguration()
         screenCapture.activateFromConfiguration()
         screenRecording.language = language
@@ -2131,6 +2150,49 @@ final class MacPilotModel: ObservableObject {
     private func stopSafetyChecks() {
         safetyCheckTask?.cancel()
         safetyCheckTask = nil
+    }
+
+    /// Keeps the shared screen-saver observers installed only while a feature
+    /// that reads them is on. `MacScreenControlService.screensaverActive` is
+    /// consumed by both BLE unlock and the iPhone remote's unlock path.
+    private func refreshScreenStateObservation() {
+        let needed = ble.settings.isEnabled || remoteDeviceStore.settings.isEnabled
+        ble.screenControl.setScreensaverObservationEnabled(needed)
+    }
+
+    /// Synchronous teardown for app termination. Must not schedule work on
+    /// another turn of the run loop: `willTerminate` returns straight into
+    /// `exit()`.
+    func shutdown() {
+        guard !hasShutdown else { return }
+        hasShutdown = true
+        stopSafetyChecks()
+        cancelAllQuitTasks(resetRuntime: true)
+        for task in launchTasks.values { task.cancel() }
+        launchTasks.removeAll()
+        inputSourceSaveTask?.cancel()
+        inputSourceSaveTask = nil
+
+        ble.shutdown()
+        fileCompression.shutdown()
+        screenCapture.shutdown()
+        screenRecording.shutdown()
+        pictureInPicture.shutdown()
+        inputSources.shutdown()
+        windowSwitcher.shutdown()
+        smoothScrolling.shutdown()
+        clipboard.shutdown()
+        remoteControl.stop()
+        memoryMonitor.stopAutoRefresh()
+        MemoryMonitorModel.clearMenuCache()
+        awake.shutdown()
+        awakeTriggers.shutdown()
+
+        for observer in lifetimeObservers { NotificationCenter.default.removeObserver(observer) }
+        lifetimeObservers.removeAll(keepingCapacity: false)
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        for observer in workspaceObservers { workspaceCenter.removeObserver(observer) }
+        workspaceObservers.removeAll(keepingCapacity: false)
     }
 
     private func wakeQuitRule(_ id: UUID) {

@@ -85,6 +85,13 @@ struct AwakeTriggerListView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Menu(model.t("awakeAgentPresets")) {
+                    ForEach(AwakeAgentPreset.allCases) { preset in
+                        Button(model.t(preset.titleKey)) {
+                            triggerEngine.addTrigger(preset.makeTrigger(name: model.t(preset.titleKey)))
+                        }
+                    }
+                }
                 Button(model.t("awakeAddTrigger")) { showingAdd = true }
                     .macPilotProminentButtonStyle()
             }
@@ -258,8 +265,14 @@ struct AwakeTriggerEditorView: View {
                         Text(model.t("awakeSessionDetails")).font(.headline)
                         Toggle(model.t("awakeSystemSleepToggle"), isOn: policyBinding(\.preventSystemSleep))
                             .toggleStyle(.switch)
+                            .disabled(draft.sessionPolicy.preventClosedLidSleep)
                         Toggle(model.t("awakeDisplaySleepToggle"), isOn: policyBinding(\.preventDisplaySleep))
                             .toggleStyle(.switch)
+                        Toggle(model.t("awakeClosedLidSleep"), isOn: closedLidSleepBinding)
+                            .toggleStyle(.switch)
+                        Text(model.t("awakeClosedLidSleepHint"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         Toggle(model.t("awakeAllowSystemSleepWhenDisplayOff"), isOn: policyBinding(\.allowSystemSleepWhenDisplayOff))
                             .toggleStyle(.switch)
                         Toggle(model.t("awakeEndOnForcedSleep"), isOn: policyBinding(\.endOnForcedSleep))
@@ -406,6 +419,15 @@ struct AwakeTriggerEditorView: View {
         Binding(
             get: { draft.sessionPolicy[keyPath: keyPath] },
             set: { draft.sessionPolicy[keyPath: keyPath] = $0 }
+        )
+    }
+
+    /// Turning this on also turns system-sleep prevention on, so the two
+    /// toggles can never describe an impossible state.
+    private var closedLidSleepBinding: Binding<Bool> {
+        Binding(
+            get: { draft.sessionPolicy.preventClosedLidSleep },
+            set: { draft.sessionPolicy.setPreventClosedLidSleep($0) }
         )
     }
 

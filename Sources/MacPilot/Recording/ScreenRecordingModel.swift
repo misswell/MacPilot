@@ -142,12 +142,49 @@ final class ScreenRecordingModel: ObservableObject {
 
     func applyLoadedSettings(_ settings: ScreenRecordingSettings) {
         self.settings = settings
-        refreshCaptureDeviceLists()
+        if settings.isEnabled { refreshCaptureDeviceLists() }
     }
 
     func activateFromConfiguration() {
+        // A switched-off recorder must not claim global hot keys or enumerate
+        // cameras, microphones and Continuity devices at launch.
+        guard settings.isEnabled else { return }
         registerAllHotKeys()
         refreshCaptureDeviceLists()
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        guard settings.isEnabled != enabled else { return }
+        updateSettings { $0.isEnabled = enabled }
+        if enabled {
+            _ = registerAllHotKeys()
+            refreshCaptureDeviceLists()
+        } else {
+            if state == .recording || state == .paused { stop() }
+            unregisterAllHotKeys()
+            closeAuxiliaryCaptureSurfaces()
+        }
+    }
+
+    /// An explicit start request (menu, settings page, deep link, hot key)
+    /// switches the feature back on, so "off" only removes background cost and
+    /// never blocks a deliberate recording.
+    private func enableForExplicitStart() {
+        guard !settings.isEnabled else { return }
+        setEnabled(true)
+    }
+
+    /// Releases windows, monitors and preview surfaces that outlive a single
+    /// recording. Shared by the disable path and app termination.
+    private func closeAuxiliaryCaptureSurfaces() {
+        cameraOverlay.close()
+        ScreenRecordingFloatingController.shared.close()
+        ScreenRecordingPrepareBarController.shared.close()
+        ScreenRecordingCountdownPanel.shared.close()
+        ScreenRecordingMouseHighlighter.shared.stopMonitoring()
+        ScreenRecordingMagnifier.shared.stop()
+        mobileRecorder.closePreview()
+        isPreparingRecording = false
     }
 
     func suspendShortcut() {
@@ -475,6 +512,7 @@ final class ScreenRecordingModel: ObservableObject {
     /// Passing `nil` from the public `start()` path requests the pre-record
     /// area selector for the configured area/application modes.
     func start(captureRect: CGRect?) {
+        enableForExplicitStart()
         guard state == .idle, !isDeviceRecording else {
             errorMessage = localized(ScreenRecordingError.alreadyRecording)
             return
@@ -535,6 +573,7 @@ final class ScreenRecordingModel: ObservableObject {
     /// overlay, regardless of the configured capture mode (the "record
     /// current screen" hotkey path).
     func startScreenRecording() {
+        enableForExplicitStart()
         guard state == .idle, !isDeviceRecording else {
             errorMessage = localized(ScreenRecordingError.alreadyRecording)
             return
@@ -563,6 +602,7 @@ final class ScreenRecordingModel: ObservableObject {
     /// without showing the selection overlay (the "record topmost window"
     /// hotkey path).
     func startFrontmostWindowRecording() {
+        enableForExplicitStart()
         guard state == .idle, !isDeviceRecording else {
             errorMessage = localized(ScreenRecordingError.alreadyRecording)
             return
@@ -575,6 +615,7 @@ final class ScreenRecordingModel: ObservableObject {
 
     /// Starts a system-audio (optionally microphone) recording with no video.
     func startAudioRecording() {
+        enableForExplicitStart()
         guard state == .idle, !isDeviceRecording else {
             errorMessage = localized(ScreenRecordingError.alreadyRecording)
             return
@@ -907,6 +948,7 @@ final class ScreenRecordingModel: ObservableObject {
         pauseStartedAt = nil
         accumulatedPauseDuration = 0
         unregisterAllHotKeys()
+        closeAuxiliaryCaptureSurfaces()
     }
 
     // MARK: - Timer / auto stop

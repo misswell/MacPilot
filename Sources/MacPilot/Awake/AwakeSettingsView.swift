@@ -107,6 +107,18 @@ struct AwakeSettingsView: View {
             Toggle(model.t("awakeAllowSystemSleepWhenDisplayOff"), isOn: allowSystemSleepWhenDisplayOffBinding)
                 .toggleStyle(.switch)
 
+            Toggle(model.t("awakeClosedLidSleep"), isOn: closedLidSleepBinding)
+                .toggleStyle(.switch)
+            Text(model.t("awakeClosedLidSleepHint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if awake.settings.defaultPolicy.preventClosedLidSleep {
+                Text(model.t("awakeClosedLidSleepWarning"))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                closedLidServiceStatus
+            }
+
             sectionLabel(model.t("awakeScreenSaver"))
             Toggle(model.t("awakeBlockScreenSaver"), isOn: blockScreenSaverBinding)
                 .toggleStyle(.switch)
@@ -331,6 +343,61 @@ struct AwakeSettingsView: View {
         )
     }
 
+    private var closedLidSleepBinding: Binding<Bool> {
+        Binding(
+            get: { awake.settings.defaultPolicy.preventClosedLidSleep },
+            set: { value in
+                awake.updateSettings { $0.defaultPolicy.setPreventClosedLidSleep(value) }
+            }
+        )
+    }
+
+    /// Status of the privileged background power service. The user never sees
+    /// `pmset`, `root`, `XPC`, or `LaunchDaemon` here.
+    @ViewBuilder
+    private var closedLidServiceStatus: some View {
+        switch awake.closedLidServiceState {
+        case .unavailable:
+            warningBanner(Label(
+                model.t("awakeClosedLidServiceUnavailable"),
+                systemImage: "exclamationmark.triangle.fill"
+            ))
+        case .notRegistered:
+            closedLidServiceBanner(
+                message: model.t("awakeClosedLidServiceRequired"),
+                actionTitle: model.t("awakeClosedLidServiceApprove"),
+                action: { Task { await awake.prepareClosedLidService() } }
+            )
+        case .requiresApproval:
+            closedLidServiceBanner(
+                message: model.t("awakeClosedLidServiceRequiresApproval"),
+                actionTitle: model.t("awakeClosedLidServiceOpenSettings"),
+                action: { awake.openClosedLidServiceSettings() }
+            )
+        case .error(let message):
+            warningBanner(Label(
+                model.t("awakeClosedLidError", message),
+                systemImage: "exclamationmark.triangle.fill"
+            ))
+        case .ready, .enabling, .enabled:
+            EmptyView()
+        }
+    }
+
+    private func closedLidServiceBanner(
+        message: String,
+        actionTitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        warningBanner(
+            VStack(alignment: .leading, spacing: 8) {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                Button(actionTitle, action: action)
+                    .controlSize(.small)
+            }
+        )
+    }
+
     private var blockScreenSaverBinding: Binding<Bool> {
         Binding(
             get: { awake.settings.defaultPolicy.blockScreenSaver },
@@ -450,6 +517,10 @@ private struct AwakeSessionDetailRow: View {
             detailLine(
                 model.t("awakeDisplaySleep"),
                 value: session.policy.preventDisplaySleep ? model.t("awakePrevented") : model.t("awakeAllowed")
+            )
+            detailLine(
+                model.t("awakeClosedLidSleepDetail"),
+                value: session.policy.preventClosedLidSleep ? model.t("awakePrevented") : model.t("awakeAllowed")
             )
             if let expectedEndAt = session.expectedEndAt {
                 detailLine(model.t("awakeEndsAt"), value: dateDescription(expectedEndAt))

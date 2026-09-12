@@ -10,15 +10,16 @@
 //
 //  * `sleepDisplay()` asks the system to put the display to sleep. It is the
 //    right call when the machine should be allowed to idle down (the BLE
-//    proximity lock). On a Mac whose Lock Screen setting requires a password as
-//    soon as the display turns off, it also locks the session — that is system
-//    policy, not this call.
-//  * `blankDisplay()` drops the backlight to zero while leaving the display
-//    awake, so that policy never fires and the session stays unlocked. It is
-//    what a user pressing "turn off screen" actually means, since MacPilot has a
-//    separate lock action.
+//    proximity lock, the Awake lid policy). On a Mac whose Lock Screen setting
+//    requires a password as soon as the display turns off, it also locks the
+//    session — that is system policy, not this call.
+//  * `turnOffScreen()` blacks every display without sleeping any of them, so
+//    that policy never fires and the session stays unlocked. It is what a user
+//    pressing "turn off screen" actually means, since MacPilot has a separate
+//    lock action.
 //
 
+import AppKit
 import CoreGraphics
 import Foundation
 import IOKit
@@ -28,6 +29,53 @@ import IOKit.pwr_mgt
 /// member, but it is exactly what "has the user touched anything yet" needs.
 private let anyInputEventType = CGEventType(rawValue: ~0)!
 
+// MARK: - Blank plan
+
+/// One display that is online and awake while the screen is being blacked.
+struct ScreenBlankCandidate: Equatable {
+    let displayID: UInt32
+    let isBuiltIn: Bool
+
+    /// Whether the private `DisplayServices` backlight call can actually drive
+    /// this display. Probed with a real read rather than inferred from the
+    /// display list, because both an external monitor and a MacBook panel in
+    /// clamshell mode answer no.
+    let canDriveBacklight: Bool
+}
+
+/// Decides how each online display gets blacked.
+///
+/// This is a pure function because the interesting part is the decision, not
+/// the side effects: when a backlight cannot be driven the display still has to
+/// go black some other way, because the only alternative left to a caller is a
+/// real display sleep — and that is what quietly locks the session.
+enum ScreenBlankPlanner {
+    enum Action: Equatable {
+        /// Drop the backlight to zero and hold it there.
+        case backlight
+        /// Cover the display with a black window.
+        case overlay
+    }
+
+    struct Step: Equatable {
+        let displayID: UInt32
+        let action: Action
+    }
+
+    /// Every candidate gets exactly one step. Built-in panels and
+    /// backlight-capable displays come first, so a MacBook panel is blacked the
+    /// cheap way even when an external display happens to be the main one.
+    static func steps(for candidates: [ScreenBlankCandidate]) -> [Step] {
+        candidates
+            .sorted { lhs, rhs in
+                if lhs.canDriveBacklight != rhs.canDriveBacklight { return lhs.canDriveBacklight }
+                if lhs.isBuiltIn != rhs.isBuiltIn { return lhs.isBuiltIn }
+                return lhs.displayID < rhs.displayID
+            }
+            .map { Step(displayID: $0.displayID, action: $0.canDriveBacklight ? .backlight : .overlay) }
+    }
+}
+
 enum DisplayPower {
     // MARK: - Real display sleep
 
@@ -35,7 +83,12 @@ enum DisplayPower {
     /// IODisplayWrangler's IORequestIdle registry write returns success but is
     /// silently ignored on modern macOS, so go through pmset, whose
     /// displaysleepnow still works.
+    ///
+    /// A held blank is released first: `turnOffScreen()` keeps the display awake
+    /// on purpose, and this call exists precisely to let it idle down.
+    @MainActor
     static func sleepDisplay() {
+        unblankDisplay()
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
@@ -58,53 +111,110 @@ enum DisplayPower {
         IOPMAssertionDeclareUserActivity("MacPilot" as CFString, kIOPMUserActiveLocal, &assertionID)
     }
 
-    // MARK: - Blanking without sleeping
+    // MARK: - Blacking without sleeping
 
-    /// True while the backlight is being held at zero.
-    @MainActor private(set) static var isBlanked = false
-    @MainActor private static var brightnessBeforeBlank: Float?
+    /// Original brightness of every display whose backlight is being held at
+    /// zero, keyed by display.
+    @MainActor private static var blankedDisplays: [CGDirectDisplayID: Float] = [:]
+    /// True while black windows are covering the displays whose backlight could
+    /// not be driven.
+    @MainActor private static var isOverlayShowing = false
     @MainActor private static var unblankWatcher: Task<Void, Never>?
+    /// Held while the screen is blacked, so macOS cannot run its own
+    /// display-sleep timer underneath. On a Mac that requires a password as soon
+    /// as the display turns off — the default — that timer is what eventually
+    /// turns "black" into "locked".
+    @MainActor private static var displaySleepAssertion: IOPMAssertionID?
 
-    /// Blacks the display *without* putting it to sleep, so the system's
-    /// "require password after the display is turned off" policy never fires.
+    /// True while MacPilot is holding the screen black.
+    @MainActor static var isBlanked: Bool { !blankedDisplays.isEmpty || isOverlayShowing }
+
+    /// Blacks every online display *without* putting any of them to sleep, so
+    /// the system's "require password after the display is turned off" policy
+    /// never fires.
     ///
-    /// - Returns: false when the backlight cannot be driven, in which case the
-    ///   caller should fall back to `sleepDisplay()`.
+    /// - Returns: false when there was nothing to black at all.
     @MainActor
     @discardableResult
     static func blankDisplay() -> Bool {
         if isBlanked { return true }
-        guard let driver = BrightnessDriver.shared, let original = driver.current() else { return false }
+
+        let steps = ScreenBlankPlanner.steps(for: onlineCandidates())
+        guard !steps.isEmpty else {
+            DiagnosticLog.write("DisplayPower", "display blank failed reason=noOnlineDisplay")
+            return false
+        }
+
         // Input arriving after this point is what brings the screen back, so the
         // moment of blanking is the baseline to compare against.
         let idleAtBlank = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInputEventType)
-        guard driver.apply(0) else { return false }
-        brightnessBeforeBlank = original
-        isBlanked = true
+
+        var blanked: [CGDirectDisplayID: Float] = [:]
+        var overlayScreens: [NSScreen] = []
+        for step in steps {
+            // Trust the probe, then verify: the state between the two can change
+            // (a display can fall asleep mid-loop), and a failed write must not
+            // leave that display uncovered.
+            if step.action == .backlight,
+               let driver = BrightnessDriver.shared,
+               let original = driver.current(step.displayID),
+               driver.apply(0, to: step.displayID) {
+                blanked[step.displayID] = original
+                continue
+            }
+            overlayScreens.append(contentsOf: screens(for: step.displayID))
+        }
+
+        guard !blanked.isEmpty || !overlayScreens.isEmpty else {
+            DiagnosticLog.write("DisplayPower", "display blank failed reason=noDisplayCouldBeBlacked")
+            return false
+        }
+
+        blankedDisplays = blanked
+        if !overlayScreens.isEmpty {
+            ScreenBlankOverlay.shared.show(covering: overlayScreens)
+            isOverlayShowing = true
+        }
+        holdDisplaySleepAssertion()
         startUnblankWatcher(idleAtBlank: idleAtBlank)
+        DiagnosticLog.write(
+            "DisplayPower",
+            "display blanked without sleeping backlight=\(blanked.count) overlay=\(overlayScreens.count) displays=\(steps.map(\.displayID))"
+        )
         return true
     }
 
-    /// Restores the brightness `blankDisplay()` captured.
+    /// Restores the brightness `blankDisplay()` captured and drops any overlay.
     @MainActor
     static func unblankDisplay() {
         unblankWatcher?.cancel()
         unblankWatcher = nil
         guard isBlanked else { return }
-        isBlanked = false
-        if let original = brightnessBeforeBlank {
-            BrightnessDriver.shared?.apply(original)
+        if let driver = BrightnessDriver.shared {
+            for (displayID, original) in blankedDisplays {
+                driver.apply(original, to: displayID)
+            }
         }
-        brightnessBeforeBlank = nil
+        blankedDisplays.removeAll()
+        if isOverlayShowing {
+            ScreenBlankOverlay.shared.hide()
+            isOverlayShowing = false
+        }
+        releaseDisplaySleepAssertion()
     }
 
     /// What a user-initiated "turn off screen" means: black without locking.
-    /// Falls back to a real display sleep when the backlight cannot be driven.
+    ///
+    /// A real display sleep is deliberately *not* a fallback here. Every Mac
+    /// that requires a password as soon as the display turns off — the default,
+    /// and the reason this distinction exists — would turn that fallback into a
+    /// lock, which is the job of MacPilot's separate lock action.
+    ///
+    /// - Returns: false when nothing could be blacked.
     @MainActor
-    static func turnOffScreen() {
-        if !blankDisplay() {
-            sleepDisplay()
-        }
+    @discardableResult
+    static func turnOffScreen() -> Bool {
+        blankDisplay()
     }
 
     /// The display is not asleep, so nothing in the system brings the backlight
@@ -136,6 +246,65 @@ enum DisplayPower {
             }
         }
     }
+
+    // MARK: - Keeping the display awake
+
+    /// A blacked screen that sleeps is a locked screen, which defeats the point
+    /// of blacking it. The assertion is bounded by user activity — the first
+    /// input releases it along with the blank — and by the process: IOKit drops
+    /// it if MacPilot exits while one is held.
+    @MainActor
+    private static func holdDisplaySleepAssertion() {
+        guard displaySleepAssertion == nil else { return }
+        var assertionID = IOPMAssertionID()
+        let result = IOPMAssertionCreateWithName(
+            kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
+            IOPMAssertionLevel(kIOPMAssertionLevelOn),
+            "MacPilot screen off" as CFString,
+            &assertionID
+        )
+        guard result == kIOReturnSuccess else {
+            DiagnosticLog.write("DisplayPower", "display sleep assertion failed code=\(result)")
+            return
+        }
+        displaySleepAssertion = assertionID
+    }
+
+    @MainActor
+    private static func releaseDisplaySleepAssertion() {
+        guard let assertionID = displaySleepAssertion else { return }
+        displaySleepAssertion = nil
+        IOPMAssertionRelease(assertionID)
+    }
+
+    // MARK: - Display discovery
+
+    /// Online, awake displays with their backlight capability probed. The probe
+    /// is a read, so it is free of side effects and safe to run for every display
+    /// on every blank.
+    @MainActor
+    private static func onlineCandidates() -> [ScreenBlankCandidate] {
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetOnlineDisplayList(count, &displayIDs, &count) == .success else { return [] }
+        return displayIDs.prefix(Int(count)).compactMap { displayID in
+            guard CGDisplayIsActive(displayID) != 0 else { return nil }
+            return ScreenBlankCandidate(
+                displayID: displayID,
+                isBuiltIn: CGDisplayIsBuiltin(displayID) != 0,
+                canDriveBacklight: BrightnessDriver.shared?.current(displayID) != nil
+            )
+        }
+    }
+
+    @MainActor
+    private static func screens(for displayID: CGDirectDisplayID) -> [NSScreen] {
+        NSScreen.screens.filter { screen in
+            let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            return number?.uint32Value == displayID
+        }
+    }
 }
 
 // MARK: - Backlight
@@ -149,11 +318,16 @@ private typealias SetBrightnessFn = @convention(c) (CGDirectDisplayID, Float) ->
 /// `brightness` command line tool drives instead.
 ///
 /// It is resolved at runtime, so the app takes no link-time dependency on a
-/// private framework, and every use is optional — if it ever goes away the
-/// caller simply falls back to a real display sleep instead of failing.
+/// private framework, and every use is optional — a display it cannot drive is
+/// covered by the black overlay instead of by a real display sleep.
+///
+/// Note that the call is per display. Asking about `CGMainDisplayID()` alone was
+/// the bug behind "turn off screen" locking the Mac: with an external monitor as
+/// the main display, the answer belongs to a display that has no backlight to
+/// drive, so the blank failed and the caller fell back to sleeping every display.
 private struct BrightnessDriver: Sendable {
-    let read: @Sendable () -> Float?
-    let write: @Sendable (Float) -> Bool
+    let read: @Sendable (CGDirectDisplayID) -> Float?
+    let write: @Sendable (CGDirectDisplayID, Float) -> Bool
 
     static let shared: BrightnessDriver? = {
         let path = "/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices"
@@ -164,14 +338,16 @@ private struct BrightnessDriver: Sendable {
         let get = unsafeBitCast(readSymbol, to: GetBrightnessFn.self)
         let set = unsafeBitCast(writeSymbol, to: SetBrightnessFn.self)
         return BrightnessDriver(
-            read: {
+            read: { displayID in
                 var value: Float = 0
-                return get(CGMainDisplayID(), &value) == 0 ? value : nil
+                return get(displayID, &value) == 0 ? value : nil
             },
-            write: { set(CGMainDisplayID(), $0) == 0 }
+            write: { displayID, value in set(displayID, value) == 0 }
         )
     }()
 
-    func current() -> Float? { read() }
-    @discardableResult func apply(_ value: Float) -> Bool { write(value) }
+    func current(_ displayID: CGDirectDisplayID) -> Float? { read(displayID) }
+    @discardableResult func apply(_ value: Float, to displayID: CGDirectDisplayID) -> Bool {
+        write(displayID, value)
+    }
 }

@@ -2976,8 +2976,9 @@ final class AreaSelectionOverlayView: NSView {
 
 // MARK: - Recreated macOS Crosshair Cursors
 
+@MainActor
 extension NSCursor {
-  static var vectorScreenshotCrosshairHighContrast: NSCursor {
+  static let vectorScreenshotCrosshairHighContrast: NSCursor = {
     let size = NSSize(width: 32, height: 32)
     let image = NSImage(size: size)
     image.isTemplate = false
@@ -3035,9 +3036,9 @@ extension NSCursor {
 
     image.unlockFocus()
     return NSCursor(image: image, hotSpot: NSPoint(x: 15, y: 15))
-  }
+  }()
 
-  static var vectorScreenshotCrosshairLight: NSCursor {
+  static let vectorScreenshotCrosshairLight: NSCursor = {
     let size = NSSize(width: 32, height: 32)
     let image = NSImage(size: size)
     image.isTemplate = false
@@ -3096,9 +3097,9 @@ extension NSCursor {
 
     image.unlockFocus()
     return NSCursor(image: image, hotSpot: NSPoint(x: 15, y: 15))
-  }
+  }()
 
-  static var applicationWindowCursor: NSCursor {
+  static let applicationWindowCursor: NSCursor = {
     let pointSize: CGFloat = 16
     let baseConfig = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
     let whiteConfig = baseConfig.applying(
@@ -3155,5 +3156,5 @@ extension NSCursor {
       image: composed,
       hotSpot: NSPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
     )
-  }
+  }()
 }

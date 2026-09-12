@@ -790,6 +790,17 @@ final class InputSourceModel: ObservableObject {
         currentSource = MacPilotInputSourceCatalog.current()
     }
 
+    /// Synchronous teardown for app termination: stops polling, removes the
+    /// event tap and observers, and hands the function-key mode back.
+    func shutdown() {
+        stopBrowserPolling()
+        removeEventTap()
+        removeObservers()
+        restoreOriginalFunctionKeyMode()
+        indicatorController = nil
+        isActive = false
+    }
+
     func setEnabled(_ enabled: Bool) {
         guard settings.isEnabled != enabled else { return }
         settings.isEnabled = enabled
@@ -1225,10 +1236,13 @@ final class InputSourceModel: ObservableObject {
     private func removeEventTap() {
         if let eventTapSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
+            CFRunLoopSourceInvalidate(eventTapSource)
         }
         if let eventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
+            CFMachPortInvalidate(eventTap)
         }
+        eventTapContext?.setEventTap(nil)
         eventTapSource = nil
         eventTap = nil
         eventTapContext = nil

@@ -267,6 +267,11 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
     )
 
     var outputFolder: String
+    /// Master switch. While it is off the recorder registers no global hot
+    /// keys and enumerates no capture devices, so an unused feature costs no
+    /// memory or background work. Defaults to on so existing installs keep the
+    /// shortcut they already had.
+    var isEnabled: Bool
     var format: ScreenRecordingFormat
     var captureMode: ScreenRecordingCaptureMode
     var framesPerSecond: Int
@@ -310,6 +315,7 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case outputFolder, format, captureMode, framesPerSecond, showsCursor
+        case isEnabled
         case capturesSystemAudio, capturesMicrophone, microphoneEchoCancellation
         case encoder, shortcut
         case audioFormat, audioQuality, withAlpha, recordHDR, highRes, pixelFormat
@@ -323,6 +329,7 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
 
     init(
         outputFolder: String = "",
+        isEnabled: Bool = true,
         format: ScreenRecordingFormat = .mov,
         captureMode: ScreenRecordingCaptureMode = .area,
         framesPerSecond: Int = 30,
@@ -363,6 +370,7 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
         migrateLegacyDefaultShortcut: Bool = false
     ) {
         self.outputFolder = outputFolder
+        self.isEnabled = isEnabled
         self.format = format
         self.captureMode = captureMode
         self.framesPerSecond = min(60, max(5, framesPerSecond))
@@ -415,6 +423,7 @@ struct ScreenRecordingSettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             outputFolder: try container.decodeIfPresent(String.self, forKey: .outputFolder) ?? "",
+            isEnabled: try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true,
             format: try container.decodeIfPresent(ScreenRecordingFormat.self, forKey: .format) ?? .mov,
             captureMode: try container.decodeIfPresent(ScreenRecordingCaptureMode.self, forKey: .captureMode) ?? .area,
             framesPerSecond: try container.decodeIfPresent(Int.self, forKey: .framesPerSecond) ?? 30,

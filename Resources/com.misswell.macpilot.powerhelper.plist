@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  MacPilot privileged power helper.
+
+	  Registered through SMAppService.daemon(plistName:) from
+	  Contents/Library/LaunchDaemons. The daemon only ever runs
+	  /usr/bin/pmset with a fixed argument list; it exposes no generic command
+	  execution surface.
+
+	  Bridge mode (OctoPilot.app) shares the same helper and Mach service so a
+	  single registration keeps working across both identities.
+	-->
+	<key>Label</key>
+	<string>com.misswell.macpilot.powerhelper</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/MacPilotPowerHelper</string>
+	<key>MachServices</key>
+	<dict>
+		<key>com.misswell.macpilot.powerhelper</key>
+		<true/>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>

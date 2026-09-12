@@ -356,6 +356,8 @@ Wi-Fi/AWDL 优先，蓝牙保底——**不是并列竞速**。蓝牙建立是�
 
 只有**用户主动的黑屏**（遥控 `displayOff`、菜单栏「关闭屏幕」）走亮度归零，即 `DisplayPower.turnOffScreen()`。蓝牙靠近锁屏（`BLEUnlock` 的 `turnOffScreen`）和 `AwakeSessionManager` 仍然走真正的 `sleepDisplay()`——因为那条路希望 Mac 能继续空闲休眠；若在那里把背光压到 0，显示器永不休眠，**系统也就再也不会自动睡眠**，是明显的功耗回归。
 
+> ⚠️ 这一版只在**外接显示器不是主显示器**时成立：它问的是 `CGMainDisplayID()` 的背光，而合盖场景下主显示器正是那台没有背光可调的外接屏。当时的「回退到真休眠」就是后来「黑屏却锁屏」的根因，见第三十节。
+
 ### 实测（用仓库里真实的 `DisplayPower.swift` 编探针跑）
 
 ```
@@ -602,3 +604,58 @@ App 退到后台（或被系统挂起）后：
 - iOS 会周期性断开后台外设连接（实测约 65 秒一次）。
 
 也就是说：**广播能活，会话不能活**。这与 V1「后台不开 socket、切后台就干净断开」的设计一致，但和「BLE 保底能在后台接上」的预期不同，需要在文档里写明。
+
+## 三十、「黑屏」偶尔还是锁屏：被回退掉的真休眠（v1.1.318）
+
+### 现象与根因
+
+用户报告：手机上点「黑屏」只黑不锁，Mac 菜单里点「关闭屏幕」却锁了屏。
+
+两个入口走的是**同一个** `DisplayPower.turnOffScreen()`，所以差异不在入口，而在**当时是否驱动得了背光**。诊断日志把过程完整记下来了：
+
+```
+21:11:53.466 [RemoteControl] command received command=displayOff
+21:11:53.467 [ScreenControl] display sleep requested reason=backlightUnavailable   ← 背光没驱上
+21:11:53.678 [BLEUnlock]     display sleep notification received
+21:11:54.008 [BLEUnlock]     screen lock history recorded source=manual            ← 会话被锁
+...
+21:12:37.754 [ScreenControl] display blanked without sleeping                      ← 盖打开后就正常了
+```
+
+`reason=backlightUnavailable` 就是旧代码的回退分支：背光压不下去时它调用 `DisplayPower.sleepDisplay()`，也就是 `pmset displaysleepnow`。显示器一睡，`com.apple.screensaver` 的「立即要求密码」策略就把会话锁掉——**黑屏的调用链里没有一行锁屏代码，锁屏是系统策略加的**。
+
+为什么背光会驱不上？`pmset -g log` 给出了当时的状态：
+
+```
+21:10:21 Sleep  Entering Sleep state due to 'Clamshell Sleep'
+```
+
+**机器合着盖、用外接 HP 24w**。合盖后内置屏下线，`CGMainDisplayID()` 变成外接屏，而旧代码只问主显示器的背光：这台 HP 对 `DisplayServicesGetBrightness` 返回 `rc=1000`，于是 `blankDisplay()` 失败 → 回退真休眠 → 锁屏。手机上成功的那几次（21:12:37 之后）恰好是盖已经打开、内置屏又变回主显示器的时候——「手机能用、菜单不能用」只是两个入口在不同时刻被试到。
+
+### 修法：黑屏这条路不再有「真休眠」这个回退
+
+1. **`turnOffScreen()` 只在驱动不了背光时改走黑窗，绝不调用 `sleepDisplay()`。** 锁屏是 MacPilot 里另一个独立动作的事。
+2. **逐显示器判断，而不是只看主显示器**：`ScreenBlankPlanner`（纯函数，有测试）给每台在线显示器各定一个动作，内置屏与可驱动背光的屏优先走背光。
+3. **驱动不了背光的显示器用黑色窗口盖住**（`ScreenBlankOverlay`）。窗口是 `.nonactivatingPanel` + `CGShieldingWindowLevel()`，盖住菜单栏与程序坞、跨 Space 存在，且点它不会把 MacPilot 激活、把用户从原来的前台应用里拽出来。合盖用外接屏的场景就是靠这一条才真的黑得下去。
+4. **黑屏期间持有 `PreventUserIdleDisplaySleep`**，否则系统自己的「显示器闲置 10 分钟休眠」迟早会把黑屏变成锁屏——那正是用户要避免的结果。第一次输入、`unblankDisplay()`、以及任何锁屏动作（锁屏必须看得见）都会立即释放它。
+5. 真的一台都黑不了时返回失败（遥控会提示「关闭屏幕未生效」），**不再静默变成锁屏**。
+
+### 实测（合盖 + 外接 HP 24w，正是出问题的那套配置）
+
+用仓库里真实的 `DisplayPower.swift` / `ScreenBlankOverlay.swift` 编探针跑：
+
+```
+screens=1 main=2
+candidate display=2 builtin=false backlight=false
+plan=[Step(displayID: 2, action: overlay)]          ← 不再赌主显示器
+blankDisplay=true isBlanked=true locked=false       ← 黑了，而且没锁
+windows=["layer=2147483628 onscreen=true bounds={{0, 0}, {1920, 1080}}"]
+while blanked: PreventUserIdleDisplaySleep named: "MacPilot screen off"
+after unblank: []                                    ← 断言精确释放
+```
+
+`layer=2147483628` 就是 `CGShieldingWindowLevel()`，`onscreen=true` 且铺满整块 1920×1080，说明黑窗真的在合成；`locked=false` 说明会话没被锁。`swift test` 559 个测试全过。
+
+### 边界
+
+黑屏期间显示器被刻意留在「醒着」，所以这一状态由用户输入界定：按下任意键或动一下鼠标就恢复亮度/收起黑窗，同时释放断言。用户在合盖 + 仅外接屏的场景下点「关闭屏幕」，看到的是一块全黑的外接屏，而不是被锁的登录窗口。
