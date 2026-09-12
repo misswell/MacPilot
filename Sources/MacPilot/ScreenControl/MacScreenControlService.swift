@@ -179,7 +179,7 @@ final class MacScreenControlService: ObservableObject {
             noteDisplaySleeping(false)
         }
 
-        let unlocked = await runUnlockAttempts(password: password, source: source, wakeFirst: false)
+        let unlocked = await runUnlockAttempts(password: password, source: source)
         let state = currentState()
         guard unlocked else {
             log("unlock failed source=\(source.rawValue)")
@@ -217,7 +217,7 @@ final class MacScreenControlService: ObservableObject {
             return .success(currentState())
         }
 
-        let unlocked = await runUnlockAttempts(password: password, source: source, wakeFirst: true)
+        let unlocked = await runUnlockAttempts(password: password, source: source)
         let state = currentState()
         guard unlocked else {
             log("wakeAndUnlock failed source=\(source.rawValue)")
@@ -235,8 +235,7 @@ final class MacScreenControlService: ObservableObject {
     /// fixed duration.
     private func runUnlockAttempts(
         password: String,
-        source: ScreenControlSource,
-        wakeFirst: Bool
+        source: ScreenControlSource
     ) async -> Bool {
         var previous: TimeInterval = 0
         let checkpoints: [TimeInterval] = [0] + Self.remoteUnlockCheckpoints
