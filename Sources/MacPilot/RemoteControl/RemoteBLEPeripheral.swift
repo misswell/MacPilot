@@ -115,6 +115,18 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
         startAdvertising(peripheral)
     }
 
+    /// Confirms the advertisement actually went out. Without this the only way
+    /// to tell "advertising" from "silently not advertising" was to read
+    /// bluetoothd's own log, which is how a peripheral that published a PSM but
+    /// never became discoverable stayed invisible.
+    func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
+        if let error {
+            onLog?("BLE advertising failed error=\(error.localizedDescription)")
+            return
+        }
+        onLog?("BLE advertising started service=\(RemoteBLEService.serviceUUID)")
+    }
+
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
         guard request.characteristic.uuid == RemoteBLEService.psmCharacteristicUUID, let psm else {
             peripheral.respond(to: request, withResult: .requestNotSupported)

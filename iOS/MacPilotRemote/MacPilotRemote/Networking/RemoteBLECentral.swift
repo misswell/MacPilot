@@ -58,7 +58,22 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     }
 
     private func beginScanningIfPossible() {
-        guard wantsChannel, let manager, manager.state == .poweredOn, !isScanning, peripheral == nil else { return }
+        // Every early return names its reason. A silent return here is
+        // indistinguishable from a healthy scan at the UI, which is exactly how
+        // a fallback that never connects stays invisible.
+        guard wantsChannel else {
+            onLog?("BLE idle; the fallback is not needed")
+            return
+        }
+        guard let manager else {
+            onLog?("BLE waiting for the central manager")
+            return
+        }
+        guard manager.state == .poweredOn else {
+            onLog?("BLE waiting for Bluetooth: state=\(manager.state.rawValue)")
+            return
+        }
+        guard !isScanning, peripheral == nil else { return }
         isScanning = true
         onLog?("BLE scanning for the MacPilot service")
         // A service-filtered scan is required for any background wake-up, and
@@ -96,6 +111,10 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     // MARK: - CBCentralManagerDelegate
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        // The raw state is logged on every transition, including the ones that
+        // have no dedicated case: a powered-off radio used to fall into
+        // `default` and leave no trace at all.
+        onLog?("BLE central state=\(central.state.rawValue)")
         switch central.state {
         case .poweredOn:
             beginScanningIfPossible()
