@@ -12,6 +12,7 @@ public final class L2CAPStreamTransport: RemoteTransport {
 
     public var onStateChange: (@MainActor (RemoteTransportState) -> Void)?
     public var onReceive: (@MainActor (Data) -> Void)?
+    public var onDiagnostic: (@MainActor (String) -> Void)?
 
     /// A BLE link has no address in the IP sense and no Bonjour name.
     public var linkDescription: String { "BLE" }
@@ -20,19 +21,16 @@ public final class L2CAPStreamTransport: RemoteTransport {
     public var remoteServiceName: String? { nil }
 
     private let pump: StreamPump
-    /// The channel must outlive its streams: they belong to it, and once the
-    /// `CBL2CAPChannel` is released they fail every read and write with "bad
-    /// file descriptor". Storing only the two streams — which is all the pump
-    /// needs — let the channel be deallocated as soon as the delegate callback
-    /// returned, so the link opened cleanly on both sides and then moved no
-    /// data at all. Tests cannot catch this because their bound-pair streams
-    /// have no channel behind them.
+    /// Retain the channel for the full transport lifetime. The pump also holds
+    /// it until its asynchronous stream teardown completes.
     private let channel: CBL2CAPChannel?
     private var didCancel = false
+    private var didStart = false
+    private var didFinish = false
 
     public init(channel: CBL2CAPChannel) {
         self.channel = channel
-        self.pump = StreamPump(input: channel.inputStream, output: channel.outputStream)
+        self.pump = StreamPump(input: channel.inputStream, output: channel.outputStream, owner: channel)
     }
 
     /// The pump only ever needed a stream pair; `CBL2CAPChannel` is just how the
@@ -44,24 +42,36 @@ public final class L2CAPStreamTransport: RemoteTransport {
     }
 
     public func start() {
+        guard !didStart, !didCancel else { return }
+        didStart = true
         pump.onChunk = { data in
-            Task { @MainActor [weak self] in self?.onReceive?(data) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.didCancel, !self.didFinish else { return }
+                self.onReceive?(data)
+            }
+        }
+        pump.onReady = {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.didCancel, !self.didFinish else { return }
+                self.onStateChange?(.ready)
+            }
+        }
+        pump.onDiagnostic = { message in
+            DispatchQueue.main.async { [weak self] in self?.onDiagnostic?(message) }
         }
         pump.onClosed = { reason in
-            Task { @MainActor [weak self] in
+            DispatchQueue.main.async { [weak self] in
                 guard let self, !self.didCancel else { return }
+                self.didFinish = true
                 self.onStateChange?(reason.map { .failed($0) } ?? .closed)
             }
         }
         onStateChange?(.connecting)
         pump.start()
-        // An L2CAP channel arrives already open, so there is no link-level
-        // handshake to await; the wire handshake runs above this layer.
-        onStateChange?(.ready)
     }
 
     public func send(_ data: Data, completion: @escaping @MainActor (Error?) -> Void) {
-        guard !didCancel else {
+        guard !didCancel, !didFinish else {
             completion(RemoteTransportError.cancelled)
             return
         }
@@ -74,6 +84,8 @@ public final class L2CAPStreamTransport: RemoteTransport {
         didCancel = true
         pump.stop()
     }
+
+    deinit { pump.stop() }
 }
 
 /// Drains a pair of `Stream`s on a thread that owns their run loop.
@@ -83,24 +95,22 @@ public final class L2CAPStreamTransport: RemoteTransport {
 /// requirement: they must be scheduled on, opened on and used from a single
 /// thread that is running its run loop.
 ///
-/// Opening them on the caller's thread and polling them from another one fails
-/// on a real L2CAP channel with "bad file descriptor" — the channel is reported
-/// ready and then errors out before a single byte moves. That is invisible to
-/// the unit tests, because the bound-pair streams they use tolerate it.
-///
-/// So the pump owns its thread end to end and never touches a stream from
-/// anywhere else. Reads are driven purely by `StreamDelegate` events. Writes are
-/// driven by the same events plus a slow tick: a queued write must not depend on
-/// a `hasSpaceAvailable` event arriving *after* it was queued, and the tick also
-/// means `send` never has to reach across threads to touch the stream — an
-/// earlier version did that with `perform(_:on:)`, and a dropped marshalling
-/// step looks exactly like a peer that never sent anything.
+/// The pump also owns teardown. A timer flushes bytes queued after the last
+/// space-available event, without accessing streams from the calling actor.
 private final class StreamPump: NSObject, @unchecked Sendable, StreamDelegate {
     private let input: InputStream
     private let output: OutputStream
+    // The pump can outlive its transport while its thread finishes closing.
+    // Keep the channel alive until that teardown has completed as well.
+    private let owner: AnyObject?
     private let lock = NSLock()
     private var pending: [Data] = []
     private var stopped = false
+    private var inputOpened = false
+    private var outputOpened = false
+    private var reportedReady = false
+    private var receivedBytes = 0
+    private var sentBytes = 0
 
     /// How often a queued write is retried when no stream event arrives.
     /// Only a fallback link pays this, and only while it is up.
@@ -108,10 +118,13 @@ private final class StreamPump: NSObject, @unchecked Sendable, StreamDelegate {
 
     var onChunk: (@Sendable (Data) -> Void)?
     var onClosed: (@Sendable (String?) -> Void)?
+    var onReady: (@Sendable () -> Void)?
+    var onDiagnostic: (@Sendable (String) -> Void)?
 
-    init(input: InputStream, output: OutputStream) {
+    init(input: InputStream, output: OutputStream, owner: AnyObject? = nil) {
         self.input = input
         self.output = output
+        self.owner = owner
     }
 
     func start() {
@@ -143,12 +156,18 @@ private final class StreamPump: NSObject, @unchecked Sendable, StreamDelegate {
     }
 
     private func run() {
+        guard !isStopped else { return }
+        onDiagnostic?("L2CAP pump opening streams")
         input.delegate = self
         output.delegate = self
         input.schedule(in: .current, forMode: .default)
         output.schedule(in: .current, forMode: .default)
         input.open()
         output.open()
+        if input.streamStatus == .error || output.streamStatus == .error {
+            finish("stream open failed; \(snapshot())")
+        }
+        let openingDeadline = Date().addingTimeInterval(5)
 
         let tick = Timer(timeInterval: flushInterval, repeats: true) { [weak self] _ in
             self?.writePending()
@@ -159,25 +178,43 @@ private final class StreamPump: NSObject, @unchecked Sendable, StreamDelegate {
         // request is noticed without depending on traffic.
         while !isStopped {
             _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.5))
+            if !reportedReady, Date() >= openingDeadline {
+                finish("stream open timed out; \(snapshot())")
+            }
         }
 
         tick.invalidate()
         input.close()
         output.close()
+        input.remove(from: .current, forMode: .default)
+        output.remove(from: .current, forMode: .default)
+        input.delegate = nil
+        output.delegate = nil
+        withExtendedLifetime(owner) {}
+        onDiagnostic?("L2CAP pump closed rx=\(receivedBytes) tx=\(sentBytes)")
     }
 
     // MARK: - StreamDelegate
 
     func stream(_ aStream: Stream, handle eventCode: Stream.Event) {
+        guard !isStopped else { return }
         switch eventCode {
+        case .openCompleted:
+            if aStream === input { inputOpened = true }
+            if aStream === output { outputOpened = true }
+            onDiagnostic?("L2CAP \(aStream === input ? "input" : "output") openCompleted; \(snapshot())")
+            if inputOpened, outputOpened, !reportedReady {
+                reportedReady = true
+                onReady?()
+            }
         case .hasBytesAvailable:
             readAvailable()
         case .hasSpaceAvailable:
             writePending()
         case .endEncountered:
-            finish(aStream.streamError?.localizedDescription)
+            finish(aStream.streamError.map { describe($0) })
         case .errorOccurred:
-            finish(aStream.streamError?.localizedDescription ?? "stream error")
+            finish("stream error; \(snapshot())")
         default:
             break
         }
@@ -188,26 +225,36 @@ private final class StreamPump: NSObject, @unchecked Sendable, StreamDelegate {
         while !isStopped, input.hasBytesAvailable {
             let count = input.read(&buffer, maxLength: buffer.count)
             if count > 0 {
+                receivedBytes += count
+                onDiagnostic?("L2CAP read=\(count) rx=\(receivedBytes)")
                 onChunk?(Data(buffer[0..<count]))
             } else if count < 0 {
-                finish(input.streamError?.localizedDescription ?? "read failed")
+                finish("read=-1; \(snapshot())")
                 return
             } else {
-                break
+                finish(nil)
+                return
             }
         }
     }
 
     private func writePending() {
+        guard outputOpened else { return }
         while !isStopped, output.hasSpaceAvailable, let next = peekPending() {
+            if next.isEmpty {
+                consumePending(0, of: next)
+                continue
+            }
             let written = next.withUnsafeBytes { raw -> Int in
                 guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return 0 }
                 return output.write(base, maxLength: next.count)
             }
             if written > 0 {
+                sentBytes += written
+                onDiagnostic?("L2CAP wrote=\(written) tx=\(sentBytes)")
                 consumePending(written, of: next)
             } else if written < 0 {
-                finish(output.streamError?.localizedDescription ?? "write failed")
+                finish("write=-1; \(snapshot())")
                 return
             } else {
                 break
@@ -221,7 +268,18 @@ private final class StreamPump: NSObject, @unchecked Sendable, StreamDelegate {
         stopped = true
         lock.unlock()
         guard !alreadyStopped else { return }
+        onDiagnostic?("L2CAP ended: \(reason ?? "EOF") rx=\(receivedBytes) tx=\(sentBytes)")
         onClosed?(reason)
+    }
+
+    private func describe(_ error: Error) -> String {
+        let error = error as NSError
+        return "\(error.domain)/\(error.code): \(error.localizedDescription)"
+    }
+
+    private func snapshot() -> String {
+        "in=\(input.streamStatus.rawValue) error=\(input.streamError.map(describe) ?? "none") "
+            + "out=\(output.streamStatus.rawValue) error=\(output.streamError.map(describe) ?? "none")"
     }
 
     private func peekPending() -> Data? {

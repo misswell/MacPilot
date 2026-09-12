@@ -221,7 +221,10 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
     /// A BLE client arrives as an already open L2CAP channel. Everything above
     /// the transport is the same code the TCP clients run.
     private func accept(channel: CBL2CAPChannel) {
-        let remote = RemoteConnection(transport: L2CAPStreamTransport(channel: channel), host: self)
+        let transport = L2CAPStreamTransport(channel: channel)
+        let traceID = UUID().uuidString.prefix(8)
+        transport.onDiagnostic = { [weak self] message in self?.log("BLE [\(traceID)] \(message)") }
+        let remote = RemoteConnection(transport: transport, host: self)
         connections[remote.id] = remote
         remote.start()
         log("incoming BLE connection accepted active=\(connections.count)")

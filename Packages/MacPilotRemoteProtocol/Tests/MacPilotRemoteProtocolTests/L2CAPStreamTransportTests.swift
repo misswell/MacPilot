@@ -57,8 +57,8 @@ struct L2CAPStreamTransportTests {
     // MARK: - Tests
 
     @MainActor
-    @Test("start reports connecting then ready before any traffic")
-    func startReportsReadyImmediately() {
+    @Test("ready waits for both streams to finish opening")
+    func startWaitsForStreamOpen() async {
         let (input, output) = Self.makeLoopbackStreams(bufferSize: 1024)
         let transport = L2CAPStreamTransport(input: input, output: output)
         let recorder = Recorder()
@@ -66,15 +66,67 @@ struct L2CAPStreamTransportTests {
 
         transport.start()
 
-        // An L2CAP channel arrives already open, so there is no link handshake
-        // to wait for; the wire handshake runs above this layer.
-        #expect(recorder.states.count == 2)
+        #expect(recorder.states == [.connecting])
+        let opened = await Self.waitUntil { recorder.states.contains(.ready) }
+        #expect(opened)
+        #expect(recorder.states == [.connecting, .ready])
         if case .connecting = recorder.states.first {} else {
             Issue.record("first state was \(String(describing: recorder.states.first))")
         }
         if case .ready = recorder.states.last {} else {
             Issue.record("last state was \(String(describing: recorder.states.last))")
         }
+        transport.cancel()
+    }
+
+    @MainActor
+    @Test("an empty send does not prevent later bytes from being sent")
+    func emptySendDoesNotBlockQueue() async {
+        let (input, output) = Self.makeLoopbackStreams(bufferSize: 16)
+        let transport = L2CAPStreamTransport(input: input, output: output)
+        let recorder = Recorder()
+        transport.onReceive = { recorder.chunks.append($0) }
+        transport.start()
+        transport.send(Data()) { _ in }
+        transport.send(Data([1, 2, 3])) { _ in }
+        let arrived = await Self.waitUntil { recorder.concatenated.count == 3 }
+        #expect(arrived)
+        #expect(recorder.concatenated == Data([1, 2, 3]))
+        transport.cancel()
+    }
+
+    @MainActor
+    @Test("repeated start does not open another pump or repeat ready")
+    func repeatedStartIsIgnored() async {
+        let (input, output) = Self.makeLoopbackStreams(bufferSize: 16)
+        let transport = L2CAPStreamTransport(input: input, output: output)
+        let recorder = Recorder()
+        transport.onStateChange = { recorder.states.append($0) }
+        transport.start()
+        transport.start()
+        let opened = await Self.waitUntil { recorder.states.contains(.ready) }
+        #expect(opened)
+        #expect(recorder.states == [.connecting, .ready])
+        transport.cancel()
+    }
+
+    @MainActor
+    @Test("a stream open failure never reports ready and preserves the error")
+    func openingFailureIsNotReady() async {
+        let input = InputStream(data: Data([1]))
+        let output = OutputStream(toFileAtPath: "/missing-\(UUID())/output", append: false)!
+        let transport = L2CAPStreamTransport(input: input, output: output)
+        let recorder = Recorder()
+        transport.onStateChange = { recorder.states.append($0) }
+        transport.start()
+        let failed = await Self.waitUntil {
+            recorder.states.contains { if case .failed = $0 { true } else { false } }
+        }
+        #expect(failed)
+        #expect(!recorder.states.contains(.ready))
+        #expect(recorder.states.contains {
+            if case .failed(let message) = $0 { message.contains("NSPOSIXErrorDomain") } else { false }
+        })
         transport.cancel()
     }
 
