@@ -442,3 +442,41 @@ Refusing authorization request for service kTCCServiceBluetoothAlways
 > 手机换了网络之后，如果遥控 App 一直连不上，**彻底退出重开一次**，而不是切回前台等它自己恢复。
 
 （顺带确认：`Networking/RemoteDiscoveryService.swift` 的 `includePeerToPeer = true` 与 `.bonjourWithTXTRecord` 组合是正确的，Mac 侧 `RemoteControlServer` 的监听和连接也都开了 P2P；这条链路两头都没有代码改动需要做。）
+
+## 二十七、BLE 端到端：卡在最后一公里（GATT 连接不建立）
+
+### 逐层验证：Mac 侧和 iOS 侧各自都是对的
+
+| 层 | 证据 |
+|---|---|
+| Mac TCC 授权 | bluetoothd `CBMsgIdTCCDone` ✓ |
+| L2CAP 发布 | `Automatically selected psm:193` / `Registering L2CAP Channel with PSM 0x00c1` ✓ |
+| GATT 服务 | statedump：服务 `6D616350-…-0001` + 特征 `…-0002`（read），值 `[ C1 00 ]` = PSM 193 ✓ |
+| 广播请求 | `Received 'start advertising' … UUID(s) [ 6D616350-…-0001 ]` ✓ |
+| 广播结果 | 新增的 `peripheralManagerDidStartAdvertising` 报 `error=none` ✓ |
+| iOS 蓝牙状态 | `BLE central state=5`（poweredOn）→ `BLE scanning for the MacPilot service` ✓ |
+| iOS 发现 | `BLE found the Mac; connecting` —— **手机确实看得见广播** ✓ |
+
+### 卡住的地方
+
+`connect()` 之后**永远不回调**：既没有 `didConnect`，也没有 `didFailToConnect`。12 秒后被看门狗重启，循环往复。而 Mac 侧**从控制器到 App 都没有任何连接痕迹**——bluetoothd 的 LE 连接事件里找不到我们的外设。
+
+### 已排除的原因
+
+1. **「128 位 UUID 进 overflow 区看不见」** —— 排除。官方文档：前台初始包 28 字节，128 位 UUID 占 18 字节装得下；而且手机确实 `found` 了。
+2. **「MacPilot 这个 App 的问题」** —— 排除。把真实 `RemoteBLEPeripheral` 原样装进独立探针 App，用完全相同的配置广播，4 分钟同样没人连。
+3. **「和距离感应解锁抢链路」** —— 排除了「释放就好」这个简单版本。关掉距离感应、确认 Mac 已释放与 iPhone 的 BLE 连接（`system_profiler` 里 BENG 消失）后，**仍然连不上**。
+4. **「广播缺设备名导致不可连接」** —— 排除。加上 `CBAdvertisementDataLocalNameKey` 再广播，同样连不上。
+
+### 目前最可疑的
+
+iPhone 的蓝牙栈可能**缓存了与这台 Mac 的陈旧链路状态**（距离感应解锁长期握着的那条），因而静默丢弃 connect。这与「手机 found、Mac 侧毫无痕迹」完全吻合——连接请求可能**在手机本地就被丢掉了**，根本没发出去。下一步要验证的是**把手机蓝牙关掉再打开**（重置协议栈）后重试。
+
+### ⚠️ 诚实声明
+
+上面第 2、4 两项实验是在**无法确认手机 App 仍在前台扫描**的情况下跑的。若当时 App 已被 iOS 挂起，这两次阴性结果**不成立**，必须在确认 App 处于扫描状态的前提下重跑。这条限制必须和结论一起保留。
+
+### 顺带修掉的真实缺陷
+
+- `RemoteBLEPeripheral` 没有实现 `peripheralManagerDidStartAdvertising` → 广播失败是完全静默的。**已补上并验证有效**（探针里打出 `DIAG didStartAdvertising error=none`）。
+- iOS 的 `isActive` 返回 `wantsChannel`，**权限被拒/蓝牙关闭时界面照样显示「搜索中」** → 界面会说谎。已改为「有真实诊断文本就优先显示」，并给 `beginScanningIfPossible` 的每个提前返回都加上原因（`BLE waiting for Bluetooth: state=…`），`centralManagerDidUpdateState` 也把原始状态值打出来。
