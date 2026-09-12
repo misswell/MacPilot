@@ -97,13 +97,13 @@ struct RemoteSettingsView: View {
     /// Bluetooth is only interesting when it is doing something; otherwise the
     /// row would read the same on every launch.
     ///
-    /// The raw diagnostic deliberately wins over the generic "scanning" label.
+    /// The raw diagnostic deliberately wins over the generic label.
     /// Showing the label first hid the only evidence that explains a fallback
-    /// which never connects: the instrument reported "scanning" while the
-    /// manager was still waiting for a usable Bluetooth state.
+    /// which never connects: the instrument reported progress while the manager
+    /// was still waiting for a usable Bluetooth state.
     private var bleStatus: String {
         if let message = appModel.lastBLEMessage { return message }
-        if appModel.bleFallbackScanning { return appModel.text("transportBLEScanning") }
+        if appModel.bleFallbackAdvertising { return appModel.text("transportBLEAdvertising") }
         return appModel.text("transportBLEOff")
     }
 

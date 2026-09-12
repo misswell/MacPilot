@@ -2,24 +2,32 @@ import CoreBluetooth
 import Foundation
 import MacPilotRemoteTransport
 
-/// Finds the Mac over BLE and opens a stream-oriented L2CAP channel to it.
+/// Finds the phone over BLE and opens a stream-oriented L2CAP channel to it.
 ///
 /// This is the fallback link: it needs no router, no shared subnet and no
 /// peer-to-peer Wi-Fi, so it covers the cases the network path cannot — a Mac on
 /// Ethernet, a phone on cellular, a client-isolating guest network.
 ///
-/// It only runs while the app is in the foreground and not already connected, so
-/// scanning never costs battery in the background.
+/// The Mac is deliberately the central here. That is the direction BLE actually
+/// supports between these two devices: this Mac already holds a central link to
+/// the iPhone for hours at a time for the proximity unlock, while the opposite
+/// direction — Mac advertising, phone connecting — never establishes a
+/// connection at all.
+///
+/// Scanning is cheap on a machine that is plugged in, and the phone only
+/// advertises when it actually wants the fallback, so nothing is connected
+/// speculatively.
 @MainActor
 final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate {
-    /// Delivers an open L2CAP channel. Ownership passes to the caller.
+    /// Hands a newly opened channel to the remote control server.
     var onChannel: ((CBL2CAPChannel) -> Void)?
     var onLog: ((String) -> Void)?
 
     private var manager: CBCentralManager?
     private var peripheral: CBPeripheral?
+    private var psmCharacteristic: CBCharacteristic?
     private var isScanning = false
-    private var wantsChannel = false
+    private var wantsToRun = false
     private var attemptWatchdog: Task<Void, Never>?
 
     /// How long a single discovery attempt may take before it is restarted.
@@ -27,12 +35,10 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     /// a stalled step would otherwise leave the fallback silently dead.
     private let attemptTimeout: TimeInterval = 12
 
-    var isActive: Bool { wantsChannel }
-
     // MARK: - Lifecycle
 
     func start() {
-        wantsChannel = true
+        wantsToRun = true
         if manager == nil {
             onLog?("BLE central starting")
             manager = CBCentralManager(
@@ -46,7 +52,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     }
 
     func stop() {
-        wantsChannel = false
+        wantsToRun = false
         attemptWatchdog?.cancel()
         attemptWatchdog = nil
         isScanning = false
@@ -55,13 +61,16 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
             manager?.cancelPeripheralConnection(peripheral)
         }
         peripheral = nil
+        psmCharacteristic = nil
     }
+
+    // MARK: - Discovery
 
     private func beginScanningIfPossible() {
         // Every early return names its reason. A silent return here is
-        // indistinguishable from a healthy scan at the UI, which is exactly how
-        // a fallback that never connects stays invisible.
-        guard wantsChannel else {
+        // indistinguishable from a healthy scan, which is exactly how a fallback
+        // that never connects stays invisible.
+        guard wantsToRun else {
             onLog?("BLE idle; the fallback is not needed")
             return
         }
@@ -75,9 +84,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         }
         guard !isScanning, peripheral == nil else { return }
         isScanning = true
-        onLog?("BLE scanning for the MacPilot service")
-        // A service-filtered scan is required for any background wake-up, and
-        // it is also what keeps this cheap in the foreground.
+        onLog?("BLE scanning for the phone")
         manager.scanForPeripherals(withServices: [RemoteBLEService.serviceUUID])
         armWatchdog()
     }
@@ -87,7 +94,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         attemptWatchdog?.cancel()
         attemptWatchdog = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(self?.attemptTimeout ?? 12))
-            guard let self, !Task.isCancelled, self.wantsChannel else { return }
+            guard let self, !Task.isCancelled, self.wantsToRun else { return }
             self.onLog?("BLE attempt stalled; restarting discovery")
             self.resetAttempt()
         }
@@ -106,8 +113,6 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         beginScanningIfPossible()
     }
 
-    private var psmCharacteristic: CBCharacteristic?
-
     // MARK: - CBCentralManagerDelegate
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
@@ -121,7 +126,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         case .unauthorized:
             onLog?("BLE unauthorized; the Bluetooth permission is required for the fallback link")
         case .unsupported:
-            onLog?("BLE unsupported on this device")
+            onLog?("BLE unsupported on this Mac")
         default:
             break
         }
@@ -133,12 +138,12 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         advertisementData: [String: Any],
         rssi RSSI: NSNumber
     ) {
-        guard wantsChannel, self.peripheral == nil else { return }
+        guard wantsToRun, self.peripheral == nil else { return }
         self.peripheral = peripheral
         peripheral.delegate = self
         central.stopScan()
         isScanning = false
-        onLog?("BLE found the Mac; connecting")
+        onLog?("BLE found the phone; connecting")
         central.connect(peripheral)
     }
 
@@ -160,16 +165,20 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
     ) {
-        // A disconnect is only a problem while we still need a channel; once
-        // one is open the L2CAP stream outlives this callback's caller.
-        guard wantsChannel, self.peripheral === peripheral else { return }
+        // A disconnect is only a problem while we still need a channel; once one
+        // is open the L2CAP stream outlives this callback's caller. The phone
+        // stops advertising as soon as it is back on the network, so closing
+        // here is expected and must not be logged as a failure.
+        guard wantsToRun, self.peripheral === peripheral else { return }
         resetAttempt()
     }
 
     // MARK: - CBPeripheralDelegate
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard error == nil, let service = peripheral.services?.first(where: { $0.uuid == RemoteBLEService.serviceUUID }) else {
+        guard error == nil,
+              let service = peripheral.services?.first(where: { $0.uuid == RemoteBLEService.serviceUUID })
+        else {
             onLog?("BLE service discovery failed error=\(error?.localizedDescription ?? "not found")")
             resetAttempt()
             return

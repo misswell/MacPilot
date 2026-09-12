@@ -39,9 +39,10 @@ final class RemoteAppModel: ObservableObject {
     /// "网络 · en0" or "蓝牙". Surfaced in Settings so the transport can be
     /// checked on a real network instead of inferred from logs.
     @Published private(set) var transportDescription = "—"
-    /// True while the BLE fallback is scanning, so the diagnostic can show that
-    /// the fallback is armed rather than silently missing.
-    @Published private(set) var bleFallbackScanning = false
+    /// True while the phone is actually advertising the BLE fallback, so the
+    /// diagnostic can show that the fallback is armed rather than silently
+    /// missing.
+    @Published private(set) var bleFallbackAdvertising = false
     /// Last thing the Bluetooth fallback did, so a failed fallback is
     /// diagnosable from the phone instead of only from the Mac's log.
     @Published private(set) var lastBLEMessage: String?
@@ -52,7 +53,11 @@ final class RemoteAppModel: ObservableObject {
     /// Second link, used when there is no usable network to the Mac. It is not a
     /// replacement: the network is faster whenever it works, so BLE only takes
     /// over after the network has visibly failed.
-    let ble = RemoteBLECentral()
+    ///
+    /// The phone is the peripheral: the Mac connects to us. That is the only BLE
+    /// direction these two devices establish reliably, and it also means the
+    /// phone decides whether the fallback exists at all.
+    let ble = RemoteBLEPeripheral()
 
     private var activeMac: PairedMac?
     private var supervisorTask: Task<Void, Never>?
@@ -63,7 +68,7 @@ final class RemoteAppModel: ObservableObject {
     private var hasEverConnected = false
     private var didStart = false
     private var discoveryStartedAt: Date?
-    /// A channel opened by the BLE central, waiting for the network to fail.
+    /// A channel the Mac opened to us, waiting for the network to fail.
     private var pendingBLEChannel: CBL2CAPChannel?
     /// Consecutive network attempts that produced no link. Drives the switch to
     /// Bluetooth; reset whenever a session starts or the app comes forward.
@@ -225,27 +230,31 @@ final class RemoteAppModel: ObservableObject {
         activeMac?.name ?? store.preferredMac?.name ?? "Mac"
     }
 
-    /// Scanning only runs in the foreground and only while disconnected, so the
-    /// fallback never costs battery in the background or during a good session.
+    /// Advertising only runs in the foreground, only while disconnected, and only
+    /// once the network has visibly failed. The phone is the peripheral, so this
+    /// is what decides whether the fallback exists at all — keeping it off until
+    /// it is needed is what stops the fallback from costing battery during a
+    /// healthy session.
     private func startBLEFallback() {
         guard isForeground, !connectionState.isConnected else { return }
+        guard connectAttempt >= bleFallbackAfterAttempts else { return }
         ble.start()
-        bleFallbackScanning = ble.isActive
+        bleFallbackAdvertising = ble.isAdvertising
     }
 
     private func stopBLEFallback() {
         ble.stop()
-        bleFallbackScanning = false
+        bleFallbackAdvertising = false
         discardPendingBLEChannel()
     }
 
-    /// The central opened a channel. Hold it rather than dialling immediately:
+    /// The Mac opened a channel to us. Hold it rather than dialling immediately:
     /// the network is faster whenever it works, and displacing a good Wi-Fi link
     /// with the slower one would be a regression.
     private func adoptBLEChannel(_ channel: CBL2CAPChannel) {
         discardPendingBLEChannel()
         pendingBLEChannel = channel
-        bleFallbackScanning = false
+        bleFallbackAdvertising = false
         lastBLEMessage = text("transportBLEReady")
         // If the network has already been failing, use it now instead of waiting
         // for the supervisor's next tick.
@@ -385,8 +394,13 @@ final class RemoteAppModel: ObservableObject {
         connectAttempt = 0
         stopConnectSupervisor()
         // A working link makes the fallback redundant, and an idle channel left
-        // open only costs both devices power.
-        stopBLEFallback()
+        // open only costs both devices power. The exception is the fallback
+        // itself: the L2CAP channel belongs to the peripheral, so stopping it
+        // while it is the link carrying this session would close the stream we
+        // just connected with.
+        if connection.transportKind != .bluetooth {
+            stopBLEFallback()
+        }
         connectionState = .connected
         errorKey = nil
         pairingPrompt = nil
@@ -422,6 +436,12 @@ final class RemoteAppModel: ObservableObject {
         // BLE is the fallback, not the default: it works without any shared
         // network, but it is slower to establish and costs both devices power to
         // hold open. So it only takes over once the network has visibly failed.
+        if attempt >= bleFallbackAfterAttempts {
+            // Make the phone reachable and let the Mac open the fallback link.
+            // This is the only path that starts advertising, which keeps a
+            // healthy Wi-Fi session free of a redundant BLE link.
+            startBLEFallback()
+        }
         if attempt >= bleFallbackAfterAttempts, let channel = pendingBLEChannel {
             pendingBLEChannel = nil
             errorKey = nil

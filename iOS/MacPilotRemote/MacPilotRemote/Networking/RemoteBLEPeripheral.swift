@@ -2,26 +2,37 @@ import CoreBluetooth
 import Foundation
 import MacPilotRemoteTransport
 
-/// Advertises a MacPilot L2CAP channel over BLE.
+/// Advertises the phone's MacPilot L2CAP channel so the Mac can reach it
+/// without any network at all.
 ///
-/// The GATT service is only a handshake: the phone reads the PSM from a
+/// The roles are deliberately inverted from what the names suggest: the phone is
+/// the peripheral and the Mac is the central. That is the direction BLE actually
+/// supports between these two devices — the Mac holds a central link to this
+/// iPhone for hours at a time for the proximity unlock, while the opposite
+/// direction never establishes a connection at all (the Mac's controller sees no
+/// connection request, and the phone's `connect` never calls back).
+///
+/// The GATT service is only a handshake: the Mac reads the PSM from a
 /// characteristic and then opens a stream-oriented L2CAP channel, so the wire
 /// protocol — framing, pairing, ChaChaPoly — runs unmodified on top of it.
-///
-/// This matters for the case the network cannot cover: a Mac on Ethernet, a
-/// phone on cellular, a guest network that isolates clients, or a router that is
-/// simply down. BLE needs none of it.
 @MainActor
 final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDelegate {
-    /// Hands a newly opened channel to the remote control server.
+    /// Delivers an open L2CAP channel. Ownership passes to the caller.
     var onChannel: ((CBL2CAPChannel) -> Void)?
     var onLog: ((String) -> Void)?
 
     private var manager: CBPeripheralManager?
     private var psm: CBL2CAPPSM?
     private var wantsToRun = false
+    private var isOnAir = false
 
-    var isRunning: Bool { manager != nil }
+    /// Whether the phone is actually reachable over BLE right now. This is driven
+    /// by the advertisement callback, not by intent: reporting intent here is
+    /// what let the diagnostic claim the fallback was running while the radio was
+    /// off and nothing was being advertised at all.
+    var isAdvertising: Bool { isOnAir }
+
+    // MARK: - Lifecycle
 
     func start() {
         wantsToRun = true
@@ -42,6 +53,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
 
     func stop() {
         wantsToRun = false
+        isOnAir = false
         guard let manager else { return }
         manager.stopAdvertising()
         if let psm {
@@ -69,8 +81,8 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     }
 
     private func startAdvertising(_ manager: CBPeripheralManager) {
-        // The service UUID is the only thing the phone needs to find us; the
-        // Mac's name is deliberately not advertised.
+        // Only the service UUID goes out. A local name would be dropped in the
+        // background anyway, and the Mac finds us by service alone.
         manager.startAdvertising([
             CBAdvertisementDataServiceUUIDsKey: [RemoteBLEService.serviceUUID]
         ])
@@ -82,14 +94,17 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
         switch peripheral.state {
         case .poweredOn:
             guard wantsToRun else { return }
-            onLog?("BLE peripheral powered on; publishing L2CAP channel")
+            onLog?("BLE advertising: radio on; publishing L2CAP channel")
             peripheral.publishL2CAPChannel(withEncryption: true)
         case .unauthorized:
-            onLog?("BLE peripheral unauthorized; Bluetooth permission is required")
+            onLog?("BLE unauthorized; the Bluetooth permission is required for the fallback link")
         case .unsupported:
-            onLog?("BLE peripheral unsupported on this Mac")
+            onLog?("BLE unsupported on this device")
         default:
-            break
+            // powered off / resetting / unknown. Naming the raw value is the only
+            // way to tell "waiting for the radio" from "advertising".
+            isOnAir = false
+            onLog?("BLE waiting for Bluetooth: state=\(peripheral.state.rawValue)")
         }
     }
 
@@ -116,15 +131,17 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     }
 
     /// Confirms the advertisement actually went out. Without this the only way
-    /// to tell "advertising" from "silently not advertising" was to read
-    /// bluetoothd's own log, which is how a peripheral that published a PSM but
+    /// to tell "advertising" from "silently not advertising" is to read the
+    /// system Bluetooth log, which is how a peripheral that published a PSM but
     /// never became discoverable stayed invisible.
     func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
         if let error {
+            isOnAir = false
             onLog?("BLE advertising failed error=\(error.localizedDescription)")
             return
         }
-        onLog?("BLE advertising started service=\(RemoteBLEService.serviceUUID)")
+        isOnAir = true
+        onLog?("BLE advertising; waiting for the Mac to connect")
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
@@ -138,6 +155,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
             return
         }
         request.value = value.subdata(in: request.offset..<value.count)
+        onLog?("BLE the Mac read the PSM; opening the L2CAP channel")
         peripheral.respond(to: request, withResult: .success)
     }
 
@@ -151,7 +169,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
             return
         }
         guard let channel else { return }
-        onLog?("BLE L2CAP channel opened")
+        onLog?("BLE L2CAP channel open")
         onChannel?(channel)
     }
 }

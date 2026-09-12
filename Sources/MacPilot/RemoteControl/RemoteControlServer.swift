@@ -10,7 +10,7 @@ import Network
 /// always advertising the real value through Bonjour so the iPhone never needs
 /// an IP address or a port.
 ///
-/// A BLE peripheral runs alongside it as a second, network-independent link.
+/// A BLE central runs alongside it as a second, network-independent link.
 @MainActor
 final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
     enum Status: Equatable {
@@ -49,11 +49,16 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
     /// Second link, for when there is no usable network between the two
     /// machines. Deliberately independent of the Bonjour listener: it starts
     /// even when the listener fails, and it needs no port.
-    private lazy var blePeripheral: RemoteBLEPeripheral = {
-        let peripheral = RemoteBLEPeripheral()
-        peripheral.onLog = { [weak self] message in self?.log(message) }
-        peripheral.onChannel = { [weak self] channel in self?.accept(channel: channel) }
-        return peripheral
+    ///
+    /// The Mac is the central here — the phone advertises and this side connects
+    /// — because that is the only BLE direction these two devices establish
+    /// reliably. The phone stays silent unless it has lost the network, so this
+    /// never connects speculatively.
+    private lazy var bleCentral: RemoteBLECentral = {
+        let central = RemoteBLECentral()
+        central.onLog = { [weak self] message in self?.log(message) }
+        central.onChannel = { [weak self] channel in self?.accept(channel: channel) }
+        return central
     }()
 
     init(
@@ -110,14 +115,14 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
             startWithDynamicPort(parameters: parameters)
         }
 
-        blePeripheral.start()
+        bleCentral.start()
     }
 
     func stop() {
         listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
-        blePeripheral.stop()
+        bleCentral.stop()
         for connection in connections.values {
             connection.close()
         }
