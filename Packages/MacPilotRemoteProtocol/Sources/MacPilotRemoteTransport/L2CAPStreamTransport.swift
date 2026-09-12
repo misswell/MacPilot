@@ -66,18 +66,28 @@ public final class L2CAPStreamTransport: RemoteTransport {
     }
 }
 
-/// Drains a pair of `Stream`s off the main actor.
+/// Drains a pair of `Stream`s on a thread that owns their run loop.
 ///
 /// `CBL2CAPChannel` gives Foundation streams rather than an `NWConnection`, so
-/// there is no delegate queue to piggyback on. A dedicated thread with a short
-/// poll keeps the main actor free and avoids RunLoop plumbing; the payloads
-/// here are a few hundred bytes, so the poll costs nothing measurable.
-private final class StreamPump: @unchecked Sendable {
+/// there is no delegate queue to piggyback on, and the streams carry one hard
+/// requirement: they must be scheduled on, opened on and used from a single
+/// thread that is running its run loop.
+///
+/// Opening them on the caller's thread and polling them from another one fails
+/// on a real L2CAP channel with "bad file descriptor" — the channel is reported
+/// ready and then errors out before a single byte moves. That is invisible to
+/// the unit tests, because the bound-pair streams they use tolerate it.
+///
+/// So the pump owns its thread end to end: it schedules and opens both streams
+/// there, drives reads and writes from `StreamDelegate` events, and marshals the
+/// one call that arrives from outside — `enqueue` — onto the same thread.
+private final class StreamPump: NSObject, @unchecked Sendable, StreamDelegate {
     private let input: InputStream
     private let output: OutputStream
     private let lock = NSLock()
     private var pending: [Data] = []
     private var stopped = false
+    private weak var thread: Thread?
 
     var onChunk: (@Sendable (Data) -> Void)?
     var onClosed: (@Sendable (String?) -> Void)?
@@ -88,11 +98,10 @@ private final class StreamPump: @unchecked Sendable {
     }
 
     func start() {
-        input.open()
-        output.open()
         let thread = Thread { [weak self] in self?.run() }
         thread.name = "com.misswell.macpilot.remote.transport.l2cap"
         thread.stackSize = 512 * 1024
+        self.thread = thread
         thread.start()
     }
 
@@ -100,14 +109,21 @@ private final class StreamPump: @unchecked Sendable {
         lock.lock()
         pending.append(data)
         lock.unlock()
+        // Touching the streams from here would break the single-thread rule, so
+        // hand the write to the run loop that owns them.
+        if let thread {
+            perform(#selector(writePending), on: thread, with: nil, waitUntilDone: false)
+        }
     }
 
     func stop() {
         lock.lock()
         stopped = true
         lock.unlock()
-        input.close()
-        output.close()
+        // The streams are closed by the thread that opened them.
+        if let thread {
+            perform(#selector(shutDown), on: thread, with: nil, waitUntilDone: false)
+        }
     }
 
     private var isStopped: Bool {
@@ -117,39 +133,84 @@ private final class StreamPump: @unchecked Sendable {
     }
 
     private func run() {
-        var buffer = [UInt8](repeating: 0, count: 4096)
+        input.delegate = self
+        output.delegate = self
+        input.schedule(in: .current, forMode: .default)
+        output.schedule(in: .current, forMode: .default)
+        input.open()
+        output.open()
+
+        // The run loop delivers the stream events; the bounded wait only exists
+        // so a stop request is noticed promptly.
         while !isStopped {
-            var didWork = false
+            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.5))
+        }
+        input.close()
+        output.close()
+    }
 
-            if input.hasBytesAvailable {
-                let count = input.read(&buffer, maxLength: buffer.count)
-                if count > 0 {
-                    onChunk?(Data(buffer[0..<count]))
-                    didWork = true
-                } else if count < 0 {
-                    onClosed?(input.streamError?.localizedDescription ?? "read failed")
-                    return
-                }
-            }
+    @objc private func shutDown() {
+        // Nothing to do beyond the loop noticing: this runs on the pump thread,
+        // which is what makes the close legal.
+        _ = isStopped
+    }
 
-            if let next = peekPending(), output.hasSpaceAvailable {
-                let written = next.withUnsafeBytes { raw -> Int in
-                    guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-                    return output.write(base, maxLength: next.count)
-                }
-                if written > 0 {
-                    consumePending(written, of: next)
-                    didWork = true
-                } else if written < 0 {
-                    onClosed?(output.streamError?.localizedDescription ?? "write failed")
-                    return
-                }
-            }
+    // MARK: - StreamDelegate
 
-            if !didWork {
-                Thread.sleep(forTimeInterval: 0.004)
+    func stream(_ aStream: Stream, handle eventCode: Stream.Event) {
+        switch eventCode {
+        case .hasBytesAvailable:
+            readAvailable()
+        case .hasSpaceAvailable:
+            writePending()
+        case .endEncountered:
+            finish(aStream.streamError?.localizedDescription)
+        case .errorOccurred:
+            finish(aStream.streamError?.localizedDescription ?? "stream error")
+        default:
+            break
+        }
+    }
+
+    private func readAvailable() {
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while !isStopped, input.hasBytesAvailable {
+            let count = input.read(&buffer, maxLength: buffer.count)
+            if count > 0 {
+                onChunk?(Data(buffer[0..<count]))
+            } else if count < 0 {
+                finish(input.streamError?.localizedDescription ?? "read failed")
+                return
+            } else {
+                break
             }
         }
+    }
+
+    @objc private func writePending() {
+        while !isStopped, output.hasSpaceAvailable, let next = peekPending() {
+            let written = next.withUnsafeBytes { raw -> Int in
+                guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return output.write(base, maxLength: next.count)
+            }
+            if written > 0 {
+                consumePending(written, of: next)
+            } else if written < 0 {
+                finish(output.streamError?.localizedDescription ?? "write failed")
+                return
+            } else {
+                break
+            }
+        }
+    }
+
+    private func finish(_ reason: String?) {
+        lock.lock()
+        let alreadyStopped = stopped
+        stopped = true
+        lock.unlock()
+        guard !alreadyStopped else { return }
+        onClosed?(reason)
     }
 
     private func peekPending() -> Data? {
