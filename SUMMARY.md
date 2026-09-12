@@ -368,3 +368,41 @@ Wi-Fi/AWDL 优先，蓝牙保底——**不是并列竞速**。蓝牙建立是�
 ```
 
 `unlock` / `wakeAndUnlock` / 解锁重试循环里也一并补了「黑屏也算屏幕没亮」的判断，否则亮度归零状态下解锁会先对着黑屏敲键盘（虽然合成按键本身也会触发恢复，但不该依赖这个副作用）。
+
+## 二十五、Mac 侧 BLE 管线实测：能发布，但三个反直觉的坑（v1.1.305 期间）
+
+目标里「BLE 后端到端」一直被两件事挡住：Mac 端还是旧版、手机必须在场。为了不再空等，我把 `RemoteBLEPeripheral` / `RemoteBLEService` **原样**编进一个带 `Info.plist` 的探针 App 里跑，用真实代码验证 Mac 侧。
+
+### 已验证
+
+| 项 | 结果 |
+|---|---|
+| `publishL2CAPChannel(withEncryption: true)` | ✅ 在这台 M1 上拿到 `psm=193` |
+| 服务添加 + 开始广播 | ✅ `didAdd error=none` |
+| `start()` → `stop()` → `start()` | ✅ 重新发布 PSM（**这正是 v1.1.304 改的点**） |
+| `stop()` → `start()` 零间隔 | ✅ 也重新发布，没有和 `removeAllServices()` 抢 |
+| 失败行数 | **0** |
+
+### 坑一：冷进程里首个 state 回调可能晚到约 18 秒
+
+实测：冷进程 `start()` 后 **15 秒内没有任何回调**，到 **+18.58s** 才收到 `didUpdateState raw=5`（`poweredOn`），此时才发布 PSM。
+
+期间**既不发布也不报错**，所以从外面看就是「蓝牙没反应」。含义有两个：
+
+- **不要在 Mac App 刚启动的十几秒内断言蓝牙保底不可用**——它可能只是还没就绪。
+- `RemoteBLEPeripheral` 对这种晚到是**正确**的：回调一到就发布；`start()` 在 manager 已存在且 `state == .poweredOn` 时也会直接补发。这是 `wantsToRun` + 「已 poweredOn 就补发」两处逻辑共同兜住的。
+
+### 坑二：同机 loopback 不可行
+
+我一度想用本机同时当 peripheral 和 central 来自测 GATT→L2CAP 交接，**行不通**：central 扫了 **134 秒**也收不到自己的广播（单射频收不到自己发的包）。所以 `openL2CAPChannel` 这一步**必须有第二台设备**，本机无法自测。这条排除了一个看似省事的捷径。
+
+### 坑三：TCC 归属会决定探针能不能跑
+
+从终端/自动化宿主 exec 的进程，TCC 把蓝牙请求**归属给宿主**（这里是 DSH）。宿主没有 `NSBluetoothAlwaysUsageDescription` 时，tccd 直接拒绝并 **SIGABRT**：
+
+```
+Refusing authorization request for service kTCCServiceBluetoothAlways
+  and subject Sub:{com.deepseek.harnessdesk} without NSBluetoothAlwaysUsageDescription key
+```
+
+必须走 LaunchServices（`open -a`）让归属落到探针自己身上，才会弹询问框。另外**每重新编译一次 cdhash 就变**，TCC 会重新评估，评估期间 CoreBluetooth 同样一个回调都不投递——这一点曾经让我误判出一个「首次 start 不发布 PSM」的假 bug，追了三轮才排掉。**结论：`RemoteBLEPeripheral` 没有 bug。**
