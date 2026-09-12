@@ -42,7 +42,7 @@
 	<key>NSAppleEventsUsageDescription</key>
 	<string>MacPilot needs permission to manage inactive apps.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>MacPilot uses Bluetooth to detect nearby BLE devices (such as your iPhone or Apple Watch) for proximity-based screen lock and unlock.</string>
+	<string>MacPilot uses Bluetooth to detect nearby BLE devices (such as your iPhone or Apple Watch) for proximity-based screen lock and unlock, and to let your own paired iPhone reach this Mac when the two are not on the same network.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>MacPilot uses Bluetooth to detect nearby BLE devices for proximity-based screen lock and unlock.</string>
 	<key>NSCameraUsageDescription</key>

@@ -25,7 +25,14 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
 
     func start() {
         wantsToRun = true
-        guard manager == nil else { return }
+        if let manager {
+            // The manager is kept across restarts: recreating it is slow and the
+            // state callback that triggers publishing only fires on a change.
+            if manager.state == .poweredOn, psm == nil {
+                manager.publishL2CAPChannel(withEncryption: true)
+            }
+            return
+        }
         manager = CBPeripheralManager(
             delegate: self,
             queue: .main,
@@ -39,10 +46,9 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
         manager.stopAdvertising()
         if let psm {
             manager.unpublishL2CAPChannel(psm)
+            self.psm = nil
         }
         manager.removeAllServices()
-        self.manager = nil
-        self.psm = nil
     }
 
     // MARK: - GATT
