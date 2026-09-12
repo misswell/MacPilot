@@ -480,3 +480,38 @@ iPhone 的蓝牙栈可能**缓存了与这台 Mac 的陈旧链路状态**（距�
 
 - `RemoteBLEPeripheral` 没有实现 `peripheralManagerDidStartAdvertising` → 广播失败是完全静默的。**已补上并验证有效**（探针里打出 `DIAG didStartAdvertising error=none`）。
 - iOS 的 `isActive` 返回 `wantsChannel`，**权限被拒/蓝牙关闭时界面照样显示「搜索中」** → 界面会说谎。已改为「有真实诊断文本就优先显示」，并给 `beginScanningIfPossible` 的每个提前返回都加上原因（`BLE waiting for Bluetooth: state=…`），`centralManagerDidUpdateState` 也把原始状态值打出来。
+
+## 二十八、BLE 失败根因收敛：方向反了（角色应当对调）
+
+把第二十七节的所有观测放在一起，指向一个很具体的结论。
+
+### 两台设备上，只有一个 BLE 方向被证明可用
+
+| 方向 | central | 实测 |
+|---|---|---|
+| iPhone → Mac | 手机 | ❌ **从未成功**：`didDiscover` 之后 `connect()` 永不回调（既无 `didConnect` 也无 `didFailToConnect`），12 秒看门狗重启，循环；Mac 侧从控制器到 App 零痕迹 |
+| **Mac → iPhone** | Mac | ✅ **连续数小时 `connected=true`**——BLEUnlock 的距离感应解锁一直是这么连的 |
+
+辅助证据：Mac 扫描到的 iPhone 广播带 `DvF 0x40000000100 < Family Connectable >`，即 iPhone 作为外设**广播是可连接的**，Mac 作为 central 能稳定建立并维持链路。反过来那条方向，**换两个独立广播者（MacPilot 自己 + 一个干净探针）、加不加设备名、手机蓝牙重置后，全部失败**。
+
+所以问题不在我们的代码，而在 **macOS 作为 BLE 外设、被 iOS 作为 central 连接的这条方向本身**。
+
+### 修法：把两个角色对调
+
+- **iPhone 当外设**：publish L2CAP 通道 + 暴露 PSM 特征 + 广播
+- **Mac 当 central**：扫描 → 连接 → 读 PSM → 打开 L2CAP 通道
+
+**可行性已经查证**：
+
+```
+$ grep publishL2CAPChannel $(xcrun --sdk iphoneos --show-sdk-path)/.../CBPeripheralManager.h
+- (void)publishL2CAPChannelWithEncryption:(BOOL)encryptionRequired NS_AVAILABLE(10_14, 11_0);
+```
+
+macOS 与 iOS 可用性完全一致（`10_14` / `11_0`），**iOS 可以发布 L2CAP 通道**。
+
+**复用程度**：`RemoteBLEService`（UUID + PSM 编解码）本来就对称，`L2CAPStreamTransport` 收的就是 `CBL2CAPChannel`，因此**分帧层与 ChaChaPoly 加密层一行不改**——正好符合「复用现有分帧与加密层不动」的要求。需要新写的是 iOS 侧的外设和 macOS 侧的 central（即两端实现互换）。
+
+### 需要权衡的代价
+
+对调后**手机侧要持续广播**，而 iOS 外设广播有电量成本；后台行为也和现在（`bluetooth-central` 常驻扫描）不同。这是设计取舍，不应当由实现方单方面决定。
