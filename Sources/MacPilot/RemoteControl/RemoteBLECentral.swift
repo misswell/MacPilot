@@ -170,6 +170,9 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         // stops advertising as soon as it is back on the network, so closing
         // here is expected and must not be logged as a failure.
         guard wantsToRun, self.peripheral === peripheral else { return }
+        // Leaving no trace here made a dropped link indistinguishable from a
+        // scan that never found anything.
+        onLog?("BLE disconnected error=\(error?.localizedDescription ?? "none"); rescanning")
         resetAttempt()
     }
 

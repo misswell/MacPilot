@@ -305,7 +305,13 @@ final class RemoteAppModel: ObservableObject {
                 await pause(0.3)
                 continue
             }
-            if connection.connectingDeviceID != nil {
+            // Guard on "an attempt exists", not on "an attempt with a device
+            // ID". A BLE channel has no device ID until the Mac identifies
+            // itself in the handshake, so guarding on the ID alone let this loop
+            // dial the network 200ms after the BLE transport was created —
+            // `connect` tears the previous transport down first, which killed
+            // the fallback link before it could send its hello.
+            if connection.hasActiveAttempt {
                 if Date().timeIntervalSince(attemptStartedAt) < connectAttemptTimeout {
                     // Let the attempt finish rather than stomping on it: calling
                     // connect() again would cancel a connection that is about
