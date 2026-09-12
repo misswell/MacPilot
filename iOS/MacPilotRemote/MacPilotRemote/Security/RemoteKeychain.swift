@@ -22,6 +22,19 @@ enum RemoteKeychain {
         return data
     }
 
+    /// Whether a long-term pairing key is stored for this Mac, without reading
+    /// the secret itself. This is the real proof of pairing; `PairedMacStore`
+    /// only caches display metadata and can be empty while the key survives.
+    static func hasPairingKey(for deviceID: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: account(deviceID),
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
     @discardableResult
     static func storePairingKey(_ key: Data, for deviceID: String) -> Bool {
         let query: [String: Any] = [

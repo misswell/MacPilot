@@ -52,6 +52,7 @@ enum RemoteText {
         "foundUnpaired": "发现 MacPilot",
         "foundUnpairedDetail": "已找到「%@」，去「设备」页点「配对」即可开始使用。",
         "goToPairing": "去配对",
+        "noNewDevices": "本网络暂无可配对的新设备。",
 
         "actionLock": "锁屏",
         "actionDisplayOff": "黑屏",
@@ -147,6 +148,7 @@ enum RemoteText {
         "foundUnpaired": "MacPilot found",
         "foundUnpairedDetail": "Found \"%@\". Open the Devices tab and tap Pair to get started.",
         "goToPairing": "Pair now",
+        "noNewDevices": "No new devices to pair on this network.",
 
         "actionLock": "Lock",
         "actionDisplayOff": "Blank",

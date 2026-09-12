@@ -89,7 +89,9 @@ struct DevicesView: View {
         Section(appModel.text("discoveredSection")) {
             let unpaired = appModel.discoveredMacs.filter { !appModel.store.isPaired(id: $0.id) }
             if unpaired.isEmpty {
-                Text(appModel.text("noMac"))
+                // "No MacPilot found" would be wrong here: a Mac may be present
+                // and already paired, it just is not a pairing candidate.
+                Text(appModel.text("noNewDevices"))
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(unpaired) { mac in

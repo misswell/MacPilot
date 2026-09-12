@@ -145,10 +145,24 @@ final class RemoteAppModel: ObservableObject {
         }
     }
 
+    /// Re-adopts Macs whose long-term key is still in the Keychain but whose
+    /// visible entry is missing, which happens after a reinstall or when an
+    /// earlier build never wrote the record. The stored key is the real proof
+    /// of pairing, so such a Mac must not be offered for pairing again — and it
+    /// has to be re-adopted before the paired-target search below, otherwise it
+    /// is never auto-connected either.
+    private func adoptAlreadyPairedMacs(from macs: [DiscoveredMac]) {
+        for mac in macs where !store.isPaired(id: mac.id)
+            && RemoteKeychain.hasPairingKey(for: mac.id.uuidString) {
+            store.ensurePaired(id: mac.id, name: mac.name)
+        }
+    }
+
     private func handleDiscovery(_ macs: [DiscoveredMac]) {
         discoveredMacs = macs
         localNetworkDenied = discovery.isPermissionDenied
         unrecognizedServiceCount = discovery.unrecognizedServiceCount
+        adoptAlreadyPairedMacs(from: macs)
         if metrics.discoveryLatencyMs == nil, !macs.isEmpty, let started = discoveryStartedAt {
             metrics.discoveryLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
         }
@@ -194,6 +208,10 @@ final class RemoteAppModel: ObservableObject {
         connectionState = .connected
         errorKey = nil
         pairingPrompt = nil
+        // Record the device before `markConnected`, which only updates an
+        // existing entry. Pairing itself writes nothing here, so a Mac would
+        // otherwise stay listed as new forever and never become the default.
+        store.ensurePaired(id: deviceID, name: name)
         store.markConnected(
             id: deviceID,
             endpoint: NWEndpointSnapshot(

@@ -74,6 +74,19 @@ final class PairedMacStore: ObservableObject {
         pairedMacs.contains { $0.id == id.uuidString }
     }
 
+    /// Adds the visible device entry for a Mac whose handshake succeeded.
+    ///
+    /// Pairing only writes the long-term key to the Keychain, so without this
+    /// the Mac never leaves the "discovered" section and keeps offering a pair
+    /// button it has already satisfied.
+    @discardableResult
+    func ensurePaired(id: UUID, name: String) -> PairedMac {
+        if let existing = mac(id: id) { return existing }
+        let mac = PairedMac(id: id.uuidString, name: name)
+        upsert(mac)
+        return mac
+    }
+
     func upsert(_ mac: PairedMac) {
         if let index = pairedMacs.firstIndex(where: { $0.id == mac.id }) {
             pairedMacs[index] = mac
