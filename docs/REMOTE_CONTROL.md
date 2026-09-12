@@ -181,14 +181,28 @@ first time; both sides need it.
 
 ## Building the iOS app
 
+Simulator build:
+
 ```sh
 cd iOS/MacPilotRemote
 xcodegen generate
-xcodebuild -scheme MacPilotRemote -sdk iphonesimulator -configuration Debug build
+xcodebuild -scheme MacPilotRemote -sdk iphonesimulator \
+  -destination 'generic/platform=iOS Simulator' -configuration Debug build
+```
+
+Device build (signed, installable on a real iPhone):
+
+```sh
+xcodebuild -scheme MacPilotRemote -sdk iphoneos \
+  -destination 'generic/platform=iOS' -configuration Debug build
 ```
 
 `project.yml` references the shared package with a relative path, so
-`Packages/MacPilotRemoteProtocol` must stay in the repository.
+`Packages/MacPilotRemoteProtocol` must stay in the repository. It also pins
+`CODE_SIGN_STYLE: Automatic` and `DEVELOPMENT_TEAM: U8U443D7ZL`, which matches
+the Apple Development and Apple Distribution identities installed in the login
+keychain, so device builds sign without extra flags. Change the team there if you
+build under a different Apple developer account.
 
 ## Tests
 

@@ -15,6 +15,10 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     ENABLE_USER_SCRIPT_SANDBOXING: YES
+    # Matches the Apple Development / Apple Distribution identities installed in
+    # the login keychain, so device builds sign without extra flags.
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: U8U443D7ZL
 
 targets:
   MacPilotRemote:
@@ -35,6 +39,3 @@ targets:
         INFOPLIST_FILE: MacPilotRemote/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         SUPPORTS_MACCATALYST: NO
-        CODE_SIGN_STYLE: Automatic
-        CODE_SIGNING_REQUIRED: NO
-        CODE_SIGNING_ALLOWED: NO
