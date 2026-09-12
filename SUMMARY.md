@@ -246,3 +246,45 @@ v1.1.236 对录屏功能做整体升级，补齐主流录屏工具的完整能�
 - **准备录制条（对标"浮光"录屏"准备录制"）**：框选/选窗口提交后不再立即开录，先在选区下方（放不下则上方）弹出深色胶囊工具条：准备录制标签 + 实时选区尺寸、麦克风开关、系统声音开关、**16:9 横屏 / 9:16 竖屏**一键重设框（保持选区中心、夹回所在显示器，`RecordingRegionFraming` 纯函数可测）、取消 X、绿色开始按钮。点开始才走原有倒计时→开录流程；音频开关直接持久化到 `screenRecording.capturesMicrophone/capturesSystemAudio`。新增 `Recording/RecordingPrepareBar.swift`（控制器 ObservableObject + 非激活 NSPanel）；`ScreenRecordingModel.prepareRecording(captureRect:)` 接管原 `onRecordingSelection→start` 直通路径，准备期间屏蔽重复触发，`shutdown()` 同步清理。设置页"录制行为"新增"录制前显示准备工具条"开关（`showsPrepareBar`，默认开，关闭恢复旧行为）。真机 E2E：合成点击提交窗口选区后，准备条在目标窗口下方出现（346×44）。
 - **序号标注自动重排（对标"有的序号重新排一遍"）**：橡皮/删除任一步骤序号后，剩余序号按绘制顺序立即重排为 1..n，下一个新序号从 n+1 继续（此前只有删光才归 1，删除中间序号会留空洞）。撤销/重做基于文档快照，天然恢复重排前编号。
 - 新增 7 个测试：序号重排×3、16:9/9:16 适配几何×2、`showsPrepareBar` 旧配置解码、偏好开关。全量 425 例通过。
+
+## 二十二、iPhone 远程控制：局域网直连锁屏 / 黑屏 / 解锁 / 唤醒解锁（本节随 v1.1.299 引入）
+
+MacPilot 新增配套 iPhone App「MacPilot 遥控」（`iOS/MacPilotRemote/`）。目标是「掏出手机点一下」：同一 Wi-Fi 下自动发现 Mac、自动连接，四个动作一键完成，不需要输入 IP、端口，也不需要每次重新配对。
+
+### 分层结构
+
+- **共享协议包** `Packages/MacPilotRemoteProtocol/`（新 SwiftPM target，macOS 14+ / iOS 17+）：命令与模型、4 字节大端长度前缀分帧、明文/加密帧编解码、P-256 ECDH 配对、HKDF-SHA256 会话密钥、ChaChaPoly 加解密、重放保护、Bonjour TXT 记录解析。Mac 与 iOS 共用同一份实现，不存在两套协议代码。
+- **Mac 服务端** `Sources/MacPilot/RemoteControl/`：`RemoteControlServer`（NWListener + Bonjour 注册，优先 43847，占用时自动动态端口）、`RemoteConnection`（握手状态机 + 加密命令通道）、`RemoteCommandRouter`（命令 → `MacScreenControlService`）、`RemotePairingManager`（6 位配对码）、`RemoteDeviceStore`（已配对设备 + 钥匙串配对密钥）、`RemoteControlSettingsView`（设置页）。
+- **iOS 客户端** `iOS/MacPilotRemote/`：`RemoteDiscoveryService`（NWBrowser 发现 `_macpilot._tcp`）、`RemoteConnectionManager`（长连接 + 握手 + 保活 ping）、`RemoteAppModel`（唯一状态源）、SwiftUI 三个标签页（控制 / 设备 / 设置）与配对弹窗。
+
+### 屏幕控制重构（阶段一）
+
+把锁屏/解锁的**原语**从 `BLEUnlock.swift` 抽到 `Sources/MacPilot/ScreenControl/`，BLE 与远程控制共用，但**策略**各自独立：
+
+- `MacScreenControlService`：`lockScreen`、`sleepDisplay`、`wakeDisplay`、`unlock`、`wakeAndUnlock`、`currentState`，统一返回 `ScreenControlResult`，并通过 `willLock` / `didUnlock` 回调让 BLE 侧维护「手动锁定」与「抑制自动解锁」状态。
+- `ScreenCredentialStore`：登录密码只存在于本机钥匙串；通过 `SecretStore` 协议抽象，测试用内存实现，绝不触碰真实钥匙串。
+- `ScreenUnlockExecutor`：快捷键锁屏（⌃⌘Q）、显示器电源、键盘事件注入。
+- `ScreenLockState` / `ScreenLockStateResolver`：屏幕锁定状态判定，`BLEScreenLockState` 等旧类型以 typealias 保留，既有测试不变。
+- 重试策略刻意不同：BLE 保持 `[2, 5, 9, 14, 20]` 秒，远程使用更快的 `[0.35, 0.8, 1.5, 2.5, 4]` 秒。
+
+### 安全模型
+
+- **Mac 登录密码永不出 Mac**：协议里没有 `password` 字段，iPhone 不存储、不接收、不请求密码；解锁由 `MacScreenControlService` → `ScreenCredentialStore` → `CGEvent` 在 Mac 本地完成。
+- 首次配对：临时 P-256 ECDH（每次连接一对临时密钥），HKDF-SHA256 从共享密钥派生 6 位配对码与 256 位长期配对密钥。配对码只用于**人工确认**，不是长期密钥；Mac 必须在「远程控制」页手动打开 120 秒配对窗口才会显示配对码。
+- 长期配对密钥分别存两端钥匙串（`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`，不参与 iCloud 同步），之后连接只走 `clientHello → serverHello → authRequest(clientProof) → authResult(serverProof)`，双向验证。
+- 会话密钥 = HKDF(配对密钥, salt: clientNonce‖serverNonce, info: "MacPilotRemote-v1-session")；所有命令帧为 `0x02 ‖ UInt64 序号 ‖ ChaChaPoly`，序号严格递增 + 时间戳偏移校验，重放帧直接被丢弃。
+- 日志只记录命令名、耗时与结果，绝不记录密码、配对密钥、会话密钥与报文内容。
+
+### 性能
+
+- 发现走 Bonjour（`NWBrowser`），不做 IP 扫描、不发 UDP 广播、不用 HTTP。
+- 连接采用**双路径竞速**：先用上次成功连接的地址直连（500ms 宽限期），超时即放弃并交给 Bonjour 结果，避免 mDNS 解析成为冷启动瓶颈。
+- 连接保持长活，命令走同一 TCP 连接；15 秒一次 `ping` 保活并回传往返延迟。
+- 断线按 `0、0.5、1、2、5` 秒退避重连；进入后台主动断开，回到前台立即重连。
+- 阶段七埋点：发现耗时、TCP 连接耗时、握手耗时、命令往返、命令执行耗时，iOS 设置页「连接性能」可见；Mac 端日志输出 `handshake complete event=... latency=...ms`。
+
+### 验证
+
+- `Packages/MacPilotRemoteProtocol/Tests/`：24 例（分帧、加解密、重放、配对码、TXT 记录、命令元数据）。
+- `Tests/MacPilotTests/RemoteControlTests.swift`：19 例（屏幕控制模型、命令路由、配置编解码、配对管理器、设备存储）。
+- iOS 端 `xcodegen generate` + `xcodebuild -sdk iphonesimulator` 构建通过、无警告。

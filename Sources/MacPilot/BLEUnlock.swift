@@ -417,32 +417,9 @@ struct BLEUnlockAttemptPlan: Equatable {
     )
 }
 
-enum BLEScreenLockState: String, Equatable {
-    case locked
-    case unlocked
-    case unknown
-}
-
 enum BLEUnlockConfirmation {
     static func isConfirmed(screenState: BLEScreenLockState) -> Bool {
         screenState == .unlocked
-    }
-}
-
-enum BLEScreenLockStateResolver {
-    static func resolve(
-        locked: Bool?,
-        loginDone: Bool?,
-        sessionUserName: String?,
-        currentUserName: String
-    ) -> BLEScreenLockState {
-        if let locked {
-            return locked ? .locked : .unlocked
-        }
-        if loginDone == true, sessionUserName == currentUserName {
-            return .unlocked
-        }
-        return .unknown
     }
 }
 
@@ -591,6 +568,33 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
     var persist: (@MainActor () -> Void)?
 
+    /// Shared screen control owner. BLE proximity policy lives here; the actual
+    /// locking, display power, credential and key-event work lives in the
+    /// service so the iPhone remote control reuses the exact same code.
+    let screenControl = MacScreenControlService()
+
+    override init() {
+        super.init()
+        screenControl.willLock = { [weak self] source in
+            guard let self else { return }
+            self.pendingLockSource = source.historySource
+            self.pendingLockSourceExpiresAt = Date().addingTimeInterval(15)
+            // A remote or manual lock outranks the proximity auto-unlock: the
+            // paired iPhone may still be sitting right next to the Mac.
+            if ScreenControlSuppressionPolicy.suppressesAutomaticUnlock(source: source) {
+                self.manualLock = true
+                self.cancelUnlockAttempt(reason: "lock-\(source.rawValue)")
+            }
+        }
+        screenControl.didUnlock = { [weak self] source, date in
+            guard let self else { return }
+            self.recordScreenUnlock(at: date, source: source.historySource)
+            if ScreenControlSuppressionPolicy.clearsAutomaticUnlockSuppression(source: source) {
+                self.manualLock = false
+            }
+        }
+    }
+
     // Runtime state published for the UI.
     @Published private(set) var devices: [BLEUnlockDevice] = []
     @Published private(set) var presence = false
@@ -615,7 +619,6 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var systemWakeRecoveryTask: Task<Void, Never>?
     private var unlockAttemptTask: Task<Void, Never>?
     private var unlockAttemptGeneration = 0
-    private var hasPasswordCache: Bool?
     private var lastLoggedRSSIAt = Date.distantPast
     private var lastLoggedRSSI: Int?
     private var lastLoggedRSSIErrorAt = Date.distantPast
@@ -1375,17 +1378,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         manualLock = true
         cancelUnlockAttempt()
         pauseNowPlaying()
-        lockOrSaveScreen(source: .manual)
+        lockOrSaveScreen(source: .localManual)
     }
 
-    private func lockOrSaveScreen(source: ScreenLockHistorySource) {
-        pendingLockSource = source
-        pendingLockSourceExpiresAt = Date().addingTimeInterval(15)
+    private func lockOrSaveScreen(source: ScreenControlSource) {
+        screenControl.markPendingLock(source: source)
         log("locking screen useScreensaver=\(settings.useScreensaver) turnOffScreen=\(settings.turnOffScreen)")
         if settings.useScreensaver {
             NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/ScreenSaverEngine.app"))
         } else {
-            bleLockScreenViaShortcut()
+            screenControl.executor.lockScreenShortcut()
             if settings.turnOffScreen { DisplayPower.sleepDisplay() }
         }
     }
@@ -1424,22 +1426,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         notifyChange()
     }
 
-    private func sessionBoolean(_ value: Any?) -> Bool? {
-        if let value = value as? NSNumber { return value.boolValue }
-        if let value = value as? Int { return value != 0 }
-        return nil
-    }
-
     private func screenLockState() -> BLEScreenLockState {
-        guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any] else {
-            return .unknown
-        }
-        return BLEScreenLockStateResolver.resolve(
-            locked: sessionBoolean(dict["CGSSessionScreenIsLocked"]),
-            loginDone: sessionBoolean(dict["kCGSessionLoginDoneKey"]),
-            sessionUserName: dict["kCGSSessionUserNameKey"] as? String,
-            currentUserName: NSUserName()
-        )
+        ScreenLockStateReader.current()
     }
 
     func isScreenLocked() -> Bool {
@@ -1470,9 +1458,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         log("unlock requested trigger=\(trigger) displaySleep=\(displaySleep) inScreensaver=\(inScreensaver) lastRSSI=\(lastRSSI.map(String.init) ?? "none")")
 
         if inScreensaver {
-            let src = CGEventSource(stateID: .hidSystemState)
-            CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: true)?.post(tap: .cghidEventTap)
-            CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: false)?.post(tap: .cghidEventTap)
+            screenControl.executor.dismissScreensaver()
         }
 
         guard !settings.wakeWithoutUnlocking else {
@@ -1659,7 +1645,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             if !isScreenLocked() && settings.lockRSSI != Self.lockDisabled {
                 log("locking due to presence loss reason=\(reason)")
                 pauseNowPlaying()
-                lockOrSaveScreen(source: .automatic)
+                lockOrSaveScreen(source: .bleAutomatic)
                 runScript(reason)
             } else {
                 log("presence loss did not lock screen alreadyLocked=\(isScreenLocked()) lockRSSIDisabled=\(settings.lockRSSI == Self.lockDisabled)")
@@ -1668,130 +1654,27 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         }
     }
 
-    private func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags = []) {
-        let src = CGEventSource(stateID: .hidSystemState)
-        let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true)
-        down?.flags = flags
-        down?.post(tap: .cghidEventTap)
-        let up = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false)
-        up?.flags = flags
-        up?.post(tap: .cghidEventTap)
-    }
-
     private func fakeKeyStrokes(_ string: String) async {
-        log("preparing password field for key events")
-
-        // The lock UI can recreate its secure text field while wake services
-        // (Touch ID, Auto Unlock, and avatar transitions) are still settling.
-        // Normalize any surviving text before every retry so a late attempt
-        // cannot append a second password to a partially handled first one.
-        postKey(0x00, flags: .maskCommand) // Command-A
-        try? await Task.sleep(for: .milliseconds(80))
-        guard !Task.isCancelled else { return }
-        postKey(0x33) // Delete
-        try? await Task.sleep(for: .milliseconds(120))
-        guard !Task.isCancelled else { return }
-
-        log("posting password key events")
-        let src = CGEventSource(stateID: .hidSystemState)
-        let per = 20
-        let utf16 = string.utf16
-        var index = utf16.startIndex
-        for offset in stride(from: 0, to: utf16.count, by: per) {
-            let len = offset + per < utf16.count ? per : utf16.count - offset
-            let buffer = UnsafeMutablePointer<UniChar>.allocate(capacity: len)
-            for i in 0..<len {
-                buffer[i] = utf16[index]
-                index = utf16.index(after: index)
-            }
-            let down = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: true)
-            down?.keyboardSetUnicodeString(stringLength: len, unicodeString: buffer)
-            down?.post(tap: .cghidEventTap)
-            let up = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: false)
-            up?.keyboardSetUnicodeString(stringLength: len, unicodeString: buffer)
-            up?.post(tap: .cghidEventTap)
-            buffer.deallocate()
-            try? await Task.sleep(for: .milliseconds(30))
-            guard !Task.isCancelled else { return }
-        }
-        try? await Task.sleep(for: .milliseconds(180))
-        guard !Task.isCancelled else { return }
-        postKey(0x24) // Return
+        // The implementation lives in ScreenUnlockExecutor so the BLE proximity
+        // unlock and the iPhone remote unlock type the same keystrokes.
+        await screenControl.executor.postPassword(string)
     }
 
     // MARK: Keychain password
 
-    private var keychainService: String { Bundle.main.bundleIdentifier ?? AppIdentity.bundleIdentifier }
-    private var keychainAccount: String { NSUserName() }
-
-    private var keychainServices: [String] {
-        var services = [keychainService]
-        for service in AppIdentity.knownBundleIdentifiers where !services.contains(service) {
-            services.append(service)
-        }
-        return services
-    }
-
-    var hasPassword: Bool {
-        if let hasPasswordCache { return hasPasswordCache }
-        return fetchPassword() != nil
-    }
+    /// BLE proximity unlock and the LAN remote control share one Keychain item
+    /// through `ScreenCredentialStore`. The password never leaves this Mac.
+    var hasPassword: Bool { screenControl.credentials.hasCredential }
 
     @discardableResult
     func storePassword(_ password: String) -> Bool {
-        let data = password.data(using: .utf8) ?? Data()
-        let status = storePasswordData(data, service: keychainService)
-        log("password stored in keychain success=\(status)")
-        hasPasswordCache = status
+        let success = screenControl.credentials.storePassword(password)
         objectWillChange.send()
-        return status
-    }
-
-    private func storePasswordData(_ data: Data, service: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: keychainAccount,
-            kSecAttrService as String: service
-        ]
-        SecItemDelete(query as CFDictionary)
-        var item = query
-        item[kSecValueData as String] = data
-        item[kSecAttrLabel as String] = "MacPilot BLE Unlock"
-        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+        return success
     }
 
     func fetchPassword(warn: Bool = false) -> String? {
-        if warn {
-            log("keychain password lookup started services=\(keychainServices.joined(separator: ","))")
-        }
-        for service in keychainServices {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrAccount as String: keychainAccount,
-                kSecAttrService as String: service,
-                kSecReturnData as String: kCFBooleanTrue!,
-                kSecMatchLimit as String: kSecMatchLimitOne
-            ]
-            var item: AnyObject?
-            let status = SecItemCopyMatching(query as CFDictionary, &item)
-            guard status != errSecItemNotFound else { continue }
-            log("keychain lookup service=\(service) status=\(status)")
-            guard status == errSecSuccess, let data = item as? Data,
-                  let password = String(data: data, encoding: .utf8) else { continue }
-            if service != keychainService {
-                _ = storePasswordData(data, service: keychainService)
-            }
-            hasPasswordCache = true
-            if warn {
-                log("keychain password lookup succeeded service=\(service)")
-            }
-            return password
-        }
-        hasPasswordCache = false
-        if warn {
-            log("keychain password lookup failed reason=notFoundOrInaccessible")
-        }
-        return nil
+        screenControl.credentials.loadPassword(warn: warn)
     }
 
     // MARK: MediaRemote (optional)
@@ -1857,6 +1740,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     func handleSystemWillSleep() {
         log("system will sleep presence=\(presence) lastRSSI=\(lastRSSI.map(String.init) ?? "none") monitored=\(monitoredUUIDs.count)")
         systemSleep = true
+        screenControl.noteSystemSleeping(true)
         recoveringFromSystemSleep = true
         wakeRetryTask?.cancel(); wakeRetryTask = nil
         cancelUnlockAttempt()
@@ -1965,6 +1849,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private func handleSystemDidWake() {
         log("system did wake")
         systemSleep = false
+        screenControl.noteSystemSleeping(false)
         guard let plan = BLEWakeRecoveryPlan.make(
             isEnabled: settings.isEnabled,
             hasMonitoredDevice: hasMonitoredDevice
@@ -1989,6 +1874,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.displaySleep = true
+                self.screenControl.noteDisplaySleeping(true)
                 self.log("display sleep notification received")
             }
         })
@@ -1996,6 +1882,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             MainActor.assumeIsolated {
                 self?.log("display wake notification received")
                 self?.displaySleep = false
+                self?.screenControl.noteDisplaySleeping(false)
                 self?.recoveringFromSystemSleep = false
                 self?.wakeRetryTask?.cancel()
                 self?.tryUnlockScreen(trigger: "screensDidWake")
@@ -2053,12 +1940,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screensaver.didstart"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.inScreensaver = true
+                self?.screenControl.screensaverActive = true
                 self?.log("screensaver started")
             }
         })
         observers.append(dnc.addObserver(forName: Notification.Name("com.apple.screensaver.didstop"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.inScreensaver = false
+                self?.screenControl.screensaverActive = false
                 self?.log("screensaver stopped")
             }
         })
@@ -2066,14 +1955,3 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 }
 
 // MARK: - Low-level display helpers
-
-func bleLockScreenViaShortcut() {
-    // Posts the system "Lock Screen" shortcut (Control-Command-Q).
-    let src = CGEventSource(stateID: .hidSystemState)
-    let down = CGEvent(keyboardEventSource: src, virtualKey: 0x0C, keyDown: true)
-    down?.flags = [.maskControl, .maskCommand]
-    down?.post(tap: .cghidEventTap)
-    let up = CGEvent(keyboardEventSource: src, virtualKey: 0x0C, keyDown: false)
-    up?.flags = [.maskControl, .maskCommand]
-    up?.post(tap: .cghidEventTap)
-}

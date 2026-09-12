@@ -9,10 +9,17 @@ let package = Package(
         .executable(name: "MacPilotUpdater", targets: ["MacPilotUpdater"]),
         .library(name: "MacPilotOcclusionPatch", type: .dynamic, targets: ["MacPilotOcclusionPatch"])
     ],
+    dependencies: [
+        // Shared wire protocol between the macOS app and the iOS remote app.
+        .package(path: "Packages/MacPilotRemoteProtocol")
+    ],
     targets: [
         .executableTarget(
             name: "MacPilot",
-            dependencies: ["MacPilotRightClickKit"]
+            dependencies: [
+                "MacPilotRightClickKit",
+                .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol")
+            ]
         ),
         .executableTarget(
             name: "MacPilotUpdater",
@@ -45,7 +52,13 @@ let package = Package(
             name: "MacPilotOcclusionPatch",
             linkerSettings: [.linkedFramework("AppKit")]
         ),
-        .testTarget(name: "MacPilotTests", dependencies: ["MacPilot"]),
+        .testTarget(
+            name: "MacPilotTests",
+            dependencies: [
+                "MacPilot",
+                .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol")
+            ]
+        ),
         .testTarget(
             name: "MacPilotRightClickKitTests",
             dependencies: ["MacPilotRightClickKit"]

@@ -34,6 +34,17 @@ Open **BLE Unlock** from the sidebar (or the menu-bar menu) and:
 
 Bluetooth and Accessibility access are required. Devices whose BLE MAC address rotates (most non-Apple devices) cannot be tracked reliably.
 
+## Remote Control from iPhone
+
+MacPilot ships with a companion iPhone app, **MacPilot Remote** (`iOS/MacPilotRemote/`), that locks, blanks, unlocks or wakes and unlocks your Mac from your pocket. It finds the Mac over Bonjour on the same Wi-Fi and reconnects to it automatically - no IP address, no port, no re-pairing every time.
+
+- **Discovery and transport**: Bonjour (`_macpilot._tcp`) plus Network.framework TCP. No IP range scanning, no UDP broadcast and no HTTP server. A remembered address is tried first so an already paired Mac is usually connected in well under a second, with Bonjour taking over if that address no longer answers.
+- **Pairing**: open **Remote Control** in MacPilot on the Mac, click **Start Pairing**, and the Mac shows a 6 digit code for two minutes. Type that code on the iPhone once. The code is derived from an ephemeral P-256 ECDH exchange and is only a confirmation value - the long lived pairing key is generated independently and stored in the Keychain on both sides.
+- **Security**: every command travels over a ChaChaPoly sealed channel keyed by HKDF-SHA256, with a strictly increasing sequence number and a timestamp skew check to reject replayed frames. **Your Mac login password never leaves the Mac** - the protocol has no password field, the iPhone never asks for it, and the unlock itself is performed locally by the same screen control service BLE Unlock uses.
+- **Actions**: Lock, Blank (display off), Unlock and Wake & Unlock, all one tap, with the Mac's screen state reflected back in the app.
+
+To build the iOS app, run `xcodegen generate` then `xcodebuild -scheme MacPilotRemote -sdk iphonesimulator` inside `iOS/MacPilotRemote/`.
+
 ## Input Source Automation
 
 The **Input Sources** sidebar brings the core Input Source Pro workflow into MacPilot:

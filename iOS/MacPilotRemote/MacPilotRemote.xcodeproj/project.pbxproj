@@ -1,0 +1,474 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		094E002356093BE6F77D140D /* RemoteKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AE3A75BF934E7F7884ACA12 /* RemoteKeychain.swift */; };
+		10AD0F90E657210C6CFE9F26 /* RemoteText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DD7E33EB369C3302C36BADA /* RemoteText.swift */; };
+		1970021C7F7E0FC5464C4433 /* DevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CEAD84B28A1735C296AEBF8 /* DevicesView.swift */; };
+		1CAEA4510A03902701764DC2 /* MacPilotRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82CA21A9B57090EDDD6FFE1B /* MacPilotRemoteApp.swift */; };
+		1FDC655EF74A5B0A9E892D40 /* PairingSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 444FF6D1A1FFC5A9B039FE51 /* PairingSheetView.swift */; };
+		2A4D3DB2192AC62F75C6B89D /* RemoteAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2664C90B50B85054CF47D9B3 /* RemoteAppModel.swift */; };
+		36BB935C02EC8519CE7DAFB1 /* PairedMacStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448BBB633EBACB20D7BD15CB /* PairedMacStore.swift */; };
+		58102F1CE9508E1A18B14846 /* RemoteSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE506F7AEC00BC4D65847C12 /* RemoteSettingsView.swift */; };
+		8ABE53FBAA8C5E88D864E561 /* RemoteConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */; };
+		97D7FA550D676240482EF5B6 /* RemoteDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */; };
+		ABAB1A3DD21B1D9F93831A4A /* MacPilotRemoteProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 2DA6CC718265164CF50E009F /* MacPilotRemoteProtocol */; };
+		C0F29AE38E0B010578AAD67D /* RemoteModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A556F1AAEC7A9B11C37B641 /* RemoteModels.swift */; };
+		CC59413625ABC1AAEE0F80AA /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21C2AB621EFBC8E6529C0E5 /* RootView.swift */; };
+		D9570EAFD947E6C943C5609E /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C3C7D3A57D31F56E250816 /* HomeView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		07C1EB6A722858B0212F438D /* MacPilotRemote.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MacPilotRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		09C3C7D3A57D31F56E250816 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		1CEAD84B28A1735C296AEBF8 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
+		2664C90B50B85054CF47D9B3 /* RemoteAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAppModel.swift; sourceTree = "<group>"; };
+		3A556F1AAEC7A9B11C37B641 /* RemoteModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteModels.swift; sourceTree = "<group>"; };
+		444FF6D1A1FFC5A9B039FE51 /* PairingSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingSheetView.swift; sourceTree = "<group>"; };
+		448BBB633EBACB20D7BD15CB /* PairedMacStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedMacStore.swift; sourceTree = "<group>"; };
+		4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteConnectionManager.swift; sourceTree = "<group>"; };
+		5AE3A75BF934E7F7884ACA12 /* RemoteKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteKeychain.swift; sourceTree = "<group>"; };
+		6DD7E33EB369C3302C36BADA /* RemoteText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteText.swift; sourceTree = "<group>"; };
+		82CA21A9B57090EDDD6FFE1B /* MacPilotRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPilotRemoteApp.swift; sourceTree = "<group>"; };
+		8D425482A5A46A96A727A35D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDiscoveryService.swift; sourceTree = "<group>"; };
+		A631B526163D86A62B57FE38 /* MacPilotRemoteProtocol */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MacPilotRemoteProtocol; path = ../../Packages/MacPilotRemoteProtocol; sourceTree = SOURCE_ROOT; };
+		CE506F7AEC00BC4D65847C12 /* RemoteSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSettingsView.swift; sourceTree = "<group>"; };
+		E21C2AB621EFBC8E6529C0E5 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		DCBF8BD64257C4BA411EC593 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ABAB1A3DD21B1D9F93831A4A /* MacPilotRemoteProtocol in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		04BEC7E993C260819B3BD1FE /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				CE506F7AEC00BC4D65847C12 /* RemoteSettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		0FAA3C3A5820E7378FF387B9 /* Security */ = {
+			isa = PBXGroup;
+			children = (
+				5AE3A75BF934E7F7884ACA12 /* RemoteKeychain.swift */,
+			);
+			path = Security;
+			sourceTree = "<group>";
+		};
+		5AD0C433F771B6DB57F8406B /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */,
+				96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		6BE6777B50F6EF2CE8B2AE31 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				8D425482A5A46A96A727A35D /* Info.plist */,
+				6DD7E33EB369C3302C36BADA /* RemoteText.swift */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		9934B3C9E8F3E0FF5229B1EB /* App */ = {
+			isa = PBXGroup;
+			children = (
+				82CA21A9B57090EDDD6FFE1B /* MacPilotRemoteApp.swift */,
+				2664C90B50B85054CF47D9B3 /* RemoteAppModel.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		99AA3E05D82BA8190DB8E23A /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				EE27B0EF9AB44287DE27EDE2 /* Devices */,
+				AEFF42AEFEC4E75D3C8350CF /* Home */,
+				C1CBB1CAD3F2B168B73D58F5 /* Pairing */,
+				04BEC7E993C260819B3BD1FE /* Settings */,
+				E21C2AB621EFBC8E6529C0E5 /* RootView.swift */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		AEFF42AEFEC4E75D3C8350CF /* Home */ = {
+			isa = PBXGroup;
+			children = (
+				09C3C7D3A57D31F56E250816 /* HomeView.swift */,
+			);
+			path = Home;
+			sourceTree = "<group>";
+		};
+		B31C980B607B2496227FCA06 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				448BBB633EBACB20D7BD15CB /* PairedMacStore.swift */,
+				3A556F1AAEC7A9B11C37B641 /* RemoteModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		C1CBB1CAD3F2B168B73D58F5 /* Pairing */ = {
+			isa = PBXGroup;
+			children = (
+				444FF6D1A1FFC5A9B039FE51 /* PairingSheetView.swift */,
+			);
+			path = Pairing;
+			sourceTree = "<group>";
+		};
+		D1421A93E52D81179AD54037 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				A631B526163D86A62B57FE38 /* MacPilotRemoteProtocol */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		D1770DB10F150C4D6CE0E142 /* MacPilotRemote */ = {
+			isa = PBXGroup;
+			children = (
+				9934B3C9E8F3E0FF5229B1EB /* App */,
+				99AA3E05D82BA8190DB8E23A /* Features */,
+				B31C980B607B2496227FCA06 /* Models */,
+				5AD0C433F771B6DB57F8406B /* Networking */,
+				6BE6777B50F6EF2CE8B2AE31 /* Resources */,
+				0FAA3C3A5820E7378FF387B9 /* Security */,
+			);
+			path = MacPilotRemote;
+			sourceTree = "<group>";
+		};
+		E19ACBFE76D55E17DC335099 = {
+			isa = PBXGroup;
+			children = (
+				D1770DB10F150C4D6CE0E142 /* MacPilotRemote */,
+				D1421A93E52D81179AD54037 /* Packages */,
+				EF8776579A3F761EECCE4C3C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		EE27B0EF9AB44287DE27EDE2 /* Devices */ = {
+			isa = PBXGroup;
+			children = (
+				1CEAD84B28A1735C296AEBF8 /* DevicesView.swift */,
+			);
+			path = Devices;
+			sourceTree = "<group>";
+		};
+		EF8776579A3F761EECCE4C3C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				07C1EB6A722858B0212F438D /* MacPilotRemote.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		BF89C0BED59832E585A6F654 /* MacPilotRemote */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 84BC82F7A2F8B438FA8ECB42 /* Build configuration list for PBXNativeTarget "MacPilotRemote" */;
+			buildPhases = (
+				CCCDF8B6DDED1E127DF97878 /* Sources */,
+				DCBF8BD64257C4BA411EC593 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MacPilotRemote;
+			packageProductDependencies = (
+				2DA6CC718265164CF50E009F /* MacPilotRemoteProtocol */,
+			);
+			productName = MacPilotRemote;
+			productReference = 07C1EB6A722858B0212F438D /* MacPilotRemote.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		8C641AE4462303326A5A6484 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					BF89C0BED59832E585A6F654 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 7BB6C3237850E79143F770AD /* Build configuration list for PBXProject "MacPilotRemote" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = E19ACBFE76D55E17DC335099;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				836BE0B205034F5B848233EE /* XCLocalSwiftPackageReference "../../Packages/MacPilotRemoteProtocol" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = EF8776579A3F761EECCE4C3C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				BF89C0BED59832E585A6F654 /* MacPilotRemote */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		CCCDF8B6DDED1E127DF97878 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1970021C7F7E0FC5464C4433 /* DevicesView.swift in Sources */,
+				D9570EAFD947E6C943C5609E /* HomeView.swift in Sources */,
+				1CAEA4510A03902701764DC2 /* MacPilotRemoteApp.swift in Sources */,
+				36BB935C02EC8519CE7DAFB1 /* PairedMacStore.swift in Sources */,
+				1FDC655EF74A5B0A9E892D40 /* PairingSheetView.swift in Sources */,
+				2A4D3DB2192AC62F75C6B89D /* RemoteAppModel.swift in Sources */,
+				8ABE53FBAA8C5E88D864E561 /* RemoteConnectionManager.swift in Sources */,
+				97D7FA550D676240482EF5B6 /* RemoteDiscoveryService.swift in Sources */,
+				094E002356093BE6F77D140D /* RemoteKeychain.swift in Sources */,
+				C0F29AE38E0B010578AAD67D /* RemoteModels.swift in Sources */,
+				58102F1CE9508E1A18B14846 /* RemoteSettingsView.swift in Sources */,
+				10AD0F90E657210C6CFE9F26 /* RemoteText.swift in Sources */,
+				CC59413625ABC1AAEE0F80AA /* RootView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		31456B5961583587F2EE2D40 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		319ADB054852D11A29A01790 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MacPilotRemote/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.misswell.macpilot.remote;
+				PRODUCT_NAME = "MacPilot Remote";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		3DE75CE3F8DCAB2221A6ABB4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MacPilotRemote/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.misswell.macpilot.remote;
+				PRODUCT_NAME = "MacPilot Remote";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		517CF1A23C1929B03B500EC9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7BB6C3237850E79143F770AD /* Build configuration list for PBXProject "MacPilotRemote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				31456B5961583587F2EE2D40 /* Debug */,
+				517CF1A23C1929B03B500EC9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		84BC82F7A2F8B438FA8ECB42 /* Build configuration list for PBXNativeTarget "MacPilotRemote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				319ADB054852D11A29A01790 /* Debug */,
+				3DE75CE3F8DCAB2221A6ABB4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		836BE0B205034F5B848233EE /* XCLocalSwiftPackageReference "../../Packages/MacPilotRemoteProtocol" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../Packages/MacPilotRemoteProtocol;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		2DA6CC718265164CF50E009F /* MacPilotRemoteProtocol */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MacPilotRemoteProtocol;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 8C641AE4462303326A5A6484 /* Project object */;
+}

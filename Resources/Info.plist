@@ -49,6 +49,12 @@
 	<string>MacPilot shows the camera in a floating overlay window that is captured into screen recordings.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>MacPilot uses the microphone to record narration as a separate audio track in screen recordings. Audio stays on your Mac.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>MacPilot publishes a local-network service so a paired iPhone on the same Wi-Fi network can lock, blank, unlock and wake this Mac. Nothing is sent to the internet.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_macpilot._tcp</string>
+	</array>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>MacPilot captures selected windows and displays for Picture-in-Picture and periodic screenshots. Captured images stay on your Mac.</string>
 </dict>

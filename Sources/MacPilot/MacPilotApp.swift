@@ -488,6 +488,49 @@ enum AppText {
         "launchDuplicate": "已存在 \"%@\" 的启动规则。", "launchPlanRunning": "%d 个任务正在等待启动",
         "launchPlanIdle": "没有待启动任务", "launchPlanDone": "本次启动计划已完成",
         "bleUnlock": "BLE 解锁", "ble": "BLE", "bleUnlockSubtitle": "根据 BLE 设备（iPhone、Apple Watch 等）的接近程度自动锁定和解锁 Mac。",
+        "remoteControl": "远程控制",
+        "remoteControlSubtitle": "用同一局域网内的 iPhone 远程执行锁屏、黑屏、解锁和唤醒解锁。登录密码始终只保存在这台 Mac 上。",
+        "remoteEnableSection": "iPhone 遥控",
+        "remoteEnableToggle": "启用 iPhone 遥控",
+        "remoteEnableHint": "启用后 MacPilot 会在本机局域网内通过 Bonjour 发布服务，已配对的 iPhone 无需填写 IP 或端口即可自动连接。",
+        "remoteDeviceName": "设备名称",
+        "remoteDeviceNameHint": "iPhone 在发现列表中看到的名称。修改后会自动重新发布服务。",
+        "remoteApplyName": "应用",
+        "remotePairingSection": "首次配对",
+        "remoteStartPairing": "开始配对",
+        "remotePairingOpenHint": "点击后 2 分钟内允许一台 iPhone 发起配对，配对码会显示在这里。",
+        "remotePairingWaiting": "等待 iPhone 发起配对…",
+        "remotePairingWindowOpen": "配对窗口剩余 %d 秒",
+        "remotePairingCancel": "取消配对",
+        "remotePairingCodeFor": "请在 %@ 上输入以下配对码",
+        "remotePairingCodeHint": "配对码只用于确认双方之间没有中间人，真正的长期密钥会分别保存在两台设备的钥匙串中。",
+        "remotePairingCodeTitle": "配对码 %@：请在 %@ 上输入这 6 位数字。",
+        "remotePairedDevices": "已配对设备",
+        "remoteNoPairedDevices": "还没有已配对的 iPhone。",
+        "remoteNeverConnected": "尚未连接",
+        "remoteJustNow": "刚刚连接",
+        "remoteMinutesAgo": "%d 分钟前连接",
+        "remoteHoursAgo": "%d 小时前连接",
+        "remoteDaysAgo": "%d 天前连接",
+        "remotePermissions": "权限与状态",
+        "remoteStatus": "服务状态",
+        "remoteStatusStopped": "已关闭",
+        "remoteStatusStarting": "正在启动…",
+        "remoteStatusRunning": "可连接 · 端口 %d",
+        "remoteStatusFailed": "启动失败：%@",
+        "remoteAccessibility": "辅助功能",
+        "remoteCredential": "解锁密码",
+        "remoteLocalNetwork": "局域网服务",
+        "remoteScreenState": "屏幕状态",
+        "remoteGranted": "已授权",
+        "remoteNotGranted": "未授权",
+        "remoteConfigured": "已配置",
+        "remoteNotConfigured": "未配置",
+        "remoteAvailable": "可用",
+        "remoteUnavailable": "不可用",
+        "remoteScreenLocked": "已锁定",
+        "remoteScreenUnlocked": "已解锁",
+        "remoteScreenUnknown": "未知",
         "bleNotConfigured": "尚未选择设备", "bleDeviceNotDetected": "未检测到设备", "bleNoDevice": "尚未选择设备",
         "bleLockNow": "立即锁定屏幕", "turnOffScreenNow": "关闭屏幕", "bleDevice": "设备", "bleScanning": "正在扫描…", "bleSelectDevice": "选择设备",
         "bleDeviceHint": "打开设备菜单开始扫描附近的 BLE 设备，选择你的 iPhone、Apple Watch 或其他 BLE 设备。需要使用固定 MAC 地址的设备。",
@@ -520,7 +563,7 @@ enum AppText {
         "bleScreenLockHistory": "近期锁屏记录", "bleScreenLockHistoryInfo": "记录最近的锁屏和解锁时间，最多保留 30 条。", "bleScreenLockHistoryEmpty": "暂无锁屏记录。",
         "bleClearScreenLockHistory": "清除记录", "bleClearScreenLockHistoryTitle": "清除锁屏记录？", "bleClearScreenLockHistoryMessage": "确定清除所有近期锁屏记录吗？",
         "bleScreenLockLockedAt": "锁屏：%@", "bleScreenLockUnlockedAt": "解锁：%@", "bleScreenLockLockSource": "锁屏来源：%@", "bleScreenLockUnlockSource": "解锁来源：%@",
-        "bleScreenLockStillLocked": "当前仍处于锁屏状态", "bleScreenLockDuration": "锁定时长：%@", "bleScreenLockAutomatic": "自动", "bleScreenLockManual": "手动", "bleHour": "小时", "bleHours": "小时",
+        "bleScreenLockStillLocked": "当前仍处于锁屏状态", "bleScreenLockDuration": "锁定时长：%@", "bleScreenLockAutomatic": "自动", "bleScreenLockManual": "手动", "bleScreenLockRemote": "iPhone 远程", "bleHour": "小时", "bleHours": "小时",
         "inputSources": "输入法", "inputSourcesSubtitle": "按应用或浏览器网站自动切换 macOS 输入法，并显示切换提示。",
         "inputSourcesEnable": "启用输入法自动化", "inputSourcesEnabled": "输入法规则正在运行", "inputSourcesDisabled": "输入法规则已停用",
         "inputSourcesCycleNow": "切换到下一个输入法",
@@ -928,6 +971,49 @@ enum AppText {
             "launchDuplicate": "A launch rule for \"%@\" already exists.", "launchPlanRunning": "%d launches are waiting",
             "launchPlanIdle": "No scheduled launches", "launchPlanDone": "This launch plan is complete",
             "bleUnlock": "BLE Unlock", "ble": "BLE", "bleUnlockSubtitle": "Automatically lock and unlock your Mac by proximity of a BLE device (iPhone, Apple Watch, etc.).",
+            "remoteControl": "Remote Control",
+            "remoteControlSubtitle": "Lock, blank, unlock and wake-and-unlock this Mac from an iPhone on the same local network. The login password never leaves this Mac.",
+            "remoteEnableSection": "iPhone Remote",
+            "remoteEnableToggle": "Enable iPhone remote control",
+            "remoteEnableHint": "MacPilot advertises a Bonjour service on your local network so a paired iPhone connects automatically without an IP address or port.",
+            "remoteDeviceName": "Device name",
+            "remoteDeviceNameHint": "The name your iPhone sees while discovering this Mac. Changing it republishes the service.",
+            "remoteApplyName": "Apply",
+            "remotePairingSection": "First-time pairing",
+            "remoteStartPairing": "Start pairing",
+            "remotePairingOpenHint": "Allows one iPhone to pair for the next 2 minutes. The pairing code appears here.",
+            "remotePairingWaiting": "Waiting for an iPhone to start pairing…",
+            "remotePairingWindowOpen": "Pairing window closes in %d s",
+            "remotePairingCancel": "Cancel pairing",
+            "remotePairingCodeFor": "Enter this code on %@",
+            "remotePairingCodeHint": "The code only proves there is no man in the middle. The long-term keys are stored separately in each device's Keychain.",
+            "remotePairingCodeTitle": "Pairing code %@: enter these 6 digits on %@.",
+            "remotePairedDevices": "Paired devices",
+            "remoteNoPairedDevices": "No iPhone has been paired yet.",
+            "remoteNeverConnected": "Never connected",
+            "remoteJustNow": "Connected just now",
+            "remoteMinutesAgo": "Connected %d min ago",
+            "remoteHoursAgo": "Connected %d h ago",
+            "remoteDaysAgo": "Connected %d d ago",
+            "remotePermissions": "Permissions & status",
+            "remoteStatus": "Service",
+            "remoteStatusStopped": "Off",
+            "remoteStatusStarting": "Starting…",
+            "remoteStatusRunning": "Reachable · port %d",
+            "remoteStatusFailed": "Failed to start: %@",
+            "remoteAccessibility": "Accessibility",
+            "remoteCredential": "Unlock password",
+            "remoteLocalNetwork": "Local network",
+            "remoteScreenState": "Screen",
+            "remoteGranted": "Granted",
+            "remoteNotGranted": "Not granted",
+            "remoteConfigured": "Configured",
+            "remoteNotConfigured": "Not configured",
+            "remoteAvailable": "Available",
+            "remoteUnavailable": "Unavailable",
+            "remoteScreenLocked": "Locked",
+            "remoteScreenUnlocked": "Unlocked",
+            "remoteScreenUnknown": "Unknown",
             "bleNotConfigured": "No device set", "bleDeviceNotDetected": "Not detected", "bleNoDevice": "No device selected",
             "bleLockNow": "Lock Screen Now", "turnOffScreenNow": "Turn Off Screen", "bleDevice": "Device", "bleScanning": "Scanning…", "bleSelectDevice": "Select Device",
             "bleDeviceHint": "Open the device menu to scan for nearby BLE devices and pick your iPhone, Apple Watch, or other BLE device. The device must use a static MAC address.",
@@ -960,7 +1046,7 @@ enum AppText {
             "bleScreenLockHistory": "Recent Screen Locks", "bleScreenLockHistoryInfo": "Records recent screen lock and unlock times. Keeps up to 30 entries.", "bleScreenLockHistoryEmpty": "No screen-lock records yet.",
             "bleClearScreenLockHistory": "Clear History", "bleClearScreenLockHistoryTitle": "Clear screen-lock history?", "bleClearScreenLockHistoryMessage": "Clear all recent screen-lock records?",
             "bleScreenLockLockedAt": "Locked: %@", "bleScreenLockUnlockedAt": "Unlocked: %@", "bleScreenLockLockSource": "Lock source: %@", "bleScreenLockUnlockSource": "Unlock source: %@",
-            "bleScreenLockStillLocked": "Still locked", "bleScreenLockDuration": "Locked for: %@", "bleScreenLockAutomatic": "Automatic", "bleScreenLockManual": "Manual", "bleHour": "hour", "bleHours": "hours",
+            "bleScreenLockStillLocked": "Still locked", "bleScreenLockDuration": "Locked for: %@", "bleScreenLockAutomatic": "Automatic", "bleScreenLockManual": "Manual", "bleScreenLockRemote": "iPhone Remote", "bleHour": "hour", "bleHours": "hours",
             "inputSources": "Input Sources", "inputSourcesSubtitle": "Automatically switch macOS input sources by app or browser website, with a visual indicator.",
             "inputSourcesEnable": "Enable input source automation", "inputSourcesEnabled": "Input source rules are running", "inputSourcesDisabled": "Input source rules are paused",
             "inputSourcesCycleNow": "Switch to Next Input Source",
@@ -1191,9 +1277,10 @@ final class MacPilotModel: ObservableObject {
         var clipboard: ClipboardSettings
         var awake: AwakeSettings
         var awakeTriggers: [AwakeTrigger]
+        var remoteControl: RemoteControlSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger]) {
-            version = 21
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], remoteControl: RemoteControlSettings) {
+            version = 22
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -1211,6 +1298,7 @@ final class MacPilotModel: ObservableObject {
             self.clipboard = clipboard
             self.awake = awake
             self.awakeTriggers = awakeTriggers
+            self.remoteControl = remoteControl
         }
 
         init(from decoder: Decoder) throws {
@@ -1233,6 +1321,7 @@ final class MacPilotModel: ObservableObject {
             clipboard = try container.decodeIfPresent(ClipboardSettings.self, forKey: .clipboard) ?? ClipboardSettings()
             awake = try container.decodeIfPresent(AwakeSettings.self, forKey: .awake) ?? .standard
             awakeTriggers = try container.decodeIfPresent([AwakeTrigger].self, forKey: .awakeTriggers) ?? []
+            remoteControl = try container.decodeIfPresent(RemoteControlSettings.self, forKey: .remoteControl) ?? RemoteControlSettings()
         }
     }
 
@@ -1261,6 +1350,13 @@ final class MacPilotModel: ObservableObject {
     let awake = AwakeSessionManager()
     let awakeTriggers: AwakeTriggerEngine
     let memoryMonitor = MemoryMonitorModel()
+    /// iPhone remote control. Lazily created so it can reference `self` for
+    /// persistence and share the BLE model's screen control service.
+    lazy var remoteDeviceStore = RemoteDeviceStore(persist: { [weak self] in self?.saveIfReady() })
+    lazy var remoteControl = RemoteControlServer(
+        deviceStore: remoteDeviceStore,
+        screenControl: ble.screenControl
+    )
     @Published var requestedSection: MainSection?
     /// Set by the menu bar/deep-link shortcut entry so the capture settings
     /// can present the recorder immediately after the main window is opened.
@@ -1293,6 +1389,12 @@ final class MacPilotModel: ObservableObject {
         save()
         refreshLoginItemState()
         startObservingWorkspace()
+        remoteControl.onPairingCodePresented = { [weak self] code, clientName in
+            self?.presentRemotePairingCode(code: code, clientName: clientName)
+        }
+        if remoteDeviceStore.settings.isEnabled {
+            remoteControl.start()
+        }
         startSafetyChecks()
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -1607,6 +1709,14 @@ final class MacPilotModel: ObservableObject {
         alertMessage = nil
         alertOffersAccessibilitySettings = false
         alertOffersAccessibilityReset = false
+    }
+
+    /// Surfaces a newly derived pairing code: brings the main window forward on
+    /// the remote control page and shows the six digits.
+    func presentRemotePairingCode(code: String, clientName: String) {
+        requestedSection = .remoteControl
+        NSApp.activate(ignoringOtherApps: true)
+        showAlert(t("remotePairingCodeTitle", code, clientName))
     }
 
     func showAlert(_ message: String) {
@@ -2093,6 +2203,7 @@ final class MacPilotModel: ObservableObject {
         clipboard.applyLoadedSettings(configuration.clipboard)
         awake.applyLoadedSettings(configuration.awake)
         awakeTriggers.applyLoadedTriggers(configuration.awakeTriggers)
+        remoteDeviceStore.applyLoadedSettings(configuration.remoteControl)
     }
 
     private func scheduleInputSourceSave() {
@@ -2128,7 +2239,8 @@ final class MacPilotModel: ObservableObject {
             smoothScrolling: smoothScrolling.settings,
             clipboard: clipboard.settings,
             awake: awake.settings,
-            awakeTriggers: awakeTriggers.triggers
+            awakeTriggers: awakeTriggers.triggers,
+            remoteControl: remoteDeviceStore.settings
         )
         let data: Data
         do {
@@ -2357,7 +2469,7 @@ final class MacPilotModel: ObservableObject {
 }
 
 enum MainSection: CaseIterable, Hashable, Identifiable {
-    case exit, launch, awake, ble, inputSources, compression, capture, screenRecording
+    case exit, launch, awake, ble, remoteControl, inputSources, compression, capture, screenRecording
     case pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick
     case memoryMonitor, settings
 
@@ -2369,6 +2481,7 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
         case .launch: "launch"
         case .awake: "awake"
         case .ble: "bleUnlock"
+        case .remoteControl: "remoteControl"
         case .inputSources: "inputSources"
         case .compression: "fileCompression"
         case .capture: "screenCapture"
@@ -2389,6 +2502,7 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
         case .launch: "play.circle"
         case .awake: "sun.max.fill"
         case .ble: "antenna.radiowaves.left.and.right"
+        case .remoteControl: "iphone.radiowaves.left.and.right"
         case .inputSources: "keyboard"
         case .compression: "archivebox"
         case .capture: "camera.viewfinder"
@@ -2482,6 +2596,8 @@ struct ContentView: View {
             AwakeSettingsView(awake: model.awake, triggerEngine: model.awakeTriggers)
         case .ble:
             BLEUnlockView(ble: model.ble)
+        case .remoteControl:
+            RemoteControlSettingsView(server: model.remoteControl, deviceStore: model.remoteDeviceStore)
         case .inputSources:
             InputSourcesView(inputSources: model.inputSources)
         case .compression:
@@ -2616,7 +2732,7 @@ struct Sidebar: View {
     @EnvironmentObject private var model: MacPilotModel
     @Binding var section: MainSection
 
-    private let automationSections: [MainSection] = [.exit, .launch, .awake, .ble, .inputSources]
+    private let automationSections: [MainSection] = [.exit, .launch, .awake, .ble, .remoteControl, .inputSources]
     private let utilitySections: [MainSection] = [
         .compression, .capture, .screenRecording, .pictureInPicture,
         .windowSwitcher, .smoothScrolling, .clipboard, .rightClick, .memoryMonitor
@@ -3863,6 +3979,7 @@ struct BLEUnlockView: View {
         switch source {
         case .automatic: return model.t("bleScreenLockAutomatic")
         case .manual: return model.t("bleScreenLockManual")
+        case .remote: return model.t("bleScreenLockRemote")
         }
     }
 

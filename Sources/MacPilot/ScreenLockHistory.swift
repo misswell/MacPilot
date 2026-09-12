@@ -4,6 +4,8 @@ import Foundation
 enum ScreenLockHistorySource: String, Codable, Equatable, Sendable {
     case automatic
     case manual
+    /// Triggered from the paired iPhone over the local network.
+    case remote
 }
 
 /// A paired screen-lock session.  The unlock side remains nil while the Mac
