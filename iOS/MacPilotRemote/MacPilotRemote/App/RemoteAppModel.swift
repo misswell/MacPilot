@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import MacPilotRemoteProtocol
 import Network
@@ -52,7 +53,18 @@ final class RemoteAppModel: ObservableObject {
 
     init(store: PairedMacStore = PairedMacStore()) {
         self.store = store
+        // Views observe this model, not the store it forwards to, and a nested
+        // `ObservableObject` does not republish through its parent. Without this
+        // bridge, deleting a device or setting a default would not refresh the
+        // list until some unrelated change happened to redraw it.
+        store.objectWillChange
+            .sink { [weak self] in
+                MainActor.assumeIsolated { self?.objectWillChange.send() }
+            }
+            .store(in: &storeChanges)
     }
+
+    private var storeChanges = Set<AnyCancellable>()
 
     // MARK: - Lifecycle
 
