@@ -383,14 +383,21 @@ Wi-Fi/AWDL 优先，蓝牙保底——**不是并列竞速**。蓝牙建立是�
 | `stop()` → `start()` 零间隔 | ✅ 也重新发布，没有和 `removeAllServices()` 抢 |
 | 失败行数 | **0** |
 
-### 坑一：冷进程里首个 state 回调可能晚到约 18 秒
+### 坑一：探针里首个 state 回调晚到约 18 秒——但这是 TCC 的，不是 App 的
 
-实测：冷进程 `start()` 后 **15 秒内没有任何回调**，到 **+18.58s** 才收到 `didUpdateState raw=5`（`poweredOn`），此时才发布 PSM。
+探针冷启动后 **15 秒内没有任何回调**，到 **+18.58s** 才收到 `didUpdateState raw=5`（`poweredOn`），此时才发布 PSM，期间**既不发布也不报错**。
 
-期间**既不发布也不报错**，所以从外面看就是「蓝牙没反应」。含义有两个：
+**但装到正式版后查到的事实是**：
 
-- **不要在 Mac App 刚启动的十几秒内断言蓝牙保底不可用**——它可能只是还没就绪。
-- `RemoteBLEPeripheral` 对这种晚到是**正确**的：回调一到就发布；`start()` 在 manager 已存在且 `state == .poweredOn` 时也会直接补发。这是 `wantsToRun` + 「已 poweredOn 就补发」两处逻辑共同兜住的。
+```
+[14:56:41] MacPilot 1.1.305 启动
+[14:56:44.411] BLE peripheral powered on; publishing L2CAP channel
+[14:56:44.434] BLE L2CAP channel published psm=192
+```
+
+**真实 App 只要 3 秒**，而且全程没有任何失败行。差别在于身份：正式版是 Developer ID 签名、TCC 授权稳定；探针每次重编 cdhash 都变，TCC 要重新评估，评估期间 CoreBluetooth 一个回调都不投递。
+
+所以那条「18 秒」属于**探针环境**，不是产品行为。保留下来的教训只有一条：**用临时签名的二进制测蓝牙时，不要拿冷启动的头几秒下结论。**
 
 ### 坑二：同机 loopback 不可行
 
