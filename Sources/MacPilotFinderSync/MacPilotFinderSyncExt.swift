@@ -25,8 +25,13 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
     /// 菜单配置缓存（内存缓存，从 Main App 推送）
     private var cachedMenuConfig: MenuConfigPayload?
 
-    /// 图标内存缓存，避免每次构建菜单都重新创建 NSImage
+    /// 图标内存缓存，避免每次构建菜单都重新创建 NSImage。
+    /// 旧实现是永不淘汰的字典，Finder 常驻进程里会按路径累积全分辨率图标。
     private var iconCache: [String: NSImage] = [:]
+    private static let iconCacheLimit = 256
+
+    /// 心跳任务，主程序退出后必须停止（Finder 扩展进程会长期驻留）
+    private var heartbeatTask: Task<Void, Never>?
 
     /// 文件类型图标提供者
     private let iconProvider = FileTypeIconProvider.shared
@@ -103,14 +108,14 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
         // 处理主程序发送的退出通知
         messager.onMainMessage(.quit) { _ in
             logger.info("Received quit notification from main app")
-            // 可以标记主程序已退出
+            self.stopHeartbeat()
         }
     }
 
     /// 处理菜单配置
     private func handleMenuConfig(_ config: MenuConfigPayload) {
         cachedMenuConfig = config
-        iconCache.removeAll()
+        clearIconCache()
         logger.debug("Menu config cached: version=\(config.version), actions=\(config.actions.count), apps=\(config.apps.count), icons cleared")
     }
 
@@ -124,14 +129,34 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
 
     /// 启动心跳机制（每 10 秒发送一次）
     private func startHeartbeat() {
-        scheduleHeartbeat()
+        heartbeatTask?.cancel()
+        heartbeatTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard let self, !Task.isCancelled else { return }
+                self.messager.sendHeartbeat()
+            }
+        }
     }
 
-    private func scheduleHeartbeat() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) { @MainActor [weak self] in
-            self?.messager.sendHeartbeat()
-            self?.scheduleHeartbeat()
+    /// 停止心跳。主程序退出后继续发送毫无意义，只会让扩展进程一直醒着。
+    private func stopHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+    }
+
+    // MARK: - Icon cache
+
+    /// 缓存写入的唯一入口：超过上限先清空，避免 Finder 进程里无限累积。
+    private func storeIcon(_ icon: NSImage, for key: String) {
+        if iconCache.count >= Self.iconCacheLimit {
+            iconCache.removeAll(keepingCapacity: true)
         }
+        iconCache[key] = icon
+    }
+
+    private func clearIconCache() {
+        iconCache.removeAll(keepingCapacity: false)
     }
 
     // MARK: - Primary Finder Sync protocol methods
@@ -310,7 +335,7 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
             if let cached = iconCache[cacheKey] { return cached }
             let icon = NSWorkspace.shared.icon(forFile: appURL)
             if icon.size.width > 0 {
-                iconCache[cacheKey] = icon
+                storeIcon(icon, for: cacheKey)
                 return icon
             }
         }
@@ -325,7 +350,7 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
         let config = NSImage.SymbolConfiguration(hierarchicalColor: .labelColor)
         guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(config) else { return nil }
-        iconCache[cacheKey] = image
+        storeIcon(image, for: cacheKey)
         return image
     }
 
@@ -334,16 +359,16 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
         let cacheKey = "load:\(iconName)"
         if let cached = iconCache[cacheKey] { return cached }
         if let icon = NSImage(named: iconName) {
-            iconCache[cacheKey] = icon
+            storeIcon(icon, for: cacheKey)
             return icon
         }
         if let icon = templateSymbol(iconName) {
-            iconCache[cacheKey] = icon
+            storeIcon(icon, for: cacheKey)
             return icon
         }
         let fallback = FileTypeIconProvider.resolvedFallbackSymbol(for: iconName)
         if let icon = templateSymbol(fallback) {
-            iconCache[cacheKey] = icon
+            storeIcon(icon, for: cacheKey)
             return icon
         }
         return nil

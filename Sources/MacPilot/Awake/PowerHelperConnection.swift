@@ -57,6 +57,14 @@ protocol PowerHelperServicing: AnyObject {
     func heartbeat() async -> Result<Bool, ClosedLidSleepFailure>
     /// Best-effort synchronous release used while the app terminates.
     func releaseSynchronously()
+    /// Drops the cached privileged connection once the feature is off, so an
+    /// idle XPC connection does not stay open for the rest of the session.
+    func invalidate() async
+}
+
+extension PowerHelperServicing {
+    /// Test doubles and fakes need no implementation.
+    func invalidate() async {}
 }
 
 /// Real helper: `SMAppService` LaunchDaemon registration plus an XPC client.
@@ -121,6 +129,10 @@ final class PrivilegedPowerHelper: PowerHelperServicing {
 
     func releaseSynchronously() {
         client.releaseSynchronously()
+    }
+
+    func invalidate() async {
+        await client.invalidate()
     }
 }
 

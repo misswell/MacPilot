@@ -62,6 +62,12 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         }
         peripheral = nil
         psmCharacteristic = nil
+        // Release the radio session as well. Keeping the manager alive after the
+        // feature is switched off would leave an idle CBCentralManager, its
+        // delegate graph and its connection to bluetoothd around for the rest of
+        // the process; `start()` rebuilds it on the next enable.
+        manager?.delegate = nil
+        manager = nil
     }
 
     // MARK: - Discovery

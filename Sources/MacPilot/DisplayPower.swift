@@ -189,6 +189,9 @@ enum DisplayPower {
     static func unblankDisplay() {
         unblankWatcher?.cancel()
         unblankWatcher = nil
+        // Released even when nothing is blanked: a state that cleared
+        // `blankedDisplays` on another path must not strand the assertion.
+        defer { releaseDisplaySleepAssertion() }
         guard isBlanked else { return }
         if let driver = BrightnessDriver.shared {
             for (displayID, original) in blankedDisplays {
@@ -200,7 +203,14 @@ enum DisplayPower {
             ScreenBlankOverlay.shared.hide()
             isOverlayShowing = false
         }
-        releaseDisplaySleepAssertion()
+    }
+
+    /// Termination teardown: stops the 400 ms wake watcher and hands the display
+    /// state and its power assertion back. `willTerminate` returns straight into
+    /// `exit()`, so this must be synchronous.
+    @MainActor
+    static func shutdown() {
+        unblankDisplay()
     }
 
     /// What a user-initiated "turn off screen" means: black without locking.

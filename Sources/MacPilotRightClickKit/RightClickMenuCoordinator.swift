@@ -42,11 +42,17 @@ public final class RightClickMenuCoordinator {
 
     private var configObserver: NSObjectProtocol?
     private var observeDirTask: Task<Void, Never>?
+    private var bootstrapTask: Task<Void, Never>?
+    private var runningMessageRetryTask: Task<Void, Never>?
+    /// Set by `stop()`. The bootstrap body is deferred, so it must not re-arm the
+    /// loops after a stop that already happened.
+    private var isStopped = false
 
     public init() {}
 
     public func start() {
-        guard configObserver == nil else { return }
+        guard configObserver == nil, bootstrapTask == nil else { return }
+        isStopped = false
         PermissionDiagnostics.record("coordinator.start")
         logger.info("RightClickMenuCoordinator.start() called")
 
@@ -61,7 +67,8 @@ public final class RightClickMenuCoordinator {
             }
         }
 
-        Task { @MainActor in
+        bootstrapTask = Task { @MainActor [weak self] in
+            guard let self, !self.isStopped else { return }
             do {
                 // 初始化默认数据
                 let context = ModelContext(SharedDataManager.sharedModelContainer)
@@ -169,29 +176,41 @@ public final class RightClickMenuCoordinator {
 
     /// 启动 running 消息重试机制（每 5 秒发送一次，持续 30 秒）
     private func startRunningMessageRetry() {
-        Task { @MainActor in
+        runningMessageRetryTask?.cancel()
+        runningMessageRetryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
             for retryCount in 0..<self.maxRunningMessageRetryCount {
                 try? await Task.sleep(for: .seconds(5))
-                guard !self.pluginRunning else { break }
+                guard !Task.isCancelled, !self.pluginRunning else { return }
                 self.messager.sendRunningNotification()
                 self.logger.debug("Sending running message retry \(retryCount + 1)/\(self.maxRunningMessageRetryCount)")
             }
-            logger.debug("Running message retry completed")
+            self.logger.debug("Running message retry completed")
         }
     }
 
-    /// Tears the coordinator down: removes the config observer and cancels the
-    /// heartbeat / retry loops. Called when the right-click menu is disabled and
+    /// Tears the coordinator down: removes the config observer and cancels every
+    /// loop it started (bootstrap, heartbeat, observe-directory retry and the
+    /// running-message retry). Called when the right-click menu is disabled and
     /// on app termination.
     public func stop() {
+        isStopped = true
         if let configObserver {
             NotificationCenter.default.removeObserver(configObserver)
             self.configObserver = nil
         }
+        bootstrapTask?.cancel()
+        bootstrapTask = nil
         heartbeatMonitorTask?.cancel()
         heartbeatMonitorTask = nil
         observeDirTask?.cancel()
         observeDirTask = nil
+        runningMessageRetryTask?.cancel()
+        runningMessageRetryTask = nil
+        // Tell the extension to stop its heartbeat. It lives inside Finder's
+        // process and would otherwise keep sending every 10 s for the rest of
+        // that process's life, long after this app is gone.
+        messager.sendQuitNotification()
         pluginRunning = false
         logger.info("RightClickMenuCoordinator.stop() called")
     }

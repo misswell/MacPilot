@@ -430,6 +430,7 @@ enum AppText {
         "loginError": "无法更新登录启动项：%@", "aboutAutomation": "自动化", "manageRules": "管理应用规则和界面偏好。", "githubProject": "GitHub 项目", "githubProjectDescription": "在 GitHub 查看 MacPilot 的源代码、版本发布和问题反馈。", "githubProjectLink": "github.com/%@",
         "quitsIn": "将在 %d 分钟后退出",
         "awake": "保持唤醒", "awakeSubtitle": "控制 Mac 的睡眠行为，并根据需要保持系统运行。",
+        "awakeEnabled": "启用保持唤醒", "awakeEnabledHint": "关闭后不再监听系统状态、不再保留任何会话，合盖休眠设置也会交还系统。",
         "awakeKeepAwake": "保持唤醒", "awakeStop": "停止保持唤醒", "awakeActive": "保持唤醒中",
         "awakeMultipleSessions": "%d 个 Session 正在保持唤醒", "awakeOpenSettings": "打开 Awake 设置…",
         "awakeDuration": "保持时长", "awake30Minutes": "30 分钟", "awakeOneHour": "1 小时", "awakeTwoHours": "2 小时", "awakeFourHours": "4 小时", "awakeUnlimited": "无限期",
@@ -445,6 +446,7 @@ enum AppText {
         "awakeExternalPower": "外接电源", "awakeCharging": "正在充电", "awakeConnected": "已连接", "awakeDisconnected": "未连接",
         "awakeYes": "是", "awakeNo": "否", "awakeUnknown": "未知", "awakeAssertionError": "无法保持 Mac 唤醒：%@",
         "awakeAutomation": "自动规则", "awakeAutomationHint": "当应用、进程、电源或显示器状态满足条件时自动保持唤醒。",
+        "awakeDisabledHint": "保持唤醒已关闭，以下设置暂不生效。",
         "awakeNoTriggers": "尚未添加自动规则。", "awakeAddTrigger": "添加规则", "awakeEditTrigger": "编辑自动规则",
         "awakeTriggerName": "规则名称", "awakeCondition": "条件", "awakeAllConditions": "全部满足", "awakeAnyCondition": "任意满足",
         "awakeAddCondition": "添加条件", "awakeRemoveCondition": "删除条件", "awakeApplicationRunning": "应用正在运行",
@@ -608,6 +610,7 @@ enum AppText {
         "inputSourcesRuleValue": "域名或 URL 模式",
         "bleSortBy": "排序", "bleSortAdded": "加载顺序", "bleSortName": "名称", "bleSortSignal": "信号",
         "softwareUpdate": "软件更新", "updateDescription": "从 GitHub Releases 检查经过签名和 Apple 公证的新版本。",
+        "automaticUpdateChecks": "自动检查更新", "automaticUpdateChecksHint": "关闭后启动时不会发出任何网络请求，只能手动点击「检查更新…」。",
         "checkForUpdates": "检查更新…", "checkingForUpdates": "正在检查更新…", "upToDate": "已是最新版本。",
         "updateAvailable": "发现新版本 %@。", "downloadAndInstall": "下载并安装", "downloadingUpdate": "正在下载更新…",
         "preparingUpdate": "正在验证并准备安装…", "updateFailed": "更新失败：%@", "currentVersion": "当前版本：%@",
@@ -929,6 +932,7 @@ enum AppText {
             "loginError": "Couldn’t update the login item: %@", "aboutAutomation": "AUTOMATION", "manageRules": "Manage app rules and interface preferences.", "githubProject": "GitHub Project", "githubProjectDescription": "View MacPilot’s source code, releases, and issue tracker on GitHub.", "githubProjectLink": "github.com/%@",
             "quitsIn": "Quits in %d min",
             "awake": "Awake", "awakeSubtitle": "Control Mac sleep behavior and keep the system running when needed.",
+            "awakeEnabled": "Enable Awake", "awakeEnabledHint": "When off, no system state is observed, no session is kept, and the closed-lid setting is handed back to the system.",
             "awakeKeepAwake": "Keep Awake", "awakeStop": "Stop Keeping Awake", "awakeActive": "Keeping Awake",
             "awakeMultipleSessions": "%d sessions are keeping the Mac awake", "awakeOpenSettings": "Open Awake Settings…",
             "awakeDuration": "Duration", "awake30Minutes": "30 minutes", "awakeOneHour": "1 hour", "awakeTwoHours": "2 hours", "awakeFourHours": "4 hours", "awakeUnlimited": "Indefinitely",
@@ -944,6 +948,7 @@ enum AppText {
             "awakeExternalPower": "External power", "awakeCharging": "Charging", "awakeConnected": "Connected", "awakeDisconnected": "Not connected",
             "awakeYes": "Yes", "awakeNo": "No", "awakeUnknown": "Unknown", "awakeAssertionError": "Could not keep the Mac awake: %@",
             "awakeAutomation": "Automation", "awakeAutomationHint": "Keep the Mac awake automatically when application, process, power, or display conditions match.",
+            "awakeDisabledHint": "Awake is off; the settings below have no effect.",
             "awakeNoTriggers": "No automation rules yet.", "awakeAddTrigger": "Add Rule", "awakeEditTrigger": "Edit Automation Rule",
             "awakeTriggerName": "Rule name", "awakeCondition": "Condition", "awakeAllConditions": "All conditions", "awakeAnyCondition": "Any condition",
             "awakeAddCondition": "Add condition", "awakeRemoveCondition": "Remove condition", "awakeApplicationRunning": "Application is running",
@@ -1107,6 +1112,7 @@ enum AppText {
             "inputSourcesRuleValue": "Domain or URL pattern",
             "bleSortBy": "Sort", "bleSortAdded": "Added", "bleSortName": "Name", "bleSortSignal": "Signal",
             "softwareUpdate": "Software Update", "updateDescription": "Check GitHub Releases for versions signed and notarized by Apple.",
+            "automaticUpdateChecks": "Check for updates automatically", "automaticUpdateChecksHint": "When off, launch makes no network request; use \"Check for Updates…\" instead.",
             "checkForUpdates": "Check for Updates…", "checkingForUpdates": "Checking for updates…", "upToDate": "MacPilot is up to date.",
             "updateAvailable": "Version %@ is available.", "downloadAndInstall": "Download and Install", "downloadingUpdate": "Downloading update…",
             "preparingUpdate": "Verifying and preparing the update…", "updateFailed": "Update failed: %@", "currentVersion": "Current version: %@",
@@ -1297,6 +1303,9 @@ final class MacPilotModel: ObservableObject {
         var launchRules: [LaunchRule]
         var isLaunchSchedulingEnabled: Bool
         var lastScheduledBootSession: String?
+        /// Automatic update checks. Off means no request is issued at launch and
+        /// the manual "Check for Updates" button is the only path.
+        var automaticUpdateChecks: Bool
         var bleUnlock: BLEUnlockSettings
         var fileCompression: FolderCompressionSettings
 
@@ -1311,14 +1320,15 @@ final class MacPilotModel: ObservableObject {
         var awakeTriggers: [AwakeTrigger]
         var remoteControl: RemoteControlSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], remoteControl: RemoteControlSettings) {
-            version = 22
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], remoteControl: RemoteControlSettings) {
+            version = 23
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
             self.launchRules = launchRules
             self.isLaunchSchedulingEnabled = isLaunchSchedulingEnabled
             self.lastScheduledBootSession = lastScheduledBootSession
+            self.automaticUpdateChecks = automaticUpdateChecks
             self.bleUnlock = bleUnlock
             self.fileCompression = fileCompression
             self.screenCapture = screenCapture
@@ -1342,6 +1352,7 @@ final class MacPilotModel: ObservableObject {
             launchRules = try container.decodeIfPresent([LaunchRule].self, forKey: .launchRules) ?? []
             isLaunchSchedulingEnabled = try container.decodeIfPresent(Bool.self, forKey: .isLaunchSchedulingEnabled) ?? true
             lastScheduledBootSession = try container.decodeIfPresent(String.self, forKey: .lastScheduledBootSession)
+            automaticUpdateChecks = try container.decodeIfPresent(Bool.self, forKey: .automaticUpdateChecks) ?? true
             bleUnlock = try container.decodeIfPresent(BLEUnlockSettings.self, forKey: .bleUnlock) ?? BLEUnlockSettings()
             fileCompression = try container.decodeIfPresent(FolderCompressionSettings.self, forKey: .fileCompression) ?? FolderCompressionSettings()
             screenCapture = try container.decodeIfPresent(ScreenCaptureSettings.self, forKey: .screenCapture) ?? ScreenCaptureSettings()
@@ -1361,6 +1372,9 @@ final class MacPilotModel: ObservableObject {
     @Published private(set) var launchRules: [LaunchRule] = []
     @Published var isEnforcing = true { didSet { enforcingChanged() } }
     @Published var isLaunchSchedulingEnabled = true { didSet { launchSchedulingChanged() } }
+    /// Automatic update checks. Persisted so the launch-time request can be
+    /// switched off entirely.
+    @Published var automaticUpdateChecks = true { didSet { saveIfReady() } }
     @Published private(set) var lastChecked = Date()
     @Published var alertMessage: String?
     @Published private(set) var alertOffersAccessibilitySettings = false
@@ -1554,10 +1568,12 @@ final class MacPilotModel: ObservableObject {
         clipboard.activateFromConfiguration()
         // Finder 右键菜单（FinderSync 扩展）。
         startRightClickMenu()
-        Task { [weak updater] in
-            try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled else { return }
-            await updater?.checkForUpdates()
+        if automaticUpdateChecks {
+            Task { [weak updater] in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                await updater?.checkForUpdates()
+            }
         }
     }
 
@@ -2156,6 +2172,11 @@ final class MacPilotModel: ObservableObject {
     /// that reads them is on. `MacScreenControlService.screensaverActive` is
     /// consumed by both BLE unlock and the iPhone remote's unlock path.
     private func refreshScreenStateObservation() {
+        // During teardown this must not run: `remoteControl.stop()` fires the
+        // running-state callback, and the predicate is still true because no
+        // enable flag was flipped, so it would re-install the very observers
+        // `ble.shutdown()` just removed.
+        guard !hasShutdown else { return }
         let needed = ble.settings.isEnabled || remoteDeviceStore.settings.isEnabled
         ble.screenControl.setScreensaverObservationEnabled(needed)
     }
@@ -2183,6 +2204,8 @@ final class MacPilotModel: ObservableObject {
         smoothScrolling.shutdown()
         clipboard.shutdown()
         remoteControl.stop()
+        DisplayPower.shutdown()
+        rightClickMenu.stop()
         memoryMonitor.stopAutoRefresh()
         MemoryMonitorModel.clearMenuCache()
         awake.shutdown()
@@ -2253,6 +2276,7 @@ final class MacPilotModel: ObservableObject {
         rules = configuration.rules
         launchRules = configuration.launchRules
         isLaunchSchedulingEnabled = configuration.isLaunchSchedulingEnabled
+        automaticUpdateChecks = configuration.automaticUpdateChecks
         lastScheduledBootSession = configuration.lastScheduledBootSession
         ble.applyLoadedSettings(configuration.bleUnlock)
         fileCompression.applyLoadedSettings(configuration.fileCompression)
@@ -2291,6 +2315,7 @@ final class MacPilotModel: ObservableObject {
             launchRules: launchRules,
             isLaunchSchedulingEnabled: isLaunchSchedulingEnabled,
             lastScheduledBootSession: lastScheduledBootSession,
+            automaticUpdateChecks: automaticUpdateChecks,
             bleUnlock: ble.settings,
             fileCompression: fileCompression.settings,
             screenCapture: screenCapture.settings,
@@ -2966,7 +2991,14 @@ struct QuitCountdownBadge: View {
 @MainActor
 private final class AppIconCache {
     static let shared = AppIconCache()
-    private let cache = NSCache<NSString, NSImage>()
+    private let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        // Bounded like IconCache: an unbounded icon cache is a slow leak in a
+        // menu-bar app that stays resident for weeks.
+        cache.countLimit = 256
+        cache.totalCostLimit = 8 * 1024 * 1024
+        return cache
+    }()
 
     func icon(for path: String) -> NSImage {
         let key = path as NSString
@@ -4390,6 +4422,7 @@ struct SettingsView: View {
 }
 
 private struct SoftwareUpdateSettingsView: View {
+    @EnvironmentObject private var model: MacPilotModel
     @ObservedObject var updater: SoftwareUpdater
     let language: AppLanguage
 
@@ -4398,6 +4431,12 @@ private struct SoftwareUpdateSettingsView: View {
             Text(t("softwareUpdate")).font(.headline)
             Text(t("updateDescription")).font(.subheadline).foregroundStyle(.secondary)
             Text(t("currentVersion", updater.currentVersion)).font(.caption).foregroundStyle(.tertiary)
+
+            Toggle(t("automaticUpdateChecks"), isOn: $model.automaticUpdateChecks)
+                .toggleStyle(.switch)
+            Text(t("automaticUpdateChecksHint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             switch updater.state {
             case .idle:

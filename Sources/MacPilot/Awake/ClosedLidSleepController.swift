@@ -46,6 +46,12 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
 
     private var desiredEnabled = false
     private var ownsSleepDisabled = false
+    /// Monotonic: set once the helper confirmed it turned `disablesleep` on, and
+    /// cleared only after a *confirmed* release. A failed release must not make
+    /// the app forget that the system setting may still be applied, or the
+    /// synchronous release at quit would be skipped and the Mac would stay
+    /// unable to sleep with the lid closed.
+    private var mayOwnSleepDisabled = false
     private var reconnectAttempt = 0
     private var workTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
@@ -102,11 +108,13 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         workTask?.cancel()
         workTask = nil
         // The setting must go back immediately on a normal quit; the helper
-        // watchdog is only the crash backstop.
-        if ownsSleepDisabled || isActive {
+        // watchdog is only the crash backstop. `mayOwnSleepDisabled` is included
+        // so a release that failed earlier still gets one more synchronous try.
+        if ownsSleepDisabled || isActive || mayOwnSleepDisabled {
             helper.releaseSynchronously()
         }
         ownsSleepDisabled = false
+        mayOwnSleepDisabled = false
         desiredEnabled = false
         isActive = false
         notifyStateChange()
@@ -139,6 +147,7 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         switch result {
         case .success(let owned):
             ownsSleepDisabled = owned
+            if owned { mayOwnSleepDisabled = true }
             isActive = true
             serviceState = .enabled
             lastFailure = nil
@@ -161,10 +170,14 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         switch result {
         case .success:
             ownsSleepDisabled = false
+            mayOwnSleepDisabled = false
             isActive = false
             lastFailure = nil
             serviceState = helper.registrationState
             logger.notice("Closed-lid sleep released")
+            // The feature is off and the setting is confirmed released, so the
+            // cached privileged connection is no longer needed.
+            await helper.invalidate()
         case .failure(let failure):
             ownsSleepDisabled = false
             isActive = false

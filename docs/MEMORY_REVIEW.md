@@ -2,190 +2,142 @@
 
 评审目标：**降低内存占用、消除内存泄漏、所有功能都要有开关，且开关关闭时不得占用内存与性能。**
 
-评审范围：`Sources/` 全部 7 万余行 Swift 代码（含 16 个功能模块、FinderSync 扩展、辅助进程），
-按模块并行审计后逐条复核。本文件记录结论、已落地修复与待办清单。
+本文件是**第二轮评审**，覆盖 `c2639ad`（含闭盖休眠提权 helper、iPhone 亮度/音量控制、iOS 唤醒按钮）。
+第一轮的结论在 §二 被逐条复核，**其中 4 条被推翻或夸大**，已就地更正。
 
-> 说明：本次评审期间工作区里还有另一处未提交的在建改动（闭盖休眠 / 熄屏 / 提权 helper），
-> 因此本文件只描述本次评审相关的改动；发版前请把两批改动分开提交。
+关联提交：第一轮 `67f95eb`，第二轮见文末 §六。
 
 ---
 
-## 一、结论摘要
+## 一、第二轮结论
 
 | 维度 | 结论 |
 | --- | --- |
-| 内存泄漏 | 发现 **4 处确定性泄漏**，已全部修复（事件 tap 未失效、VideoToolbox 会话未回收、无上限字典缓存、自递归重试任务） |
-| 无用内存占用 | 启动时无条件分配/扫描/解码共 **6 处**，已修复 5 处，1 处记录待办 |
-| 功能开关 | 16 个功能中，**13 个有关闭即停的总开关**；本轮为「屏幕录制」新增总开关；**Awake、右键菜单、内存监控** 仍缺总开关（见 §四） |
-| 退出清理 | 原本 15 个功能只有 6 个挂了退出清理、且其中 3 个是异步调度（必然丢失）；已改为单一同步 `MacPilotModel.shutdown()` |
-| 验证 | `swift build` 通过；`swift test --skip shortcutConfigEncodesAndDecodesCarbonModifiers` **558 个测试 / 48 个套件全部通过** |
+| 新增攻击面 | 提权守护进程**参数固定、无命令执行面、有签名校验**（team + bundle id 白名单），未发现提权漏洞 |
+| 真实泄漏 | 新增 4 处：Finder 扩展图标缓存、iPhone 端 `NWBrowser` 从不取消、合盖会话的 XPC 连接常驻、更新暂存目录 |
+| 自引入缺陷 | 第一轮的修复引入 **3 个新缺陷**（退出时重新安装观察者、平滑滚动相位机被重置、图标缓存成本算错），本轮已修 |
+| 未生效的"已修复" | 2 处：`RightClickMenuCoordinator.stop()` 无人调用、`IconCache` 的 8MB 上限实际不可达 |
+| 功能开关 | 本轮补齐 **Awake**（此前完全缺失，且 `init` 里无条件装 9 个系统观察者）与 **自动检查更新** |
+| 验证 | `swift build` 通过；`swift test --skip shortcutConfigEncodesAndDecodesCarbonModifiers` → **571 测试 / 49 套件全部通过** |
 
 ---
 
-## 二、已修复
+## 二、第一轮报告的更正（重要）
 
-### A. 功能关闭时仍在运行的路径（最严重）
-
-| # | 位置 | 问题 | 修复 |
-| --- | --- | --- | --- |
-| A1 | `Sources/MacPilot/MacPilotApp.swift:1536`（改前） | BLE 关闭时仍在启动阶段安装 8 个进程级通知观察者（4 个 `NSWorkspace` + 4 个 `DistributedNotificationCenter`，含屏保/锁屏通知），且 `BLEUnlock.swift` 全文没有 `removeObserver`/`deinit`，**永不释放** | 观察者改为仅在启用时安装：`BLEUnlockModel.activateFromConfiguration()` 与 `setEnabled(true)` 安装，`setEnabled(false)` 调 `stopObservingSystemState()` 移除 |
-| A2 | `Sources/MacPilot/Recording/ScreenRecordingModel.swift:148` | 录屏**没有总开关**；每次启动都 `registerAllHotKeys()`（Carbon 全局热键）+ `refreshCaptureDeviceLists()`（枚举摄像头/麦克风/Continuity 设备），即使用户从不录屏 | 新增 `ScreenRecordingSettings.isEnabled`（Codable，默认 `true` 保持既有行为）、`setEnabled(_:)`、启动/设置页 `onAppear` 全部加守卫；关闭时注销热键、关闭浮层与预览、停止鼠标高亮/放大镜。显式点「开始录制」会自动重新打开开关，避免"关了就没反应" |
-| A3 | `Sources/MacPilot/ScreenCapture.swift:666` | 截图功能关闭时，启动仍执行 `CloudManager.apply`、历史解码、**递归遍历输出目录统计磁盘占用**、以及**删除 Captures 目录下所有临时文件** | 把磁盘统计 + 临时文件清理 + QuickAccess 标注接线收进 `refreshCaptureHousekeeping()`，仅在 `screenshotEnabled \|\| isEnabled` 时执行；重新打开开关时补跑 |
-| A4 | `Sources/MacPilot/Clipboard/ClipboardModel.swift:154` | 功能关闭时修改快捷键仍会注册系统级 Carbon 热键，该组合被永久吞掉，但面板又打不开 | `setHotkey` 仅在 `settings.isEnabled` 时 `updateBinding`，否则 `hotKeyCenter.stop()` |
-| A5 | `Sources/MacPilot/SmoothScrolling/SmoothScrollController.swift:72` | 平滑滚动一旦启用就在激活时启动 `CVDisplayLink`，而空闲时 `eventTemplate == nil` 导致停止条件永远不成立 → 触控板用户会一直跑显示刷新率回调 | 激活时不再 `runtime.start()`；由 `SmoothScrollRuntime.update(event:)` 在首个滚轮事件时懒启动、滑行结束自动停止 |
-| A6 | `Sources/MacPilotRightClickKit/RightClickMenuCoordinator.swift:106` | Finder 扩展未启用时，`sendObserveDirMessage()` 每 3 秒自递归，任务既不保存也无法取消，贯穿整个 App 生命周期 | 改为带上限（20 次）的可取消任务并存入 `observeDirTask`；新增 `stop()` 取消心跳与重试 |
-
-### B. 确定性内存泄漏
-
-| # | 位置 | 问题 | 修复 |
-| --- | --- | --- | --- |
-| B1 | `Sources/MacPilot/Recording/RecordingEngine.swift:318` | `VTCompressionSessionCreate` 探针会话从未 `VTCompressionSessionInvalidate`，而成功路径直接 `return`——**每次 H.264 录制都泄漏一个硬件编码器会话及其缓冲** | 两条路径都先 `VTCompressionSessionInvalidate(session)` |
-| B2 | `Sources/MacPilot/PictureInPicture.swift:2359` | PiP 的 CGEvent tap 只 `tapEnable(false)`，从未 `CFMachPortInvalidate`，窗口服务器里的注册会残留，每次启停再叠加一个 | 补 `CFMachPortInvalidate` + `CFRunLoopSourceInvalidate` + `context.setEventTap(nil)` |
-| B3 | `Sources/MacPilot/SmartScreenshot.swift:1899,1955` | 截图快捷键/选区两个 tap 同样只禁用不失效（全文无 `CFMachPortInvalidate`） | 两处 teardown 补齐 |
-| B4 | `Sources/MacPilot/InputSourceFeature.swift:1236`、`Sources/MacPilot/WindowSwitcher.swift:2498` | 同类 tap teardown 不一致（与 `SmoothScrollController` 的正确写法相比缺 invalidate） | 统一补齐 invalidate + source invalidate |
-| B5 | `Sources/MacPilotRightClickKit/IconCache.swift:17` | `[String: NSImage]` 以路径为 key 且**永不淘汰**，启动还预加载；`icon.size` 只改逻辑尺寸，全分辨率表示常驻 | 改为 `NSCache`（`countLimit 256`、`totalCostLimit 8MB`，按像素计费） |
-| B6 | `Sources/MacPilotRightClickKit/RightClickMenuCoordinator.swift:45` | 块式通知观察者 token 被丢弃，无法移除 | token 存入 `configObserver`，`stop()` 中移除 |
-
-### C. 退出清理
-
-| # | 位置 | 问题 | 修复 |
-| --- | --- | --- | --- |
-| C1 | `Sources/MacPilot/MacPilotApp.swift:1442-1458`（改前） | 3 个功能的 `shutdown()` 被包在 `Task { @MainActor in … }` 里；`willTerminate` 返回后立即 `exit()`，这些任务**几乎不可能执行** | 改为单一同步 `willTerminate` 观察者直调 `shutdown()` |
-| C2 | 同上 | 15 个功能只有 6 个挂了退出清理；BLE / InputSource / WindowSwitcher / 压缩 / PiP / 右键协调器全无 | 新增 `MacPilotModel.shutdown()`：停安全检查、取消退出/启动任务、逐个调用各模型 `shutdown()`、移除全部观察者；并补上缺失的 `shutdown()` 实现 |
-| C3 | `Sources/MacPilot/FileCompression.swift` / `InputSourceFeature.swift` / `WindowSwitcher.swift` | 相应模型没有同步 teardown 入口 | 分别补 `shutdown()`（停 FSEvents / 停轮询+tap+观察者+功能键还原 / `stopRuntime()`） |
-| C4 | `Sources/MacPilot/MemoryMonitor/MemoryMonitorModel.swift:11` | `static var cachedMenuSample` 常驻整个进程 | 新增 `clearMenuCache()`，退出时清理 |
-
-### D. 其它
-
-| # | 位置 | 问题 | 修复 |
-| --- | --- | --- | --- |
-| D1 | `Sources/MacPilot/BLEUnlock.swift:967` | 关闭 BLE 只 `stopScan()`，`CBCentralManager` 及其蓝牙 XPC 会话与 delegate 图常驻 | 关闭时 `delegate = nil; centralMgr = nil`，下次启用由 `ensureCentralManager()` 重建 |
-| D2 | `Sources/MacPilot/ScreenControl/MacScreenControlService.swift` | 屏幕保护状态观察者由 BLE 代码持有，而**远程解锁也要读 `screensaverActive`**——简单按 BLE 开关关闭会静默破坏远程解锁 | 观察者迁到共享的 `MacScreenControlService`，由 `MacPilotModel.refreshScreenStateObservation()` 按 `BLE 启用 \|\| 远程启用` 安装/移除；`RemoteControlServer.onRunningStateChanged` 在启用状态变化时回调 |
-| D3 | `Sources/MacPilot/RemoteControl/RemoteControlServer.swift:125` | `stop()` 无条件访问 lazy `bleCentral`，会为了关闭而**新建**一个 CoreBluetooth central | 加 `bleCentralStarted` 标志，未启动过就不创建 |
-| D4 | `Sources/MacPilot/Recording/RecordingEngine.swift:854` | `finishInputs()` 抛错时 writer 既不 finish 也不 cancel，`.recpart` 文件与输入长期残留 | 出错路径 `cancelWriting()` + 删除工作文件后重抛；`cancel()` 同样补 `cancelWriting()` |
-| D5 | `Sources/MacPilot/Recording/RecordingMobileRecorder.swift:175` | `stopRecording()` 以 `captureSession?.isRunning` 为条件，会话被系统中断时**跳过停止**，movie output / 会话 / 文件句柄全部滞留且不回调 | 无条件调用 `output.stopRecording()` |
-| D6 | `Sources/MacPilot/Awake/AwakeSessionManager.swift:302` | `sessions` 只 append 与改状态，**永不删除**，长期运行会累积每一次会话 | 新增 `pruneEndedSessions()`，已结束会话上限 20 条 |
-| D7 | `Sources/MacPilot/SnapzyQuickAccess/QuickAccessManager.swift:628` | `pinScreenshot(url:)` 独缺 `guard isEnabled`（`addScreenshot`/`addVideo` 都有），关闭状态下仍会创建钉图窗口 | 补守卫与诊断日志 |
-| D8 | `Sources/MacPilot/SnapzyCapture/AreaSelectionWindow.swift:2980,3040,3101` | 三个光标是 `static var`，**每次鼠标移动**都重绘 `NSImage` 并新建 `NSCursor`，导致身份守卫永远不命中 | 改为 `@MainActor static let`，只构建一次 |
-| D9 | `Sources/MacPilot/ScreenRecordingModel.swift:899` | `refreshCaptureDeviceLists()` 在 `applyLoadedSettings` 中无条件执行（启动路径） | 仅在 `isEnabled` 时执行 |
+| 第一轮结论 | 实际情况 |
+| --- | --- |
+| §一「发现 4 处确定性泄漏，**已全部修复**」 | **夸大**。`SmartScreenshot.deinit` 仍只 `tapEnable(false)`，第三处 CGEvent tap teardown 未修 → 本轮修复 |
+| §C1/C2「已改为**单一同步** shutdown」 | **不成立**。`ScreenRecordingModel.shutdown()` 内部是 `Task { await session.cancel() }`，录制中退出时 writer 不会 cancel、`.recpart` 残留 → 本轮补 `cancelImmediately()` |
+| §A6 / §C2「右键协调器已加 `stop()` 并纳入退出清理」 | **不成立**。`stop()` 定义了但**零调用点**，`MacPilotModel.shutdown()` 里没有它 → 本轮接入，并补上 bootstrap / 重试任务的取消 |
+| §B5「NSCache + 8MB 按像素计费」 | **不成立**。成本用的是刚被设成 32×32 的**逻辑尺寸**，每个图标恒定 4096B，8MB 上限永远不可达；全分辨率表示实际免费 → 本轮改为按位图表示计费 |
+| §四-2「扩展心跳可在收到 `.quit` 后停止」 | **半对**。`Messager.sendQuitNotification()` 全仓零调用，扩展的 `.quit` 处理器只打日志，10 秒心跳实际永不停止 → 本轮修复 |
+| §四-7 提权 helper 生命周期 | **准确但低估**。除"每次开机以 root 运行"外，还有 (a) helper 消失时 `disablesleep=1` 可能永久卡住、(b) 自更新后守护进程不会重建、(c) 撤销注册会强制重新授权，因此**不应**在每次退出时 unregister |
+| §二-D6「会话不增长」 | **只有一半**。已结束会话限 20 条，**活跃会话无上限**——菜单点 100 次就是 100 个活跃会话 → 本轮加活跃上限 |
+| §二-B5「`IconCache` 已修」 | 同功能下还有两处无上限缓存：扩展自身的 `iconCache`（本轮已修）与 `FileTypeIconProvider.cache`（**按扩展名为键，实际有界，审计结论过重，维持现状**） |
 
 ---
 
-## 三、功能开关矩阵（本轮结束后）
+## 三、本轮修复
 
-| 功能 | 总开关 | 默认 | 关闭时的行为 |
-| --- | --- | --- | --- |
-| 退出规则 | `isEnforcing` + 每条 `rule.isEnabled` | 开 | 取消全部退出任务与安全检查 ✅ |
-| 启动规则 | `isLaunchSchedulingEnabled` + 每条规则 | 开 | 取消计划 ✅ |
-| Awake 防休眠 | **无总开关** ⚠️ | — | 启动仍安装系统观察者（见 §四‑1） |
-| BLE 解锁 | `BLEUnlockSettings.isEnabled` | 关 | 不装观察者、不建 CBCentralManager ✅ |
-| iPhone 遥控 | `RemoteControlSettings.isEnabled` | 关 | 不监听、不建 BLE central ✅ |
-| 输入法切换 | `InputSourceSettings.isEnabled` | 关 | 不装观察者/tap、不轮询浏览器 ✅ |
-| 存储压缩 | `automaticallyCompress`（+ 文件夹非空） | 关 | 不启 FSEvents ✅ |
-| 截图 | `screenshotEnabled`（智能截图）/ `isEnabled`（定时截图） | 关 | 不做磁盘扫描/临时清理、不注册热键、不建 smart capture 控制器 ✅ |
-| 屏幕录制 | `ScreenRecordingSettings.isEnabled`（**本轮新增**） | 开 | 不注册热键、不枚举设备、关浮层 ✅ |
-| 画中画 | `PictureInPictureSettings.isEnabled` | 关 | 不装 tap/观察者、停 occlusion ✅ |
-| 窗口切换 | `WindowSwitcherSettings.isEnabled` | **开** ⚠️ | 停 runtime、移除 tap/AX/观察者 ✅（默认值策略见 §四‑4） |
-| 平滑滚动 | `SmoothScrollSettings.isEnabled` / `reverseScrollingEnabled` | 关 | 全部关时 `requiresInputTap == false`，不建 tap；空闲不再跑 display link ✅ |
-| 剪贴板 | `ClipboardSettings.isEnabled` | 关 | 停监听与热键、关面板 ✅（历史仍在内存，见 §四‑3） |
-| 右键菜单 | **无总开关** ⚠️ | — | 启动即建协调器（见 §四‑2） |
-| 内存监控 | **无开关**（仅页面级） | — | 打开页面才采样；菜单采样有 2s 缓存 ✅（见 §四‑3） |
-| 存储压缩监控 | 同「存储压缩」 | 关 | `stopMonitoring()` ✅ |
+### A. 第一轮修复引入的缺陷
 
----
+| 位置 | 问题 | 修复 |
+| --- | --- | --- |
+| `MacPilotApp.swift` `refreshScreenStateObservation()` | `shutdown()` 里 `ble.shutdown()` 先移除屏保观察者，其后的 `remoteControl.stop()` 回调 `onRunningStateChanged` 又把它们**重新装上**（谓词仍为 true） | 加 `guard !hasShutdown` |
+| `SmoothScrollController.activate()` | 无条件 `runtime.stop()` 会 `phaseMachine.reset()`；`activate()` 在每次设置变更时都被调用，若此时正在滑行，目标 App 收不到配对的结束相位 | 仅在 `!activeSettings.isEnabled` 时 stop |
+| `IconCache.cost(of:)` | 按逻辑尺寸计费 → 上限不可达 | 改为累加 `image.representations` 的像素 ×4 |
+| `IconCache.cacheSize` | 返回 `countLimit` 常量，语义是假的 | 删除（全仓无调用方） |
+| `SmartScreenshot.deinit` | 仍只禁用 tap，窗口服务器注册与 run-loop source 泄漏 | deinit 内补 `CFMachPortInvalidate` + `CFRunLoopSourceInvalidate` |
 
-## 四、待办（按优先级）
+### B. 未完成的第一轮修复
 
-### 1. Awake 缺总开关（P1，**最高优先**）
-现状：`AwakeSettings`（`Sources/MacPilot/Awake/AwakeModels.swift`）没有任何总开关；
-`AwakeSessionManager.init`（`AwakeSessionManager.swift:77`）与 `AwakeTriggerEngine.init`（`AwakeTriggerEngine.swift:52`）
-各自无条件 `installSystemObservers()`，并在 init 里就采样电源/应用/进程/显示状态。
+| 位置 | 问题 | 修复 |
+| --- | --- | --- |
+| `ScreenRecordingModel.shutdown()` | 用 `Task` 取消录制 → 退出时丢失 | 新增 `ScreenRecordingEngine.cancelImmediately()`（同步 cancel writer + 删 `.recpart`），shutdown 直接调用 |
+| `RightClickMenuCoordinator` | `stop()` 零调用；bootstrap / 重试任务不可取消，`stop()` 后仍会自启 | `stop()` 接入 `MacPilotModel.shutdown()`；保存并取消 bootstrap 与重试任务；`start()` 加 `isStopped` 守卫；`stop()` 里补 `sendQuitNotification()` |
+| `AwakeSessionManager` | 活跃会话无上限 | `pruneExcessActiveSessions(keeping:)`，活跃上限 8 |
+| `PowerHelperConnection.invalidate()` | 死代码，功能关闭后 XPC 连接常驻 | 提升为 `PowerHelperServicing` 要求（带默认实现），释放成功后调用 |
+| `AwakeAssertionController` 释放失败 | 保留旧 ID 并上报失败——**复核后认为行为正确**（断言确实仍被持有，`isSystemAssertionActive` 报告为 true 是诚实的），不做改动 | 保持，并在此记录 |
 
-建议改动：
-1. `AwakeSettings` 增 `var isEnabled: Bool`（Codable，默认 `true`，`decodeIfPresent(...) ?? true`）。
-2. 两个 engine 的 `installSystemObservers()` 从 `init` 移出，改由 `setEnabled(_:)` / `activateFromConfiguration()` 控制；
-   `shutdown()` 已具备完整卸载逻辑，可直接复用。
-3. `AwakeSettingsView` 顶部状态卡加总开关；`MacPilotModel` 启动时按开关激活。
-4. 关闭时结束活动会话（`endAllSessions()`），否则会留下系统断言。
+### C. 守护进程 / 提权路径
 
-> 本轮未改：该文件正被另一处在建改动同时编辑，避免冲突；改动本身是自包含的。
+| 位置 | 问题 | 修复 |
+| --- | --- | --- |
+| `SleepDisabledManager.runPMSet` | `standardError = Pipe()` 从不读；XPC 全在一条串行队列上，子进程写满 stderr 会**永久卡死守护进程** | 改为 `FileHandle.nullDevice` |
+| `ClosedLidSleepController` | 释放失败时同时清掉 `ownsSleepDisabled`/`isActive`，导致 `shutdown()` **跳过**同步释放，系统 `disablesleep` 可能一直为 1 | 新增单调标志 `mayOwnSleepDisabled`：启用成功置位，仅在**确认释放**后清零；`shutdown()` 以它作为释放条件 |
 
-### 2. 右键菜单 / FinderSync 缺总开关（P1）
-`RightClickMenuCoordinator`（SwiftData + Messager + 图标预加载 + 心跳 + 重试）在
-`MacPilotApp.startRightClickMenu()` 无条件启动，`AppState` 只有 `fold*`/`showCommonDirs` 等子选项。
-建议在 `AppState` 增 `isRightClickMenuEnabled`，`startRightClickMenu()` 与设置页绑定，
-关闭时调用本轮新增的 `RightClickMenuCoordinator.stop()` 并向扩展发送退出通知；
-`MacPilotFinderSyncExt` 的心跳（`MacPilotFinderSyncExt.swift:130`）也应在 `.quit` 消息后停止。
+### D. 开关补齐
 
-### 3. 启动即解码 / 常驻内存（P2）
-- `ClipboardModel.history = ClipboardHistory()` 在 `init` 就 `load()` 整个历史（含旧版内联图片/大数据）。
-  需要把 `ClipboardHistory` 改成首次访问才加载（`ensureLoaded()`），**并注意**
-  `storageLimit` 的 `didSet` 会 `save()`，未加载时保存空数组会**清空用户历史**——必须让
-  `applyLoadedSettings` 在加载完成前不触发保存，否则会造成数据丢失。
-- 内存监控页无持久化开关；`MemoryMonitorModel.startAutoRefresh()` 只应随页面可见性启停（现有调用点已如此）。
+| 功能 | 之前 | 现在 |
+| --- | --- | --- |
+| **Awake / 合盖休眠** | **完全没有开关**；`AwakeSessionManager.init` 与 `AwakeTriggerEngine.init` 无条件安装 9 个系统观察者并采样电源状态 | `AwakeSettings.isEnabled`（`decodeIfPresent ?? true` 保证老配置不失效）；观察者改由 `applyLoadedSettings` / `setEnabled(_:)` 安装；关闭时结束全部会话、移除观察者、停合盖监控、交还 `disablesleep`；触发器引擎通过 `setFeatureEnabled(_:)` 同步；设置页顶部新增总开关（`awakeEnabled` / `awakeEnabledHint` / `awakeDisabledHint`） |
+| **自动检查更新** | 每次启动无条件发 GitHub 请求（2 秒后），无任何设置 | `StoredConfiguration.automaticUpdateChecks`（默认 true，`version` 22→23）；启动任务加守卫；设置页新增开关 |
 
-### 4. 窗口切换默认值策略（P2）
-`WindowSwitcherSettings.isEnabled` 解码默认 `true`：老配置文件（无该字段）会在启动时
-启动隐藏面板、5 个 workspace 观察者与全局快捷键，且需要辅助功能权限才会真正启动。
-建议显式决定：要么保持默认开启并在 UI/README 说明，要么改为 `?? false` 让用户显式启用。
+### E. 有界化
 
-### 5. 截图相关大内存峰值（P2）
-- `SmartScreenshot.swift:3922` 滚动截图累积**最多 30 张全分辨率 CGImage**（3000×2000 区域约 24MB/张
-  ≈ 720MB 峰值），且 `stitch` 在 `@MainActor` 上执行。建议按总像素预算（如 200MP）限制、
-  追加时降采样，并把 `stitch` 放到 `Task.detached`。
-- `ScreenshotExtras.swift:239` 的 `bestOverlap` 对每对相邻帧建**两份**全分辨率 `[UInt8]` 栅格；
-  建议每帧只栅格化一次并复用（或 1/4 线性降采样）。
-- `SmartScreenshot.swift` 的 `undoDocuments`/`redoDocuments` 无上限，建议限制深度（如 50）。
-
-### 6. 远程控制面的可被外部放大的增长（P1，安全相关）
-- `RemoteControlServer.connections` 与每连接 `idleWatchdog` 无上限，未认证的局域网对端可以在
-  180s 配对超时内随意开连接。建议 `accept` 时限制并发数（如 8）。
-- `RemoteConnection.pendingFrames` 无数量/字节上限，慢操作（锁屏/解锁）期间可被塞入任意多请求。建议限流并在超限时关闭连接。
-
-### 7. 提权 helper 生命周期（P1）
-`PowerHelperConnection` 注册的 root LaunchDaemon 的 plist 带 `RunAtLoad` + `KeepAlive`，
-但没有任何 `unregister()`；用户关闭「合盖继续运行」后守护进程仍每次开机以 root 运行。
-建议在最后一次释放与 `shutdown()` 时注销。
-
-### 8. 其它已确认但影响较小
-- `SmartScreenshot` 的 `deinit` 只禁用 tap，不摘 run-loop source / 不关面板；`ScreenCaptureModel.applyLoadedSettings`
-  有直接把 `smartCapture = nil` 而不 `stop()` 的分支。
-- `WindowSwitcherModel.thumbnailCache` / `cachedWindows` 保留全分辨率缩略图与 `AXUIElement`，
-  仅在 runtime 停止时清空；可考虑对非选中项惰性解析 AX。
-- `InputSourceModel.init` 在功能默认关闭时仍枚举 Carbon 输入源列表。
-- `macOS` 屏幕锁/解锁的分布式通知（BLE 观察者）在 BLE 关闭时不再安装，因此 `ScreenLockHistory`
-  只在功能开启时累积——这是预期行为，已在文档中确认。
+| 位置 | 之前 | 现在 |
+| --- | --- | --- |
+| `RemoteControlServer.accept` | 连接数无上限，局域网可无限开连接 | 上限 8；超限直接 `cancel()` / 关 L2CAP 流 |
+| `RemoteConnection.enqueue` | `pendingFrames` 无上限（单帧可达 256KB） | 32 帧 / 1MB 上限，超限关闭该会话 |
+| `MacPilotFinderSyncExt.iconCache` | 永不淘汰的字典，按路径累积全分辨率图标 | 统一走 `storeIcon(_:for:)`，256 条后清空 |
+| `AppIconCache`（`MacPilotApp.swift`） | `NSCache` 但没有任何 limit | 256 条 / 8MB |
+| Finder 扩展心跳 | `asyncAfter` 自递归，永不停止 | 可取消 `Task`，收到 `.quit` 即停；主程序退出时发送该通知 |
 
 ---
 
-## 五、复核用的检查清单
+## 四、仍未解决（按优先级）
 
-新增功能时请对照：
-
-1. **开关**：`Settings` 结构体里有 `isEnabled` 吗？`decodeIfPresent(...) ?? 默认值` 的默认值是显式的吗？
-2. **启动路径**：`init` / `activateFromConfiguration()` 在开关关闭时会创建定时器、观察者、事件 tap、
-   `CBCentralManager`/`SCStream`/`FSEvents`、枚举设备或遍历磁盘吗？
-3. **关闭路径**：`setEnabled(false)` 是否移除了**全部**资源（观察者 token、tap 的 `CFMachPortInvalidate`、
-   Timer `invalidate`、Task `cancel`、lazy 单例置 nil）？
-4. **退出路径**：是否挂进了 `MacPilotModel.shutdown()`？teardown 必须是**同步**的。
-5. **观察者**：块式 API 的返回值存起来了吗？共享状态（如 `MacScreenControlService.screensaverActive`）
-   是否由真正共享的持有者安装，而不是借用某个功能的开关？
-6. **缓存**：`static var`、字典缓存、历史数组是否有上限/淘汰？是否会在退出时清理？
-7. **跨线程回调**：`queue: .main` + `MainActor.assumeIsolated` 是既定写法；
-   不要在 `Task { }` 里做终止清理。
+| # | 项目 | 说明与建议 |
+| --- | --- | --- |
+| 1 | **提权守护进程从不注销** | plist 为 `RunAtLoad`+`KeepAlive`，用户启用过一次后 root 进程每次开机启动。**不能**在每次退出时 unregister（会导致每次启动重新授权）；正确触发点是"用户关闭合盖休眠且无任何会话需要它"、App 被删除、以及**版本更新后**（Apple 明确要求改过可执行文件后要 unregister→register）。需要 `PowerHelperServicing.unregister()` 与按构建号触发一次的迁移逻辑 |
+| 2 | **`disablesleep` 可能永久卡住** | helper 在持有设置时消失（用户撤销批准、App 被删、更新后守护进程启动失败），`SleepDisabledManager.disable()` 因"非本 App 所有"拒绝释放，且所有权只存在可丢失的状态文件里。建议加独立的对账路径：启动时若 `pmset -g` 显示 `SleepDisabled 1` 而自身无注册，向用户提供「恢复睡眠」动作 |
+| 3 | **审批状态只读一次** | `ClosedLidSleepController.isServiceReady` 零调用；用户在系统设置里批准后 App 不会察觉，横幅一直停在"需要批准"。建议在页面出现 / `didBecomeActive` / 打开系统设置后重新读 `service.status` |
+| 4 | **XPC 无超时** | 守护进程活着但卡住时 `perform` 的 continuation 永不恢复，心跳循环停摆，90 秒后守护进程看门狗释放断言而 App 仍以为已启用。建议给每次 `perform` 加超时。另：客户端也应校验服务端身份（`setCodeSigningRequirement`），并在拒绝连接时 `invalidate()` + 限流日志 |
+| 5 | **右键菜单仍无可用总开关** | 设置页那个开关只打开系统设置面板。`RightClickMenuCoordinator` 仍然无条件注册观察者、开 SwiftData 容器、预加载图标、跑心跳与重试。**注意**：开关要落到 `AppState`（SwiftData 模型）上，涉及 schema 迁移且与 Finder 扩展共享存储，需要单独评估后再做 |
+| 6 | **iOS 端无停止开关** | `RemoteDiscoveryService.stop()` 仍零调用；`.background` 停掉了 supervisor / BLE / 连接但没停 `NWBrowser`；`.failed`/`.cancelled` 后 `browser` 非 nil 导致**再也无法重启**；`cancelPairing()` 没有 `stopConnectSupervisor()`，会重新拨号。iOS 目标不由 SwiftPM 构建，改动无法在本机编译验证，建议在 Xcode 工程里单独处理 |
+| 7 | **更新暂存目录泄漏** | `launchInstaller` 抛错时 `MacPilotUpdate-<uuid>/`（数十~数百 MB）不会被删除；`ditto`/`pluginkit` 的输出管道在 `waitUntilExit()` 之后才读，超 64KB 会死锁；归档被复制成两份；SHA-256 用整包 `Data(contentsOf:)` |
+| 8 | **滚动截图内存峰值** | 最多累积 30 张全分辨率 CGImage（约 720MB 峰值），`stitch` 在 `@MainActor` 执行；`bestOverlap` 每对帧建两份全分辨率栅格。建议按总像素预算限制 + 降采样 + 把 stitch 移出主线程 |
+| 9 | **L2CAP 写队列无上限** | `L2CAPStreamTransport.pending` 无字节上限，且 `send()` 入队即回调成功，调用方无法感知积压；实际由 90 秒空闲看门狗兜底（BLE 速率下约数 MB） |
+| 10 | **Awake 子系统缺 `deinit`** | `AwakeSessionManager` / `AwakeTriggerEngine` / `LidStateMonitor` / `ClosedLidSleepController` 都没有 `deinit`；IOKit 回调用 `passUnretained(self)`，对象若未 `stop()` 就释放会 use-after-free。生产中由 app 生命周期模型持有并在 `shutdown()` 停止，属潜在风险 |
+| 11 | **`MenuBarView` 的默认参数陷阱** | `AwakeSessionManager = AwakeSessionManager()` 作为默认参数会静默构造第二个管理器（多装 5 个观察者且无 teardown）。当前唯一生产调用点显式传参，建议删掉默认值 |
+| 12 | **低级项** | `getSleepDisabled` 整条特权 IPC 面无人使用；`PowerStateProvider.startMonitoring` 丢弃 token 导致无法移除；`MacPilotModel.shutdown()` 无法取消启动时那个未保存的 `Task`；`ScreenshotExtras` 全分辨率缓冲；`undoDocuments`/`redoDocuments` 无上限；`BookmarkManager` 安全作用域书签 start/stop 不平衡 |
 
 ---
 
-## 六、验证方式
+## 五、开关矩阵（第二轮结束后）
+
+| 功能 | 总开关 | 关闭时的行为 |
+| --- | --- | --- |
+| 退出规则 / 启动规则 | `isEnforcing`、`isLaunchSchedulingEnabled` + 每条规则 | 取消全部任务 ✅ |
+| **Awake 防休眠** | **`AwakeSettings.isEnabled`（本轮新增）** | 不装观察者、不采样电源、结束会话、交还 `disablesleep` ✅ |
+| BLE 解锁 | `BLEUnlockSettings.isEnabled` | 不装观察者、释放 `CBCentralManager` ✅ |
+| iPhone 遥控 | `RemoteControlSettings.isEnabled` | 不监听、释放 BLE central、上限 8 连接 ✅ |
+| 输入法切换 | `InputSourceSettings.isEnabled` | 不装观察者/tap、不轮询 ✅ |
+| 存储压缩 | `automaticallyCompress` + 文件夹非空 | 不启 FSEvents ✅ |
+| 截图 | `screenshotEnabled` / `isEnabled` | 不做磁盘扫描、不注册热键 ✅ |
+| 屏幕录制 | `ScreenRecordingSettings.isEnabled` | 不注册热键、不枚举设备 ✅ |
+| 画中画 | `PictureInPictureSettings.isEnabled` | 不装 tap/观察者 ✅ |
+| 窗口切换 | `WindowSwitcherSettings.isEnabled`（**默认开**，策略待定） | 停 runtime、移除 tap/AX ✅ |
+| 平滑滚动 | `SmoothScrollSettings.isEnabled` / `reverseScrollingEnabled` | 不建 tap；空闲不跑 display link ✅ |
+| 剪贴板 | `ClipboardSettings.isEnabled` | 停监听与热键（历史仍常驻，见遗留） |
+| **自动检查更新** | **`automaticUpdateChecks`（本轮新增）** | 启动零网络请求 ✅ |
+| 右键菜单 | **仍无（见遗留 5）** ⚠️ | 启动即建协调器 |
+| 内存监控 | 仅页面级 | 离开页面停止采样 ✅ |
+
+---
+
+## 六、验证
 
 ```sh
 swift build
+swift build --target MacPilotFinderSync
 swift test --skip shortcutConfigEncodesAndDecodesCarbonModifiers
 ```
 
-> ⚠️ **已知既有缺陷（与本次改动无关）**：
-> `swift test` 全量运行会在 `QuickAccessTests.shortcutConfigEncodesAndDecodesCarbonModifiers`
-> 崩溃（SIGSEGV，`ShortcutConfig.currentLayoutPrintableKeyDisplayString` → CarbonCore）。
-> 已从诊断报告确认该崩溃在本轮编辑开始**之前**（21:22:37）就已存在，单独运行该用例同样崩溃，
-> 其余 558 个测试 / 48 个套件全部通过。建议后续把该用例改为不依赖当前键盘布局
-> （注入 `TISGetInputSourceProperty` 结果，或跳过无键盘布局的 CI 环境）。
+结果：构建零 error / 零 warning（含 FinderSync 扩展目标）；**571 个测试 / 49 个套件全部通过**。
+
+> ⚠️ **已知既有缺陷（与本次改动无关）**：全量 `swift test` 会在
+> `QuickAccessTests.shortcutConfigEncodesAndDecodesCarbonModifiers` 崩溃（SIGSEGV，
+> `ShortcutConfig.currentLayoutPrintableKeyDisplayString` → CarbonCore）。
+> 已由诊断报告确认该崩溃在本轮编辑之前（21:22:37，另一处会话触发）即存在，
+> 单独运行该用例同样崩溃。

@@ -185,16 +185,31 @@ final class RemoteConnection: Identifiable {
         }
     }
 
+    /// Each frame may be up to `RemoteProtocolVersion.maximumFrameSize`, and a
+    /// peer that outruns this drain loop must not be able to grow the queue
+    /// without bound. Over either budget the session is closed instead.
+    private static let maximumPendingFrames = 32
+    private static let maximumPendingBytes = 1 << 20
+    private var pendingBytes = 0
+
     /// Commands must run one at a time and in arrival order.
     private func enqueue(_ frames: [Data]) {
         guard !frames.isEmpty else { return }
         pendingFrames.append(contentsOf: frames)
+        pendingBytes += frames.reduce(0) { $0 + $1.count }
+        if pendingFrames.count > Self.maximumPendingFrames || pendingBytes > Self.maximumPendingBytes {
+            pendingFrames.removeAll(keepingCapacity: false)
+            pendingBytes = 0
+            Task { await fail(.invalidMessage) }
+            return
+        }
         guard !isDraining else { return }
         isDraining = true
         Task { @MainActor [weak self] in
             guard let self else { return }
             while !self.pendingFrames.isEmpty, !self.isClosed {
                 let frame = self.pendingFrames.removeFirst()
+                self.pendingBytes = max(0, self.pendingBytes - frame.count)
                 await self.handleFrame(frame)
             }
             self.isDraining = false

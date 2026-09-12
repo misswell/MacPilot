@@ -80,8 +80,53 @@ final class AwakeTriggerEngine: ObservableObject {
         runtimeStates = Dictionary(
             uniqueKeysWithValues: loadedTriggers.map { ($0.id, TriggerRuntimeState()) }
         )
+        // Nothing may be armed while the Awake master switch is off; the switch
+        // calls `setFeatureEnabled(true)` when it is turned back on.
+        guard sessionManager.settings.isEnabled else { return }
+        installSystemObservers()
         synchronizeMonitors()
         evaluateAll()
+    }
+
+    /// Feature-level switch, driven by the Awake master switch. Unlike
+    /// `shutdown()` the engine stays usable, so turning the switch back on
+    /// re-arms the monitors from the stored triggers.
+    func setFeatureEnabled(_ enabled: Bool) {
+        guard !isShutdown else { return }
+        guard enabled else {
+            for trigger in triggers { endTriggerSession(trigger.id) }
+            cancelAllPendingTasks()
+            if applicationMonitoring {
+                applicationMonitoring = false
+                applicationStateProvider.stopMonitoring()
+            }
+            if processMonitoring {
+                processMonitoring = false
+                processStateProvider.stopMonitoring()
+            }
+            if displayMonitoring {
+                displayMonitoring = false
+                displayStateProvider.stopMonitoring()
+            }
+            if let token = powerMonitoringToken {
+                powerMonitoringToken = nil
+                powerStateProvider.removeMonitoringObserver(token)
+            }
+            removeSystemObservers()
+            return
+        }
+        installSystemObservers()
+        synchronizeMonitors()
+        evaluateAll()
+    }
+
+    /// Removes every process-level observer this engine installed.
+    private func removeSystemObservers() {
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        observers.removeAll()
     }
 
     func addTrigger(_ trigger: AwakeTrigger) {
@@ -169,11 +214,7 @@ final class AwakeTriggerEngine: ObservableObject {
             powerMonitoringToken = nil
             powerStateProvider.removeMonitoringObserver(token)
         }
-        for observer in observers {
-            NotificationCenter.default.removeObserver(observer)
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
-        }
-        observers.removeAll()
+        removeSystemObservers()
     }
 
     private func synchronizeMonitors() {
@@ -404,6 +445,7 @@ final class AwakeTriggerEngine: ObservableObject {
     }
 
     private func installSystemObservers() {
+        guard observers.isEmpty, !isShutdown else { return }
         let workspaceCenter = NSWorkspace.shared.notificationCenter
         observers.append(workspaceCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,

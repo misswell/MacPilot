@@ -36,6 +36,7 @@ struct AwakeSettingsView: View {
                     Text(model.t("awakeSubtitle")).foregroundStyle(.secondary)
                 }
 
+                masterSwitchCard
                 sessionCard
                 sessionDetailsCard
                 AwakeTriggerListView(triggerEngine: triggerEngine)
@@ -43,6 +44,33 @@ struct AwakeSettingsView: View {
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
         }
+    }
+
+    /// 总开关：关闭后不再安装任何系统观察者、不采样电源状态、不保留会话，
+    /// 合盖休眠也交还系统设置。其余卡片随之失效，避免留下看似生效的选项。
+    private var masterSwitchCard: some View {
+        SettingsCard {
+            Toggle(model.t("awakeEnabled"), isOn: enabledBinding)
+                .toggleStyle(.switch)
+            Text(model.t("awakeEnabledHint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !awake.settings.isEnabled {
+                Text(model.t("awakeDisabledHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { awake.settings.isEnabled },
+            set: { value in
+                awake.setEnabled(value)
+                triggerEngine.setFeatureEnabled(value)
+            }
+        )
     }
 
     /// 统一的 Session 卡片：这里的全部配置就是「默认会话」——手动开始与

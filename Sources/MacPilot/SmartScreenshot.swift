@@ -2255,8 +2255,26 @@ final class SmartScreenshotController {
 
     deinit {
         shortcutRegistrationRetryTask?.cancel()
-        if let selectionEventTap { CGEvent.tapEnable(tap: selectionEventTap, enable: false) }
-        if let shortcutEventTap { CGEvent.tapEnable(tap: shortcutEventTap, enable: false) }
+        // Releasing the controller without `stop()` must not leave a
+        // window-server tap registration and its run-loop source behind, so the
+        // teardown is repeated here (this context cannot call the actor-isolated
+        // `stop…EventTap()` helpers).
+        if let shortcutEventTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), shortcutEventTapSource, .commonModes)
+            CFRunLoopSourceInvalidate(shortcutEventTapSource)
+        }
+        if let selectionEventTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), selectionEventTapSource, .commonModes)
+            CFRunLoopSourceInvalidate(selectionEventTapSource)
+        }
+        if let selectionEventTap {
+            CGEvent.tapEnable(tap: selectionEventTap, enable: false)
+            CFMachPortInvalidate(selectionEventTap)
+        }
+        if let shortcutEventTap {
+            CGEvent.tapEnable(tap: shortcutEventTap, enable: false)
+            CFMachPortInvalidate(shortcutEventTap)
+        }
         if let selectionLocalMonitor { NSEvent.removeMonitor(selectionLocalMonitor) }
         if let selectionGlobalMonitor { NSEvent.removeMonitor(selectionGlobalMonitor) }
         if let selectionCancelHotKey { UnregisterEventHotKey(selectionCancelHotKey) }

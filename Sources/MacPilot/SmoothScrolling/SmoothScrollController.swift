@@ -72,7 +72,14 @@ final class SmoothScrollController {
         // Never start the display link here. `SmoothScrollRuntime.update(event:)`
         // starts it lazily on the first accepted wheel event and stops it when
         // the glide drains, so an idle tap costs nothing between scrolls.
-        runtime.stop()
+        //
+        // Do not stop it either while smoothing stays enabled: `activate()` runs
+        // on every settings mutation, and `stop()` resets the phase machine,
+        // which would strand the began/changed events already delivered to the
+        // target app without their matching end phase.
+        if !activeSettings.isEnabled {
+            runtime.stop()
+        }
     }
 
     func deactivate() {

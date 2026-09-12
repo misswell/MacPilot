@@ -52,14 +52,21 @@ public class IconCache {
     }
 
     /// 缓存中的图标数量
-    public var cacheSize: Int {
-        // NSCache does not expose its count; keep the public surface but report
-        // the count limit as the upper bound callers can rely on.
-        memoryCache.countLimit
-    }
+    ///
+    /// `NSCache` does not expose its occupancy, so the old exact-count property
+    /// is gone rather than left returning `countLimit` as if it were a count.
+    /// Nothing in the repo consumed it.
 
     private static func cost(of image: NSImage) -> Int {
-        let pixels = Int(max(image.size.width, 1) * max(image.size.height, 1))
-        return pixels * 4
+        // Bill the actual bitmap representations, not the 32pt logical size the
+        // caller just set: `iconSize` is the same for every entry, so a logical
+        // cost would make `totalCostLimit` unreachable and the real
+        // full-resolution backing store free.
+        var bytes = 0
+        for rep in image.representations {
+            bytes += max(rep.pixelsWide, 0) * max(rep.pixelsHigh, 0) * 4
+        }
+        if bytes > 0 { return bytes }
+        return 32 * 32 * 4
     }
 }

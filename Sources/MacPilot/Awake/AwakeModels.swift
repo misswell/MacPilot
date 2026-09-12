@@ -413,27 +413,35 @@ struct AwakeDefaultSessionSettings: Codable, Equatable, Sendable {
 }
 
 struct AwakeSettings: Codable, Equatable, Sendable {
+    /// Master switch for the whole feature. While it is off the app installs no
+    /// system observers, samples no power state and keeps no sessions, so a
+    /// disabled Awake costs nothing.
+    var isEnabled: Bool
     var defaultPolicy: SessionPolicy
     var defaultSession: AwakeDefaultSessionSettings
     var safetyPolicy: AwakeSafetyPolicy
 
     static let standard = AwakeSettings(
+        isEnabled: true,
         defaultPolicy: .standard,
         defaultSession: .standard,
         safetyPolicy: .standard
     )
 
     init(
+        isEnabled: Bool = true,
         defaultPolicy: SessionPolicy = .standard,
         defaultSession: AwakeDefaultSessionSettings = .standard,
         safetyPolicy: AwakeSafetyPolicy = .standard
     ) {
+        self.isEnabled = isEnabled
         self.defaultPolicy = defaultPolicy
         self.defaultSession = defaultSession
         self.safetyPolicy = safetyPolicy
     }
 
     private enum CodingKeys: String, CodingKey {
+        case isEnabled
         case defaultPolicy
         case defaultSession
         case safetyPolicy
@@ -442,6 +450,9 @@ struct AwakeSettings: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
+            // Existing installs predate the switch and rely on launch-time and
+            // trigger sessions, so a missing key means "enabled".
+            isEnabled: try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true,
             defaultPolicy: try container.decodeIfPresent(SessionPolicy.self, forKey: .defaultPolicy) ?? .standard,
             defaultSession: try container.decodeIfPresent(AwakeDefaultSessionSettings.self, forKey: .defaultSession) ?? .standard,
             safetyPolicy: try container.decodeIfPresent(AwakeSafetyPolicy.self, forKey: .safetyPolicy) ?? .standard

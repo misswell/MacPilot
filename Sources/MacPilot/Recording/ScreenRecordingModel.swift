@@ -938,7 +938,10 @@ final class ScreenRecordingModel: ObservableObject {
         isPreparingRecording = false
         if let session {
             self.session = nil
-            Task { await session.cancel() }
+            // Must be synchronous: `shutdown()` runs inside `willTerminate`, so a
+            // `Task { await session.cancel() }` would be dropped at `exit()` and
+            // leave the writer unfinalized with its `.recpart` file behind.
+            session.cancelImmediately()
         }
         if isDeviceRecording {
             mobileRecorder.stopRecording()

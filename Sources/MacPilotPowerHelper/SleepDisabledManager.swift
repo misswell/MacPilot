@@ -158,7 +158,11 @@ final class SleepDisabledManager: @unchecked Sendable {
         process.arguments = arguments
         let output = Pipe()
         process.standardOutput = output
-        process.standardError = Pipe()
+        // Discard stderr instead of collecting it in an undrained pipe. All XPC
+        // work is serialized on one queue, so a child that filled the stderr
+        // buffer would block in write and wedge the daemon permanently in
+        // `waitUntilExit()`.
+        process.standardError = FileHandle.nullDevice
         do {
             try process.run()
         } catch {

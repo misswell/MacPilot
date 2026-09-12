@@ -7,6 +7,10 @@ import OSLog
 final class AwakeSessionManager: ObservableObject {
     /// Upper bound on ended sessions kept for the UI's recent history.
     private static let maximumRetainedEndedSessions = 20
+    /// Upper bound on concurrently active sessions. Every menu click starts a
+    /// session and all of them are re-evaluated on each maintenance tick, so
+    /// repeated clicks must not accumulate dozens of live sessions.
+    private static let maximumActiveSessions = 8
     // Active sessions are intentionally in-memory. The Awake spec's startup
     // policy says manual sessions do not survive an app restart; wake and
     // clock-change notifications still re-evaluate sessions that remain live.
@@ -80,7 +84,9 @@ final class AwakeSessionManager: ObservableObject {
         closedLidSleepController?.onStateChange = { [weak self] in
             self?.syncClosedLidServiceState()
         }
-        installSystemObservers()
+        // The system observers are installed by `applyLoadedSettings` once the
+        // persisted master switch is known, not here: at construction the
+        // settings are still `.standard`.
     }
 
     var activeSessions: [AwakeSession] {
@@ -120,6 +126,7 @@ final class AwakeSessionManager: ObservableObject {
             state: .active
         )
         sessions.append(session)
+        pruneExcessActiveSessions(keeping: session.id)
         logger.notice("Session started: \(session.id.uuidString, privacy: .public)")
         refreshPowerState()
         return session.id
@@ -155,6 +162,7 @@ final class AwakeSessionManager: ObservableObject {
     /// Auto-start only fills an idle state, so repeated calls are no-ops.
     @discardableResult
     func startDefaultSessionOnLaunchIfEnabled() -> UUID? {
+        guard settings.isEnabled else { return nil }
         guard settings.defaultSession.autoStartOnLaunch, activeSessions.isEmpty else { return nil }
         logger.notice("Auto-starting default session on launch")
         return startDefaultSession()
@@ -274,9 +282,36 @@ final class AwakeSessionManager: ObservableObject {
 
     func applyLoadedSettings(_ newSettings: AwakeSettings) {
         settings = newSettings
+        if newSettings.isEnabled {
+            installSystemObservers()
+        } else {
+            removeSystemObservers()
+        }
         powerState = powerStateProvider.currentPowerState()
         updatePowerReconnectMonitoring()
         refreshDesiredState()
+    }
+
+    /// Master switch. Turning it off ends every session (so no power assertion is
+    /// left held), removes the system observers and hands the closed-lid setting
+    /// back; turning it on re-arms them.
+    func setEnabled(_ enabled: Bool) {
+        guard !isShutdown, settings.isEnabled != enabled else { return }
+        settings.isEnabled = enabled
+        if enabled {
+            installSystemObservers()
+            logger.notice("Awake enabled")
+        } else {
+            endAllSessions()
+            removeSystemObservers()
+            stopLidMonitoring()
+            closedLidSleepController?.setEnabled(false)
+            logger.notice("Awake disabled")
+        }
+        powerState = powerStateProvider.currentPowerState()
+        updatePowerReconnectMonitoring()
+        refreshDesiredState()
+        persist?()
     }
 
     func shutdown() {
@@ -289,17 +324,23 @@ final class AwakeSessionManager: ObservableObject {
             powerReconnectToken = nil
             powerStateProvider.removeMonitoringObserver(token)
         }
-        for observer in observers {
-            NotificationCenter.default.removeObserver(observer)
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
-        }
-        observers.removeAll()
+        removeSystemObservers()
         stopLidMonitoring()
         closedLidSleepController?.shutdown()
         syncClosedLidServiceState()
         if case .failure(let failure) = assertionController.releaseAll() {
             lastAssertionFailure = failure
         }
+    }
+
+    /// Removes every process-level observer this manager installed. Safe to call
+    /// repeatedly, and paired with `installSystemObservers()`'s emptiness guard.
+    private func removeSystemObservers() {
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        observers.removeAll()
     }
 
     private func markSessionEnded(_ id: UUID) {
@@ -320,6 +361,18 @@ final class AwakeSessionManager: ObservableObject {
             guard remainingToDrop > 0, session.state != .active else { return false }
             remainingToDrop -= 1
             return true
+        }
+    }
+
+    /// Ends the oldest active sessions once the active set exceeds its bound,
+    /// never the session that was just started.
+    private func pruneExcessActiveSessions(keeping id: UUID) {
+        let active = sessions.filter { $0.state == .active }
+        guard active.count > Self.maximumActiveSessions else { return }
+        let excess = active.count - Self.maximumActiveSessions
+        for session in active.prefix(excess) where session.id != id {
+            logger.notice("Ending excess active session \(session.id.uuidString, privacy: .public)")
+            endSession(session.id)
         }
     }
 
@@ -582,6 +635,9 @@ final class AwakeSessionManager: ObservableObject {
     }
 
     private func installSystemObservers() {
+        // Idempotent: the master switch can re-arm the feature after it was
+        // turned off, and the observers must not be installed twice.
+        guard observers.isEmpty, !isShutdown else { return }
         let workspaceCenter = NSWorkspace.shared.notificationCenter
         observers.append(workspaceCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
