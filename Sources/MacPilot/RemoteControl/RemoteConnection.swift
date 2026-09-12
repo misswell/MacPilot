@@ -55,11 +55,35 @@ final class RemoteConnection: Identifiable {
     private var pendingFrames: [Data] = []
     private var isDraining = false
 
-    init(connection: NWConnection, host: RemoteConnectionHost) {
+    /// Last time any byte arrived from this client. Outbound traffic does not
+    /// count: the point is to notice a client that stopped talking.
+    private(set) var lastActivityAt = Date()
+    private var idleWatchdog: Task<Void, Never>?
+
+    /// Test seams: the defaults come from `RemoteConnectionIdlePolicy`, and
+    /// overriding them lets a test exercise the watchdog without waiting out a
+    /// real heartbeat window.
+    private let idleTimeoutOverride: TimeInterval?
+    private let idleCheckInterval: TimeInterval
+
+    private static let defaultIdleCheckInterval: TimeInterval = 15
+
+    init(
+        connection: NWConnection,
+        host: RemoteConnectionHost,
+        idleTimeout: TimeInterval? = nil,
+        idleCheckInterval: TimeInterval? = nil
+    ) {
         self.connection = connection
         self.host = host
         self.router = RemoteCommandRouter(service: host.screenControl, log: host.remoteLog)
         self.remoteAddress = Self.addressDescription(for: connection.endpoint)
+        self.idleTimeoutOverride = idleTimeout
+        self.idleCheckInterval = idleCheckInterval ?? Self.defaultIdleCheckInterval
+    }
+
+    private var effectiveIdleTimeout: TimeInterval {
+        idleTimeoutOverride ?? RemoteConnectionIdlePolicy.timeout(isAuthenticated: isAuthenticated)
     }
 
     // MARK: - Lifecycle
@@ -70,14 +94,39 @@ final class RemoteConnection: Identifiable {
         }
         connection.start(queue: Self.queue)
         receive()
+        startIdleWatchdog()
     }
 
     func close() {
         guard !isClosed else { return }
         isClosed = true
+        idleWatchdog?.cancel()
+        idleWatchdog = nil
         connection.stateUpdateHandler = nil
         connection.cancel()
         host?.remoteConnectionDidClose(self)
+    }
+
+    /// Reaps a client whose app stopped talking while its socket stayed open.
+    /// A suspended iPhone holds the connection `ESTABLISHED` indefinitely, so
+    /// without this the Mac counts a frozen phone as connected forever and
+    /// accumulates one such socket per app launch.
+    private func startIdleWatchdog() {
+        idleWatchdog?.cancel()
+        let interval = idleCheckInterval
+        idleWatchdog = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                guard let self, !self.isClosed else { return }
+                guard RemoteConnectionIdlePolicy.shouldReap(
+                    lastActivityAt: self.lastActivityAt,
+                    timeout: self.effectiveIdleTimeout
+                ) else { continue }
+                self.host?.remoteLog("connection idle timeout; closing silent client")
+                self.close()
+                return
+            }
+        }
     }
 
     private func handleState(_ state: NWConnection.State) {
@@ -102,6 +151,7 @@ final class RemoteConnection: Identifiable {
             Task { @MainActor in
                 guard let self, !self.isClosed else { return }
                 if let data, !data.isEmpty {
+                    self.lastActivityAt = Date()
                     self.buffer.append(data)
                     self.processBuffer()
                 }

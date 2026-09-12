@@ -1,5 +1,6 @@
 import Foundation
 import MacPilotRemoteProtocol
+import Network
 import Testing
 
 @testable import MacPilot
@@ -292,5 +293,229 @@ struct RemoteDeviceStoreTests {
         let second = store.ensureDeviceIdentity()
         #expect(first == second)
         #expect(store.settings.deviceID == first.uuidString)
+    }
+}
+
+@Suite("Remote connection idle policy")
+struct RemoteConnectionIdlePolicyTests {
+    private let start = Date(timeIntervalSince1970: 1_000_000)
+
+    @Test("a quiet authenticated client is reaped after its heartbeat window")
+    func authenticatedClientIsReaped() {
+        #expect(!RemoteConnectionIdlePolicy.shouldReap(
+            lastActivityAt: start,
+            isAuthenticated: true,
+            now: start.addingTimeInterval(89)
+        ))
+        #expect(RemoteConnectionIdlePolicy.shouldReap(
+            lastActivityAt: start,
+            isAuthenticated: true,
+            now: start.addingTimeInterval(91)
+        ))
+    }
+
+    @Test("a pairing client survives the whole pairing window")
+    func pairingClientSurvivesThePairingWindow() {
+        // The Mac's pairing window is 120s; reaping before it closes would kill
+        // a connection whose user is still typing the code.
+        #expect(!RemoteConnectionIdlePolicy.shouldReap(
+            lastActivityAt: start,
+            isAuthenticated: false,
+            now: start.addingTimeInterval(120)
+        ))
+        #expect(RemoteConnectionIdlePolicy.shouldReap(
+            lastActivityAt: start,
+            isAuthenticated: false,
+            now: start.addingTimeInterval(181)
+        ))
+    }
+
+    @Test("pairing is given more slack than an authenticated session")
+    func pairingTimeoutExceedsAuthenticatedTimeout() {
+        #expect(RemoteConnectionIdlePolicy.timeout(isAuthenticated: false)
+            > RemoteConnectionIdlePolicy.timeout(isAuthenticated: true))
+        // Whatever the numbers become, the authenticated window has to outlast
+        // several client heartbeats or a live client would be reaped.
+        #expect(RemoteConnectionIdlePolicy.authenticatedTimeout >= 60)
+    }
+
+    @Test("recent activity keeps the connection alive")
+    func recentActivityKeepsTheConnection() {
+        #expect(!RemoteConnectionIdlePolicy.shouldReap(
+            lastActivityAt: start.addingTimeInterval(80),
+            isAuthenticated: true,
+            now: start.addingTimeInterval(90)
+        ))
+    }
+}
+
+@Suite("Remote connection idle watchdog")
+@MainActor
+struct RemoteConnectionIdleWatchdogTests {
+    /// Records what the connection under test reports back.
+    @MainActor
+    private final class TestHost: RemoteConnectionHost {
+        let screenControl = MacScreenControlService(
+            credentials: ScreenCredentialStore(secretStore: InMemorySecretStore(), log: { _ in }),
+            log: { _ in }
+        )
+        let pairingManager = RemotePairingManager(log: { _ in })
+        let deviceStore = RemoteDeviceStore(
+            keychainService: "com.misswell.macpilot.tests.remote.\(UUID().uuidString)",
+            secretStore: InMemorySecretStore(),
+            persist: {},
+            log: { _ in }
+        )
+        var closed = 0
+        var messages: [String] = []
+
+        func remoteConnection(
+            _ connection: RemoteConnection,
+            didAuthenticate clientID: String,
+            name: String,
+            address: String?
+        ) {}
+
+        func remoteConnectionDidClose(_ connection: RemoteConnection) { closed += 1 }
+        func remoteLog(_ message: String) { messages.append(message) }
+    }
+
+    /// Holds the server side of the socket, which only exists after the
+    /// listener accepts.
+    @MainActor
+    private final class ConnectionBox {
+        var connection: RemoteConnection?
+    }
+
+    private struct Harness {
+        let listener: NWListener
+        let host: TestHost
+        let box: ConnectionBox
+        let port: NWEndpoint.Port
+    }
+
+    private enum HarnessError: Error { case noPort }
+
+    private func startHarness(
+        idleTimeout: TimeInterval,
+        idleCheckInterval: TimeInterval
+    ) async throws -> Harness {
+        let listener = try NWListener(using: NWParameters(tls: nil, tcp: NWProtocolTCP.Options()))
+        let host = TestHost()
+        let box = ConnectionBox()
+        listener.newConnectionHandler = { nwConnection in
+            Task { @MainActor in
+                let connection = RemoteConnection(
+                    connection: nwConnection,
+                    host: host,
+                    idleTimeout: idleTimeout,
+                    idleCheckInterval: idleCheckInterval
+                )
+                box.connection = connection
+                connection.start()
+            }
+        }
+        let port = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<NWEndpoint.Port, Error>) in
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    listener.stateUpdateHandler = nil
+                    guard let port = listener.port else {
+                        continuation.resume(throwing: HarnessError.noPort)
+                        return
+                    }
+                    continuation.resume(returning: port)
+                case .failed(let error):
+                    listener.stateUpdateHandler = nil
+                    continuation.resume(throwing: error)
+                default:
+                    break
+                }
+            }
+            listener.start(queue: DispatchQueue(label: "com.misswell.macpilot.tests.listener"))
+        }
+        return Harness(listener: listener, host: host, box: box, port: port)
+    }
+
+    private func connectClient(to port: NWEndpoint.Port) async throws -> NWConnection {
+        let client = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            client.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    client.stateUpdateHandler = nil
+                    continuation.resume()
+                case .failed(let error):
+                    client.stateUpdateHandler = nil
+                    continuation.resume(throwing: error)
+                default:
+                    break
+                }
+            }
+            client.start(queue: DispatchQueue(label: "com.misswell.macpilot.tests.client"))
+        }
+        return client
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 5,
+        _ condition: @MainActor () -> Bool
+    ) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+    }
+
+    /// A client that goes silent while its socket stays open — a suspended
+    /// iPhone — must be dropped instead of being counted as connected forever.
+    @Test("a silent client is reaped once its window lapses")
+    func silentClientIsReaped() async throws {
+        let harness = try await startHarness(idleTimeout: 0.4, idleCheckInterval: 0.1)
+        defer { harness.listener.cancel() }
+        let client = try await connectClient(to: harness.port)
+        defer { client.cancel() }
+        await waitUntil { harness.box.connection != nil }
+        #expect(harness.box.connection != nil)
+
+        await waitUntil { harness.host.closed > 0 }
+        #expect(harness.host.closed == 1)
+        #expect(harness.host.messages.contains { $0.contains("idle timeout") })
+    }
+
+    /// The watchdog must never touch a client that keeps talking: inbound data
+    /// refreshes the deadline, so a healthy phone stays connected indefinitely.
+    @Test("inbound traffic keeps refreshing the deadline")
+    func inboundTrafficKeepsTheConnection() async throws {
+        let harness = try await startHarness(idleTimeout: 3, idleCheckInterval: 0.1)
+        defer { harness.listener.cancel() }
+        let client = try await connectClient(to: harness.port)
+        defer { client.cancel() }
+        await waitUntil { harness.box.connection != nil }
+        let connection = try #require(harness.box.connection)
+
+        let before = connection.lastActivityAt
+        try await Task.sleep(for: .milliseconds(200))
+
+        // A well-formed hello: enough to prove the receive path stamps
+        // activity, and valid enough not to trip the protocol failure path.
+        let hello = RemoteHandshakeMessage(
+            kind: .clientHello,
+            clientID: UUID(),
+            clientName: "Idle Watchdog Test",
+            clientNonce: RemoteCrypto.randomData(count: RemoteCrypto.nonceLength)
+        )
+        // `encodePlain` already length-prefixes the payload.
+        let frame = try RemoteFrameCodec.encodePlain(hello)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            client.send(content: frame, completion: .contentProcessed { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            })
+        }
+
+        await waitUntil { connection.lastActivityAt > before }
+        #expect(connection.lastActivityAt > before)
+        #expect(harness.host.closed == 0)
     }
 }

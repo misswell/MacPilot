@@ -72,7 +72,16 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
         lastError = nil
         _ = deviceStore.ensureDeviceIdentity()
 
-        let parameters = NWParameters.tcp
+        // Keepalive only catches a peer whose device vanished — the other end's
+        // kernel answers probes even when its app is frozen. The application
+        // heartbeat in `RemoteConnection` covers that case.
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.enableKeepalive = true
+        tcpOptions.keepaliveIdle = 30
+        tcpOptions.keepaliveCount = 3
+        tcpOptions.keepaliveInterval = 5
+
+        let parameters = NWParameters(tls: nil, tcp: tcpOptions)
         parameters.includePeerToPeer = true
         parameters.allowLocalEndpointReuse = true
 
