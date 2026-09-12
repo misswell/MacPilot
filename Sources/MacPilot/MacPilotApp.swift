@@ -4180,9 +4180,10 @@ struct MenuBarView: View {
         }
         Divider()
         Button(model.t("turnOffScreenNow")) {
-            // Let the menu finish its tracking loop before blacking the
-            // display; the click's own input events would wake it again.
-            deferCaptureAction { DisplayPower.sleepDisplay() }
+            // Let the menu finish its tracking loop before blanking the
+            // display; otherwise the click's own input brings the backlight
+            // straight back.
+            deferCaptureAction { DisplayPower.turnOffScreen() }
         }
         Divider()
         UpdateMenuItems(updater: model.updater) {
