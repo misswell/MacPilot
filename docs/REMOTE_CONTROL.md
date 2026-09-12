@@ -204,6 +204,24 @@ the Apple Development and Apple Distribution identities installed in the login
 keychain, so device builds sign without extra flags. Change the team there if you
 build under a different Apple developer account.
 
+### App icon
+
+The icon lives in `MacPilotRemote/Resources/Assets.xcassets/AppIcon.appiconset/`
+as `AppIcon-1024.png`, the one size iOS needs. `project.yml` picks the catalog up
+automatically because it sits inside the target's `sources` folder, so adding it
+does not need a project.yml change.
+
+The master artwork is `Artwork/AppIconSource.png`. It is a padded squircle, while
+iOS wants a full-bleed opaque square that it masks itself, so
+`Scripts/generate-app-icon.py` copies just the cyan/violet mark out of the master
+and repaints the rest with the squircle's own fill colour. Re-run it after
+replacing the master:
+
+```sh
+cd iOS/MacPilotRemote
+python3 Scripts/generate-app-icon.py   # requires Pillow
+```
+
 ## Tests
 
 - `Packages/MacPilotRemoteProtocol/Tests/MacPilotRemoteProtocolTests/` covers
