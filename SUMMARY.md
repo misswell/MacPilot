@@ -288,3 +288,9 @@ MacPilot 新增配套 iPhone App「MacPilot 遥控」（`iOS/MacPilotRemote/`）
 - `Packages/MacPilotRemoteProtocol/Tests/`：24 例（分帧、加解密、重放、配对码、TXT 记录、命令元数据）。
 - `Tests/MacPilotTests/RemoteControlTests.swift`：19 例（屏幕控制模型、命令路由、配置编解码、配对管理器、设备存储）。
 - iOS 端 `xcodegen generate` + `xcodebuild -sdk iphonesimulator` 构建通过、无警告。
+
+### 踩过的坑
+
+- **`NWBrowser` 必须用 `.bonjourWithTXTRecord`，不能用 `.bonjour`。** 两者都叫「Bonjour 浏览」，但 `.bonjour(type:domain:)` 的浏览描述符**不请求 TXT 记录**，每个结果都带 `metadata == .none`，于是 `RemoteServiceInfo(txtRecord:)` 解析失败、`makeMac` 把结果全部丢掉。现象是「手机永远找不到 Mac」，而 Mac 端 `dns-sd -B` / `-L` 一切正常、`lsof` 也显示端口在监听——因为它根本不是网络或权限问题。排查时看 iOS 日志里 `nw_browse_descriptor ... (no txt)`（错误）与 `(txt)`（正确）的区别即可一眼定位。
+- 这类「结果被静默过滤」的失败与「网络里确实没有目标」在 UI 上完全无法区分。因此 `RemoteDiscoveryService` 现在单独统计 `unrecognizedServiceCount` 并写 `os_log`，首页也区分「未发现」与「发现了但读不到信息」。
+- SwiftUI 中**嵌套的 `ObservableObject` 不会向上转发 `objectWillChange`**：视图观察 `RemoteAppModel` 时，直接读 `appModel.discovery.xxx` 不会随之刷新。发现相关状态改为镜像到 `RemoteAppModel` 自己的 `@Published` 属性。
