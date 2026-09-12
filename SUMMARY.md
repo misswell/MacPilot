@@ -324,3 +324,47 @@ Wi-Fi/AWDL 优先，蓝牙保底——**不是并列竞速**。蓝牙建立是�
 ### 诊断：接口名让 AWDL 可见
 
 设置页新增「连接方式」，显示当前链路与接口（`网络 · en0`、`网络 · awdl0`、`蓝牙`）以及蓝牙保底状态。接口名取自链路本地地址的 scope 后缀——实测确认 `currentPath?.localEndpoint` 会带 `%en0`（`fe80::cfc:eb99:7564:5494%en0.50445`），所以**一条连接到底走 Wi-Fi 还是 AWDL，现在在 App 里直接能看出来**，不必再用 `lsof` 的十六进制 scope 反推。
+
+## 二十四、黑屏不再顺带锁屏：把背光压到 0 而不是让显示器休眠（v1.1.305）
+
+### 问题不在 MacPilot
+
+「黑屏」的调用链是 `RemoteCommandRouter .displayOff` → `MacScreenControlService.sleepDisplay()` → `DisplayPower.sleepDisplay()` → `/usr/bin/pmset displaysleepnow`，**全程没有任何锁屏调用**。锁屏是 macOS 的策略加的：`com.apple.screensaver` 的 `askForPassword` 一旦为「立即」（新装系统的默认值），**任何**显示器休眠都会顺手锁掉会话。
+
+所以这不只影响遥控——Mac 菜单栏的「关闭屏幕」同样会锁。而 MacPilot 本来就有独立的「锁屏」动作，所以「黑屏」顺带锁屏是语义错位，不是缺功能。
+
+### 解法：显示器不休眠，只把背光压到 0
+
+系统认为显示器一直醒着，锁屏策略就永远不会触发。屏幕全黑但会话不锁。
+
+| 路径 | 结论 |
+|---|---|
+| IOKit `IODisplaySetFloatParameter` / `IODisplayConnect` | ❌ 在 Apple Silicon 内置屏上**已失效**——`IOServiceMatching("IODisplayConnect")` 的迭代器是空的，读都读不到 |
+| 私有框架 `DisplayServices`（`brightness` 命令行工具用的就是它） | ✅ M1 MacBookAir10,1 实测：读 `0.9026` → 写 `0` → 回读 `0.0` → 写回 `0.9026`，全部 `rc=0` |
+
+`DisplayServices` 是私有的，但**用 `dlopen`/`dlsym` 运行时解析**，所以 App 不产生链接期依赖；而且每一处调用都是可选的——拿不到就退回真休眠，不会比以前更差。Developer ID 分发 + 公证不检查私有 API（那只在 App Store 审核管）。
+
+### 最大的坑：没有东西会把背光「唤醒」
+
+显示器根本没睡，所以按键、动鼠标**不会**点亮它——系统认为它一直醒着。屏幕会一直黑着，直到有人去按亮度键。这是必须补的一环：
+
+- 记下黑屏瞬间的「自上次输入的时间」（`CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInputEventType)`，其中 `anyInputEventType` 是 `CGEventType(rawValue: ~0)!`，即头文件里的 `kCGAnyInputEventType`，Swift 没有对应成员）。
+- 每 400 ms 采样一次，**空闲时间倒退了**就说明刚有人动了输入设备 → 立即恢复背光。
+- 用轮询而不是全局事件监听，因为**它不需要辅助功能授权**。这一条是刻意的：MacPilot 绝不能把用户困在黑屏上。判定抽成 `DisplayPower.didUserInputOccur(idleNow:idleAtBlank:)` 这个纯函数并加了测试——逻辑一旦写反就是「用户被困黑屏」。
+
+### 边界：哪条路走真休眠
+
+只有**用户主动的黑屏**（遥控 `displayOff`、菜单栏「关闭屏幕」）走亮度归零，即 `DisplayPower.turnOffScreen()`。蓝牙靠近锁屏（`BLEUnlock` 的 `turnOffScreen`）和 `AwakeSessionManager` 仍然走真正的 `sleepDisplay()`——因为那条路希望 Mac 能继续空闲休眠；若在那里把背光压到 0，显示器永不休眠，**系统也就再也不会自动睡眠**，是明显的功耗回归。
+
+### 实测（用仓库里真实的 `DisplayPower.swift` 编探针跑）
+
+```
+0. 合成事件能否冒充用户输入: 能（idle 50.13 → 0.29）
+1. 初始亮度            = 0.54687065
+   blankDisplay() -> true  isBlanked=true  亮度=0.0
+2. 静置 1.5s（无输入）  isBlanked=true  亮度=0.0   ← 看门狗不会误触发
+3. 模拟用户输入后       isBlanked=false 亮度=0.54687065  ← 精确恢复
+✅ 亮度归零 → 保持黑屏 → 恢复，全链路通过
+```
+
+`unlock` / `wakeAndUnlock` / 解锁重试循环里也一并补了「黑屏也算屏幕没亮」的判断，否则亮度归零状态下解锁会先对着黑屏敲键盘（虽然合成按键本身也会触发恢复，但不该依赖这个副作用）。
