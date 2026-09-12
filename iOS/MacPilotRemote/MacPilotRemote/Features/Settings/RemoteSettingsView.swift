@@ -44,6 +44,23 @@ struct RemoteSettingsView: View {
                     .disabled(appModel.pairedMacs.isEmpty)
                 }
 
+                Section(appModel.text("transportSection")) {
+                    HStack {
+                        Text(appModel.text("transportCurrent"))
+                        Spacer()
+                        Text(appModel.transportDescription)
+                            .font(.system(.footnote, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text(appModel.text("transportBLE"))
+                        Spacer()
+                        Text(bleStatus)
+                            .font(.system(.footnote, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 if appModel.metrics != RemoteMetrics() {
                     Section(appModel.text("performance")) {
                         metricRow("metricDiscovery", appModel.metrics.discoveryLatencyMs)
@@ -75,6 +92,14 @@ struct RemoteSettingsView: View {
                 Text(appModel.text("resetPairingsConfirm"))
             }
         }
+    }
+
+    /// Bluetooth is only interesting when it is doing something; otherwise the
+    /// row would read the same on every launch.
+    private var bleStatus: String {
+        if appModel.bleFallbackScanning { return appModel.text("transportBLEScanning") }
+        if let message = appModel.lastBLEMessage { return message }
+        return appModel.text("transportBLEOff")
     }
 
     @ViewBuilder

@@ -1,5 +1,7 @@
+import CoreBluetooth
 import Foundation
 import MacPilotRemoteProtocol
+import MacPilotRemoteTransport
 import Network
 
 /// Publishes `_macpilot._tcp` over Bonjour and accepts the iPhone connections.
@@ -7,6 +9,8 @@ import Network
 /// The listener prefers the fixed port 43847 and falls back to a dynamic port,
 /// always advertising the real value through Bonjour so the iPhone never needs
 /// an IP address or a port.
+///
+/// A BLE peripheral runs alongside it as a second, network-independent link.
 @MainActor
 final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
     enum Status: Equatable {
@@ -41,6 +45,16 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
     private var connections: [UUID: RemoteConnection] = [:]
     private var isUsingDynamicPort = false
     private let logHandler: (String) -> Void
+
+    /// Second link, for when there is no usable network between the two
+    /// machines. Deliberately independent of the Bonjour listener: it starts
+    /// even when the listener fails, and it needs no port.
+    private lazy var blePeripheral: RemoteBLEPeripheral = {
+        let peripheral = RemoteBLEPeripheral()
+        peripheral.onLog = { [weak self] message in self?.log(message) }
+        peripheral.onChannel = { [weak self] channel in self?.accept(channel: channel) }
+        return peripheral
+    }()
 
     init(
         deviceStore: RemoteDeviceStore,
@@ -95,12 +109,15 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
             log("listener creation failed error=\(error.localizedDescription); retrying on a dynamic port")
             startWithDynamicPort(parameters: parameters)
         }
+
+        blePeripheral.start()
     }
 
     func stop() {
         listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
+        blePeripheral.stop()
         for connection in connections.values {
             connection.close()
         }
@@ -194,6 +211,15 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
         connections[remote.id] = remote
         remote.start()
         log("incoming connection accepted active=\(connections.count)")
+    }
+
+    /// A BLE client arrives as an already open L2CAP channel. Everything above
+    /// the transport is the same code the TCP clients run.
+    private func accept(channel: CBL2CAPChannel) {
+        let remote = RemoteConnection(transport: L2CAPStreamTransport(channel: channel), host: self)
+        connections[remote.id] = remote
+        remote.start()
+        log("incoming BLE connection accepted active=\(connections.count)")
     }
 
     // MARK: - Bonjour name

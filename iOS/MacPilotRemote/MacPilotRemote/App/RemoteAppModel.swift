@@ -1,6 +1,8 @@
 import Combine
+import CoreBluetooth
 import Foundation
 import MacPilotRemoteProtocol
+import MacPilotRemoteTransport
 import Network
 import SwiftUI
 
@@ -33,10 +35,24 @@ final class RemoteAppModel: ObservableObject {
     @Published private(set) var runningCommand: RemoteCommand?
     @Published var pairingPrompt: PairingPrompt?
     @Published private(set) var metrics = RemoteMetrics()
+    /// Which link carries the session and through which interface, e.g.
+    /// "网络 · en0" or "蓝牙". Surfaced in Settings so the transport can be
+    /// checked on a real network instead of inferred from logs.
+    @Published private(set) var transportDescription = "—"
+    /// True while the BLE fallback is scanning, so the diagnostic can show that
+    /// the fallback is armed rather than silently missing.
+    @Published private(set) var bleFallbackScanning = false
+    /// Last thing the Bluetooth fallback did, so a failed fallback is
+    /// diagnosable from the phone instead of only from the Mac's log.
+    @Published private(set) var lastBLEMessage: String?
 
     let store: PairedMacStore
     let discovery = RemoteDiscoveryService()
     let connection = RemoteConnectionManager()
+    /// Second link, used when there is no usable network to the Mac. It is not a
+    /// replacement: the network is faster whenever it works, so BLE only takes
+    /// over after the network has visibly failed.
+    let ble = RemoteBLECentral()
 
     private var activeMac: PairedMac?
     private var supervisorTask: Task<Void, Never>?
@@ -47,6 +63,11 @@ final class RemoteAppModel: ObservableObject {
     private var hasEverConnected = false
     private var didStart = false
     private var discoveryStartedAt: Date?
+    /// A channel opened by the BLE central, waiting for the network to fail.
+    private var pendingBLEChannel: CBL2CAPChannel?
+    /// Consecutive network attempts that produced no link. Drives the switch to
+    /// Bluetooth; reset whenever a session starts or the app comes forward.
+    private var connectAttempt = 0
 
     /// Retry cadence while the app is in the foreground. The first entries are
     /// deliberately tight: the user has just opened the app and is watching.
@@ -55,6 +76,8 @@ final class RemoteAppModel: ObservableObject {
     /// attempt that produced no transport within this long is dropped and
     /// retried — by then Bonjour usually has a fresh endpoint.
     private let connectAttemptTimeout: TimeInterval = 4
+    /// How many network attempts fail before the BLE channel is used instead.
+    private let bleFallbackAfterAttempts = 2
 
     init(store: PairedMacStore = PairedMacStore()) {
         self.store = store
@@ -83,12 +106,16 @@ final class RemoteAppModel: ObservableObject {
         discoveryStartedAt = Date()
         discovery.start()
 
+        ble.onLog = { [weak self] message in self?.bleLog(message) }
+        ble.onChannel = { [weak self] channel in self?.adoptBLEChannel(channel) }
+
         if let preferred = store.preferredMac {
             activeMac = preferred
             connectionState = .connecting
         } else {
             connectionState = .discovering
         }
+        startBLEFallback()
         startConnectSupervisor()
     }
 
@@ -96,14 +123,19 @@ final class RemoteAppModel: ObservableObject {
         switch phase {
         case .active:
             isForeground = true
+            // Back to the top of the preference order: the network may well be
+            // back, and the tight retry cadence is what the user is watching.
+            connectAttempt = 0
             // Re-arm with a fresh, tight retry cadence: opening the app is
             // exactly when the user expects an immediate connection.
+            startBLEFallback()
             startConnectSupervisor()
         case .background:
             // No background sockets in V1; close cleanly so the Mac releases
             // the connection instead of waiting for a timeout.
             isForeground = false
             stopConnectSupervisor()
+            stopBLEFallback()
             connection.disconnect(report: false)
             connectionState = hasEverConnected ? .reconnecting : .idle
         default:
@@ -180,6 +212,73 @@ final class RemoteAppModel: ObservableObject {
         supervisorTask = nil
     }
 
+    private func restartConnectSupervisor() {
+        stopConnectSupervisor()
+        startConnectSupervisor()
+    }
+
+    // MARK: - Bluetooth fallback
+
+    /// Name to show while the Mac is still unidentified; the handshake replaces
+    /// it with the real one.
+    private var blePeerName: String {
+        activeMac?.name ?? store.preferredMac?.name ?? "Mac"
+    }
+
+    /// Scanning only runs in the foreground and only while disconnected, so the
+    /// fallback never costs battery in the background or during a good session.
+    private func startBLEFallback() {
+        guard isForeground, !connectionState.isConnected else { return }
+        ble.start()
+        bleFallbackScanning = ble.isActive
+    }
+
+    private func stopBLEFallback() {
+        ble.stop()
+        bleFallbackScanning = false
+        discardPendingBLEChannel()
+    }
+
+    /// The central opened a channel. Hold it rather than dialling immediately:
+    /// the network is faster whenever it works, and displacing a good Wi-Fi link
+    /// with the slower one would be a regression.
+    private func adoptBLEChannel(_ channel: CBL2CAPChannel) {
+        discardPendingBLEChannel()
+        pendingBLEChannel = channel
+        bleFallbackScanning = false
+        lastBLEMessage = text("transportBLEReady")
+        // If the network has already been failing, use it now instead of waiting
+        // for the supervisor's next tick.
+        if !connectionState.isConnected, connectAttempt >= bleFallbackAfterAttempts {
+            restartConnectSupervisor()
+        }
+    }
+
+    private func discardPendingBLEChannel() {
+        guard let channel = pendingBLEChannel else { return }
+        pendingBLEChannel = nil
+        // An unused channel would sit open on the Mac as a silent client until
+        // its idle timeout reaped it.
+        channel.inputStream.close()
+        channel.outputStream.close()
+    }
+
+    private func bleLog(_ message: String) {
+        lastBLEMessage = message
+    }
+
+    /// Records which link is carrying the session so Settings can show it.
+    private func refreshTransportDescription() {
+        guard connectionState.isConnected, let kind = connection.transportKind else {
+            transportDescription = "—"
+            return
+        }
+        let link = connection.linkDescription
+        transportDescription = link.isEmpty || link == kind.displayName
+            ? kind.displayName
+            : "\(kind.displayName) · \(link)"
+    }
+
     private func runConnectSupervisor() async {
         var attempt = 0
         var attemptStartedAt = Date()
@@ -212,7 +311,8 @@ final class RemoteAppModel: ObservableObject {
                 await pause(delay)
                 if Task.isCancelled { return }
             }
-            attemptReconnect()
+            attemptReconnect(attempt: connectAttempt)
+            connectAttempt += 1
             attemptStartedAt = Date()
             attempt += 1
             await pause(0.2)
@@ -261,7 +361,9 @@ final class RemoteAppModel: ObservableObject {
             connectionState = .discovering
             return
         }
-        guard connection.connectingDeviceID != target.id else { return }
+        // Any attempt in flight wins, including a BLE one that has no device ID
+        // yet. The supervisor retries regardless, so declining here is safe.
+        guard !connection.hasActiveAttempt else { return }
         activeMac = store.mac(id: target.id)
         connect(to: target.endpoint, deviceID: target.id, name: target.name)
     }
@@ -280,10 +382,15 @@ final class RemoteAppModel: ObservableObject {
 
     private func handleConnected(deviceID: UUID, name: String, endpoint: RemoteConnectionManager.ResolvedEndpoint) {
         hasEverConnected = true
+        connectAttempt = 0
         stopConnectSupervisor()
+        // A working link makes the fallback redundant, and an idle channel left
+        // open only costs both devices power.
+        stopBLEFallback()
         connectionState = .connected
         errorKey = nil
         pairingPrompt = nil
+        refreshTransportDescription()
         // Record the device before `markConnected`, which only updates an
         // existing entry. Pairing itself writes nothing here, so a Mac would
         // otherwise stay listed as new forever and never become the default.
@@ -302,13 +409,33 @@ final class RemoteAppModel: ObservableObject {
 
     private func handleDisconnected() {
         guard connectionState != .idle else { return }
+        refreshTransportDescription()
         connectionState = hasEverConnected ? .reconnecting : .failed(text("errorNetwork"))
+        startBLEFallback()
         startConnectSupervisor()
     }
 
-    private func attemptReconnect() {
+    private func attemptReconnect(attempt: Int) {
         guard !connectionState.isConnected else { return }
         if !discovery.isBrowsing { discovery.start() }
+
+        // BLE is the fallback, not the default: it works without any shared
+        // network, but it is slower to establish and costs both devices power to
+        // hold open. So it only takes over once the network has visibly failed.
+        if attempt >= bleFallbackAfterAttempts, let channel = pendingBLEChannel {
+            pendingBLEChannel = nil
+            errorKey = nil
+            refreshTransportDescription()
+            connectionState = .connecting
+            connection.connect(
+                using: L2CAPStreamTransport(channel: channel),
+                deviceID: nil,
+                name: blePeerName,
+                clientID: store.clientID,
+                clientName: store.clientName
+            )
+            return
+        }
 
         if let mac = activeMac ?? store.preferredMac, let deviceID = mac.deviceID {
             if let online = discovery.onlineEndpoint(for: deviceID) {
@@ -381,6 +508,7 @@ final class RemoteAppModel: ObservableObject {
         store.remove(id: UUID(uuidString: mac.id) ?? UUID())
         if wasActive {
             stopConnectSupervisor()
+            stopBLEFallback()
             connection.disconnect(report: false)
             activeMac = nil
             connectionState = .discovering
@@ -389,6 +517,7 @@ final class RemoteAppModel: ObservableObject {
 
     func removeAllPairings() {
         stopConnectSupervisor()
+        stopBLEFallback()
         connection.disconnect(report: false)
         store.removeAll()
         activeMac = nil

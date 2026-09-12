@@ -18,7 +18,8 @@ let package = Package(
             name: "MacPilot",
             dependencies: [
                 "MacPilotRightClickKit",
-                .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol")
+                .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol"),
+                .product(name: "MacPilotRemoteTransport", package: "MacPilotRemoteProtocol")
             ]
         ),
         .executableTarget(
@@ -56,7 +57,8 @@ let package = Package(
             name: "MacPilotTests",
             dependencies: [
                 "MacPilot",
-                .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol")
+                .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol"),
+                .product(name: "MacPilotRemoteTransport", package: "MacPilotRemoteProtocol")
             ]
         ),
         .testTarget(

@@ -1,13 +1,17 @@
 import Foundation
 import MacPilotRemoteProtocol
+import MacPilotRemoteTransport
 import Network
 
-/// Owns the single long lived `NWConnection` to the Mac.
+/// Owns the single long lived link to the Mac.
 ///
 /// Responsibilities: framing, the pairing/authentication handshake, the session
 /// key, replay safe sequencing, request/response correlation and the 15 second
 /// keep alive ping. UI state is pushed out through the callbacks so the
 /// `RemoteAppModel` remains the single source of truth for the views.
+///
+/// The link itself is a `RemoteTransport`, so TCP over Wi-Fi/AWDL and BLE L2CAP
+/// both arrive here as the same byte stream and everything above is shared.
 @MainActor
 final class RemoteConnectionManager {
     /// Snapshot of where the Mac was actually reached, used for the next fast
@@ -39,11 +43,14 @@ final class RemoteConnectionManager {
     /// (connect latency ms, handshake latency ms) measured once per session.
     var onMetrics: (@MainActor (Int?, Int?) -> Void)?
 
-    private let queue = DispatchQueue(label: "com.misswell.macpilot.remote.ios.connection")
-
-    private var connection: NWConnection?
+    private var transport: RemoteTransport?
     private var buffer = Data()
     private var phase: Phase = .idle
+
+    /// Which link currently carries the session, and through which interface.
+    /// Surfaced in Settings so the transport can be verified on a real network.
+    private(set) var transportKind: RemoteTransportKind?
+    var linkDescription: String { transport?.linkDescription ?? "—" }
 
     private var sessionKey: RemoteSessionKey?
     private var sentSequence: UInt64 = 0
@@ -68,15 +75,40 @@ final class RemoteConnectionManager {
 
     var isReady: Bool { phase == .ready }
     var isPairing: Bool { phase == .pairing }
-    /// True once the TCP/TLS path is up, even if the handshake is still running.
+    /// True once the link is up, even if the handshake is still running.
     private(set) var isTransportReady = false
     /// Device currently being connected to, so discovery does not race itself.
     private(set) var connectingDeviceID: UUID?
+
+    /// True from the moment a link starts being dialled until it is torn down.
+    ///
+    /// `connectingDeviceID` cannot answer this on its own: a BLE channel has no
+    /// device ID until the Mac identifies itself in the handshake, so anything
+    /// guarding on the ID alone would happily cancel a live BLE attempt.
+    var hasActiveAttempt: Bool { transport != nil }
 
     // MARK: - Connect
 
     func connect(
         to endpoint: NWEndpoint,
+        deviceID: UUID?,
+        name: String,
+        clientID: String,
+        clientName: String
+    ) {
+        connect(
+            using: NetworkRemoteTransport(to: endpoint),
+            deviceID: deviceID,
+            name: name,
+            clientID: clientID,
+            clientName: clientName
+        )
+    }
+
+    /// Connects over any link. The caller picks the transport; everything from
+    /// the handshake down is identical, which is the whole point of the split.
+    func connect(
+        using transport: RemoteTransport,
         deviceID: UUID?,
         name: String,
         clientID: String,
@@ -92,29 +124,26 @@ final class RemoteConnectionManager {
         self.buffer = Data()
         self.didReportDisconnect = false
         self.phase = .connecting
+        self.transportKind = transport.kind
+        transport.onStateChange = { [weak self] state in self?.handleTransportState(state) }
+        transport.onReceive = { [weak self] data in
+            guard let self else { return }
+            self.buffer.append(data)
+            self.processBuffer()
+        }
+        self.transport = transport
         onStateChange?(.connecting)
-
-        let parameters = NWParameters.tcp
-        // Peer-to-peer helps when Bonjour resolves to an Apple device path; a
-        // raw host/port fast path stays plain TCP.
-        if case .service = endpoint {
-            parameters.includePeerToPeer = true
-        }
-
-        let connection = NWConnection(to: endpoint, using: parameters)
-        self.connection = connection
-        connection.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor in self?.handleState(state) }
-        }
-        connection.start(queue: queue)
+        transport.start()
     }
 
     func disconnect(report: Bool = true) {
         cancelPing()
         failPendingRequests(RemoteConnectionError.network("disconnected"))
-        connection?.stateUpdateHandler = nil
-        connection?.cancel()
-        connection = nil
+        transport?.onStateChange = nil
+        transport?.onReceive = nil
+        transport?.cancel()
+        transport = nil
+        transportKind = nil
         sessionKey = nil
         pairingExchange = nil
         serverPairingPublicKey = nil
@@ -170,32 +199,28 @@ final class RemoteConnectionManager {
 
     // MARK: - Connection state
 
-    private func handleState(_ state: NWConnection.State) {
+    private func handleTransportState(_ state: RemoteTransportState) {
         switch state {
         case .ready:
             isTransportReady = true
             transportReadyAt = Date()
             captureResolvedEndpoint()
             startHandshake()
-        case .waiting:
-            // Bonjour resolution and Wi-Fi settling can park the connection
-            // here for a moment; stay in `connecting` instead of alarming.
+        case .connecting, .waiting:
+            // Bonjour resolution, BLE channel setup and Wi-Fi settling can park
+            // the link here for a moment; stay in `connecting` instead of
+            // alarming the user.
             break
-        case .failed:
+        case .failed, .closed:
             disconnect()
-        case .cancelled:
-            disconnect()
-        default:
-            break
         }
     }
 
     private func captureResolvedEndpoint() {
-        guard let remote = connection?.currentPath?.remoteEndpoint else { return }
-        if case let .hostPort(host, port) = remote {
-            resolvedEndpoint.host = "\(host)"
-            resolvedEndpoint.port = port.rawValue
-        }
+        guard let transport else { return }
+        if let host = transport.remoteHost { resolvedEndpoint.host = host }
+        if let port = transport.remotePort { resolvedEndpoint.port = port }
+        if let service = transport.remoteServiceName { resolvedEndpoint.serviceName = service }
     }
 
     // MARK: - Handshake
@@ -211,7 +236,6 @@ final class RemoteConnectionManager {
             clientNonce: nonce
         )
         try? sendPlain(hello)
-        receive()
     }
 
     private func handlePlaintext(_ message: RemoteHandshakeMessage) {
@@ -366,8 +390,7 @@ final class RemoteConnectionManager {
     }
 
     private func resolvedServiceName() -> String? {
-        if case let .service(name, _, _, _) = connection?.endpoint { return name }
-        return nil
+        transport?.remoteServiceName
     }
 
     // MARK: - Secure traffic
@@ -384,23 +407,6 @@ final class RemoteConnectionManager {
 
     // MARK: - Receive / send
 
-    private func receive() {
-        connection?.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
-            Task { @MainActor in
-                guard let self, self.connection != nil else { return }
-                if let data, !data.isEmpty {
-                    self.buffer.append(data)
-                    self.processBuffer()
-                }
-                if error != nil || isComplete {
-                    self.disconnect()
-                    return
-                }
-                self.receive()
-            }
-        }
-    }
-
     private func processBuffer() {
         guard let frames = try? RemoteFrameCodec.extractFrames(from: &buffer) else {
             fail(.network("malformed frame"))
@@ -415,7 +421,7 @@ final class RemoteConnectionManager {
                 fail(.network("malformed handshake"))
                 return
             }
-            if connection == nil { return }
+            if transport == nil { return }
         }
     }
 
@@ -424,7 +430,7 @@ final class RemoteConnectionManager {
     }
 
     private func sendRaw(_ data: Data) {
-        connection?.send(content: data, completion: .contentProcessed { _ in })
+        transport?.send(data) { _ in }
     }
 
     // MARK: - Keep alive

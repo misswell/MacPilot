@@ -1,5 +1,6 @@
 import Foundation
 import MacPilotRemoteProtocol
+import MacPilotRemoteTransport
 import Network
 
 /// Delegate used by `RemoteConnection` to reach the server without holding a
@@ -31,7 +32,7 @@ final class RemoteConnection: Identifiable {
     /// actor, so only the raw socket work lives here.
     static let queue = DispatchQueue(label: "com.misswell.macpilot.remote.control")
 
-    private let connection: NWConnection
+    private let transport: RemoteTransport
     private weak var host: RemoteConnectionHost?
     private let router: RemoteCommandRouter
 
@@ -68,19 +69,40 @@ final class RemoteConnection: Identifiable {
 
     private static let defaultIdleCheckInterval: TimeInterval = 15
 
+    /// Every client — TCP over Wi-Fi/AWDL or BLE L2CAP — arrives as a byte
+    /// stream, so only the transport differs below this line.
     init(
+        transport: RemoteTransport,
+        host: RemoteConnectionHost,
+        idleTimeout: TimeInterval? = nil,
+        idleCheckInterval: TimeInterval? = nil
+    ) {
+        self.transport = transport
+        self.host = host
+        self.router = RemoteCommandRouter(service: host.screenControl, log: host.remoteLog)
+        self.remoteAddress = transport.remoteHost
+        self.idleTimeoutOverride = idleTimeout
+        self.idleCheckInterval = idleCheckInterval ?? Self.defaultIdleCheckInterval
+    }
+
+    convenience init(
         connection: NWConnection,
         host: RemoteConnectionHost,
         idleTimeout: TimeInterval? = nil,
         idleCheckInterval: TimeInterval? = nil
     ) {
-        self.connection = connection
-        self.host = host
-        self.router = RemoteCommandRouter(service: host.screenControl, log: host.remoteLog)
-        self.remoteAddress = Self.addressDescription(for: connection.endpoint)
-        self.idleTimeoutOverride = idleTimeout
-        self.idleCheckInterval = idleCheckInterval ?? Self.defaultIdleCheckInterval
+        self.init(
+            transport: NetworkRemoteTransport(connection: connection),
+            host: host,
+            idleTimeout: idleTimeout,
+            idleCheckInterval: idleCheckInterval
+        )
     }
+
+    /// Which link carries this client, for the connection list in Settings.
+    var transportKind: RemoteTransportKind { transport.kind }
+
+    var linkDescription: String { transport.linkDescription }
 
     private var effectiveIdleTimeout: TimeInterval {
         idleTimeoutOverride ?? RemoteConnectionIdlePolicy.timeout(isAuthenticated: isAuthenticated)
@@ -89,11 +111,14 @@ final class RemoteConnection: Identifiable {
     // MARK: - Lifecycle
 
     func start() {
-        connection.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor in self?.handleState(state) }
+        transport.onStateChange = { [weak self] state in self?.handleTransportState(state) }
+        transport.onReceive = { [weak self] data in
+            guard let self, !self.isClosed else { return }
+            self.lastActivityAt = Date()
+            self.buffer.append(data)
+            self.processBuffer()
         }
-        connection.start(queue: Self.queue)
-        receive()
+        transport.start()
         startIdleWatchdog()
     }
 
@@ -102,8 +127,9 @@ final class RemoteConnection: Identifiable {
         isClosed = true
         idleWatchdog?.cancel()
         idleWatchdog = nil
-        connection.stateUpdateHandler = nil
-        connection.cancel()
+        transport.onStateChange = nil
+        transport.onReceive = nil
+        transport.cancel()
         host?.remoteConnectionDidClose(self)
     }
 
@@ -129,43 +155,20 @@ final class RemoteConnection: Identifiable {
         }
     }
 
-    private func handleState(_ state: NWConnection.State) {
+    private func handleTransportState(_ state: RemoteTransportState) {
         switch state {
         case .ready:
-            host?.remoteLog("connection ready")
-        case .failed(let error):
-            host?.remoteLog("connection failed error=\(error.localizedDescription)")
+            host?.remoteLog("connection ready kind=\(transport.kind.rawValue) link=\(transport.linkDescription)")
+        case let .failed(reason):
+            host?.remoteLog("connection failed error=\(reason)")
             close()
-        case .cancelled:
+        case .closed:
             if !isClosed {
                 isClosed = true
                 host?.remoteConnectionDidClose(self)
             }
-        default:
+        case .connecting, .waiting:
             break
-        }
-    }
-
-    private func receive() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
-            Task { @MainActor in
-                guard let self, !self.isClosed else { return }
-                if let data, !data.isEmpty {
-                    self.lastActivityAt = Date()
-                    self.buffer.append(data)
-                    self.processBuffer()
-                }
-                if let error {
-                    self.host?.remoteLog("receive error=\(error.localizedDescription)")
-                    self.close()
-                    return
-                }
-                if isComplete {
-                    self.close()
-                    return
-                }
-                self.receive()
-            }
         }
     }
 
@@ -390,13 +393,11 @@ final class RemoteConnection: Identifiable {
 
     private func send(_ data: Data) {
         guard !isClosed else { return }
-        connection.send(content: data, completion: .contentProcessed { [weak self] error in
+        transport.send(data) { [weak self] error in
             guard let error else { return }
-            Task { @MainActor in
-                self?.host?.remoteLog("send failed error=\(error.localizedDescription)")
-                self?.close()
-            }
-        })
+            self?.host?.remoteLog("send failed error=\(error.localizedDescription)")
+            self?.close()
+        }
     }
 
     private func fail(_ error: RemoteProtocolError) async {
@@ -409,10 +410,5 @@ final class RemoteConnection: Identifiable {
             ))
         }
         close()
-    }
-
-    private static func addressDescription(for endpoint: NWEndpoint) -> String? {
-        guard case let .hostPort(host, _) = endpoint else { return nil }
-        return "\(host)"
     }
 }

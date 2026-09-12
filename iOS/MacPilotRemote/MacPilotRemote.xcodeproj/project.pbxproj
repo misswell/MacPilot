@@ -18,7 +18,9 @@
 		8ABE53FBAA8C5E88D864E561 /* RemoteConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */; };
 		97D7FA550D676240482EF5B6 /* RemoteDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */; };
 		ABAB1A3DD21B1D9F93831A4A /* MacPilotRemoteProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 2DA6CC718265164CF50E009F /* MacPilotRemoteProtocol */; };
+		BBA8EB473A8DFC5AFF6FC54E /* MacPilotRemoteTransport in Frameworks */ = {isa = PBXBuildFile; productRef = EC71CA884A51DA6FA3C258DF /* MacPilotRemoteTransport */; };
 		C0F29AE38E0B010578AAD67D /* RemoteModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A556F1AAEC7A9B11C37B641 /* RemoteModels.swift */; };
+		CC227C3CA888A9DE6E85633D /* RemoteBLECentral.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6E6922DECDEC1517C554428 /* RemoteBLECentral.swift */; };
 		CC59413625ABC1AAEE0F80AA /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21C2AB621EFBC8E6529C0E5 /* RootView.swift */; };
 		D9570EAFD947E6C943C5609E /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C3C7D3A57D31F56E250816 /* HomeView.swift */; };
 /* End PBXBuildFile section */
@@ -38,6 +40,7 @@
 		8D425482A5A46A96A727A35D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDiscoveryService.swift; sourceTree = "<group>"; };
 		A631B526163D86A62B57FE38 /* MacPilotRemoteProtocol */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MacPilotRemoteProtocol; path = ../../Packages/MacPilotRemoteProtocol; sourceTree = SOURCE_ROOT; };
+		A6E6922DECDEC1517C554428 /* RemoteBLECentral.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBLECentral.swift; sourceTree = "<group>"; };
 		CE506F7AEC00BC4D65847C12 /* RemoteSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSettingsView.swift; sourceTree = "<group>"; };
 		E21C2AB621EFBC8E6529C0E5 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -48,6 +51,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				ABAB1A3DD21B1D9F93831A4A /* MacPilotRemoteProtocol in Frameworks */,
+				BBA8EB473A8DFC5AFF6FC54E /* MacPilotRemoteTransport in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -73,6 +77,7 @@
 		5AD0C433F771B6DB57F8406B /* Networking */ = {
 			isa = PBXGroup;
 			children = (
+				A6E6922DECDEC1517C554428 /* RemoteBLECentral.swift */,
 				4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */,
 				96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */,
 			);
@@ -197,6 +202,7 @@
 			name = MacPilotRemote;
 			packageProductDependencies = (
 				2DA6CC718265164CF50E009F /* MacPilotRemoteProtocol */,
+				EC71CA884A51DA6FA3C258DF /* MacPilotRemoteTransport */,
 			);
 			productName = MacPilotRemote;
 			productReference = 07C1EB6A722858B0212F438D /* MacPilotRemote.app */;
@@ -250,6 +256,7 @@
 				36BB935C02EC8519CE7DAFB1 /* PairedMacStore.swift in Sources */,
 				1FDC655EF74A5B0A9E892D40 /* PairingSheetView.swift in Sources */,
 				2A4D3DB2192AC62F75C6B89D /* RemoteAppModel.swift in Sources */,
+				CC227C3CA888A9DE6E85633D /* RemoteBLECentral.swift in Sources */,
 				8ABE53FBAA8C5E88D864E561 /* RemoteConnectionManager.swift in Sources */,
 				97D7FA550D676240482EF5B6 /* RemoteDiscoveryService.swift in Sources */,
 				094E002356093BE6F77D140D /* RemoteKeychain.swift in Sources */,
@@ -466,6 +473,10 @@
 		2DA6CC718265164CF50E009F /* MacPilotRemoteProtocol */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = MacPilotRemoteProtocol;
+		};
+		EC71CA884A51DA6FA3C258DF /* MacPilotRemoteTransport */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MacPilotRemoteTransport;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

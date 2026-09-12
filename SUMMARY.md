@@ -278,9 +278,9 @@ MacPilot 新增配套 iPhone App「MacPilot 遥控」（`iOS/MacPilotRemote/`）
 ### 性能
 
 - 发现走 Bonjour（`NWBrowser`），不做 IP 扫描、不发 UDP 广播、不用 HTTP。
-- 连接采用**双路径竞速**：先用上次成功连接的地址直连（500ms 宽限期），超时即放弃并交给 Bonjour 结果，避免 mDNS 解析成为冷启动瓶颈。
-- 连接保持长活，命令走同一 TCP 连接；15 秒一次 `ping` 保活并回传往返延迟。
-- 断线按 `0、0.5、1、2、5` 秒退避重连；进入后台主动断开，回到前台立即重连。
+- 连接由**唯一一个前台监管循环**负责（见下节「自相残杀的快速路径」），先试上次成功连接的地址直连、再试 Bonjour 结果，尝试超过 4 秒无传输层才丢弃。
+- 连接保持长活，命令走同一连接；15 秒一次 `ping` 保活并回传往返延迟。
+- 重试节奏前密后疏 `0.25、0.5、1、1.5、2、3、5` 秒——刚打开 App 时最密；进入后台主动断开，回到前台立即重连。
 - 阶段七埋点：发现耗时、TCP 连接耗时、握手耗时、命令往返、命令执行耗时，iOS 设置页「连接性能」可见；Mac 端日志输出 `handshake complete event=... latency=...ms`。
 
 ### 验证
@@ -291,9 +291,36 @@ MacPilot 新增配套 iPhone App「MacPilot 遥控」（`iOS/MacPilotRemote/`）
 
 ### 踩过的坑
 
+- **自相残杀的「快速路径」：一个机制取消掉自己发起的连接，而没有任何东西再发起它。** 旧实现先直连上次的地址，然后 500ms 到点，如果传输层还没就绪就 `disconnect()` 掉**自己刚发起的那条连接**。链路本地的邻居解析冷启动很容易超过 500ms——尤其是 Mac 换了网段、记录里的地址已失效时，那正是用户报障的场景。而 Bonjour 结果通常就在这 500ms 内到达，`handleDiscovery` 看到「已有连接在飞」就正确让路了；等快速路径把自己杀掉之后**再没有东西重新发起连接**，因为发现只在结果**变化**时回调，Mac 一直在列表里不会变。于是永远停在「搜索中」，而手动点击走的是另一条优先用 Bonjour 新端点的路径，所以秒连。修法是把重连收敛成唯一一个监管循环：有连接在飞时绝不 `connect()`，超时才丢弃，且不管有没有回调都会继续重试。
+- **`connectingDeviceID` 不能用来判断「有没有尝试在飞」。** 蓝牙通道在握手拿到 `serverHello` 之前**没有 device ID**，所以把它传成 `nil` 时，任何只认 ID 的守卫都会以为「没有尝试」，于是放行一次新的连接、把活着的蓝牙尝试取消掉。现在用独立的 `hasActiveAttempt`（即「transport 是否存在」）判断。
+- **`CBUUID` 不是 `Sendable`**，`static let` 的 UUID 常量在 Swift 6 严格并发下会报 `MutableGlobalVariable`。仓库里已有的蓝牙标识符就是用 `nonisolated(unsafe)` 声明的，新代码保持一致。
 - **`NWBrowser` 必须用 `.bonjourWithTXTRecord`，不能用 `.bonjour`。** 两者都叫「Bonjour 浏览」，但 `.bonjour(type:domain:)` 的浏览描述符**不请求 TXT 记录**，每个结果都带 `metadata == .none`，于是 `RemoteServiceInfo(txtRecord:)` 解析失败、`makeMac` 把结果全部丢掉。现象是「手机永远找不到 Mac」，而 Mac 端 `dns-sd -B` / `-L` 一切正常、`lsof` 也显示端口在监听——因为它根本不是网络或权限问题。排查时看 iOS 日志里 `nw_browse_descriptor ... (no txt)`（错误）与 `(txt)`（正确）的区别即可一眼定位。
 - 这类「结果被静默过滤」的失败与「网络里确实没有目标」在 UI 上完全无法区分。因此 `RemoteDiscoveryService` 现在单独统计 `unrecognizedServiceCount` 并写 `os_log`，首页也区分「未发现」与「发现了但读不到信息」。
 - SwiftUI 中**嵌套的 `ObservableObject` 不会向上转发 `objectWillChange`**：视图观察 `RemoteAppModel` 时，直接读 `appModel.discovery.xxx` 不会随之刷新。发现相关状态改为镜像到 `RemoteAppModel` 自己的 `@Published` 属性。**同一个坑还会以「看起来能用」的形态出现**：`RemoteAppModel.pairedMacs` 转发到 `PairedMacStore`，因为 `handleDiscovery` / `handleConnected` 恰好也会改模型上的其他 `@Published`，列表看起来是正常的；但 `setDefault` 只改 store、`forget` 删除非当前设备时只改 store，这两条路径没有任何东西触发刷新，界面就会停在旧状态。最终改成把 `store.objectWillChange` 桥接到模型，而不是逐个镜像——镜像只是碰巧掩盖问题。
 - **`RemotePairing` 只写 Keychain，没人写设备列表。** `PairedMac` 结构体全工程从未被构造，而 `PairedMacStore.markConnected` 是 `guard var mac = mac(id:) else { return }`，只更新「已存在」的条目。于是配对成功后设备列表永远为空：已配对的 Mac 一直被当成新设备显示「配对」按钮，`preferredMacID` 永远为 nil，**「记住上次地址直连」的快速路径从未执行过**——功能看起来只是「偶尔慢一点」，实际是整条路径被静默禁用。现在 `handleConnected` 会先 `ensurePaired` 再 `markConnected`，并用 `RemoteKeychain.hasPairingKey` 认领「密钥还在、记录丢了」的 Mac（重装、旧版本）。
 - **`includePeerToPeer` 让发现不必局限在同一局域网，但系统可能因此挑中 AWDL。** `NWParameters.includePeerToPeer = true`（listener 与 browser 都设了）会让系统把 AWDL——AirDrop / AirPlay / Sidecar 用的点对点 Wi-Fi——也纳入候选，所以 Mac 接网线、iPhone 用蜂窝这种「不在同一网络」的组合理论上也能发现。实测确认服务确实在 `awdl0` 上广播，且与 App 同配置（`includePeerToPeer` + `.bonjourWithTXTRecord`）的 `NWBrowser` 会在 `awdl0` 上枚举到它。但副作用是：系统会自己挑传输，可能选中 AWDL，而 AWDL 是时间切片共享电台，吞吐和延迟都明显差于基础设施 Wi-Fi——对「<500ms」是个隐患。用 `Scripts/verify-awdl.sh check` 做前置检查、`Scripts/verify-awdl.sh watch` 判断一条连接到底走的是哪个接口（`lsof` 把 IPv6 链路本地的 scope 以十六进制写在地址里：`fe80:c::` 里 `c`=12=en0，`fe80:11::` 里 `11`=17=awdl0）。
 - **socket 是 `ESTABLISHED` 不代表客户端还活着。** iOS 会把挂起的 App 连同它的 TCP 连接一起冻结，连接会**无限期**保持 `ESTABLISHED`；而 TCP keepalive 是**对端内核**应答的，App 冻结了一样会 ACK，所以 keepalive 查不出这种情况。实测：同一台 iPhone 累积出 2–3 条 `ESTABLISHED`，但只有一条心跳流；Mac 端 `active` 计数只增不减，冻结的手机一直算「已连接」。只有**应用层心跳**能识别，因此 Mac 现在按 `RemoteConnectionIdlePolicy` 自行回收（已认证 90s / 配对中 180s——后者必须大于 120s 配对窗口，否则用户还在输码就被断开），keepalive 作为补充只负责「设备本身消失」。验证这类接线要小心：集成测试里 `RemoteFrameCodec.encodePlain` **内部已经做了长度前缀**，再套一层 `frame()` 会双份帧头，服务端按错误的长度切包后走 `fail()` 关闭连接——而 `lastActivityAt` 因为是在解析前打时间戳，仍然会更新，断言「流量刷新了心跳」会通过，只有断言「连接没被关闭」才暴露出问题。
+
+## 二十三、多传输层：抽出 `RemoteTransport`，蓝牙作为第二条通道
+
+「除了局域网，还有别的发现方式吗」的答案落地成了链路层可替换、协议层一行不动。
+
+### 分层
+
+- `MacPilotRemoteProtocol`（纯 Foundation + CryptoKit）：分帧、ChaChaPoly、配对、命令。**保持不变**。
+- `MacPilotRemoteTransport`（新 target，两端共用）：`RemoteTransport` 协议 + `NetworkRemoteTransport`（TCP，Wi-Fi 与 AWDL 是同一个实现，区别只在接口）+ `L2CAPStreamTransport`（BLE 流）。
+- 角色代码各自保留：Mac 是 `CBPeripheralManager` 外设（`RemoteBLEPeripheral`），iOS 是 `CBCentralManager`（`RemoteBLECentral`）——BLE 的角色本来就不对称，没有可共用的部分。
+
+### 为什么蓝牙便宜
+
+`CBL2CAPChannel`（macOS 10.14+ / iOS 11+）给的是 `InputStream`/`OutputStream`，是**面向流的**而不是消息。所以 4 字节长度前缀、ChaChaPoly、重放保护、配对信任链**全部原样复用**，只是把 `NWConnection` 换成流。GATT 服务只是一个交接仪式：手机读一个 characteristic 拿到 PSM，然后 `openL2CAPChannel`，之后就是同一条字节流。
+
+实测负载也够：最大的帧是带 P-256 公钥的 `serverHello`（350 B），加密命令帧 130 B，`getState` 应答 241 B；ATT MTU 185 B，即 1–2 个分片。
+
+### 传输选择
+
+Wi-Fi/AWDL 优先，蓝牙保底——**不是并列竞速**。蓝牙建立是数秒级（扫描 + 连接 + 服务发现 + 开 L2CAP），且两端都要耗电维持，所以只在网络**连续失败两次**之后接管；扫描只在前台且未连接时进行。已连接后立刻停止扫描并关掉闲置通道。
+
+### 诊断：接口名让 AWDL 可见
+
+设置页新增「连接方式」，显示当前链路与接口（`网络 · en0`、`网络 · awdl0`、`蓝牙`）以及蓝牙保底状态。接口名取自链路本地地址的 scope 后缀——实测确认 `currentPath?.localEndpoint` 会带 `%en0`（`fe80::cfc:eb99:7564:5494%en0.50445`），所以**一条连接到底走 Wi-Fi 还是 AWDL，现在在 App 里直接能看出来**，不必再用 `lsof` 的十六进制 scope 反推。

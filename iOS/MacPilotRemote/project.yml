@@ -29,6 +29,8 @@ targets:
     dependencies:
       - package: MacPilotRemoteProtocol
         product: MacPilotRemoteProtocol
+      - package: MacPilotRemoteProtocol
+        product: MacPilotRemoteTransport
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.misswell.macpilot.remote
