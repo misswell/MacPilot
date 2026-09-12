@@ -56,7 +56,7 @@ enum RemoteText {
 
         "actionLock": "锁屏",
         "actionDisplayOff": "黑屏",
-        "actionUnlock": "解锁",
+        "actionWakeDisplay": "亮屏",
         "actionWakeAndUnlock": "唤醒解锁",
         "actionRunning": "执行中…",
         "actionDone": "完成",
@@ -171,7 +171,7 @@ enum RemoteText {
 
         "actionLock": "Lock",
         "actionDisplayOff": "Blank",
-        "actionUnlock": "Unlock",
+        "actionWakeDisplay": "Wake screen",
         "actionWakeAndUnlock": "Wake & Unlock",
         "actionRunning": "Working…",
         "actionDone": "Done",

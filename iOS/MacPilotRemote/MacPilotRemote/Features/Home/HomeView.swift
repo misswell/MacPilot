@@ -69,11 +69,18 @@ struct HomeView: View {
 
     // MARK: - Actions
 
+    /// The four remote actions, paired by intent: the first row takes the Mac
+    /// away (lock, black), the second brings it back (light the screen, wake and
+    /// unlock).
+    ///
+    /// There is deliberately no plain "unlock" button: the Mac's unlock path
+    /// wakes the display itself when it is off, so a separate action was the same
+    /// thing with a second way to get it wrong.
     private var actionGrid: some View {
         LazyVGrid(columns: columns, spacing: 14) {
             actionButton(.lockScreen, titleKey: "actionLock", systemImage: "lock.fill", tint: .blue)
             actionButton(.displayOff, titleKey: "actionDisplayOff", systemImage: "moon.fill", tint: .indigo)
-            actionButton(.unlock, titleKey: "actionUnlock", systemImage: "lock.open.fill", tint: .teal)
+            actionButton(.wakeDisplay, titleKey: "actionWakeDisplay", systemImage: "sun.max.fill", tint: .yellow)
             actionButton(.wakeAndUnlock, titleKey: "actionWakeAndUnlock", systemImage: "sunrise.fill", tint: .orange)
         }
     }
