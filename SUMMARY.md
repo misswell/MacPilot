@@ -515,3 +515,67 @@ macOS 与 iOS 可用性完全一致（`10_14` / `11_0`），**iOS 可以发布 L
 ### 需要权衡的代价
 
 对调后**手机侧要持续广播**，而 iOS 外设广播有电量成本；后台行为也和现在（`bluetooth-central` 常驻扫描）不同。这是设计取舍，不应当由实现方单方面决定。
+
+## 二十九、角色对调：链路打通了，数据面另有两个真 bug
+
+### 对调本身是完全正确的
+
+Mac 当 central、手机当外设之后，**BLE 链路一次就建立成功**：
+
+```
+BLE central starting
+BLE central state=5
+BLE scanning for the phone
+BLE found the phone; connecting
+BLE opening L2CAP channel psm=192
+BLE L2CAP channel open
+connection ready kind=bluetooth link=BLE      ← 传输层生效
+incoming BLE connection accepted active=1
+```
+
+从「发现」到「通道打开」约 **0.9 秒**。第二十七、二十八节的判断得到证实：**原来那条方向（Mac 当外设、iOS 当 central）就是建立不起来**，换方向即刻可用。`publishL2CAPChannel` 在 iOS 上 `NS_AVAILABLE(10_14, 11_0)`，与 macOS 完全对称，分帧与 ChaChaPoly 层一行未改。
+
+### 顺带挖出两个真 bug（第二个是共享传输层的）
+
+**1. 看门狗用错了守卫（iOS）**
+
+```swift
+if connection.connectingDeviceID != nil {   // BLE 尝试没有 deviceID
+```
+
+`RemoteConnectionManager.hasActiveAttempt` 早就为这个坑写好（注释明确写着「BLE 通道在握手完成前没有 device ID，只看 ID 的守卫会乐意取消一次正在进行的 BLE 尝试」），**但看门狗没有用它**。后果：BLE 传输刚创建 200ms，循环就再走网络分支，`connect` 内部先 `disconnect()` 把 BLE 传输踩掉。
+
+**2. Foundation Stream 的线程/RunLoop 约束（共享层）**
+
+```swift
+func start() {
+    input.open()          // 在调用者线程（主线程）打开
+    output.open()
+    let thread = Thread { self?.run() }   // 却在另一条没有 RunLoop 的线程上轮询
+```
+
+`CBL2CAPChannel` 给的是 Foundation 流，而流**必须「调度到、打开于、使用于同一条正在跑 RunLoop 的线程」**。违反后在真实通道上立刻报 `Bad file descriptor`：两侧通道都打开、`connection ready` 都打了、**一个字节都走不动**。
+
+**为什么 35 个单元测试全绿却漏掉了它**：测试用的是 `CFStreamCreateBoundPair`，这种流对线程/RunLoop 不敏感。这是「测试通过 ≠ 真机可用」的一个典型案例。
+
+修法：`StreamPump` 端到端独占自己的线程——在那里 schedule + open，用 `StreamDelegate` 事件驱动读写（不再 4ms 轮询，对手机电量友好），外部唯一的调用 `enqueue` 用 `perform(_:on:)` 编送到同一线程。**35 个测试仍然全过。**
+
+### 当前状态：链路通、数据未通
+
+Mac 侧现在干净地反复建立通道（`Bad file descriptor` 已消失），但**手机侧始终没有在通道上发出 hello**，Mac 因此每次等到 `connection idle timeout; closing silent client`。链路每 ~65 秒断一次并自动重连。
+
+排查过程中用探针做过决定性实验：探针以 central 身份扫描、把真实 `RemoteBLEPeripheral`/`RemoteBLECentral` 装进独立 App、把每条流 schedule 到主 RunLoop 后逐字节记录——**4 分钟、4 条通道、收到 0 字节**，与 MacPilot 自己的现象一致。
+
+已用排除法否掉的原因：
+- ❌ 屏幕自动锁定导致 App 挂起 —— 设成「永不」后 65 秒断链周期依旧，不成立。
+- ❌ 手机侧流没打开 —— `Bad file descriptor` 消失后仍未发数据。
+- ❌ 128 位 UUID 不可见 / 广播缺设备名 / 与距离感应解锁抢链路 —— 见第二十七、二十八节。
+
+### 关于「BLE 后台存活」的实测结论（可写进文档）
+
+App 退到后台（或被系统挂起）后：
+- **广播继续**，Mac 仍能反复发现并连上手机（这正是整段排查里 Mac 一直能 `BLE found the phone` 的原因）；
+- 但 **App 不会去使用那条通道**——当前的看门狗只在 `isForeground` 时启动，所以后台不会发起协议握手；
+- iOS 会周期性断开后台外设连接（实测约 65 秒一次）。
+
+也就是说：**广播能活，会话不能活**。这与 V1「后台不开 socket、切后台就干净断开」的设计一致，但和「BLE 保底能在后台接上」的预期不同，需要在文档里写明。
