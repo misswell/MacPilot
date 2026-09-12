@@ -78,16 +78,23 @@ public final class L2CAPStreamTransport: RemoteTransport {
 /// ready and then errors out before a single byte moves. That is invisible to
 /// the unit tests, because the bound-pair streams they use tolerate it.
 ///
-/// So the pump owns its thread end to end: it schedules and opens both streams
-/// there, drives reads and writes from `StreamDelegate` events, and marshals the
-/// one call that arrives from outside — `enqueue` — onto the same thread.
+/// So the pump owns its thread end to end and never touches a stream from
+/// anywhere else. Reads are driven purely by `StreamDelegate` events. Writes are
+/// driven by the same events plus a slow tick: a queued write must not depend on
+/// a `hasSpaceAvailable` event arriving *after* it was queued, and the tick also
+/// means `send` never has to reach across threads to touch the stream — an
+/// earlier version did that with `perform(_:on:)`, and a dropped marshalling
+/// step looks exactly like a peer that never sent anything.
 private final class StreamPump: NSObject, @unchecked Sendable, StreamDelegate {
     private let input: InputStream
     private let output: OutputStream
     private let lock = NSLock()
     private var pending: [Data] = []
     private var stopped = false
-    private weak var thread: Thread?
+
+    /// How often a queued write is retried when no stream event arrives.
+    /// Only a fallback link pays this, and only while it is up.
+    private let flushInterval: TimeInterval = 0.1
 
     var onChunk: (@Sendable (Data) -> Void)?
     var onClosed: (@Sendable (String?) -> Void)?
@@ -101,29 +108,22 @@ private final class StreamPump: NSObject, @unchecked Sendable, StreamDelegate {
         let thread = Thread { [weak self] in self?.run() }
         thread.name = "com.misswell.macpilot.remote.transport.l2cap"
         thread.stackSize = 512 * 1024
-        self.thread = thread
         thread.start()
     }
 
     func enqueue(_ data: Data) {
+        // Only touches the queue: the streams belong to the pump thread.
         lock.lock()
         pending.append(data)
         lock.unlock()
-        // Touching the streams from here would break the single-thread rule, so
-        // hand the write to the run loop that owns them.
-        if let thread {
-            perform(#selector(writePending), on: thread, with: nil, waitUntilDone: false)
-        }
     }
 
     func stop() {
+        // The thread that opened the streams is the one that closes them; the
+        // bounded run loop wait picks this up promptly.
         lock.lock()
         stopped = true
         lock.unlock()
-        // The streams are closed by the thread that opened them.
-        if let thread {
-            perform(#selector(shutDown), on: thread, with: nil, waitUntilDone: false)
-        }
     }
 
     private var isStopped: Bool {
@@ -140,19 +140,20 @@ private final class StreamPump: NSObject, @unchecked Sendable, StreamDelegate {
         input.open()
         output.open()
 
-        // The run loop delivers the stream events; the bounded wait only exists
-        // so a stop request is noticed promptly.
+        let tick = Timer(timeInterval: flushInterval, repeats: true) { [weak self] _ in
+            self?.writePending()
+        }
+        RunLoop.current.add(tick, forMode: .default)
+
+        // Stream events drive the link; the bounded wait only exists so a stop
+        // request is noticed without depending on traffic.
         while !isStopped {
             _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.5))
         }
+
+        tick.invalidate()
         input.close()
         output.close()
-    }
-
-    @objc private func shutDown() {
-        // Nothing to do beyond the loop noticing: this runs on the pump thread,
-        // which is what makes the close legal.
-        _ = isStopped
     }
 
     // MARK: - StreamDelegate
@@ -187,7 +188,7 @@ private final class StreamPump: NSObject, @unchecked Sendable, StreamDelegate {
         }
     }
 
-    @objc private func writePending() {
+    private func writePending() {
         while !isStopped, output.hasSpaceAvailable, let next = peekPending() {
             let written = next.withUnsafeBytes { raw -> Int in
                 guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return 0 }
