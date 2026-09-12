@@ -41,6 +41,12 @@ struct ScreenBlankCandidate: Equatable {
     /// display list, because both an external monitor and a MacBook panel in
     /// clamshell mode answer no.
     let canDriveBacklight: Bool
+
+    /// Whether the display answers DDC/CI on its own I2C channel. This is what an
+    /// external monitor has instead of `DisplayServices`, and it is a real
+    /// backlight rather than a black cover: the panel goes dark, no pointer is
+    /// left floating on it, and nothing has to sleep.
+    var canDriveDDC = false
 }
 
 /// Decides how each online display gets blacked.
@@ -51,9 +57,12 @@ struct ScreenBlankCandidate: Equatable {
 /// real display sleep — and that is what quietly locks the session.
 enum ScreenBlankPlanner {
     enum Action: Equatable {
-        /// Drop the backlight to zero and hold it there.
+        /// Drop the backlight to zero through `DisplayServices` and hold it.
         case backlight
-        /// Cover the display with a black window.
+        /// Drop the backlight to zero through the monitor's own DDC/CI control.
+        case ddcBacklight
+        /// Cover the display with a black window, for a panel that answers
+        /// neither.
         case overlay
     }
 
@@ -64,15 +73,23 @@ enum ScreenBlankPlanner {
 
     /// Every candidate gets exactly one step. Built-in panels and
     /// backlight-capable displays come first, so a MacBook panel is blacked the
-    /// cheap way even when an external display happens to be the main one.
+    /// cheap way even when an external display happens to be the main one; a
+    /// black cover is the last resort, because it is the only one of the three
+    /// that leaves the panel lit.
     static func steps(for candidates: [ScreenBlankCandidate]) -> [Step] {
         candidates
             .sorted { lhs, rhs in
                 if lhs.canDriveBacklight != rhs.canDriveBacklight { return lhs.canDriveBacklight }
+                if lhs.canDriveDDC != rhs.canDriveDDC { return lhs.canDriveDDC }
                 if lhs.isBuiltIn != rhs.isBuiltIn { return lhs.isBuiltIn }
                 return lhs.displayID < rhs.displayID
             }
-            .map { Step(displayID: $0.displayID, action: $0.canDriveBacklight ? .backlight : .overlay) }
+            .map { candidate in
+                let action: Action = candidate.canDriveBacklight
+                    ? .backlight
+                    : (candidate.canDriveDDC ? .ddcBacklight : .overlay)
+                return Step(displayID: candidate.displayID, action: action)
+            }
     }
 }
 
@@ -116,6 +133,8 @@ enum DisplayPower {
     /// Original brightness of every display whose backlight is being held at
     /// zero, keyed by display.
     @MainActor private static var blankedDisplays: [CGDirectDisplayID: Float] = [:]
+    /// Same, for external displays blacked through their own DDC/CI control.
+    @MainActor private static var ddcBlankedDisplays: [CGDirectDisplayID: Double] = [:]
     /// True while black windows are covering the displays whose backlight could
     /// not be driven.
     @MainActor private static var isOverlayShowing = false
@@ -127,7 +146,9 @@ enum DisplayPower {
     @MainActor private static var displaySleepAssertion: IOPMAssertionID?
 
     /// True while MacPilot is holding the screen black.
-    @MainActor static var isBlanked: Bool { !blankedDisplays.isEmpty || isOverlayShowing }
+    @MainActor static var isBlanked: Bool {
+        !blankedDisplays.isEmpty || !ddcBlankedDisplays.isEmpty || isOverlayShowing
+    }
 
     /// Blacks every online display *without* putting any of them to sleep, so
     /// the system's "require password after the display is turned off" policy
@@ -150,6 +171,7 @@ enum DisplayPower {
         let idleAtBlank = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInputEventType)
 
         var blanked: [CGDirectDisplayID: Float] = [:]
+        var ddcBlanked: [CGDirectDisplayID: Double] = [:]
         var overlayScreens: [NSScreen] = []
         for step in steps {
             // Trust the probe, then verify: the state between the two can change
@@ -162,15 +184,24 @@ enum DisplayPower {
                 blanked[step.displayID] = original
                 continue
             }
+            if step.action == .ddcBacklight,
+               let ddc = DDCBacklight.shared,
+               let original = ddc.level(step.displayID),
+               ddc.setLevel(0, step.displayID) {
+                // Already confirmed at zero by the read-back inside setLevel.
+                ddcBlanked[step.displayID] = original
+                continue
+            }
             overlayScreens.append(contentsOf: screens(for: step.displayID))
         }
 
-        guard !blanked.isEmpty || !overlayScreens.isEmpty else {
+        guard !blanked.isEmpty || !ddcBlanked.isEmpty || !overlayScreens.isEmpty else {
             DiagnosticLog.write("DisplayPower", "display blank failed reason=noDisplayCouldBeBlacked")
             return false
         }
 
         blankedDisplays = blanked
+        ddcBlankedDisplays = ddcBlanked
         if !overlayScreens.isEmpty {
             ScreenBlankOverlay.shared.show(covering: overlayScreens)
             isOverlayShowing = true
@@ -179,7 +210,7 @@ enum DisplayPower {
         startUnblankWatcher(idleAtBlank: idleAtBlank)
         DiagnosticLog.write(
             "DisplayPower",
-            "display blanked without sleeping backlight=\(blanked.count) overlay=\(overlayScreens.count) displays=\(steps.map(\.displayID))"
+            "display blanked without sleeping backlight=\(blanked.count) ddc=\(ddcBlanked.count) overlay=\(overlayScreens.count) displays=\(steps.map(\.displayID))"
         )
         return true
     }
@@ -199,6 +230,14 @@ enum DisplayPower {
             }
         }
         blankedDisplays.removeAll()
+        if let ddc = DDCBacklight.shared {
+            for (displayID, original) in ddcBlankedDisplays {
+                // Best effort: the level the user had before the blank is the one
+                // thing worth restoring even if the monitor does not confirm it.
+                _ = ddc.setLevel(original, displayID)
+            }
+        }
+        ddcBlankedDisplays.removeAll()
         if isOverlayShowing {
             ScreenBlankOverlay.shared.hide()
             isOverlayShowing = false
@@ -233,11 +272,13 @@ enum DisplayPower {
     ///
     /// The built-in panel wins whenever its backlight can actually be driven,
     /// because that is the panel a MacBook user means by "screen brightness";
-    /// falling back to any other drivable display keeps an Apple external
-    /// display working. Pure, so the choice is testable without hardware.
+    /// falling back to any other drivable display keeps an Apple external display
+    /// working, and an external monitor that speaks DDC/CI is still a backlight
+    /// the slider can move. Pure, so the choice is testable without hardware.
     static func brightnessTarget(in candidates: [ScreenBlankCandidate]) -> CGDirectDisplayID? {
         candidates.first { $0.isBuiltIn && $0.canDriveBacklight }?.displayID
             ?? candidates.first { $0.canDriveBacklight }?.displayID
+            ?? candidates.first { $0.canDriveDDC }?.displayID
     }
 
     /// Current backlight level in `0...1`, or `nil` when no online display can
@@ -248,10 +289,13 @@ enum DisplayPower {
     /// moment it is opened.
     @MainActor
     static func brightness() -> Double? {
-        guard let driver = BrightnessDriver.shared,
-              let displayID = brightnessTarget(in: onlineCandidates()) else { return nil }
+        guard let displayID = brightnessTarget(in: onlineCandidates()) else { return nil }
         if let held = blankedDisplays[displayID] { return Double(held) }
-        return driver.current(displayID).map(Double.init)
+        if let held = ddcBlankedDisplays[displayID] { return held }
+        if let driver = BrightnessDriver.shared, let value = driver.current(displayID) {
+            return Double(value)
+        }
+        return DDCBacklight.shared?.level(displayID)
     }
 
     /// Drives the target display's backlight.
@@ -263,10 +307,13 @@ enum DisplayPower {
     @MainActor
     @discardableResult
     static func setBrightness(_ value: Double) -> Bool {
-        guard let driver = BrightnessDriver.shared,
-              let displayID = brightnessTarget(in: onlineCandidates()) else { return false }
+        guard let displayID = brightnessTarget(in: onlineCandidates()) else { return false }
         if isBlanked { unblankDisplay() }
-        return driver.apply(Float(min(max(value, 0), 1)), to: displayID)
+        let level = min(max(value, 0), 1)
+        if let driver = BrightnessDriver.shared, driver.current(displayID) != nil {
+            return driver.apply(Float(level), to: displayID)
+        }
+        return DDCBacklight.shared?.setLevel(level, displayID) ?? false
     }
 
     /// The display is not asleep, so nothing in the system brings the backlight
@@ -342,10 +389,16 @@ enum DisplayPower {
         guard CGGetOnlineDisplayList(count, &displayIDs, &count) == .success else { return [] }
         return displayIDs.prefix(Int(count)).compactMap { displayID in
             guard CGDisplayIsActive(displayID) != 0 else { return nil }
+            let canDriveBacklight = BrightnessDriver.shared?.current(displayID) != nil
+            // Only worth asking a display that has no `DisplayServices` backlight:
+            // a built-in panel answers no to DDC anyway, and this probe is an I2C
+            // round trip to the monitor.
+            let canDriveDDC = !canDriveBacklight && DDCBacklight.shared?.level(displayID) != nil
             return ScreenBlankCandidate(
                 displayID: displayID,
                 isBuiltIn: CGDisplayIsBuiltin(displayID) != 0,
-                canDriveBacklight: BrightnessDriver.shared?.current(displayID) != nil
+                canDriveBacklight: canDriveBacklight,
+                canDriveDDC: canDriveDDC
             )
         }
     }

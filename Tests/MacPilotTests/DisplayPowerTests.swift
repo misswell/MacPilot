@@ -28,9 +28,15 @@ extension DisplayPowerTests {
     private func candidate(
         _ displayID: UInt32,
         builtIn: Bool = false,
-        backlight: Bool = true
+        backlight: Bool = true,
+        ddc: Bool = false
     ) -> ScreenBlankCandidate {
-        ScreenBlankCandidate(displayID: displayID, isBuiltIn: builtIn, canDriveBacklight: backlight)
+        ScreenBlankCandidate(
+            displayID: displayID,
+            isBuiltIn: builtIn,
+            canDriveBacklight: backlight,
+            canDriveDDC: ddc
+        )
     }
 
     /// The regression this plan exists for: with an external monitor as the main
@@ -100,5 +106,62 @@ extension DisplayPowerTests {
             ScreenBlankCandidate(displayID: 2, isBuiltIn: false, canDriveBacklight: false),
         ]) == nil)
         #expect(DisplayPower.brightnessTarget(in: []) == nil)
+    }
+}
+
+extension DisplayPowerTests {
+    /// An external monitor has no `DisplayServices` backlight but does answer
+    /// DDC/CI, and that is a real backlight rather than a black cover: the panel
+    /// goes dark, so nothing is left glowing behind the pointer.
+    @Test func anExternalDisplayThatSpeaksDDCIsDippedRatherThanCovered() {
+        #expect(ScreenBlankPlanner.steps(for: [
+            candidate(2, backlight: false, ddc: true),
+        ]) == [
+            ScreenBlankPlanner.Step(displayID: 2, action: .ddcBacklight),
+        ])
+    }
+
+    /// A display that answers nothing still has to go black, and a cover is all
+    /// that is left short of a display sleep that would lock the session.
+    @Test func aDisplayThatAnswersNothingIsCovered() {
+        #expect(ScreenBlankPlanner.steps(for: [
+            candidate(2, backlight: false, ddc: false),
+        ]) == [
+            ScreenBlankPlanner.Step(displayID: 2, action: .overlay),
+        ])
+    }
+
+    /// Ordering matters because the covers go up last: a display MacPilot can
+    /// genuinely darken should never be waiting behind one it can only cover.
+    @Test func realBacklightsAreHandledBeforeCovers() {
+        #expect(ScreenBlankPlanner.steps(for: [
+            candidate(4, backlight: false, ddc: false),
+            candidate(3, backlight: false, ddc: true),
+            candidate(1, builtIn: true, backlight: true),
+        ]) == [
+            ScreenBlankPlanner.Step(displayID: 1, action: .backlight),
+            ScreenBlankPlanner.Step(displayID: 3, action: .ddcBacklight),
+            ScreenBlankPlanner.Step(displayID: 4, action: .overlay),
+        ])
+    }
+
+    /// The slider follows the same preference: the built-in panel first, then a
+    /// system backlight, and an external monitor's DDC channel as the last thing
+    /// that is still a backlight. Without this an external-only Mac (a MacBook in
+    /// clamshell mode) reports no brightness at all and the phone hides the row.
+    @Test func theBrightnessSliderFallsBackToADisplayThatSpeaksDDC() {
+        #expect(DisplayPower.brightnessTarget(in: [
+            candidate(1, builtIn: true, backlight: false, ddc: false),
+            candidate(2, backlight: false, ddc: true),
+        ]) == 2)
+        // The built-in panel still wins when it can be driven.
+        #expect(DisplayPower.brightnessTarget(in: [
+            candidate(1, builtIn: true, backlight: true, ddc: false),
+            candidate(2, backlight: false, ddc: true),
+        ]) == 1)
+        // A cover-only display offers no backlight to move.
+        #expect(DisplayPower.brightnessTarget(in: [
+            candidate(2, backlight: false, ddc: false),
+        ]) == nil)
     }
 }
