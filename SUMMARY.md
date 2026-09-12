@@ -554,22 +554,45 @@ func start() {
     let thread = Thread { self?.run() }   // 却在另一条没有 RunLoop 的线程上轮询
 ```
 
-`CBL2CAPChannel` 给的是 Foundation 流，而流**必须「调度到、打开于、使用于同一条正在跑 RunLoop 的线程」**。违反后在真实通道上立刻报 `Bad file descriptor`：两侧通道都打开、`connection ready` 都打了、**一个字节都走不动**。
+`CBL2CAPChannel` 给的是 Foundation 流，而流**必须「调度到、打开于、使用于同一条正在跑 RunLoop 的线程」**。原实现违反了这个约定（在调用者线程 open、在另一条没有 RunLoop 的线程上轮询），并且依赖了一个不可靠的事件：单元测试里那条 `CFStreamCreateBoundPair` 的 `hasSpaceAvailable` 实测不会触发（加了 0.1 秒兜底 tick 后，连续发送用例从 14ms 变成 113ms，正是它在起作用）。
 
-**为什么 35 个单元测试全绿却漏掉了它**：测试用的是 `CFStreamCreateBoundPair`，这种流对线程/RunLoop 不敏感。这是「测试通过 ≠ 真机可用」的一个典型案例。
+修法：`StreamPump` 端到端独占自己的线程——在那里 schedule + open，读用 `StreamDelegate` 事件驱动，写由事件加兜底 tick 保证；`send` 只碰队列、绝不跨线程碰流（早先一版用 `perform(_:on:)` 编送，而**编送一旦落空，现象与「对端从没发过东西」完全无法区分**，这个失败模式不值得留着）。**35 个测试仍然全过。**
 
-修法：`StreamPump` 端到端独占自己的线程——在那里 schedule + open，用 `StreamDelegate` 事件驱动读写（不再 4ms 轮询，对手机电量友好），外部唯一的调用 `enqueue` 用 `perform(_:on:)` 编送到同一线程。**35 个测试仍然全过。**
+> ⚠️ **更正**：这一条当时被我当成 `Bad file descriptor` 的根因，**是错的**。下面的探针实验证明，即使把两条流完美调度并打开在同一个 RunLoop 上，也仍然第一次读写就失败。它是一处真实的契约违反，值得修，但**不是拦路的那个**。
+
+**3. `CBL2CAPChannel` 没有被保留（共享层）**
+
+`L2CAPStreamTransport` 只存了 `channel.inputStream` / `channel.outputStream`，而流是通道的附属物。改成在传输层里持有 `CBL2CAPChannel` 本身。同样**不是**拦路的那个，但形状是对的。
+
+### 决定性实验：数据面卡在平台层，不在我们的代码里
+
+最小探针（复用真实的 `RemoteBLECentral`）拿到通道后，把两条流 **schedule 到主 RunLoop、在同一线程 open、并保留 channel 对象**，然后每秒打印流状态并试探读写：
+
+```
+[+29.2s] in=2(已打开) out=2(已打开) inAvail=true outSpace=true 错误: 无
+[+29.2s] <<< 读返回 -1
+[+29.2s] >>> 试探写 4 字节 → 返回 -1
+[+31.2s] in=7(错误) out=7(错误) 错误: Bad file descriptor
+```
+
+流先自报「已打开、可读、可写」，**第一次读和第一次写就双双失败**，随即整体转入错误态。同一条 macOS central → iOS peripheral 路径，两种独立实现（MacPilot 与几十行的探针）复现同一结果。
+
+**这条阴性结果一次排掉三个假设**：不是线程/RunLoop 模型（已完美满足）、不是 channel 生命周期（已持有）、不是 MacPilot 的逻辑（探针里没有 MacPilot 的逻辑）。剩下的解释是**对端（iOS 外设侧）没有把通道真正建立起来**，但手机侧没有任何日志可看——`log collect --device` 需要 root（见第二十七节），而 App 的 BLE 路径本身不写系统日志。
+
+**下一步该做的**：给 iOS 端加**屏上通道诊断**（`peripheralManager(_:didOpen:error:)` 是否触发、pump 打开成功与否、写入/读取字节数、最近一次流错误），把唯一的可见通道（App 界面）用起来。这是能一次定位问题的下一步，改动很小。
 
 ### 当前状态：链路通、数据未通
 
-Mac 侧现在干净地反复建立通道（`Bad file descriptor` 已消失），但**手机侧始终没有在通道上发出 hello**，Mac 因此每次等到 `connection idle timeout; closing silent client`。链路每 ~65 秒断一次并自动重连。
+Mac 侧稳定地反复建立通道（发现→通道打开约 0.9 秒），但**那条通道上一次可用的读写都没有成功过**，手机侧也始终没有发出 hello，Mac 因此每次等到 `connection idle timeout; closing silent client`。链路每 ~65 秒断一次并自动重连。
 
-排查过程中用探针做过决定性实验：探针以 central 身份扫描、把真实 `RemoteBLEPeripheral`/`RemoteBLECentral` 装进独立 App、把每条流 schedule 到主 RunLoop 后逐字节记录——**4 分钟、4 条通道、收到 0 字节**，与 MacPilot 自己的现象一致。
+更早的一次探针里，4 分钟、4 条通道、**收到 0 字节**，与 MacPilot 自己的现象一致。
 
 已用排除法否掉的原因：
-- ❌ 屏幕自动锁定导致 App 挂起 —— 设成「永不」后 65 秒断链周期依旧，不成立。
-- ❌ 手机侧流没打开 —— `Bad file descriptor` 消失后仍未发数据。
 - ❌ 128 位 UUID 不可见 / 广播缺设备名 / 与距离感应解锁抢链路 —— 见第二十七、二十八节。
+- ❌ 角色方向 —— 对调后链路立刻可建立，方向确实曾是问题（第二十八、二十九节开头），但**只解决了「连不上」，没有解决「传不动」**。
+- ❌ 看门狗误取消 BLE 尝试 —— 已修，链路因此能稳定建立。
+- ❌ 屏幕自动锁定导致 App 挂起 —— 设成「永不」后现象不变，不成立。
+- ❌ 线程/RunLoop、channel 生命周期 —— 见上面的更正与决定性实验，均已排除。
 
 ### 关于「BLE 后台存活」的实测结论（可写进文档）
 
