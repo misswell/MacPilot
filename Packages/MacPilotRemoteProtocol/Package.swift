@@ -26,7 +26,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MacPilotRemoteProtocolTests",
-            dependencies: ["MacPilotRemoteProtocol"]
+            dependencies: ["MacPilotRemoteProtocol", "MacPilotRemoteTransport"]
         )
     ]
 )
