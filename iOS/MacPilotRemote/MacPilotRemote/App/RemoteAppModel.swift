@@ -39,17 +39,22 @@ final class RemoteAppModel: ObservableObject {
     let connection = RemoteConnectionManager()
 
     private var activeMac: PairedMac?
-    private var reconnectTask: Task<Void, Never>?
-    private var fastPathTask: Task<Void, Never>?
-    private var reconnectIndex = 0
+    private var supervisorTask: Task<Void, Never>?
+    /// Bumped on every start/stop so a finishing supervisor run cannot clear the
+    /// handle of a newer one.
+    private var supervisorGeneration = 0
+    private var isForeground = true
     private var hasEverConnected = false
     private var didStart = false
     private var discoveryStartedAt: Date?
 
-    /// Reconnect backoff while the app is in the foreground.
-    private let reconnectDelays: [TimeInterval] = [0, 0.5, 1, 2, 5]
-    /// The remembered address gets a short head start before Bonjour takes over.
-    private let fastPathGrace: Duration = .milliseconds(500)
+    /// Retry cadence while the app is in the foreground. The first entries are
+    /// deliberately tight: the user has just opened the app and is watching.
+    private let connectRetryDelays: [TimeInterval] = [0.25, 0.5, 1, 1.5, 2, 3, 5]
+    /// A stale remembered address can sit in `.waiting` indefinitely, so an
+    /// attempt that produced no transport within this long is dropped and
+    /// retried — by then Bonjour usually has a fresh endpoint.
+    private let connectAttemptTimeout: TimeInterval = 4
 
     init(store: PairedMacStore = PairedMacStore()) {
         self.store = store
@@ -81,21 +86,24 @@ final class RemoteAppModel: ObservableObject {
         if let preferred = store.preferredMac {
             activeMac = preferred
             connectionState = .connecting
-            startFastPath(preferred)
         } else {
             connectionState = .discovering
         }
+        startConnectSupervisor()
     }
 
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
-            if !connectionState.isConnected, activeMac != nil || store.preferredMac != nil {
-                attemptReconnect()
-            }
+            isForeground = true
+            // Re-arm with a fresh, tight retry cadence: opening the app is
+            // exactly when the user expects an immediate connection.
+            startConnectSupervisor()
         case .background:
             // No background sockets in V1; close cleanly so the Mac releases
             // the connection instead of waiting for a timeout.
+            isForeground = false
+            stopConnectSupervisor()
             connection.disconnect(report: false)
             connectionState = hasEverConnected ? .reconnecting : .idle
         default:
@@ -142,19 +150,77 @@ final class RemoteAppModel: ObservableObject {
 
     // MARK: - Connection
 
-    private func startFastPath(_ mac: PairedMac) {
-        guard let endpoint = mac.rememberedEndpoint, let deviceID = mac.deviceID else { return }
-        connect(to: endpoint, deviceID: deviceID, name: mac.name)
-        fastPathTask?.cancel()
-        fastPathTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: self?.fastPathGrace ?? .milliseconds(500))
-            guard let self, !Task.isCancelled else { return }
-            // The remembered address did not come up in time; let Bonjour win.
-            if !self.connection.isTransportReady {
-                self.connection.disconnect(report: false)
-                self.connectionState = .discovering
+    /// Owns connecting while the app is in the foreground.
+    ///
+    /// This is the only retry authority. It used to be two mechanisms racing
+    /// each other: a 500ms "fast path" cancelled its own in-flight connection
+    /// when the remembered address was slow (a cold link-local neighbour lookup
+    /// easily exceeds that), and nothing restarted it — discovery only reports
+    /// *changes*, so with the Mac already in its results no further callback
+    /// arrived. The app then sat on "searching" indefinitely while a manual tap,
+    /// which takes the direct path, connected immediately.
+    private func startConnectSupervisor() {
+        guard isForeground, supervisorTask == nil else { return }
+        supervisorGeneration += 1
+        let generation = supervisorGeneration
+        supervisorTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runConnectSupervisor()
+            // Only clear our own handle: a stop()/start() pair may already have
+            // installed a newer run.
+            if self.supervisorGeneration == generation {
+                self.supervisorTask = nil
             }
         }
+    }
+
+    private func stopConnectSupervisor() {
+        supervisorGeneration += 1
+        supervisorTask?.cancel()
+        supervisorTask = nil
+    }
+
+    private func runConnectSupervisor() async {
+        var attempt = 0
+        var attemptStartedAt = Date()
+
+        while !Task.isCancelled {
+            if connectionState.isConnected { return }
+            // Never interrupt a handshake: the user may be typing a pair code.
+            if connectionState == .pairing || connectionState == .authenticating {
+                attempt = 0
+                await pause(1)
+                continue
+            }
+            // A transport exists, so the handshake is already under way.
+            if connection.isTransportReady {
+                await pause(0.3)
+                continue
+            }
+            if connection.connectingDeviceID != nil {
+                if Date().timeIntervalSince(attemptStartedAt) < connectAttemptTimeout {
+                    // Let the attempt finish rather than stomping on it: calling
+                    // connect() again would cancel a connection that is about
+                    // to succeed.
+                    await pause(0.2)
+                    continue
+                }
+                connection.disconnect(report: false)
+            }
+            if attempt > 0 {
+                let delay = connectRetryDelays[min(attempt - 1, connectRetryDelays.count - 1)]
+                await pause(delay)
+                if Task.isCancelled { return }
+            }
+            attemptReconnect()
+            attemptStartedAt = Date()
+            attempt += 1
+            await pause(0.2)
+        }
+    }
+
+    private func pause(_ seconds: TimeInterval) async {
+        try? await Task.sleep(for: .seconds(seconds))
     }
 
     /// Re-adopts Macs whose long-term key is still in the Keychain but whose
@@ -214,9 +280,7 @@ final class RemoteAppModel: ObservableObject {
 
     private func handleConnected(deviceID: UUID, name: String, endpoint: RemoteConnectionManager.ResolvedEndpoint) {
         hasEverConnected = true
-        reconnectIndex = 0
-        reconnectTask?.cancel()
-        reconnectTask = nil
+        stopConnectSupervisor()
         connectionState = .connected
         errorKey = nil
         pairingPrompt = nil
@@ -239,19 +303,7 @@ final class RemoteAppModel: ObservableObject {
     private func handleDisconnected() {
         guard connectionState != .idle else { return }
         connectionState = hasEverConnected ? .reconnecting : .failed(text("errorNetwork"))
-        scheduleReconnect()
-    }
-
-    private func scheduleReconnect() {
-        reconnectTask?.cancel()
-        let index = min(reconnectIndex, reconnectDelays.count - 1)
-        let delay = reconnectDelays[index]
-        reconnectIndex += 1
-        reconnectTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard let self, !Task.isCancelled else { return }
-            self.attemptReconnect()
-        }
+        startConnectSupervisor()
     }
 
     private func attemptReconnect() {
@@ -276,6 +328,7 @@ final class RemoteAppModel: ObservableObject {
         activeMac = store.mac(id: mac.id)
         errorKey = nil
         connect(to: mac.endpoint, deviceID: mac.id, name: mac.name)
+        startConnectSupervisor()
     }
 
     func connect(to mac: PairedMac) {
@@ -289,11 +342,16 @@ final class RemoteAppModel: ObservableObject {
         } else {
             connectionState = .discovering
         }
+        startConnectSupervisor()
     }
 
     func retry() {
-        reconnectIndex = 0
-        attemptReconnect()
+        errorKey = nil
+        // Drop whatever is in flight so the user sees a fresh attempt now
+        // instead of waiting out the current one's timeout.
+        connection.disconnect(report: false)
+        stopConnectSupervisor()
+        startConnectSupervisor()
     }
 
     // MARK: - Pairing
@@ -322,6 +380,7 @@ final class RemoteAppModel: ObservableObject {
         let wasActive = activeMac?.id == mac.id
         store.remove(id: UUID(uuidString: mac.id) ?? UUID())
         if wasActive {
+            stopConnectSupervisor()
             connection.disconnect(report: false)
             activeMac = nil
             connectionState = .discovering
@@ -329,6 +388,7 @@ final class RemoteAppModel: ObservableObject {
     }
 
     func removeAllPairings() {
+        stopConnectSupervisor()
         connection.disconnect(report: false)
         store.removeAll()
         activeMac = nil
