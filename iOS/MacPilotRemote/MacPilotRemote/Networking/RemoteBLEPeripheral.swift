@@ -25,6 +25,20 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     private var psm: CBL2CAPPSM?
     private var wantsToRun = false
     private var isOnAir = false
+    #if DEBUG
+    private var diagnosticTransport: L2CAPStreamTransport?
+    private var isEchoDiagnostic: Bool {
+        ProcessInfo.processInfo.environment["MACPILOT_BLE_ECHO"] == "1"
+    }
+    #endif
+
+    private var requiresEncryption: Bool {
+        #if DEBUG
+        if isEchoDiagnostic,
+           ProcessInfo.processInfo.environment["MACPILOT_BLE_UNENCRYPTED"] == "1" { return false }
+        #endif
+        return true
+    }
 
     /// Whether the phone is actually reachable over BLE right now. This is driven
     /// by the advertisement callback, not by intent: reporting intent here is
@@ -40,7 +54,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
             // The manager is kept across restarts: recreating it is slow and the
             // state callback that triggers publishing only fires on a change.
             if manager.state == .poweredOn, psm == nil {
-                manager.publishL2CAPChannel(withEncryption: true)
+                manager.publishL2CAPChannel(withEncryption: requiresEncryption)
             }
             return
         }
@@ -52,6 +66,10 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     }
 
     func stop() {
+        #if DEBUG
+        diagnosticTransport?.cancel()
+        diagnosticTransport = nil
+        #endif
         wantsToRun = false
         isOnAir = false
         guard let manager else { return }
@@ -95,7 +113,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
         case .poweredOn:
             guard wantsToRun else { return }
             onLog?("BLE advertising: radio on; publishing L2CAP channel")
-            peripheral.publishL2CAPChannel(withEncryption: true)
+            peripheral.publishL2CAPChannel(withEncryption: requiresEncryption)
         case .unauthorized:
             onLog?("BLE unauthorized; the Bluetooth permission is required for the fallback link")
         case .unsupported:
@@ -118,7 +136,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
             return
         }
         psm = PSM
-        onLog?("BLE L2CAP channel published psm=\(PSM)")
+        onLog?("BLE L2CAP channel published psm=\(PSM) encryption=\(requiresEncryption)")
         publishService(on: peripheral, psm: PSM)
     }
 
@@ -164,12 +182,25 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
         didOpen channel: CBL2CAPChannel?,
         error: Error?
     ) {
+        onLog?("BLE didOpen channel=\(channel != nil) error=\(error.map { "\(($0 as NSError).domain)/\(($0 as NSError).code): \($0.localizedDescription)" } ?? "none")")
         if let error {
             onLog?("BLE L2CAP open failed error=\(error.localizedDescription)")
             return
         }
         guard let channel else { return }
-        onLog?("BLE L2CAP channel open")
+        onLog?("BLE L2CAP channel open psm=\(channel.psm) peer=\(String(describing: channel.peer))")
+        #if DEBUG
+        if isEchoDiagnostic {
+            diagnosticTransport?.cancel()
+            let transport = L2CAPStreamTransport(channel: channel)
+            diagnosticTransport = transport
+            transport.onDiagnostic = { [weak self] message in self?.onLog?(message) }
+            transport.onStateChange = { [weak self] state in self?.onLog?("echo state=\(state)") }
+            transport.onReceive = { [weak transport] bytes in transport?.send(bytes) { _ in } }
+            transport.start()
+            return
+        }
+        #endif
         onChannel?(channel)
     }
 }

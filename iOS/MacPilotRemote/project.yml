@@ -41,3 +41,34 @@ targets:
         INFOPLIST_FILE: MacPilotRemote/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         SUPPORTS_MACCATALYST: NO
+
+  MacPilotRemoteScreenshots:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ScreenshotTests
+    dependencies:
+      - target: MacPilotRemote
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.misswell.macpilot.remote.screenshots
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: MacPilotRemote
+        SUPPORTS_MACCATALYST: NO
+
+schemes:
+  MacPilotRemote:
+    build:
+      targets:
+        MacPilotRemote: all
+    archive:
+      config: Release
+  MacPilotRemoteScreenshots:
+    build:
+      targets:
+        MacPilotRemote: all
+        MacPilotRemoteScreenshots: [test]
+    test:
+      config: Debug
+      targets:
+        - MacPilotRemoteScreenshots

@@ -15,6 +15,7 @@
 		2A4D3DB2192AC62F75C6B89D /* RemoteAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2664C90B50B85054CF47D9B3 /* RemoteAppModel.swift */; };
 		36BB935C02EC8519CE7DAFB1 /* PairedMacStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448BBB633EBACB20D7BD15CB /* PairedMacStore.swift */; };
 		58102F1CE9508E1A18B14846 /* RemoteSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE506F7AEC00BC4D65847C12 /* RemoteSettingsView.swift */; };
+		70EB80CE61981CAF16DD2B71 /* ScreenshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447CDE5B9C0AAC4C65F9D517 /* ScreenshotTests.swift */; };
 		746C20ADD2D532ED80A341B6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D110E3CC36E64E72A3521A8C /* Assets.xcassets */; };
 		7F9A392EE7B644AB9A987F7A /* RemoteBLEPeripheral.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7890B51F3A461DD34A2BF5C8 /* RemoteBLEPeripheral.swift */; };
 		8ABE53FBAA8C5E88D864E561 /* RemoteConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */; };
@@ -26,6 +27,16 @@
 		D9570EAFD947E6C943C5609E /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C3C7D3A57D31F56E250816 /* HomeView.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		D8CFC4C5F5A5605DA4486462 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8C641AE4462303326A5A6484 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BF89C0BED59832E585A6F654;
+			remoteInfo = MacPilotRemote;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		07C1EB6A722858B0212F438D /* MacPilotRemote.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MacPilotRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		09C3C7D3A57D31F56E250816 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
@@ -33,7 +44,9 @@
 		2664C90B50B85054CF47D9B3 /* RemoteAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAppModel.swift; sourceTree = "<group>"; };
 		3A556F1AAEC7A9B11C37B641 /* RemoteModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteModels.swift; sourceTree = "<group>"; };
 		444FF6D1A1FFC5A9B039FE51 /* PairingSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingSheetView.swift; sourceTree = "<group>"; };
+		447CDE5B9C0AAC4C65F9D517 /* ScreenshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotTests.swift; sourceTree = "<group>"; };
 		448BBB633EBACB20D7BD15CB /* PairedMacStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedMacStore.swift; sourceTree = "<group>"; };
+		4AE0998F761C1A856CE81DDD /* MacPilotRemoteScreenshots.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = MacPilotRemoteScreenshots.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteConnectionManager.swift; sourceTree = "<group>"; };
 		5AE3A75BF934E7F7884ACA12 /* RemoteKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteKeychain.swift; sourceTree = "<group>"; };
 		6DD7E33EB369C3302C36BADA /* RemoteText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteText.swift; sourceTree = "<group>"; };
@@ -74,6 +87,14 @@
 				5AE3A75BF934E7F7884ACA12 /* RemoteKeychain.swift */,
 			);
 			path = Security;
+			sourceTree = "<group>";
+		};
+		39EC12C68FFA2B00A907F119 /* ScreenshotTests */ = {
+			isa = PBXGroup;
+			children = (
+				447CDE5B9C0AAC4C65F9D517 /* ScreenshotTests.swift */,
+			);
+			path = ScreenshotTests;
 			sourceTree = "<group>";
 		};
 		5AD0C433F771B6DB57F8406B /* Networking */ = {
@@ -168,6 +189,7 @@
 			children = (
 				D1770DB10F150C4D6CE0E142 /* MacPilotRemote */,
 				D1421A93E52D81179AD54037 /* Packages */,
+				39EC12C68FFA2B00A907F119 /* ScreenshotTests */,
 				EF8776579A3F761EECCE4C3C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -184,6 +206,7 @@
 			isa = PBXGroup;
 			children = (
 				07C1EB6A722858B0212F438D /* MacPilotRemote.app */,
+				4AE0998F761C1A856CE81DDD /* MacPilotRemoteScreenshots.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -212,6 +235,24 @@
 			productReference = 07C1EB6A722858B0212F438D /* MacPilotRemote.app */;
 			productType = "com.apple.product-type.application";
 		};
+		F2534AA8744243E3E4711BF2 /* MacPilotRemoteScreenshots */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 06CFC8742F9F4AD562158374 /* Build configuration list for PBXNativeTarget "MacPilotRemoteScreenshots" */;
+			buildPhases = (
+				7AEFE30657CD692DD485B615 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4C4DAC8A06A16FE684C23277 /* PBXTargetDependency */,
+			);
+			name = MacPilotRemoteScreenshots;
+			packageProductDependencies = (
+			);
+			productName = MacPilotRemoteScreenshots;
+			productReference = 4AE0998F761C1A856CE81DDD /* MacPilotRemoteScreenshots.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -224,6 +265,11 @@
 					BF89C0BED59832E585A6F654 = {
 						DevelopmentTeam = U8U443D7ZL;
 						ProvisioningStyle = Automatic;
+					};
+					F2534AA8744243E3E4711BF2 = {
+						DevelopmentTeam = U8U443D7ZL;
+						ProvisioningStyle = Automatic;
+						TestTargetID = BF89C0BED59832E585A6F654;
 					};
 				};
 			};
@@ -245,6 +291,7 @@
 			projectRoot = "";
 			targets = (
 				BF89C0BED59832E585A6F654 /* MacPilotRemote */,
+				F2534AA8744243E3E4711BF2 /* MacPilotRemoteScreenshots */,
 			);
 		};
 /* End PBXProject section */
@@ -261,6 +308,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		7AEFE30657CD692DD485B615 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				70EB80CE61981CAF16DD2B71 /* ScreenshotTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CCCDF8B6DDED1E127DF97878 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -283,6 +338,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		4C4DAC8A06A16FE684C23277 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BF89C0BED59832E585A6F654 /* MacPilotRemote */;
+			targetProxy = D8CFC4C5F5A5605DA4486462 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		31456B5961583587F2EE2D40 /* Debug */ = {
@@ -394,6 +457,24 @@
 			};
 			name = Release;
 		};
+		4B82A71E675AEB1A57706F03 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.misswell.macpilot.remote.screenshots;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = MacPilotRemote;
+			};
+			name = Release;
+		};
 		517CF1A23C1929B03B500EC9 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -454,9 +535,36 @@
 			};
 			name = Release;
 		};
+		A954711743324906D7B5330C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.misswell.macpilot.remote.screenshots;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = MacPilotRemote;
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		06CFC8742F9F4AD562158374 /* Build configuration list for PBXNativeTarget "MacPilotRemoteScreenshots" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A954711743324906D7B5330C /* Debug */,
+				4B82A71E675AEB1A57706F03 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		7BB6C3237850E79143F770AD /* Build configuration list for PBXProject "MacPilotRemote" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

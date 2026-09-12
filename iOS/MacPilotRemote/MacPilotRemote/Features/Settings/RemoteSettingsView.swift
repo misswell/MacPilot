@@ -59,6 +59,16 @@ struct RemoteSettingsView: View {
                             .font(.system(.footnote, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
+                    if !appModel.bleDiagnostics.isEmpty {
+                        ShareLink(item: appModel.bleDiagnostics.joined(separator: "\n")) {
+                            Label(appModel.text("bleShareDiagnostics"), systemImage: "square.and.arrow.up")
+                        }
+                        DisclosureGroup(appModel.text("bleDiagnostics")) {
+                            Text(appModel.bleDiagnostics.joined(separator: "\n"))
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                    }
                 }
 
                 if appModel.metrics != RemoteMetrics() {

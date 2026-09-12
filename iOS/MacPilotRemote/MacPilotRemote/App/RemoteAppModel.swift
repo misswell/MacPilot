@@ -4,6 +4,7 @@ import Foundation
 import MacPilotRemoteProtocol
 import MacPilotRemoteTransport
 import Network
+import OSLog
 import SwiftUI
 
 #if canImport(UIKit)
@@ -46,6 +47,8 @@ final class RemoteAppModel: ObservableObject {
     /// Last thing the Bluetooth fallback did, so a failed fallback is
     /// diagnosable from the phone instead of only from the Mac's log.
     @Published private(set) var lastBLEMessage: String?
+    @Published private(set) var bleDiagnostics: [String] = []
+    private let bleLogger = Logger(subsystem: "com.misswell.macpilot.remote", category: "BLE")
 
     let store: PairedMacStore
     let discovery = RemoteDiscoveryService()
@@ -83,6 +86,13 @@ final class RemoteAppModel: ObservableObject {
     private let connectAttemptTimeout: TimeInterval = 4
     /// How many network attempts fail before the BLE channel is used instead.
     private let bleFallbackAfterAttempts = 2
+    private var isBLEDiagnosticRun: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["MACPILOT_BLE_DIAGNOSTIC"] == "1"
+        #else
+        false
+        #endif
+    }
 
     init(store: PairedMacStore = PairedMacStore()) {
         self.store = store
@@ -237,7 +247,7 @@ final class RemoteAppModel: ObservableObject {
     /// healthy session.
     private func startBLEFallback() {
         guard isForeground, !connectionState.isConnected else { return }
-        guard connectAttempt >= bleFallbackAfterAttempts else { return }
+        guard isBLEDiagnosticRun || connectAttempt >= bleFallbackAfterAttempts else { return }
         ble.start()
         bleFallbackAdvertising = ble.isAdvertising
     }
@@ -255,7 +265,7 @@ final class RemoteAppModel: ObservableObject {
         discardPendingBLEChannel()
         pendingBLEChannel = channel
         bleFallbackAdvertising = false
-        lastBLEMessage = text("transportBLEReady")
+        bleLog("BLE channel delivered; waiting to adopt streams")
         // If the network has already been failing, use it now instead of waiting
         // for the supervisor's next tick.
         if !connectionState.isConnected, connectAttempt >= bleFallbackAfterAttempts {
@@ -273,7 +283,13 @@ final class RemoteAppModel: ObservableObject {
     }
 
     private func bleLog(_ message: String) {
+        #if DEBUG
+        print("BLE diagnostic: \(message)")
+        #endif
         lastBLEMessage = message
+        bleLogger.info("\(message, privacy: .public)")
+        bleDiagnostics.append("\(Date().ISO8601Format()) \(message)")
+        if bleDiagnostics.count > 120 { bleDiagnostics.removeFirst(bleDiagnostics.count - 120) }
     }
 
     /// Records which link is carrying the session so Settings can show it.
@@ -384,6 +400,7 @@ final class RemoteAppModel: ObservableObject {
     }
 
     private func connect(to endpoint: NWEndpoint, deviceID: UUID, name: String) {
+        guard !isBLEDiagnosticRun else { return }
         errorKey = nil
         connectionState = .connecting
         connection.connect(
@@ -453,8 +470,12 @@ final class RemoteAppModel: ObservableObject {
             errorKey = nil
             refreshTransportDescription()
             connectionState = .connecting
+            let transport = L2CAPStreamTransport(channel: channel)
+            let traceID = UUID().uuidString.prefix(8)
+            transport.onDiagnostic = { [weak self] message in self?.bleLog("[\(traceID)] \(message)") }
+            bleLog("BLE [\(traceID)] adopting channel psm=\(channel.psm)")
             connection.connect(
-                using: L2CAPStreamTransport(channel: channel),
+                using: transport,
                 deviceID: nil,
                 name: blePeerName,
                 clientID: store.clientID,
