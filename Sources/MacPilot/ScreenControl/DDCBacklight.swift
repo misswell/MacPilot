@@ -127,7 +127,8 @@ private enum DDCBacklightIO {
 
     /// A display's identity as its EDID reports it, which is what ties one
     /// `DCPAVServiceProxy` to one `CGDirectDisplayID`.
-    private struct Identity: Equatable {        let model: Int
+    private struct Identity: Equatable {
+        let model: Int
         let serial: Int
 
         func matches(_ other: Identity) -> Bool {
@@ -153,16 +154,16 @@ private enum DDCBacklightIO {
             level: { displayID in
                 busLock.lock()
                 defer { busLock.unlock() }
-                guard let service = service(for: displayID, create: create, read: read) else { return nil }
-                defer { release(service) }
-                return reply(from: service, vcp: DDCPacket.brightness, read: read, write: write)?.level
+                return cachedReply(for: displayID, create: create, read: read, write: write)?.level
             },
             setLevel: { level, displayID in
                 busLock.lock()
                 defer { busLock.unlock() }
                 guard let service = service(for: displayID, create: create, read: read) else { return false }
                 defer { release(service) }
-                guard let before = reply(from: service, vcp: DDCPacket.brightness, read: read, write: write) else { return false }
+                guard let before = cachedReply(for: displayID, create: create, read: read, write: write) else {
+                    return false
+                }
                 let raw = DDCPacket.rawValue(for: level, maximum: before.maximum)
                 guard send(DDCPacket.writeRequest(vcp: DDCPacket.brightness, value: raw), to: service, write: write) else { return false }
                 // An I2C write the monitor ignored is not a change: read it back
@@ -170,9 +171,44 @@ private enum DDCBacklightIO {
                 // claiming a dark screen that is still lit.
                 usleep(60_000)
                 guard let after = reply(from: service, vcp: DDCPacket.brightness, read: read, write: write) else { return false }
+                // The read-back is also the freshest thing known about this
+                // display, so it replaces whatever the probe had cached.
+                replyCache = (displayID, after, Date())
                 return DDCPacket.confirms(wrote: raw, readback: after.current)
             }
         )
+    }
+
+    /// A monitor's I2C bus is slow — resolving the channel plus a brightness read
+    /// is around 70 ms — and one state request asks for the same level twice: the
+    /// blank probe and the brightness read that follows it. Remembering the last
+    /// answer for a moment turns the second into nothing, while the short lifetime
+    /// keeps a display that was unplugged, woken or changed from being described
+    /// by a stale answer.
+    private static let replyCacheLifetime: TimeInterval = 1
+    /// `busLock`-guarded, which the compiler cannot see through.
+    nonisolated(unsafe) private static var replyCache: (displayID: CGDirectDisplayID, reply: DDCPacket.Reply?, at: Date)?
+
+    /// Caller must hold `busLock`.
+    private static func cachedReply(
+        for displayID: CGDirectDisplayID,
+        create: CreateWithService,
+        read: Transfer,
+        write: Transfer
+    ) -> DDCPacket.Reply? {
+        if let cached = replyCache, cached.displayID == displayID, Date().timeIntervalSince(cached.at) < replyCacheLifetime {
+            return cached.reply
+        }
+        guard let service = service(for: displayID, create: create, read: read) else {
+            // Remembered too: a monitor that does not answer should not cost an
+            // I2C round trip on every single state request.
+            replyCache = (displayID, nil, Date())
+            return nil
+        }
+        defer { release(service) }
+        let reply = reply(from: service, vcp: DDCPacket.brightness, read: read, write: write)
+        replyCache = (displayID, reply, Date())
+        return reply
     }
 
     /// The I2C channel for one display, or nil when DDC cannot address it.
