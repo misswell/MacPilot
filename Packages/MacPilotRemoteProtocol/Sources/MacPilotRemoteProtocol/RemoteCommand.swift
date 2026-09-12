@@ -13,6 +13,11 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
     case unlock
     case wakeAndUnlock
     case ping
+    /// Drive the panel backlight. Carries a `RemoteLevelRequest` payload.
+    case setBrightness
+    /// Drive the default output device's volume (and optionally its mute).
+    /// Carries a `RemoteLevelRequest` payload.
+    case setVolume
 
     /// Commands that change the machine and therefore always require an
     /// authenticated, encrypted session.
@@ -20,7 +25,8 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
         switch self {
         case .getState, .ping:
             return false
-        case .lockScreen, .displayOff, .wakeDisplay, .unlock, .wakeAndUnlock:
+        case .lockScreen, .displayOff, .wakeDisplay, .unlock, .wakeAndUnlock,
+             .setBrightness, .setVolume:
             return true
         }
     }

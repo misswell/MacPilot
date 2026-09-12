@@ -35,6 +35,43 @@ struct PairedMac: Codable, Identifiable, Equatable {
     }
 }
 
+/// One of the two continuous output levels on the remote panel. Each maps onto
+/// the payload carrying command the Mac expects.
+enum RemoteLevelKind: String, CaseIterable, Equatable {
+    case brightness
+    case volume
+
+    var command: RemoteCommand {
+        switch self {
+        case .brightness: return .setBrightness
+        case .volume: return .setVolume
+        }
+    }
+
+    var labelKey: String {
+        switch self {
+        case .brightness: return "brightnessLabel"
+        case .volume: return "volumeLabel"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .brightness: return "sun.max.fill"
+        case .volume: return "speaker.wave.2.fill"
+        }
+    }
+
+    /// The level this kind reports in `MacRemoteState`, or `nil` when this Mac
+    /// cannot provide it.
+    func value(in state: MacRemoteState?) -> Double? {
+        switch self {
+        case .brightness: return state?.brightness
+        case .volume: return state?.volume
+        }
+    }
+}
+
 /// Phase 7 instrumentation. Every value is measured on device; nothing is sent
 /// anywhere.
 struct RemoteMetrics: Equatable {
@@ -118,6 +155,8 @@ extension RemoteErrorCode {
         case .wakeFailed: return "errorWakeFailed"
         case .lockFailed: return "errorLockFailed"
         case .displaySleepFailed: return "errorDisplaySleepFailed"
+        case .brightnessUnavailable: return "errorBrightnessUnavailable"
+        case .volumeUnavailable: return "errorVolumeUnavailable"
         case .commandTimeout: return "errorTimeout"
         case .replayDetected: return "errorNetwork"
         case .invalidMessage: return "errorNetwork"

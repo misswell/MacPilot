@@ -35,6 +35,12 @@ enum ScreenControlFailure: String, Equatable, Sendable {
     case commandTimeout
     case internalError
 
+    /// No display on this Mac has a backlight that can be driven, so there is
+    /// no brightness to show or set.
+    case brightnessUnavailable
+    /// No output device exposes a volume control.
+    case volumeUnavailable
+
     var remoteErrorCode: RemoteErrorCode {
         switch self {
         case .accessibilityPermissionRequired: return .accessibilityPermissionRequired
@@ -47,6 +53,8 @@ enum ScreenControlFailure: String, Equatable, Sendable {
         case .unlockFailed: return .unlockFailed
         case .commandTimeout: return .commandTimeout
         case .internalError: return .internalError
+        case .brightnessUnavailable: return .brightnessUnavailable
+        case .volumeUnavailable: return .volumeUnavailable
         }
     }
 }

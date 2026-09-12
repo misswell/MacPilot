@@ -217,6 +217,48 @@ enum DisplayPower {
         blankDisplay()
     }
 
+    // MARK: - Brightness
+
+    /// The display a brightness slider should drive.
+    ///
+    /// The built-in panel wins whenever its backlight can actually be driven,
+    /// because that is the panel a MacBook user means by "screen brightness";
+    /// falling back to any other drivable display keeps an Apple external
+    /// display working. Pure, so the choice is testable without hardware.
+    static func brightnessTarget(in candidates: [ScreenBlankCandidate]) -> CGDirectDisplayID? {
+        candidates.first { $0.isBuiltIn && $0.canDriveBacklight }?.displayID
+            ?? candidates.first { $0.canDriveBacklight }?.displayID
+    }
+
+    /// Current backlight level in `0...1`, or `nil` when no online display can
+    /// be driven.
+    ///
+    /// While the screen is held black the level the user last chose is reported
+    /// rather than the held zero, so the remote slider does not jump to 0 the
+    /// moment it is opened.
+    @MainActor
+    static func brightness() -> Double? {
+        guard let driver = BrightnessDriver.shared,
+              let displayID = brightnessTarget(in: onlineCandidates()) else { return nil }
+        if let held = blankedDisplays[displayID] { return Double(held) }
+        return driver.current(displayID).map(Double.init)
+    }
+
+    /// Drives the target display's backlight.
+    ///
+    /// A brightness change is a request to *see* the screen, so a held blank is
+    /// released first — otherwise the new level would be invisible.
+    ///
+    /// - Returns: false when no display could be driven.
+    @MainActor
+    @discardableResult
+    static func setBrightness(_ value: Double) -> Bool {
+        guard let driver = BrightnessDriver.shared,
+              let displayID = brightnessTarget(in: onlineCandidates()) else { return false }
+        if isBlanked { unblankDisplay() }
+        return driver.apply(Float(min(max(value, 0), 1)), to: displayID)
+    }
+
     /// The display is not asleep, so nothing in the system brings the backlight
     /// back on its own — a key press would leave the screen black until someone
     /// reached for the brightness key. Idle time is polled rather than observed

@@ -178,12 +178,12 @@ final class RemoteConnectionManager {
 
     // MARK: - Commands
 
-    func send(_ command: RemoteCommand, timeout: TimeInterval = 10) async throws -> RemoteResponse {
+    func send(_ command: RemoteCommand, payload: Data? = nil, timeout: TimeInterval = 10) async throws -> RemoteResponse {
         guard let sessionKey, phase == .ready else {
             throw RemoteConnectionError.notPaired
         }
         sentSequence &+= 1
-        let request = RemoteRequest(command: command, sequence: sentSequence)
+        let request = RemoteRequest(command: command, sequence: sentSequence, payload: payload)
         let framed = try RemoteFrameCodec.encodeSecure(request, key: sessionKey, sequence: sentSequence)
 
         return try await withCheckedThrowingContinuation { continuation in

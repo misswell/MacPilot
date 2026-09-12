@@ -22,6 +22,14 @@ final class RemoteAppModel: ObservableObject {
         let name: String
     }
 
+    /// The newest level the user asked for. Held rather than sent immediately
+    /// because a drag emits updates faster than the link can answer them.
+    private struct PendingLevel {
+        let kind: RemoteLevelKind
+        let value: Double
+        let muted: Bool?
+    }
+
     @Published private(set) var connectionState: RemoteConnectionState = .idle
     @Published private(set) var discoveredMacs: [DiscoveredMac] = []
     /// Mirrored from `discovery` because a nested `ObservableObject` does not
@@ -76,6 +84,13 @@ final class RemoteAppModel: ObservableObject {
     /// Consecutive network attempts that produced no link. Drives the switch to
     /// Bluetooth; reset whenever a session starts or the app comes forward.
     private var connectAttempt = 0
+    /// Coalescing state for slider drags: at most one level request is in
+    /// flight, and `pendingLevel` always holds the last value produced.
+    private var pendingLevel: PendingLevel?
+    private var isSendingLevel = false
+    /// Guards the state refresh so a connect plus a foreground event cannot both
+    /// send one.
+    private var isRefreshingState = false
 
     /// Retry cadence while the app is in the foreground. The first entries are
     /// deliberately tight: the user has just opened the app and is watching.
@@ -145,6 +160,10 @@ final class RemoteAppModel: ObservableObject {
             // exactly when the user expects an immediate connection.
             startBLEFallback()
             startConnectSupervisor()
+            // Brightness and volume can have moved while the app was away (the
+            // keyboard's own keys), and the panel would otherwise show stale
+            // values until the next keep-alive.
+            refreshState()
         case .background:
             // No background sockets in V1; close cleanly so the Mac releases
             // the connection instead of waiting for a timeout.
@@ -162,7 +181,9 @@ final class RemoteAppModel: ObservableObject {
         connection.onStateChange = { [weak self] state in
             guard let self else { return }
             // Only promote the visible state; failures and disconnects are
-            // driven by the dedicated callbacks below.
+            // driven by the dedicated callbacks below. The connection already
+            // asks for a fresh state as soon as the session is ready, so
+            // brightness and volume arrive with the handshake.
             if state == .connected || state == .pairing || state == .authenticating {
                 self.connectionState = state
             }
@@ -623,6 +644,72 @@ final class RemoteAppModel: ObservableObject {
 
     func beginCommand(_ command: RemoteCommand) {
         Haptics.impact()
+    }
+
+    // MARK: - Output levels
+
+    /// True when the Mac reported at least one level the panel can drive. A Mac
+    /// build that predates these controls reports neither, which is how the app
+    /// decides to explain itself instead of showing a dead slider.
+    var hasLevelControls: Bool {
+        RemoteLevelKind.allCases.contains { $0.value(in: macState) != nil }
+    }
+
+    /// Sends a level without blocking the UI.
+    ///
+    /// Dragging a slider produces far more updates than the link should carry,
+    /// so only the newest one matters: at most one request is in flight and the
+    /// queue collapses to the last value the user's finger produced. That keeps
+    /// the slider responsive on Bluetooth and guarantees the final value — not
+    /// an intermediate one — is what the Mac ends up at.
+    func setLevel(_ kind: RemoteLevelKind, value: Double, muted: Bool? = nil) {
+        guard connectionState.isConnected else {
+            errorKey = "errorNotPaired"
+            return
+        }
+        pendingLevel = PendingLevel(kind: kind, value: min(max(value, 0), 1), muted: muted)
+        guard !isSendingLevel else { return }
+        isSendingLevel = true
+        Task { await drainPendingLevels() }
+    }
+
+    /// Asks the Mac for a fresh state. The panel reads brightness and volume
+    /// from `MacRemoteState`, so this is what picks up changes made on the Mac
+    /// itself (the volume keys, or a brightness key) without waiting for the 15
+    /// second keep-alive.
+    func refreshState() {
+        // A foreground event can repeat while the previous round trip is still
+        // open; one is enough.
+        guard connection.isReady, !isRefreshingState else { return }
+        isRefreshingState = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isRefreshingState = false }
+            guard let response = try? await self.connection.send(.getState) else { return }
+            if let state = response.state { self.macState = state }
+        }
+    }
+
+    private func drainPendingLevels() async {
+        while let next = pendingLevel {
+            pendingLevel = nil
+            do {
+                let payload = try RemoteLevelRequest(value: next.value, muted: next.muted).encoded()
+                let response = try await connection.send(next.kind.command, payload: payload)
+                if let state = response.state { macState = state }
+                if !response.success, let code = response.error?.code {
+                    errorKey = code.messageKey
+                    Haptics.warning()
+                }
+            } catch let error as RemoteConnectionError {
+                errorKey = error.messageKey
+                Haptics.warning()
+            } catch {
+                errorKey = "errorNetwork"
+                Haptics.warning()
+            }
+        }
+        isSendingLevel = false
     }
 
     func clearMessages() {

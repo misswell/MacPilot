@@ -55,7 +55,32 @@ struct RemoteCommandRouter {
 
         case .wakeAndUnlock:
             return respond(request, await service.wakeAndUnlock(source: .remoteExplicit), started: started)
+
+        case .setBrightness, .setVolume:
+            return respondToLevel(request, started: started)
         }
+    }
+
+    /// Brightness and volume share one shape: decode the payload, clamp it, apply
+    /// it, then answer with the level the machine actually reports. A missing or
+    /// unreadable payload is refused rather than guessed at, because guessing
+    /// would move a control the user did not ask to move.
+    private func respondToLevel(_ request: RemoteRequest, started: Date) -> RemoteResponse {
+        guard let level = RemoteLevelRequest.decoded(from: request.payload) else {
+            log("command refused reason=missingLevel command=\(request.command.rawValue)")
+            return failure(for: request, code: .invalidMessage)
+        }
+
+        let result: ScreenControlResult
+        switch request.command {
+        case .setBrightness:
+            result = service.setBrightness(level.clampedValue)
+        case .setVolume:
+            result = service.setVolume(level.clampedValue, muted: level.muted)
+        default:
+            return failure(for: request, code: .unsupportedCommand)
+        }
+        return respond(request, result, started: started)
     }
 
     private func respond(

@@ -78,12 +78,16 @@ final class MacScreenControlService: ObservableObject {
         let lockState = ScreenLockStateReader.current()
         let credentialsPresent = credentials.hasCredential
         let trusted = accessibilityGranted
+        let levels = MacOutputLevel.snapshot()
         return MacRemoteState(
             screenLocked: RemoteBooleanState(lockState == .unknown ? nil : lockState == .locked),
             canUnlock: RemoteBooleanState(trusted && credentialsPresent),
             hasCredential: RemoteBooleanState(credentialsPresent),
             accessibilityGranted: RemoteBooleanState(trusted),
-            displaySleeping: RemoteBooleanState(isDisplaySleeping)
+            displaySleeping: RemoteBooleanState(isDisplaySleeping),
+            brightness: levels.brightness,
+            volume: levels.volume,
+            volumeMuted: RemoteBooleanState(levels.muted)
         )
     }
 
@@ -228,6 +232,44 @@ final class MacScreenControlService: ObservableObject {
             return .failure(.wakeFailed, state: state)
         }
         return .success(state)
+    }
+
+    // MARK: - Output levels
+
+    /// Drives the panel backlight, and reports failure when no display on this
+    /// Mac has a drivable one instead of pretending the level changed.
+    ///
+    /// A brightness change is a request to *see* the screen, so a held blank is
+    /// released on the way in: otherwise the new level would be invisible and
+    /// the phone would look broken.
+    func setBrightness(_ value: Double) -> ScreenControlResult {
+        guard DisplayPower.brightness() != nil else {
+            log("brightness unavailable reason=noDrivableBacklight")
+            return .failure(.brightnessUnavailable, state: currentState())
+        }
+        let wasBlanked = DisplayPower.isBlanked
+        guard DisplayPower.setBrightness(value) else {
+            log("brightness failed reason=displayRejectedValue")
+            return .failure(.brightnessUnavailable, state: currentState())
+        }
+        if wasBlanked {
+            log("display unblanked reason=brightnessChanged")
+            noteDisplaySleeping(false)
+        }
+        log("brightness set value=\(String(format: "%.2f", value))")
+        return .success(currentState())
+    }
+
+    /// Drives the default output device's volume. `muted` is optional so moving
+    /// the slider never changes the mute state by itself.
+    func setVolume(_ value: Double, muted: Bool?) -> ScreenControlResult {
+        guard MacOutputLevel.setVolume(value, muted: muted) else {
+            log("volume unavailable reason=noSettableOutputDevice")
+            return .failure(.volumeUnavailable, state: currentState())
+        }
+        let muteText = muted.map { $0 ? "true" : "false" } ?? "unchanged"
+        log("volume set value=\(String(format: "%.2f", value)) muted=\(muteText)")
+        return .success(currentState())
     }
 
     // MARK: - Unlock

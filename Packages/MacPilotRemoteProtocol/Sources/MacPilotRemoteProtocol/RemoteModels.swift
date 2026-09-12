@@ -31,19 +31,66 @@ public struct MacRemoteState: Codable, Sendable, Equatable {
     public var hasCredential: RemoteBooleanState
     public var accessibilityGranted: RemoteBooleanState
     public var displaySleeping: RemoteBooleanState?
+    /// Output level in `0...1`, or `nil` when this Mac has no display whose
+    /// backlight can be driven.
+    ///
+    /// `nil` is also what an older Mac build decodes to, because it sends no
+    /// such field at all. That is deliberate: the client offers a slider only
+    /// when a real value arrives, instead of inferring support from a version
+    /// number and then failing on the first drag.
+    public var brightness: Double?
+    /// Output volume in `0...1`, or `nil` when there is no output device with a
+    /// volume control.
+    public var volume: Double?
+    /// `nil` when the output device has no mute control.
+    public var volumeMuted: RemoteBooleanState?
 
     public init(
         screenLocked: RemoteBooleanState = .unknown,
         canUnlock: RemoteBooleanState = .unknown,
         hasCredential: RemoteBooleanState = .unknown,
         accessibilityGranted: RemoteBooleanState = .unknown,
-        displaySleeping: RemoteBooleanState? = nil
+        displaySleeping: RemoteBooleanState? = nil,
+        brightness: Double? = nil,
+        volume: Double? = nil,
+        volumeMuted: RemoteBooleanState? = nil
     ) {
         self.screenLocked = screenLocked
         self.canUnlock = canUnlock
         self.hasCredential = hasCredential
         self.accessibilityGranted = accessibilityGranted
         self.displaySleeping = displaySleeping
+        self.brightness = brightness
+        self.volume = volume
+        self.volumeMuted = volumeMuted
+    }
+}
+
+/// Payload for `setBrightness` and `setVolume`.
+///
+/// The level is normalized to `0...1` so the phone owns the scale it presents;
+/// the Mac clamps anything outside that range rather than trusting the peer.
+public struct RemoteLevelRequest: Codable, Sendable, Equatable {
+    public let value: Double
+    /// Volume only. `nil` leaves the mute state exactly as it was, so dragging
+    /// the slider never silently un-mutes a deliberately muted Mac.
+    public let muted: Bool?
+
+    public init(value: Double, muted: Bool? = nil) {
+        self.value = value
+        self.muted = muted
+    }
+
+    /// `value` restricted to the only range the wire format promises.
+    public var clampedValue: Double { min(max(value, 0), 1) }
+
+    public func encoded() throws -> Data { try JSONEncoder().encode(self) }
+
+    /// `nil` for a missing or undecodable payload, which the server reports as
+    /// `invalidMessage` instead of guessing a level.
+    public static func decoded(from payload: Data?) -> RemoteLevelRequest? {
+        guard let payload, !payload.isEmpty else { return nil }
+        return try? JSONDecoder().decode(RemoteLevelRequest.self, from: payload)
     }
 }
 
@@ -66,6 +113,10 @@ public enum RemoteErrorCode: String, Codable, Sendable, Equatable, CaseIterable 
     case lockFailed
     case displaySleepFailed
     case commandTimeout
+    /// No display on this Mac has a backlight that can be driven.
+    case brightnessUnavailable
+    /// No output device on this Mac exposes a volume control.
+    case volumeUnavailable
 
     case replayDetected
     case invalidMessage

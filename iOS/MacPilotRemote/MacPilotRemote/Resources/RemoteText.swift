@@ -61,6 +61,15 @@ enum RemoteText {
         "actionRunning": "执行中…",
         "actionDone": "完成",
 
+        "levelsTitle": "亮度与音量",
+        "brightnessLabel": "屏幕亮度",
+        "volumeLabel": "音量",
+        "mute": "静音",
+        "unmute": "取消静音",
+        "levelsUnavailable": "这台 Mac 暂不上报亮度或音量，请把 Mac 上的 MacPilot 更新到最新版。",
+        "levelsUnavailableShort": "暂不可用",
+        "levelsNotConnected": "连接后可在此调节 Mac 的亮度与音量。",
+
         "devicesTitle": "设备",
         "devicesSubtitle": "选择默认 Mac，或在局域网内发现新的 MacPilot。",
         "pairedSection": "已配对",
@@ -128,6 +137,8 @@ enum RemoteText {
         "errorWakeFailed": "无法唤醒 Mac 的显示器。",
         "errorLockFailed": "锁屏未生效。",
         "errorDisplaySleepFailed": "关闭屏幕未生效。",
+        "errorBrightnessUnavailable": "无法调节亮度：这台 Mac 没有可控制的屏幕背光（例如合盖外接显示器时）。",
+        "errorVolumeUnavailable": "无法调节音量：Mac 上没有可调音量的输出设备。",
         "errorTimeout": "命令超时。",
         "errorInternal": "Mac 返回了内部错误。"
     ]
@@ -164,6 +175,15 @@ enum RemoteText {
         "actionWakeAndUnlock": "Wake & Unlock",
         "actionRunning": "Working…",
         "actionDone": "Done",
+
+        "levelsTitle": "Brightness & volume",
+        "brightnessLabel": "Brightness",
+        "volumeLabel": "Volume",
+        "mute": "Mute",
+        "unmute": "Unmute",
+        "levelsUnavailable": "This Mac does not report brightness or volume yet. Update MacPilot on the Mac.",
+        "levelsUnavailableShort": "Unavailable",
+        "levelsNotConnected": "Connect to adjust your Mac's brightness and volume here.",
 
         "devicesTitle": "Devices",
         "devicesSubtitle": "Choose the default Mac or discover a new MacPilot on this network.",
@@ -232,6 +252,8 @@ enum RemoteText {
         "errorWakeFailed": "Could not wake the Mac's display.",
         "errorLockFailed": "The Mac did not lock.",
         "errorDisplaySleepFailed": "The display did not turn off.",
+        "errorBrightnessUnavailable": "Cannot change brightness: this Mac has no display with a controllable backlight (an external monitor in clamshell mode, for example).",
+        "errorVolumeUnavailable": "Cannot change volume: no output device with a volume control.",
         "errorTimeout": "The command timed out.",
         "errorInternal": "The Mac reported an internal error."
     ]

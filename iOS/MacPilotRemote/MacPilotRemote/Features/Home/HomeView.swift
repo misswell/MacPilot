@@ -18,6 +18,7 @@ struct HomeView: View {
                 VStack(spacing: 18) {
                     statusHeader
                     actionGrid
+                    levelsPanel
                     messageBanner
                     if !appModel.connectionState.isConnected {
                         disconnectedPanel
@@ -118,6 +119,51 @@ struct HomeView: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .accessibilityLabel(appModel.text(titleKey))
+    }
+
+    // MARK: - Output levels
+
+    /// Brightness and volume, read from the same `MacRemoteState` the rest of
+    /// the screen uses.
+    ///
+    /// A level the Mac did not report is not shown at all: an external monitor
+    /// with no controllable backlight, or a Mac with no output device, both mean
+    /// a slider that cannot work. The card says so instead of offering one.
+    private var levelsPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(appModel.text("levelsTitle"))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if !appModel.connectionState.isConnected {
+                hint(appModel.text("levelsNotConnected"))
+            } else if appModel.macState == nil {
+                // The state rides along with the first response after the
+                // handshake; nothing useful to say for that one round trip.
+                hint(appModel.text("levelsUnavailableShort"))
+            } else if appModel.hasLevelControls {
+                ForEach(RemoteLevelKind.allCases, id: \.self) { kind in
+                    if let value = kind.value(in: appModel.macState) {
+                        LevelSliderRow(kind: kind, value: value)
+                    }
+                }
+            } else {
+                hint(appModel.text("levelsUnavailable"))
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - Messages
@@ -223,5 +269,92 @@ extension RemoteAppModel {
 
     private func activeMacName(_ mac: PairedMac?) -> String {
         mac?.name ?? "MacPilot"
+    }
+
+    /// `nil` when this Mac has no mute control at all, as opposed to a device
+    /// that is simply not muted.
+    var volumeMuted: Bool? { macState?.volumeMuted?.boolValue }
+}
+
+/// One brightness or volume row.
+///
+/// The slider keeps its own draft while the finger is down: the Mac's answer
+/// arrives a round trip later, and letting that value write back mid-drag would
+/// fight the user. Every change is handed to the model, which coalesces the
+/// drag into a single in-flight request ending on the value the user let go of.
+private struct LevelSliderRow: View {
+    @EnvironmentObject private var appModel: RemoteAppModel
+
+    let kind: RemoteLevelKind
+    /// The value the Mac last reported, used whenever the finger is up.
+    let value: Double
+
+    @State private var draft: Double = 0
+    @State private var isEditing = false
+
+    private var isMuted: Bool {
+        kind == .volume && appModel.volumeMuted == true
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: isMuted ? "speaker.slash.fill" : kind.iconName)
+                    .font(.subheadline)
+                    .frame(width: 20)
+                    .foregroundStyle(isMuted ? Color.orange : Color.accentColor)
+                Text(appModel.text(kind.labelKey))
+                    .font(.subheadline.weight(.medium))
+                Spacer(minLength: 8)
+                Text("\(Int((draft * 100).rounded()))%")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                if kind == .volume, appModel.volumeMuted != nil {
+                    muteButton
+                }
+            }
+
+            Slider(value: $draft, in: 0...1, step: 0.01) { editing in
+                isEditing = editing
+                // The release is sent explicitly so a drag that ends between two
+                // coalesced requests still lands on its final value.
+                if !editing { send(draft) }
+            }
+            .accessibilityLabel(appModel.text(kind.labelKey))
+            .accessibilityValue("\(Int((draft * 100).rounded()))%")
+        }
+        .onAppear { draft = value }
+        .onChange(of: draft) { _, newValue in
+            guard isEditing else { return }
+            send(newValue)
+        }
+        .onChange(of: value) { _, newValue in
+            guard !isEditing else { return }
+            draft = newValue
+        }
+    }
+
+    private var muteButton: some View {
+        Button {
+            appModel.setLevel(kind, value: draft, muted: !isMuted)
+            Haptics.impact()
+        } label: {
+            Image(systemName: isMuted ? "speaker.slash" : "speaker.wave.2")
+                .font(.subheadline)
+                .frame(width: 30, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(.tertiarySystemFill))
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(appModel.text(isMuted ? "unmute" : "mute"))
+    }
+
+    /// Raising the volume clears mute, exactly like the Mac's own volume keys;
+    /// dragging to silence leaves the mute state alone.
+    private func send(_ newValue: Double) {
+        let muted: Bool? = kind == .volume && newValue > 0 ? false : nil
+        appModel.setLevel(kind, value: newValue, muted: muted)
     }
 }

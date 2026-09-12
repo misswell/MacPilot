@@ -72,3 +72,33 @@ extension DisplayPowerTests {
         #expect(ScreenBlankPlanner.steps(for: []).isEmpty)
     }
 }
+
+// MARK: - Brightness target
+
+extension DisplayPowerTests {
+    /// The brightness slider drives exactly one panel, and it has to be the one
+    /// whose backlight can actually be driven: with an external monitor as the
+    /// main display, keying off `CGMainDisplayID()` would address a panel that
+    /// has no controllable backlight.
+    @Test func theBuiltInPanelWinsTheBrightnessSlider() {
+        #expect(DisplayPower.brightnessTarget(in: [
+            ScreenBlankCandidate(displayID: 2, isBuiltIn: false, canDriveBacklight: true),
+            ScreenBlankCandidate(displayID: 1, isBuiltIn: true, canDriveBacklight: true),
+        ]) == 1)
+    }
+
+    @Test func aDrivableExternalDisplayIsUsedWhenTheBuiltInPanelCannotBeDriven() {
+        #expect(DisplayPower.brightnessTarget(in: [
+            ScreenBlankCandidate(displayID: 1, isBuiltIn: true, canDriveBacklight: false),
+            ScreenBlankCandidate(displayID: 3, isBuiltIn: false, canDriveBacklight: true),
+        ]) == 3)
+    }
+
+    @Test func noDrivableDisplayMeansThereIsNoBrightnessToControl() {
+        #expect(DisplayPower.brightnessTarget(in: [
+            ScreenBlankCandidate(displayID: 1, isBuiltIn: true, canDriveBacklight: false),
+            ScreenBlankCandidate(displayID: 2, isBuiltIn: false, canDriveBacklight: false),
+        ]) == nil)
+        #expect(DisplayPower.brightnessTarget(in: []) == nil)
+    }
+}

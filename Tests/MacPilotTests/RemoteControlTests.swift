@@ -25,6 +25,8 @@ struct ScreenControlModelTests {
         #expect(ScreenControlFailure.displaySleepFailed.remoteErrorCode == .displaySleepFailed)
         #expect(ScreenControlFailure.commandTimeout.remoteErrorCode == .commandTimeout)
         #expect(ScreenControlFailure.internalError.remoteErrorCode == .internalError)
+        #expect(ScreenControlFailure.brightnessUnavailable.remoteErrorCode == .brightnessUnavailable)
+        #expect(ScreenControlFailure.volumeUnavailable.remoteErrorCode == .volumeUnavailable)
     }
 
     @Test("a remote lock suppresses BLE auto-unlock")
@@ -100,12 +102,156 @@ struct RemoteCommandRouterTests {
 
     @Test("state changing commands refuse to run without authentication")
     func unauthenticatedCommandsRefused() async {
-        for command in [RemoteCommand.lockScreen, .displayOff, .wakeDisplay, .unlock, .wakeAndUnlock] {
+        for command in [RemoteCommand.lockScreen, .displayOff, .wakeDisplay, .unlock, .wakeAndUnlock, .setBrightness, .setVolume] {
             let request = RemoteRequest(command: command, sequence: 1)
             let response = await makeRouter().response(for: request, isAuthenticated: false)
             #expect(!response.success, "\(command) must not run unauthenticated")
             #expect(response.error?.code == .unauthenticated)
         }
+    }
+
+    /// A level command carries its target in the payload. Guessing a value when
+    /// it is missing would move a control the user never touched.
+    @Test("a level command without a payload is refused instead of guessed")
+    func levelCommandRequiresPayload() async {
+        for command in [RemoteCommand.setBrightness, .setVolume] {
+            let request = RemoteRequest(command: command, sequence: 1)
+            let response = await makeRouter().response(for: request, isAuthenticated: true)
+            #expect(!response.success, "\(command) must not run without a payload")
+            #expect(response.error?.code == .invalidMessage)
+        }
+    }
+
+    @Test("a corrupt level payload is refused instead of guessed")
+    func corruptLevelPayloadRefused() async {
+        let request = RemoteRequest(
+            command: .setVolume,
+            sequence: 1,
+            payload: Data("not json".utf8)
+        )
+        let response = await makeRouter().response(for: request, isAuthenticated: true)
+        #expect(!response.success)
+        #expect(response.error?.code == .invalidMessage)
+    }
+
+    /// Re-setting a level the Mac already reports must succeed and leave the
+    /// level where it was. Skipped where the machine has no such control, which
+    /// is exactly what the phone is told through the state fields.
+    @Test("re-setting the reported level is a successful no-op")
+    func levelRoundTripKeepsTheReportedValue() async throws {
+        let router = makeRouter()
+        let state = try #require(
+            await router.response(for: RemoteRequest(command: .getState, sequence: 1), isAuthenticated: true).state
+        )
+
+        if let brightness = state.brightness {
+            let request = RemoteRequest(
+                command: .setBrightness,
+                sequence: 2,
+                payload: try RemoteLevelRequest(value: brightness).encoded()
+            )
+            let response = await router.response(for: request, isAuthenticated: true)
+            #expect(response.success)
+            let reported = try #require(response.state?.brightness)
+            #expect(abs(reported - brightness) < 0.02)
+        }
+
+        if let volume = state.volume {
+            let request = RemoteRequest(
+                command: .setVolume,
+                sequence: 3,
+                payload: try RemoteLevelRequest(value: volume).encoded()
+            )
+            let response = await router.response(for: request, isAuthenticated: true)
+            #expect(response.success)
+            let reported = try #require(response.state?.volume)
+            #expect(abs(reported - volume) < 0.02)
+        }
+    }
+}
+
+// MARK: - Level payload
+
+@Suite("Remote level payload")
+struct RemoteLevelPayloadTests {
+    @Test("a level payload round trips through the wire")
+    func levelPayloadRoundTrips() throws {
+        let payload = try RemoteLevelRequest(value: 0.42, muted: true).encoded()
+        let decoded = try #require(RemoteLevelRequest.decoded(from: payload))
+        #expect(decoded.value == 0.42)
+        #expect(decoded.muted == true)
+    }
+
+    @Test("an out of range level is clamped instead of trusted")
+    func levelIsClamped() {
+        #expect(RemoteLevelRequest(value: 4).clampedValue == 1)
+        #expect(RemoteLevelRequest(value: -2).clampedValue == 0)
+        #expect(RemoteLevelRequest(value: 0.35).clampedValue == 0.35)
+    }
+
+    @Test("a slider move leaves the mute state alone")
+    func muteIsOptional() throws {
+        let decoded = try #require(RemoteLevelRequest.decoded(from: try RemoteLevelRequest(value: 0.5).encoded()))
+        #expect(decoded.muted == nil)
+    }
+
+    @Test("a missing or unreadable payload decodes to nothing")
+    func payloadMustDecode() {
+        #expect(RemoteLevelRequest.decoded(from: nil) == nil)
+        #expect(RemoteLevelRequest.decoded(from: Data()) == nil)
+        #expect(RemoteLevelRequest.decoded(from: Data("{\"value\":\"loud\"}".utf8)) == nil)
+    }
+
+    /// The compatibility contract that lets the two apps ship independently: a
+    /// Mac build that predates these controls sends no level fields, and the
+    /// phone must read that as "not available here" rather than fail to decode
+    /// the whole state.
+    @Test("a state from an older Mac decodes with no levels")
+    func legacyStateDecodesWithoutLevels() throws {
+        let json = #"{"screenLocked":"yes","canUnlock":"no","hasCredential":"unknown","accessibilityGranted":"yes"}"#
+        let state = try JSONDecoder().decode(MacRemoteState.self, from: Data(json.utf8))
+        #expect(state.screenLocked == .yes)
+        #expect(state.brightness == nil)
+        #expect(state.volume == nil)
+        #expect(state.volumeMuted == nil)
+    }
+
+    @Test("a state with levels survives a round trip")
+    func stateCarriesLevels() throws {
+        let state = MacRemoteState(brightness: 0.7, volume: 0.25, volumeMuted: .no)
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(MacRemoteState.self, from: data)
+        #expect(decoded == state)
+    }
+
+    /// The payload rides inside the encrypted frame, so this is what proves the
+    /// slider's value reaches the Mac's router unchanged.
+    @Test("a level payload survives the secure frame codec")
+    func payloadSurvivesSecureFrame() throws {
+        let key = RemoteCrypto.sessionKey(
+            pairingKey: RemoteCrypto.randomData(count: RemoteCrypto.pairingKeyLength),
+            clientNonce: RemoteCrypto.randomData(count: RemoteCrypto.nonceLength),
+            serverNonce: RemoteCrypto.randomData(count: RemoteCrypto.nonceLength)
+        )
+        let request = RemoteRequest(
+            command: .setVolume,
+            sequence: 7,
+            payload: try RemoteLevelRequest(value: 0.3, muted: true).encoded()
+        )
+
+        // Framed exactly the way the transport does it, so the length prefix is
+        // covered too rather than assumed.
+        var buffer = try RemoteFrameCodec.encodeSecure(request, key: key, sequence: 7)
+        let frames = try RemoteFrameCodec.extractFrames(from: &buffer)
+        let framed = try #require(frames.first)
+        let (sequence, decoded) = try RemoteFrameCodec.decodeSecure(RemoteRequest.self, from: framed, key: key)
+
+        #expect(sequence == 7)
+        #expect(decoded.command == .setVolume)
+        #expect(decoded.payload == request.payload)
+        let level = try #require(RemoteLevelRequest.decoded(from: decoded.payload))
+        #expect(level.value == 0.3)
+        #expect(level.muted == true)
     }
 }
 
