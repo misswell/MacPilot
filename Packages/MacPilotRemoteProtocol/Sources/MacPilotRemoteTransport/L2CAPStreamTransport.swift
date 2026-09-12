@@ -20,9 +20,18 @@ public final class L2CAPStreamTransport: RemoteTransport {
     public var remoteServiceName: String? { nil }
 
     private let pump: StreamPump
+    /// The channel must outlive its streams: they belong to it, and once the
+    /// `CBL2CAPChannel` is released they fail every read and write with "bad
+    /// file descriptor". Storing only the two streams — which is all the pump
+    /// needs — let the channel be deallocated as soon as the delegate callback
+    /// returned, so the link opened cleanly on both sides and then moved no
+    /// data at all. Tests cannot catch this because their bound-pair streams
+    /// have no channel behind them.
+    private let channel: CBL2CAPChannel?
     private var didCancel = false
 
     public init(channel: CBL2CAPChannel) {
+        self.channel = channel
         self.pump = StreamPump(input: channel.inputStream, output: channel.outputStream)
     }
 
@@ -30,6 +39,7 @@ public final class L2CAPStreamTransport: RemoteTransport {
     /// pair arrives in production. This seam exists so the short-write and close
     /// paths can be driven from a test instead of only on a real device.
     init(input: InputStream, output: OutputStream) {
+        self.channel = nil
         self.pump = StreamPump(input: input, output: output)
     }
 
