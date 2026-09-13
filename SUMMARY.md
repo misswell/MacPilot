@@ -749,3 +749,28 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 - 显示器/连接必须支持 DDC/CI：DisplayPort 基本都行，HDMI（尤其经转接）常被屏蔽。不支持时行为与改动前完全一致（黑色遮罩），只是仍然会有那支指针。
 - 同一时刻只能有一个进程占用 I2C：第三方 DDC 工具高频轮询时，读写可能失败；失败会退回遮罩，不会谎报黑屏。
 - 外接屏亮度是**显示器自己的**控制，与系统「显示器」面板里的亮度滑杆不是同一个东西（后者对外接屏本来就不提供）。
+
+## 三十三、锁屏态黑屏与解锁输密码防泄漏（v1.1.332）
+
+真机测试暴露的两个屏幕控制问题，同属 `ScreenControl` 一条链路。
+
+### 问题一：锁屏后再点「黑屏」没有反应
+
+手机先点「锁屏」，再点「黑屏」毫无效果。原因：「黑屏」走 `DisplayPower.turnOffScreen()`（背光压零 / DDC / 黑色遮罩），这三样都以「解锁会话在前台」为前提——黑色遮罩是用户会话的 NSWindow，画不到 loginwindow 之上，背光 seam 在锁屏态也不再可靠。
+
+修复：新增纯决策 `DisplayOffApproach.forScreen(locked:)`——锁屏态改用系统自己的「锁屏黑屏方式」，即真实显示器睡眠（`pmset displaysleepnow`，`DisplayPower.sleepDisplay()`），并等 `CGDisplayIsAsleep` 确认后才报成功。真实睡眠在锁屏态是无害的：会话本来就锁着，「显示器关闭后要求密码」策略已无事可做。解锁桌面保持原行为（遮罩式黑屏，绝不真睡眠）。
+
+### 问题二：解锁竞态把锁屏密码打进用户会话的输入框
+
+用户解锁快于 MacPilot 打字（Touch ID / 手表 / 手输密码）时，会话带着锁屏前的输入焦点回来，此时还在重试循环里的键击会落进用户留下的输入框——实测把整条密码「发送」进了聊天输入框。旧实现的三个缺口：远程路径在会话状态 unknown 时也照打；整条密码加回车一次性批量发出，中途不复查；密码字段是否就绪全凭时序。
+
+修复（`ScreenUnlockExecutor`，BLE 与远程共用）：
+
+- 新增纯决策 `PasswordTypingGate.command(locked:secureFieldFocused:)`：只有「会话确认锁定 + 密码框持有 secure event input（`IsSecureEventInputEnabled()`，锁屏密码框聚焦时才置位，普通文本框不会）」才允许输入；锁定但字段未弹出时先 Escape 唤出（有时限）；未锁定一律 `.abort`。
+- 输入改小段（4 个 UTF-16 单元/段），清屏（⌘A/Delete）、每段、回车之前全部重新过门；中途发现会话解锁立即中止并记日志（`stage=… reason=sessionNoLongerLocked`）。竞态窗口从「整条密码」缩到「4 字符 × 毫秒级」。
+- 中途只有「不再锁定」才中止：锁屏 UI 在唤醒服务稳定期间可能短暂丢掉 secure input，此时键击仍归 loginwindow 所有，若因此中止反而会留下半截密码（下次尝试会先清空字段）。
+
+### 验证
+
+- 新增 `ScreenControlSafetyTests`（5 例：黑屏方式决策、密码门全表、中途中止规则、解锁态即使有安全字段也中止）；`swift test` 589 例全过。
+- 真机待验证：锁屏后手机点「黑屏」应看到屏幕熄灭且状态报 displaySleeping；锁屏后立即手动 Touch ID 解锁，诊断日志应出现 `password typing aborted`，聊天框不应出现密码。

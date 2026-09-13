@@ -2,6 +2,26 @@ import ApplicationServices
 import Foundation
 import MacPilotRemoteProtocol
 
+/// Which mechanism "turn off screen" uses, as a pure rule.
+///
+/// The two session states need opposite tools. An unlocked desktop must not
+/// sleep the display, because the system's "require password after the display
+/// turns off" policy would lock it. The lock screen must not use MacPilot's
+/// black cover, because MacPilot's windows cannot draw above the login window
+/// and the session's brightness seam is no longer frontmost there — while a
+/// real display sleep, the way the lock screen itself goes dark, cannot lock
+/// anything that is not already locked.
+enum DisplayOffApproach: Equatable {
+    /// Black the displays without sleeping them.
+    case blankCover
+    /// Ask the system to put the display to sleep (`pmset displaysleepnow`).
+    case systemSleep
+
+    static func forScreen(locked: Bool) -> DisplayOffApproach {
+        locked ? .systemSleep : .blankCover
+    }
+}
+
 /// The single owner of "make the Mac lock, sleep its display, wake it or type
 /// the login password" behaviour.
 ///
@@ -193,22 +213,42 @@ final class MacScreenControlService: ObservableObject {
 
     /// Blacks the display without locking the session.
     ///
-    /// A real display sleep is deliberately not a fallback: on a Mac that
-    /// requires a password as soon as the display turns off (the default) it
-    /// locks the session, which is what MacPilot's separate lock action is for.
-    /// When no display can be blacked the action fails visibly instead of
-    /// silently turning "turn off screen" into "lock".
+    /// On an unlocked desktop a real display sleep is deliberately not a
+    /// fallback: on a Mac that requires a password as soon as the display turns
+    /// off (the default) it locks the session, which is what MacPilot's
+    /// separate lock action is for. When no display can be blacked the action
+    /// fails visibly instead of silently turning "turn off screen" into "lock".
+    ///
+    /// The lock screen is the exception picked by
+    /// `DisplayOffApproach.forScreen(locked:)`: the black cover cannot reach a
+    /// screen the login window owns, so there the action becomes the system's
+    /// own darkening of a locked Mac — a plain display sleep — and confirms the
+    /// display actually went down before reporting success.
     func sleepDisplay() async -> ScreenControlResult {
         if isDisplaySleeping {
             return .success(currentState())
         }
-        guard DisplayPower.turnOffScreen() else {
-            log("display off failed reason=noDisplayCouldBeBlacked")
-            return .failure(.displaySleepFailed, state: currentState())
+        switch DisplayOffApproach.forScreen(locked: ScreenLockStateReader.current() == .locked) {
+        case .systemSleep:
+            log("display off requested while locked; sleeping display instead of blanking")
+            DisplayPower.sleepDisplay()
+            let slept = await waitUntil(timeout: 4) { ScreenLockStateReader.displayIsAsleep() }
+            guard slept else {
+                log("display sleep failed reason=stillAwakeWhileLocked")
+                return .failure(.displaySleepFailed, state: currentState())
+            }
+            noteDisplaySleeping(true)
+            log("display slept while locked")
+            return .success(currentState())
+        case .blankCover:
+            guard DisplayPower.turnOffScreen() else {
+                log("display off failed reason=noDisplayCouldBeBlacked")
+                return .failure(.displaySleepFailed, state: currentState())
+            }
+            log("display blacked without sleeping")
+            noteDisplaySleeping(true)
+            return .success(currentState())
         }
-        log("display blacked without sleeping")
-        noteDisplaySleeping(true)
-        return .success(currentState())
     }
 
     func wakeDisplay() async -> ScreenControlResult {
