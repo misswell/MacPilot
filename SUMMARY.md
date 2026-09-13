@@ -774,3 +774,15 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 
 - 新增 `ScreenControlSafetyTests`（5 例：黑屏方式决策、密码门全表、中途中止规则、解锁态即使有安全字段也中止）；`swift test` 589 例全过。
 - 真机待验证：锁屏后手机点「黑屏」应看到屏幕熄灭且状态报 displaySleeping；锁屏后立即手动 Touch ID 解锁，诊断日志应出现 `password typing aborted`，聊天框不应出现密码。
+
+## 三十四、黑屏崩溃恢复：亮度快照落盘（v1.1.333）
+
+「黑屏」的省电本质是把每块屏的背光真压到 0（内建走 `DisplayServices`、外接走 DDC/CI，遮罩只是兜底），原始亮度只存在内存字典里。这带来一个唯一的"卡黑屏"场景：**黑屏期间进程被强杀或崩溃**，恢复用的原始亮度随之丢失，面板停在 0，用户只能自己摸亮度键。
+
+修复：黑屏成功时把捕获到的原始亮度**原子落盘**到 `Application Support/MacPilot/DisplayBlankRecovery.json`（`DisplayBlankSnapshot`，按显示器 ID 分键，遮罩态没有背光状态可丢、不落盘）；`unblankDisplay()` 全部还原之后才删文件。下次启动 `MacPilotApp.init()` 最先执行 `DisplayBlankRecovery.recover`：
+
+- **逐屏先读后写**：读回仍是 0 才恢复（用户已经自己调亮的屏绝不覆盖回去）；读不到（显示器已断开）直接跳过；
+- **写失败不清档**：锁屏态等场景可能拒写，被拒的条目留在快照里等下次启动重试；只有全部写成功（DDC 路径 `setLevel` 自带写后读回确认）才清文件；
+- **中途崩溃幂等**：恢复到一半再崩，文件还在，下次启动重跑——已还原的屏读回非 0 会被 `alreadyRepaired` 跳过，天然幂等。
+
+`DisplayBlankRecovery.Appliers` 把两套背光驱动做成注入缝，测试用假驱动完整跑通恢复流程；新增 5 个用例（快照往返、清档、决策表、只恢复仍黑的屏、被拒写入留档），`swift test` 594 例全过。真机验证方法：黑屏状态下强退 MacPilot，重开应用后面板亮度应自动回到黑屏前的值。

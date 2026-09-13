@@ -144,6 +144,8 @@ enum DisplayPower {
     /// as the display turns off — the default — that timer is what eventually
     /// turns "black" into "locked".
     @MainActor private static var displaySleepAssertion: IOPMAssertionID?
+    /// Where the held-blank brightness snapshot lives while the screen is black.
+    @MainActor private static let snapshotStore = DisplayBlankSnapshotStore.standard
 
     /// True while MacPilot is holding the screen black.
     @MainActor static var isBlanked: Bool {
@@ -202,6 +204,17 @@ enum DisplayPower {
 
         blankedDisplays = blanked
         ddcBlankedDisplays = ddcBlanked
+        // Persist the captured originals for as long as the blank is held: a
+        // force quit or crash would otherwise leave the panels dark with the
+        // recovery values lost. An overlay-only blank has no backlight state
+        // to lose, so nothing is written for it.
+        if !blanked.isEmpty || !ddcBlanked.isEmpty {
+            snapshotStore.save(DisplayBlankSnapshot(
+                capturedAt: Date(),
+                systemBacklight: Dictionary(uniqueKeysWithValues: blanked.map { (String($0.key), $0.value) }),
+                ddcBacklight: Dictionary(uniqueKeysWithValues: ddcBlanked.map { (String($0.key), $0.value) })
+            ))
+        }
         if !overlayScreens.isEmpty {
             ScreenBlankOverlay.shared.show(covering: overlayScreens)
             isOverlayShowing = true
@@ -238,6 +251,10 @@ enum DisplayPower {
             }
         }
         ddcBlankedDisplays.removeAll()
+        // Cleared only after the restores: a crash between a restore and this
+        // line leaves the snapshot in place, and the next launch re-decides per
+        // display, skipping the ones already raised.
+        snapshotStore.clear()
         if isOverlayShowing {
             ScreenBlankOverlay.shared.hide()
             isOverlayShowing = false
@@ -430,7 +447,10 @@ private typealias SetBrightnessFn = @convention(c) (CGDirectDisplayID, Float) ->
 /// the bug behind "turn off screen" locking the Mac: with an external monitor as
 /// the main display, the answer belongs to a display that has no backlight to
 /// drive, so the blank failed and the caller fell back to sleeping every display.
-private struct BrightnessDriver: Sendable {
+///
+/// Internal so the crash-recovery seam (`DisplayBlankRecovery`) can drive the
+/// same writes the blank path does.
+struct BrightnessDriver: Sendable {
     let read: @Sendable (CGDirectDisplayID) -> Float?
     let write: @Sendable (CGDirectDisplayID, Float) -> Bool
 
