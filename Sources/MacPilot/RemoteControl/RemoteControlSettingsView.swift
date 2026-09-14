@@ -17,7 +17,7 @@ struct RemoteControlSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
-                enableCard
+                deviceCard
                 if deviceStore.settings.isEnabled {
                     pairingCard
                     devicesCard
@@ -44,19 +44,11 @@ struct RemoteControlSettingsView: View {
         }
     }
 
-    // MARK: - Enable
+    // MARK: - Device
 
-    private var enableCard: some View {
+    private var deviceCard: some View {
         SettingsCard {
             Text(t("remoteEnableSection")).font(.headline)
-            Toggle(t("remoteEnableToggle"), isOn: Binding(
-                get: { deviceStore.settings.isEnabled },
-                set: { setEnabled($0) }
-            ))
-            .toggleStyle(.switch)
-            Text(t("remoteEnableHint")).font(.caption).foregroundStyle(.secondary)
-
-            Divider().padding(.vertical, 2)
 
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(t("remoteDeviceName")).frame(width: 120, alignment: .leading)
@@ -186,16 +178,6 @@ struct RemoteControlSettingsView: View {
     }
 
     // MARK: - Helpers
-
-    private func setEnabled(_ enabled: Bool) {
-        deviceStore.setEnabled(enabled)
-        if enabled {
-            deviceNameDraft = deviceStore.deviceName
-            server.start()
-        } else {
-            server.stop()
-        }
-    }
 
     private func applyDeviceName() {
         deviceStore.setDeviceName(deviceNameDraft)

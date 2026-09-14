@@ -22,28 +22,16 @@ struct ClipboardSettingsView: View {
                 }
 
                 SettingsCard {
-                    Toggle(model.t("clipboardEnable"), isOn: Binding(
-                        get: { clipboard.settings.isEnabled },
-                        set: { clipboard.setEnabled($0) }
-                    ))
-                    .toggleStyle(.switch)
+                    permissionStatus
 
-                    if !clipboard.settings.isEnabled {
-                        Label(model.t("clipboardNotConfiguredHint"), systemImage: "info.circle")
-                            .font(.subheadline).foregroundStyle(.secondary)
+                    Divider()
+
+                    Button {
+                        clipboard.openPanel()
+                    } label: {
+                        Label(model.t("clipboardOpenNow"), systemImage: "clipboard")
                     }
-                    if clipboard.settings.isEnabled {
-                        permissionStatus
-
-                        Divider()
-
-                        Button {
-                            clipboard.openPanel()
-                        } label: {
-                            Label(model.t("clipboardOpenNow"), systemImage: "clipboard")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
+                    .buttonStyle(.borderedProminent)
                 }
 
                 SettingsCard {

@@ -2968,24 +2968,6 @@ struct PictureInPictureView: View {
                 Text(t("pictureInPictureSubtitle")).foregroundStyle(.secondary)
             }
             Spacer()
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(pictureInPicture.settings.isEnabled ? Color.green : Color.orange)
-                    .frame(width: 7, height: 7)
-                Text(pictureInPicture.settings.isEnabled ? t("pipEnabledStatus") : t("pipDisabledStatus"))
-                    .font(.caption.weight(.semibold))
-                Toggle("", isOn: Binding(
-                    get: { pictureInPicture.settings.isEnabled },
-                    set: { pictureInPicture.setEnabled($0) }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-            }
-            .padding(.leading, 11)
-            .padding(.trailing, 8)
-            .padding(.vertical, 7)
-            .background(.quaternary.opacity(0.55), in: Capsule())
             Button(t("pipCloseAll")) { pictureInPicture.closeAll() }
                 .disabled(pictureInPicture.summaries.isEmpty)
             Button {
@@ -2994,7 +2976,6 @@ struct PictureInPictureView: View {
                 Label(t("pipCaptureFocused"), systemImage: "plus.rectangle.on.rectangle")
             }
             .macPilotProminentButtonStyle()
-            .disabled(!pictureInPicture.settings.isEnabled)
         }
         .padding(.horizontal, 36)
         .padding(.top, 34)

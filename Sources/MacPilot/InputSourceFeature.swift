@@ -1264,7 +1264,7 @@ struct InputSourcesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
-                enableCard
+                availabilityCard
                 currentSourceCard
                 defaultSourceCard
                 indicatorCard
@@ -1306,25 +1306,11 @@ struct InputSourcesView: View {
         }
     }
 
-    private var enableCard: some View {
-        SettingsCard {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(model.t("inputSourcesEnable")).font(.headline)
-                    Text(inputSources.settings.isEnabled ? model.t("inputSourcesEnabled") : model.t("inputSourcesDisabled"))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Toggle("", isOn: Binding(
-                    get: { inputSources.settings.isEnabled },
-                    set: { inputSources.setEnabled($0) }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.large)
-            }
-            if inputSources.settings.isEnabled, inputSources.availableSources.isEmpty {
+    /// 开关在首页；这里只保留「系统里没有可用输入法」这类需要用户处理的警告。
+    @ViewBuilder
+    private var availabilityCard: some View {
+        if inputSources.availableSources.isEmpty {
+            SettingsCard {
                 Label(model.t("inputSourcesUnavailable"), systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
             }

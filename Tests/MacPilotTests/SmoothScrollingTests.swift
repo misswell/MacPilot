@@ -230,8 +230,6 @@ struct SmoothScrollingTests {
     @Test func smoothScrollingLocalizationIsBilingual() {
         #expect(AppText.value("smoothScrolling", language: .simplifiedChinese) == "平滑滚动")
         #expect(AppText.value("smoothScrolling", language: .english) == "Smooth Scrolling")
-        #expect(AppText.value("smoothScrollingEnable", language: .simplifiedChinese) == "启用平滑滚动")
-        #expect(AppText.value("smoothScrollingEnable", language: .english) == "Enable smooth scrolling")
         #expect(AppText.value("smoothScrollingReverseSection", language: .simplifiedChinese) == "鼠标反向")
         #expect(AppText.value("smoothScrollingReverseSection", language: .english) == "Mouse direction reversal")
         #expect(AppText.value("smoothScrollingReverseEnable", language: .simplifiedChinese) == "启用鼠标反向")

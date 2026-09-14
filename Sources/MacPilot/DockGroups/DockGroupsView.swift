@@ -28,9 +28,7 @@ struct DockGroupsView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             controls
-            if dockGroups.settings.isEnabled {
-                options
-            }
+            options
 
             if let warning = dockGroups.configWarning {
                 warningBanner(Text(model.t("dockGroupsConfigWarning", warning)))
@@ -42,9 +40,7 @@ struct DockGroupsView: View {
                     .padding(.bottom, 12)
             }
 
-            if !dockGroups.settings.isEnabled {
-                disabledState
-            } else if dockGroups.groups.isEmpty {
+            if dockGroups.groups.isEmpty {
                 emptyState
             } else {
                 groupList
@@ -98,13 +94,6 @@ struct DockGroupsView: View {
 
     private var controls: some View {
         HStack(spacing: 12) {
-            Toggle(model.t("dockGroupsEnable"), isOn: Binding(
-                get: { dockGroups.settings.isEnabled },
-                set: { dockGroups.setEnabled($0) }
-            ))
-            .toggleStyle(.switch)
-            .fixedSize()
-
             Spacer(minLength: 16)
 
             Button {
@@ -114,7 +103,6 @@ struct DockGroupsView: View {
                 Label(model.t("dockGroupsNewGroup"), systemImage: "plus")
             }
             .macPilotProminentButtonStyle()
-            .disabled(!dockGroups.settings.isEnabled)
             .fixedSize()
 
             Button {
@@ -122,7 +110,7 @@ struct DockGroupsView: View {
             } label: {
                 Label(model.t("dockGroupsRegenerate"), systemImage: "arrow.clockwise")
             }
-            .disabled(!dockGroups.settings.isEnabled || dockGroups.isRegeneratingHelpers)
+            .disabled(dockGroups.isRegeneratingHelpers)
             .fixedSize()
 
             Button {
@@ -130,7 +118,6 @@ struct DockGroupsView: View {
             } label: {
                 Label(model.t("dockGroupsRevealFolder"), systemImage: "folder")
             }
-            .disabled(!dockGroups.settings.isEnabled)
             .fixedSize()
 
             // 需求第 26 节：清理入口只删 MacPilot 自己的 Helper / 配置 / 缓存。
@@ -196,15 +183,7 @@ struct DockGroupsView: View {
             )
     }
 
-    // MARK: - 关闭 / 空状态
-
-    private var disabledState: some View {
-        centeredState(
-            symbol: "square.grid.2x2",
-            title: model.t("dockGroupsEnable"),
-            detail: model.t("dockGroupsDisabledHint")
-        )
-    }
+    // MARK: - 空状态
 
     private var emptyState: some View {
         VStack(spacing: 16) {
@@ -224,19 +203,6 @@ struct DockGroupsView: View {
             Button(model.t("dockGroupsAddToDockGuide")) { showsAddToDockGuide = true }
                 .buttonStyle(.link)
                 .font(.subheadline)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.bottom, 70)
-    }
-
-    private func centeredState(symbol: String, title: String, detail: String) -> some View {
-        VStack(spacing: 14) {
-            Image(systemName: symbol).font(.system(size: 42)).foregroundStyle(.secondary)
-            Text(title).font(.title3.bold())
-            Text(detail)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 460)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.bottom, 70)

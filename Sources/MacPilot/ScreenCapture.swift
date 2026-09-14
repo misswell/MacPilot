@@ -2058,16 +2058,6 @@ struct ScreenCaptureView: View {
 
     private var smartCaptureCard: some View {
         SettingsCard {
-            Toggle(t("scScreenshotEnabled"), isOn: Binding(
-                get: { capture.settings.screenshotEnabled },
-                set: { capture.setScreenshotEnabled($0) }
-            ))
-            .font(.body.weight(.medium))
-            .toggleStyle(.switch)
-            Text(t("scScreenshotDisabledHint"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Divider()
             HStack(spacing: 14) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 13).fill(Color.blue.opacity(0.13))

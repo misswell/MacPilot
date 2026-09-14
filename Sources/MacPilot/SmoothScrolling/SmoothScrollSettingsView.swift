@@ -24,15 +24,6 @@ struct SmoothScrollSettingsView: View {
                 }
 
                 SettingsCard {
-                    Toggle(model.t("smoothScrollingEnable"), isOn: Binding(
-                        get: { smoothScrolling.settings.isEnabled },
-                        set: { smoothScrolling.setEnabled($0) }
-                    ))
-                    .toggleStyle(.switch)
-                    if !smoothScrolling.settings.isEnabled {
-                        Label(model.t("smoothScrollingNotConfiguredHint"), systemImage: "info.circle")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }
                     permissionStatus
                 }
 

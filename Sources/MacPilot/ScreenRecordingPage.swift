@@ -104,24 +104,6 @@ struct ScreenRecordingPageView: View {
 
             Divider()
 
-            row(t("scRecordingEnabled")) {
-                Toggle("", isOn: Binding(
-                    get: { recording.settings.isEnabled },
-                    set: { recording.setEnabled($0) }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-            }
-
-            if !recording.settings.isEnabled {
-                Text(t("scRecordingDisabledHint"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Divider()
-
             HStack(spacing: 14) {
                 if recording.state == .recording || recording.state == .paused || recording.state == .stopping {
                     if recording.state == .recording {

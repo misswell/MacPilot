@@ -119,6 +119,18 @@ var body: some View {
 - 卡片内部结构固定：第一行是 34pt 圆角图标底座 + 右侧 `.toggleStyle(.switch)` 开关；第二行是 `.body.weight(.semibold)` 标题 + `.caption` 说明。说明文字用 `.lineLimit(3, reservesSpace: true)` 保证同一行卡片等高。
 - 分组标题（如「自动化」「效率工具」）以 `.font(.headline)` 直接放在网格上方，不放进卡片——网格本身已经是卡片，再套一层就是嵌套玻璃。
 
+### 功能总开关只在首页
+
+**一个功能的总开关只有一个，就在首页。详情页不要再放「启用本功能」这类总开关。**
+
+- 详情页只有在功能已开启时才可达（`isSectionAvailable`），所以在详情页上它永远是开着的；再放一个总开关只会和首页互相打架。
+- 详情页里**保留**语义不同的开关：
+  - 子功能开关，例如屏幕录制的「启用定时截屏」、截屏的「启用截图功能」之外的各项参数；
+  - 暂停类开关，例如退出规则页的「规则执行中 / 已暂停」、启动页的「启动计划已启用 / 已暂停」。
+- 功能模型内部仍保留 `settings.isEnabled` 作为运行时镜像，由 `MacPilotModel.prepareFeatureForUserEnable(_:)` 在首页打开时置位；
+  历史配置里关掉的总开关由 `StoredConfiguration.aligningHomeControlledSwitches()` 在启动时按首页状态校正，
+  所以**新增这类功能时必须同时更新这两处**，否则会出现「首页开着、功能却没启动」。
+
 ## 5. 特殊情况
 
 | 场景 | 处理方式 |
@@ -140,6 +152,7 @@ var body: some View {
 - [ ] 外边距 `36 / 34 / 30`，卡片间距 `24`
 - [ ] 卡片内小节标题用 `.font(.headline)`，说明文字用 `caption/subheadline` + `secondary`
 - [ ] 启停开关用 `.toggleStyle(.switch)`
+- [ ] 功能总开关只放在首页，详情页不再放「启用本功能」开关（子功能 / 暂停开关除外）
 - [ ] 主操作按钮使用 `macPilotProminentButtonStyle()`；多分类选中态使用统一 selection pill
 - [ ] 应用/规则列表用原生全高 `List`（不嵌卡片、不加 `ScrollView`/`minHeight`，避免嵌套滚动条）
 - [ ] 文案走 `AppText`/`AppLocalization`，中英文同步

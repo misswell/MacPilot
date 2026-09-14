@@ -2841,28 +2841,6 @@ struct WindowSwitcherSettingsView: View {
                 }
 
                 SettingsCard {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(model.t("windowSwitcherTitle")).font(.headline)
-                            Text(model.t("windowSwitcherShortcutHint"))
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Toggle(
-                            "",
-                            isOn: Binding(
-                                get: { windowSwitcher.settings.isEnabled },
-                                set: { windowSwitcher.setEnabled($0) }
-                            )
-                        )
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.large)
-                    }
-                }
-
-                SettingsCard {
                     Toggle(
                         model.t("windowSwitcherIncludeMinimized"),
                         isOn: Binding(
