@@ -64,6 +64,19 @@ Clipboard History keeps recent copied content available from a searchable panel:
 - Pin important items, remove individual entries, clear unpinned history, and configure the history limit.
 - Text, images, URLs, and other supported pasteboard content are deduplicated and persisted across launches.
 
+## Dock Groups
+
+The **Dock Groups** feature collects several apps into one lightweight helper you can pin to the real macOS Dock:
+
+- Create a group, add apps by picking them from a scan of installed apps, dragging `.app` bundles in, or browsing for them; drag rows to reorder.
+- Each group generates its own helper app under `~/Library/Application Support/MacPilot/DockGroups/`. Drag that `.app` onto the Dock (MacPilot never rewrites `com.apple.dock.plist`), then click it to open a secondary popover listing the group's apps in a grid or list layout.
+- Clicking an app activates it when it is already running and launches it otherwise — never a second instance. Running apps show a green dot.
+- The popover has no title bar, no second Dock icon, and no normal window chrome; it closes on Escape or an outside click and supports arrow-key navigation, dark mode, and Retina.
+- Apps stay read-only. MacPilot stores a reference only (bundle identifier first, path as a fallback) and reads just the bundle identifier, name, version, icon, executable URL, and running state. It never copies, moves, patches, injects into, or re-signs a third-party app, so updates, TCC permissions, and code signatures are unaffected.
+- A group whose app moved shows “App not found” with options to relocate it or remove the reference; a missing app is never downloaded or substituted automatically.
+- Deleting a group removes only MacPilot's own helper app and configuration, and only after verifying the target lives inside MacPilot's own folder.
+- Off by default. While disabled, MacPilot does no app scanning, no helper management, and no background timers.
+
 ## Memory Monitor
 
 The **Memory Monitor** shows how much physical memory each app uses in real time:

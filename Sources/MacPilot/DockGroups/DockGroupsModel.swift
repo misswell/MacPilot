@@ -1,0 +1,416 @@
+//
+//  DockGroupsModel.swift
+//  MacPilot
+//
+//  Dock Groups 的运行时模型：连接 MacPilot UI、
+//  `groups.json` 存储与 Helper App 管理。
+//
+//  安全边界（需求第 2、23、25 节）：
+//  - 只读写 MacPilot 自己的目录；
+//  - 对第三方 App 只做「解析 + 启动 + 激活 + 读图标」；
+//  - 功能关闭时不做任何扫描、不监听 Workspace、不跑后台 Timer。
+//
+
+import AppKit
+import Combine
+import Foundation
+import MacPilotDockGroupsCore
+import OSLog
+
+@MainActor
+final class DockGroupsModel: ObservableObject {
+    private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "DockGroups")
+
+    @Published private(set) var settings = DockGroupsSettings()
+    @Published private(set) var groups: [DockGroup] = []
+    /// 配置损坏等需要用户知情的提示（需求第 16 节：不崩溃）。
+    @Published private(set) var configWarning: String?
+    /// Helper 生成失败等提示（视图按当前语言展示对应文案）。
+    @Published private(set) var helperUnavailable = false
+    @Published private(set) var runningBundleIdentifiers: Set<String> = []
+    @Published private(set) var isRegeneratingHelpers = false
+
+    /// 由 MacPilotModel 注入，用于把功能开关写回 config.json。
+    var persist: (() -> Void)?
+
+    let helperManager: DockHelperManager
+    private let store: DockGroupStore
+
+    private var isActive = false
+    private var runningTask: Task<Void, Never>?
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var iconCache: [String: NSImage] = [:]
+
+    init(
+        store: DockGroupStore = DockGroupStore(),
+        helperManager: DockHelperManager = DockHelperManager()
+    ) {
+        self.store = store
+        self.helperManager = helperManager
+    }
+
+    // MARK: - 生命周期
+
+    func applyLoadedSettings(_ loaded: DockGroupsSettings) {
+        settings = loaded
+        reload()
+    }
+
+    /// 需求第 22 节：功能关闭时不做任何后台工作。
+    func activateFromConfiguration() {
+        guard settings.isEnabled else { return }
+        isActive = true
+        reload()
+        startObservingWorkspace()
+        ensureHelpersExistIfNeeded()
+    }
+
+    func shutdown() {
+        isActive = false
+        stopObservingWorkspace()
+        stopMonitoring()
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        guard settings.isEnabled != enabled else { return }
+        settings.isEnabled = enabled
+        if enabled {
+            activateFromConfiguration()
+            // 用户在当前页面直接打开开关时，立刻接上运行状态轮询。
+            if isPageVisible { startMonitoring() }
+        } else {
+            shutdown()
+        }
+        persist?()
+    }
+
+    func setDefaultLayout(_ layout: DockGroupLayout) {
+        guard settings.defaultLayout != layout else { return }
+        settings.defaultLayout = layout
+        persist?()
+    }
+
+    func setShowsRunningState(_ shows: Bool) {
+        guard settings.showsRunningState != shows else { return }
+        settings.showsRunningState = shows
+        if shows, isPageVisible { startMonitoring() }
+        persist?()
+    }
+
+    /// 页面可见时才轮询运行状态（与内存监控页一致的按需生命周期）。
+    private(set) var isPageVisible = false
+
+    func startMonitoring() {
+        isPageVisible = true
+        // 需求第 22 节：功能关闭时不监听 Workspace、不跑轮询。
+        guard settings.isEnabled else { return }
+        refreshRunningState()
+        guard runningTask == nil else { return }
+        runningTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard let self, !Task.isCancelled else { return }
+                self.refreshRunningState()
+            }
+        }
+    }
+
+    func stopMonitoring() {
+        isPageVisible = false
+        runningTask?.cancel()
+        runningTask = nil
+    }
+
+    // MARK: - 读取
+
+    /// 需求第 6、16 节：按 bundleIdentifier 优先解析，path 兜底；找不到就标记未找到。
+    func resolvedApps(for group: DockGroup) -> [ResolvedInstalledApp] {
+        group.apps.map {
+            InstalledAppResolver.resolve($0, runningBundleIdentifiers: runningBundleIdentifiers)
+        }
+    }
+
+    func resolvedApp(_ reference: DockGroupApp) -> ResolvedInstalledApp {
+        InstalledAppResolver.resolve(reference, runningBundleIdentifiers: runningBundleIdentifiers)
+    }
+
+    /// 图标缓存在内存里（系统本身会缓存 App 图标），不做无意义的磁盘拷贝。
+    func icon(for reference: DockGroupApp, size: CGFloat = 64) -> NSImage? {
+        guard let url = InstalledAppResolver.resolveURL(reference) else { return nil }
+        let key = "\(url.path)#\(Int(size))"
+        if let cached = iconCache[key] { return cached }
+        guard let image = InstalledAppResolver.icon(for: url, size: size) else { return nil }
+        iconCache[key] = image
+        return image
+    }
+
+    func groupIcon(for group: DockGroup, size: CGFloat) -> NSImage {
+        DockGroupIconRenderer.image(
+            for: group,
+            size: size,
+            memberIconURLs: group.apps.compactMap { InstalledAppResolver.resolveURL($0) },
+            customIconDirectory: helperManager.rootDirectory
+        )
+    }
+
+    /// 需求第 13 节：自定义图片只拷贝用户选择的图片文件到 MacPilot 自己的目录，
+    /// 原文件保持只读，更不会写进任何第三方 App。
+    @discardableResult
+    func importCustomIcon(from sourceURL: URL, for groupID: String) -> Bool {
+        guard let image = NSImage(contentsOf: sourceURL),
+              let png = ICNSWriter.renderPNG(image: image, pixels: 1024) else { return false }
+
+        let fileName = "\(DockGroupIdentifier.sanitizedID(groupID))-\(UUID().uuidString.prefix(8)).png"
+        let destination = DockGroupPaths.customIconURL(in: helperManager.rootDirectory, fileName: fileName)
+        do {
+            let target = try ManagedPathGuard.requireManaged(destination, root: helperManager.rootDirectory)
+            try TargetAppAccessPolicy.requireWrite(.write, at: target, managedRoot: helperManager.rootDirectory)
+            try FileManager.default.createDirectory(
+                at: target.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try png.write(to: target, options: .atomic)
+        } catch {
+            Self.logger.error("Failed to import custom Dock group icon: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+
+        setIcon(DockGroupIcon(source: .customImage, value: fileName), for: groupID)
+        return true
+    }
+
+    func helperAppURL(for group: DockGroup) -> URL {
+        helperManager.helperAppURL(for: group)
+    }
+
+    func helperExists(for group: DockGroup) -> Bool {
+        helperManager.helperExists(for: group)
+    }
+
+    // MARK: - 读写配置
+
+    func reload() {
+        switch store.load() {
+        case let .loaded(document):
+            groups = document.groups
+            configWarning = nil
+        case .missing:
+            groups = []
+            configWarning = nil
+        case let .corrupt(message):
+            groups = []
+            configWarning = message
+        }
+    }
+
+    private func document() -> DockGroupsDocument {
+        DockGroupsDocument(groups: groups)
+    }
+
+    private func commit(_ mutate: (inout DockGroupsDocument) -> Void) {
+        var document = self.document()
+        mutate(&document)
+        groups = document.groups
+        do {
+            try store.save(document)
+            configWarning = nil
+        } catch {
+            configWarning = error.localizedDescription
+            Self.logger.error("Failed to save Dock Groups: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - 分组编辑
+
+    @discardableResult
+    func createGroup(named name: String) -> DockGroup {
+        var created = DockGroup(id: "", name: name)
+        commit { document in
+            created = DockGroupDocumentEditor.createGroup(named: name, in: &document)
+            if let index = document.groups.firstIndex(where: { $0.id == created.id }) {
+                document.groups[index].layout = settings.defaultLayout
+                created = document.groups[index]
+            }
+        }
+        regenerateHelper(for: created)
+        return created
+    }
+
+    func renameGroup(_ groupID: String, to name: String) {
+        var renamed: DockGroup?
+        commit { document in
+            _ = DockGroupDocumentEditor.rename(groupID: groupID, to: name, in: &document)
+            renamed = document.groups.first { $0.id == groupID }
+        }
+        // 名称变化会改变 Helper 的 .app 文件名，需要重新生成并清理旧文件。
+        if let renamed {
+            regenerateHelper(for: renamed)
+            helperManager.removeStaleHelpers(keeping: groups)
+        }
+    }
+
+    func deleteGroup(_ groupID: String) {
+        guard let group = groups.first(where: { $0.id == groupID }) else { return }
+        commit { document in
+            _ = DockGroupDocumentEditor.removeGroup(groupID, in: &document)
+        }
+        // 需求第 15 节：只删除 MacPilot 自己创建的 Helper App 与配置。
+        helperManager.removeHelper(for: group)
+    }
+
+    func setIcon(_ icon: DockGroupIcon, for groupID: String) {
+        updateGroup(groupID) { $0.icon = icon }
+    }
+
+    func setLayout(_ layout: DockGroupLayout, for groupID: String) {
+        updateGroup(groupID) { $0.layout = layout }
+    }
+
+    private func updateGroup(_ groupID: String, _ mutate: (inout DockGroup) -> Void) {
+        var updated: DockGroup?
+        commit { document in
+            guard let index = document.groups.firstIndex(where: { $0.id == groupID }) else { return }
+            mutate(&document.groups[index])
+            document.groups[index].updatedAt = DockGroupTimestamp.now()
+            updated = document.groups[index]
+        }
+        if let updated { regenerateHelper(for: updated) }
+    }
+
+    // MARK: - App 引用编辑
+
+    /// 需求第 11 节：拖入 `.app` 只保存引用，不复制、不移动、不修改。
+    @discardableResult
+    func addApp(at url: URL, to groupID: String) -> Bool {
+        guard let reference = InstalledAppResolver.makeReference(from: url) else { return false }
+        return addApp(reference, to: groupID)
+    }
+
+    @discardableResult
+    func addApp(_ reference: DockGroupApp, to groupID: String) -> Bool {
+        var added = false
+        commit { document in
+            added = DockGroupDocumentEditor.addApp(reference, to: groupID, in: &document)
+        }
+        if added, let group = groups.first(where: { $0.id == groupID }) {
+            regenerateHelper(for: group)
+        }
+        return added
+    }
+
+    func removeApp(_ appID: UUID, from groupID: String) {
+        var removed = false
+        commit { document in
+            removed = DockGroupDocumentEditor.removeApp(appID, from: groupID, in: &document)
+        }
+        if removed, let group = groups.first(where: { $0.id == groupID }) {
+            regenerateHelper(for: group)
+        }
+    }
+
+    func moveApps(in groupID: String, from source: IndexSet, to destination: Int) {
+        // 顺序变化不影响 Helper App 本身，只更新配置。
+        commit { document in
+            _ = DockGroupDocumentEditor.moveApps(in: groupID, from: source, to: destination, in: &document)
+        }
+    }
+
+    /// 需求第 16 节：应用被移动后提供「重新定位」，只改引用。
+    @discardableResult
+    func relocateApp(_ appID: UUID, in groupID: String, to url: URL) -> Bool {
+        guard let reference = InstalledAppResolver.makeReference(from: url) else { return false }
+        var relocated = false
+        commit { document in
+            relocated = DockGroupDocumentEditor.relocateApp(appID, in: groupID, to: reference, in: &document)
+        }
+        if relocated, let group = groups.first(where: { $0.id == groupID }) {
+            regenerateHelper(for: group)
+        }
+        return relocated
+    }
+
+    // MARK: - Helper 管理
+
+    func regenerateHelper(for group: DockGroup) {
+        // 需求第 22 节：功能关闭时不运行任何 Helper 管理任务。
+        guard settings.isEnabled else { return }
+        let iconURLs = group.apps.compactMap { InstalledAppResolver.resolveURL($0) }
+        if helperManager.ensureHelper(for: group, memberIconURLs: iconURLs) == nil {
+            helperUnavailable = true
+        }
+    }
+
+    func regenerateAllHelpers() {
+        guard isActive else { return }
+        isRegeneratingHelpers = true
+        helperUnavailable = false
+        defer { isRegeneratingHelpers = false }
+        ensureHelpersExistIfNeeded(force: true)
+    }
+
+    func revealHelper(for group: DockGroup) {
+        helperManager.revealInFinder(for: group)
+    }
+
+    func revealGroupsFolder() {
+        helperManager.revealGroupsFolder()
+    }
+
+    /// 启动时只做一次「Helper 缺失就补」的轻量校验，避免每次启动都重写磁盘。
+    private func ensureHelpersExistIfNeeded(force: Bool = false) {
+        guard settings.isEnabled, helperManager.isHelperExecutableAvailable else { return }
+        var missing = false
+        for group in groups {
+            if force || !helperManager.helperExists(for: group) {
+                regenerateHelper(for: group)
+                missing = true
+            }
+        }
+        if missing {
+            helperManager.removeStaleHelpers(keeping: groups)
+        }
+    }
+
+    // MARK: - 运行状态
+
+    /// 需求第 9 节：只用公开的 NSWorkspace 运行列表，不接触目标进程内部。
+    func refreshRunningState() {
+        runningBundleIdentifiers = InstalledAppResolver.runningBundleIdentifiers()
+    }
+
+    private func startObservingWorkspace() {
+        guard workspaceObservers.isEmpty else { return }
+        let center = NSWorkspace.shared.notificationCenter
+        let names: [Notification.Name] = [
+            NSWorkspace.didLaunchApplicationNotification,
+            NSWorkspace.didTerminateApplicationNotification
+        ]
+        for name in names {
+            let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.refreshRunningState() }
+            }
+            workspaceObservers.append(observer)
+        }
+    }
+
+    private func stopObservingWorkspace() {
+        let center = NSWorkspace.shared.notificationCenter
+        for observer in workspaceObservers {
+            center.removeObserver(observer)
+        }
+        workspaceObservers.removeAll()
+    }
+
+    // MARK: - 诊断
+
+    /// 需求第 30 节自动化测试之外的自检入口：确认管理目录里没有第三方 App。
+    func managedArtifactPaths() -> [String] {
+        let fileManager = FileManager.default
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: helperManager.rootDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return entries.map(\.path).sorted()
+    }
+}

@@ -1,0 +1,164 @@
+//
+//  InstalledAppResolver.swift
+//  MacPilotDockGroupsCore
+//
+//  需求第 2、6、9、11、16 节：
+//  对第三方 App **只读**地读取 Bundle URL / Bundle Identifier / App Name /
+//  App Icon / Version / Executable URL / Running State。
+//
+//  解析优先级（需求第 6 节）：
+//  1. bundleIdentifier（App 更新或移动后仍能命中）
+//  2. path（fallback）
+//  找不到时返回 isInstalled == false，由 UI 显示「应用未找到」。
+//
+
+import AppKit
+import Foundation
+
+/// 一次解析的结果。只承载只读信息。
+public struct ResolvedInstalledApp: Equatable, Sendable {
+    /// 分组里保存的原始引用。
+    public var reference: DockGroupApp
+    /// 解析到的 Bundle URL；未找到时为 nil。
+    public var url: URL?
+    public var bundleIdentifier: String?
+    public var name: String
+    public var version: String?
+    public var executableURL: URL?
+    public var isRunning: Bool
+
+    /// 需求第 16 节：App 被删除时不要报错崩溃，显示「应用未找到」。
+    public var isInstalled: Bool { url != nil }
+
+    public var displayName: String {
+        name.isEmpty ? (reference.name.isEmpty ? (url?.deletingPathExtension().lastPathComponent ?? "") : reference.name) : name
+    }
+
+    public var runningStateSymbol: String { isRunning ? "●" : "○" }
+}
+
+public enum InstalledAppResolver {
+    /// 需求第 9 节：用 NSWorkspace.runningApplications 按 bundleIdentifier 匹配。
+    /// 绝不注入、读取内存或修改目标进程。
+    public static func runningBundleIdentifiers(workspace: NSWorkspace = .shared) -> Set<String> {
+        Set(workspace.runningApplications.compactMap { $0.bundleIdentifier })
+    }
+
+    public static func resolve(
+        _ reference: DockGroupApp,
+        runningBundleIdentifiers running: Set<String> = InstalledAppResolver.runningBundleIdentifiers(),
+        workspace: NSWorkspace = .shared
+    ) -> ResolvedInstalledApp {
+        let url = resolveURL(reference, workspace: workspace)
+        let bundle = url.flatMap { Bundle(url: $0) }
+        let bundleIdentifier = bundle?.bundleIdentifier ?? reference.bundleIdentifier
+        let name = bundle.map { displayName(of: $0, fallback: reference.name) } ?? reference.name
+        let version = bundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let isRunning = bundleIdentifier.map { running.contains($0) } ?? false
+
+        return ResolvedInstalledApp(
+            reference: reference,
+            url: url,
+            bundleIdentifier: bundleIdentifier,
+            name: name,
+            version: version,
+            executableURL: bundle?.executableURL,
+            isRunning: isRunning
+        )
+    }
+
+    /// 解析单个引用对应的 Bundle URL。
+    public static func resolveURL(_ reference: DockGroupApp, workspace: NSWorkspace = .shared) -> URL? {
+        if let bundleIdentifier = reference.bundleIdentifier, !bundleIdentifier.isEmpty,
+           let url = workspace.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+            return url
+        }
+        let path = reference.path
+        guard !path.isEmpty else { return nil }
+        let url = URL(fileURLWithPath: path)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return nil
+        }
+        return url
+    }
+
+    /// 需求第 11 节：从拖入的 `.app` 生成只读引用，不复制、不移动、不修改。
+    public static func makeReference(from url: URL) -> DockGroupApp? {
+        guard url.pathExtension.lowercased() == "app" else { return nil }
+        let bundle = Bundle(url: url)
+        let name = bundle.map { displayName(of: $0, fallback: url.deletingPathExtension().lastPathComponent) }
+            ?? url.deletingPathExtension().lastPathComponent
+        return DockGroupApp(
+            bundleIdentifier: bundle?.bundleIdentifier,
+            path: url.standardizedFileURL.path,
+            name: name
+        )
+    }
+
+    // MARK: - App 图标（只读）
+
+    /// 需求第 12 节：图标直接读取系统 App Icon，不写入目标 Resources。
+    public static func icon(for url: URL, size: CGFloat = 64) -> NSImage? {
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        icon.size = NSSize(width: size, height: size)
+        return icon
+    }
+
+    // MARK: - 安装目录扫描（供 App Picker 使用）
+
+    /// 常用安装位置。只做浅层扫描（最多两层），避免遍历整个磁盘。
+    public static func defaultSearchDirectories(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
+        [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            URL(fileURLWithPath: "/Applications/Utilities", isDirectory: true),
+            URL(fileURLWithPath: "/System/Applications", isDirectory: true),
+            URL(fileURLWithPath: "/System/Applications/Utilities", isDirectory: true),
+            home.appendingPathComponent("Applications", isDirectory: true)
+        ]
+    }
+
+    /// 扫描已安装的 App（只读）。
+    public static func scanInstalledApps(
+        in directories: [URL] = defaultSearchDirectories(),
+        maximumDepth: Int = 2
+    ) -> [DockGroupApp] {
+        let fileManager = FileManager.default
+        var results: [DockGroupApp] = []
+        var seenPaths = Set<String>()
+
+        for directory in directories {
+            guard let enumerator = fileManager.enumerator(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                errorHandler: { _, _ in true }
+            ) else { continue }
+
+            for case let url as URL in enumerator {
+                let depth = url.pathComponents.count - directory.pathComponents.count
+                if depth > maximumDepth {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                guard url.pathExtension.lowercased() == "app" else { continue }
+                enumerator.skipDescendants()
+                let standardized = url.standardizedFileURL.path
+                guard seenPaths.insert(standardized).inserted else { continue }
+                if let reference = makeReference(from: url) {
+                    results.append(reference)
+                }
+            }
+        }
+
+        return results.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    private static func displayName(of bundle: Bundle, fallback: String) -> String {
+        (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
+            ?? fallback
+    }
+}

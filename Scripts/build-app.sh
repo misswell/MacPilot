@@ -38,6 +38,9 @@ REXT_PRODUCT="$ROOT/build/FinderSync"
 BIN="$BIN_DIR/MacPilot"
 UPDATER_BIN="$BIN_DIR/MacPilotUpdater"
 HELPER_BIN="$BIN_DIR/MacPilotPowerHelper"
+# Dock Groups 的 Helper 可执行文件。MacPilot 会把它拷贝进
+# ~/Library/Application Support/MacPilot/DockGroups/<Group>.app 后复用。
+DOCK_HELPER_BIN="$BIN_DIR/MacPilotDockHelper"
 OCCLUSION_PATCH_BIN="$BIN_DIR/libMacPilotOcclusionPatch.dylib"
 xcrun clang -dynamiclib -O2 "${PATCH_ARCH_ARGS[@]}" \
     -mmacosx-version-min=14.0 -framework AppKit \
@@ -69,6 +72,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_EXECUTABLE_NAME"
 cp "$UPDATER_BIN" "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
 cp "$HELPER_BIN" "$APP/Contents/MacOS/MacPilotPowerHelper"
+# Dock Groups helper: 与主程序同目录，DockHelperBundleBuilder 按这个相对路径查找。
+cp "$DOCK_HELPER_BIN" "$APP/Contents/MacOS/MacPilotDockHelper"
+chmod 755 "$APP/Contents/MacOS/MacPilotDockHelper"
 cp "$OCCLUSION_PATCH_BIN" "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
@@ -154,14 +160,18 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
     # MacPilot bundle identifier and invalidate the nested signature.
     REXT_ENTITLEMENTS="$ROOT/FinderSync/Resources/FinderSync.entitlements"
     HELPER_ENTITLEMENTS="$ROOT/Resources/MacPilotPowerHelper.entitlements"
-    # Nested code is signed inside-out: the privileged helper first, then the
-    # FinderSync appex, the updater, the injected dylib, and finally the app.
+    # Dock Groups helper needs its own identifier: MacPilot copies this exact
+    # binary into every generated ~/Library/.../DockGroups/<Group>.app, and those
+    # copies must not look like the MacPilot app itself.
+    DOCK_HELPER_IDENTIFIER="${BUNDLE_IDENTIFIER}.dock-helper"
     if [[ "$SIGNING_IDENTITY" == "-" ]]; then
         codesign --force --entitlements "$HELPER_ENTITLEMENTS" \
             --sign - "$APP/Contents/MacOS/MacPilotPowerHelper"
         codesign --force --entitlements "$REXT_ENTITLEMENTS" \
             --sign - "$REXT_APPEX"
         codesign --force --sign - "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
+        codesign --force --identifier "$DOCK_HELPER_IDENTIFIER" --sign - \
+            "$APP/Contents/MacOS/MacPilotDockHelper"
         codesign --force --sign - \
             "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
         codesign --force --entitlements "$ENTITLEMENTS" \
@@ -173,6 +183,8 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
             --sign "$SIGNING_IDENTITY" "$REXT_APPEX"
         codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
             "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
+        codesign --force --options runtime --identifier "$DOCK_HELPER_IDENTIFIER" \
+            --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/MacPilotDockHelper"
         codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
             "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
         codesign --force --options runtime --entitlements "$ENTITLEMENTS" \

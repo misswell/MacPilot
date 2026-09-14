@@ -880,6 +880,116 @@ enum AppText {
         "scQuickCopySaveFailedTitle": "Auto Save Failed",
     ]
 
+    private static let dockGroupsChinese: [String: String] = [
+        "dockGroups": "Dock 分组",
+        "dockGroupsSubtitle": "把应用收进原生 Dock 的二级分组，让 Dock 更简洁。MacPilot 不修改、不注入、不重新签名任何被管理的应用。",
+        "dockGroupsEnable": "启用 Dock 分组",
+        "dockGroupsDisabledHint": "开启后才会创建分组、生成 Helper App 并显示应用运行状态。",
+        "dockGroupsNewGroup": "新建分组",
+        "dockGroupsNewGroupName": "新建分组",
+        "dockGroupsNoGroups": "还没有 Dock 分组",
+        "dockGroupsNoGroupsDetail": "创建一个分组，把常用应用放进去，再把生成的 Helper 拖到 Dock 上。",
+        "dockGroupsRevealFolder": "在访达中显示",
+        "dockGroupsRegenerate": "重新生成",
+        "dockGroupsAppCount": "%d 个应用",
+        "dockGroupsRunningCount": "%d 个正在运行",
+        "dockGroupsMissingCount": "%d 个未找到",
+        "dockGroupsLayoutGrid": "网格",
+        "dockGroupsLayoutList": "列表",
+        "dockGroupsDeleteGroup": "删除分组",
+        "dockGroupsDeleteGroupAction": "删除分组",
+        "dockGroupsDeleteGroupMessage": "确定要删除“%@”吗？只会删除 MacPilot 自己生成的 Helper 和配置，不会动任何第三方应用。",
+        "dockGroupsRevealHelper": "显示 Helper",
+        "dockGroupsAppMissing": "应用未找到",
+        "dockGroupsRelocate": "重新定位",
+        "dockGroupsRemoveApp": "从分组移除",
+        "dockGroupsSearchApps": "搜索应用",
+        "dockGroupsDone": "完成",
+        "dockGroupsBasics": "分组设置",
+        "dockGroupsName": "名称",
+        "dockGroupsIcon": "图标",
+        "dockGroupsIconComposite": "组合",
+        "dockGroupsIconSymbol": "符号",
+        "dockGroupsIconEmoji": "Emoji",
+        "dockGroupsIconImage": "图片",
+        "dockGroupsIconHint": "默认为前 4 个应用图标的 2×2 组合预览。",
+        "dockGroupsChooseImage": "选择图片…",
+        "dockGroupsApps": "应用（%d）",
+        "dockGroupsAppsFooter": "拖拽可排序。MacPilot 只保存引用，不复制、不移动、不修改应用本身。",
+        "dockGroupsDropHint": "也可以把 .app 拖到这里",
+        "dockGroupsRunning": "运行中",
+        "dockGroupsHelper": "Dock Helper",
+        "dockGroupsHelperUnavailable": "找不到 MacPilot 的 Helper 可执行文件，暂未生成 Helper App。请用 ./Scripts/build-app.sh 构建完整的 MacPilot.app。",
+        "dockGroupsConfigWarning": "分组配置无法读取（%@）。已暂停显示分组，修复或删除 groups.json 后即可恢复。",
+        "dockGroupsAddToDock": "添加到 Dock",
+        "dockGroupsAddToDockHint": "在访达中把生成的 .app 拖到 Dock 上即可固定。MacPilot 不会改写系统的 Dock 配置。",
+        "dockGroupsAddToDockGuide": "如何添加到 Dock",
+        "dockGroupsAddToDockGuideBody": "1. 点「在访达中显示」打开 DockGroups 文件夹。\n2. 把分组的 .app 拖到 Dock 上（放在分隔线左侧）。\n3. 点击 Dock 图标即可展开二级列表。",
+        "dockGroupsSafetyNote": "安全说明：Dock Groups 只生成 MacPilot 自己的 Helper，不修改、不注入、不重新签名任何第三方应用，因此应用更新、TCC 权限与代码签名都不会受影响。",
+        "dockGroupsReadOnlyNote": "被管理的应用始终只读：MacPilot 只读取图标与版本信息，启动应用使用公开的 Workspace API。",
+        "dockGroupsGroupMissing": "该分组已被删除。",
+        "dockGroupsScanning": "正在扫描应用…",
+        "dockGroupsNoMatchingApps": "没有匹配的应用",
+        "dockGroupsAlreadyAdded": "已添加",
+        "dockGroupsDefaultLayout": "默认布局",
+        "dockGroupsShowRunningState": "显示运行状态",
+    ]
+
+    private static let dockGroupsEnglish: [String: String] = [
+        "dockGroups": "Dock Groups",
+        "dockGroupsSubtitle": "Tuck apps into secondary groups on the native Dock. MacPilot never modifies, injects into, or re-signs the apps you manage.",
+        "dockGroupsEnable": "Enable Dock Groups",
+        "dockGroupsDisabledHint": "Turn this on to create groups, generate helper apps, and show running state.",
+        "dockGroupsNewGroup": "New Group",
+        "dockGroupsNewGroupName": "New Group",
+        "dockGroupsNoGroups": "No Dock groups yet",
+        "dockGroupsNoGroupsDetail": "Create a group, add your apps, then drag the generated helper into the Dock.",
+        "dockGroupsRevealFolder": "Reveal in Finder",
+        "dockGroupsRegenerate": "Regenerate",
+        "dockGroupsAppCount": "%d apps",
+        "dockGroupsRunningCount": "%d running",
+        "dockGroupsMissingCount": "%d missing",
+        "dockGroupsLayoutGrid": "Grid",
+        "dockGroupsLayoutList": "List",
+        "dockGroupsDeleteGroup": "Delete Group",
+        "dockGroupsDeleteGroupAction": "Delete Group",
+        "dockGroupsDeleteGroupMessage": "Delete “%@”? Only MacPilot's own helper app and configuration are removed; no third-party app is touched.",
+        "dockGroupsRevealHelper": "Reveal Helper",
+        "dockGroupsAppMissing": "App not found",
+        "dockGroupsRelocate": "Locate…",
+        "dockGroupsRemoveApp": "Remove from group",
+        "dockGroupsSearchApps": "Search apps",
+        "dockGroupsDone": "Done",
+        "dockGroupsBasics": "Group Settings",
+        "dockGroupsName": "Name",
+        "dockGroupsIcon": "Icon",
+        "dockGroupsIconComposite": "Composite",
+        "dockGroupsIconSymbol": "Symbol",
+        "dockGroupsIconEmoji": "Emoji",
+        "dockGroupsIconImage": "Image",
+        "dockGroupsIconHint": "Defaults to a 2×2 preview of the first four app icons.",
+        "dockGroupsChooseImage": "Choose Image…",
+        "dockGroupsApps": "Apps (%d)",
+        "dockGroupsAppsFooter": "Drag to reorder. MacPilot only stores a reference; it never copies, moves, or modifies the app itself.",
+        "dockGroupsDropHint": "Or drag an .app here",
+        "dockGroupsRunning": "Running",
+        "dockGroupsHelper": "Dock Helper",
+        "dockGroupsHelperUnavailable": "MacPilot's Dock helper executable is missing, so no helper app was generated. Build the full MacPilot.app with ./Scripts/build-app.sh.",
+        "dockGroupsConfigWarning": "The group configuration could not be read (%@). Groups are hidden until groups.json is fixed or removed.",
+        "dockGroupsAddToDock": "Add to Dock",
+        "dockGroupsAddToDockHint": "Drag the generated .app onto the Dock in Finder. MacPilot never rewrites your Dock configuration.",
+        "dockGroupsAddToDockGuide": "How to add to the Dock",
+        "dockGroupsAddToDockGuideBody": "1. Click “Reveal in Finder” to open the DockGroups folder.\n2. Drag the group's .app onto the Dock (left of the divider).\n3. Click the Dock icon to open the secondary list.",
+        "dockGroupsSafetyNote": "Safety: Dock Groups only generates MacPilot's own helpers. It never modifies, injects into, or re-signs any third-party app, so updates, TCC permissions, and code signatures are unaffected.",
+        "dockGroupsReadOnlyNote": "Managed apps stay read-only: MacPilot only reads icons and version information, and launches apps through the public Workspace API.",
+        "dockGroupsGroupMissing": "This group no longer exists.",
+        "dockGroupsScanning": "Scanning apps…",
+        "dockGroupsNoMatchingApps": "No matching apps",
+        "dockGroupsAlreadyAdded": "Added",
+        "dockGroupsDefaultLayout": "Default layout",
+        "dockGroupsShowRunningState": "Show running state",
+    ]
+
     static func value(_ key: String, language: AppLanguage, arguments: [CVarArg]) -> String {
         let useChinese: Bool
         switch language {
@@ -888,8 +998,8 @@ enum AppText {
         case .system: useChinese = Locale.autoupdatingCurrent.language.languageCode?.identifier == "zh"
         }
         let template = useChinese
-            ? (chinese[key] ?? recordingSelectionChinese[key] ?? memoryMonitorChinese[key] ?? screenCaptureFeedbackChinese[key] ?? key)
-            : (english[key] ?? recordingSelectionEnglish[key] ?? memoryMonitorEnglish[key] ?? screenCaptureFeedbackEnglish[key] ?? key)
+            ? (chinese[key] ?? recordingSelectionChinese[key] ?? memoryMonitorChinese[key] ?? screenCaptureFeedbackChinese[key] ?? dockGroupsChinese[key] ?? key)
+            : (english[key] ?? recordingSelectionEnglish[key] ?? memoryMonitorEnglish[key] ?? screenCaptureFeedbackEnglish[key] ?? dockGroupsEnglish[key] ?? key)
         return arguments.isEmpty ? template : String(format: template, locale: language.locale, arguments: arguments)
     }
 
@@ -1319,9 +1429,10 @@ final class MacPilotModel: ObservableObject {
         var awake: AwakeSettings
         var awakeTriggers: [AwakeTrigger]
         var remoteControl: RemoteControlSettings
+        var dockGroups: DockGroupsSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], remoteControl: RemoteControlSettings) {
-            version = 23
+        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings) {
+            version = 24
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -1341,6 +1452,7 @@ final class MacPilotModel: ObservableObject {
             self.awake = awake
             self.awakeTriggers = awakeTriggers
             self.remoteControl = remoteControl
+            self.dockGroups = dockGroups
         }
 
         init(from decoder: Decoder) throws {
@@ -1365,6 +1477,7 @@ final class MacPilotModel: ObservableObject {
             awake = try container.decodeIfPresent(AwakeSettings.self, forKey: .awake) ?? .standard
             awakeTriggers = try container.decodeIfPresent([AwakeTrigger].self, forKey: .awakeTriggers) ?? []
             remoteControl = try container.decodeIfPresent(RemoteControlSettings.self, forKey: .remoteControl) ?? RemoteControlSettings()
+            dockGroups = try container.decodeIfPresent(DockGroupsSettings.self, forKey: .dockGroups) ?? DockGroupsSettings()
         }
     }
 
@@ -1406,6 +1519,8 @@ final class MacPilotModel: ObservableObject {
         deviceStore: remoteDeviceStore,
         screenControl: ble.screenControl
     )
+    /// Dock Groups：分组配置 + 每个分组的 Helper App。
+    let dockGroups = DockGroupsModel()
     @Published var requestedSection: MainSection?
     /// Set by the menu bar/deep-link shortcut entry so the capture settings
     /// can present the recorder immediately after the main window is opened.
@@ -1554,6 +1669,8 @@ final class MacPilotModel: ObservableObject {
         clipboard.persist = { [weak self] in self?.saveIfReady() }
         awake.persist = { [weak self] in self?.saveIfReady() }
         awakeTriggers.persist = { [weak self] in self?.saveIfReady() }
+        // Dock Groups 的功能开关保存在 config.json；分组数据在 groups.json。
+        dockGroups.persist = { [weak self] in self?.saveIfReady() }
         windowSwitcher.language = language
         clipboard.language = language
         // BLE installs its own observers from `activateFromConfiguration()`; the
@@ -1569,6 +1686,7 @@ final class MacPilotModel: ObservableObject {
         windowSwitcher.activateFromConfiguration()
         smoothScrolling.activateFromConfiguration()
         clipboard.activateFromConfiguration()
+        dockGroups.activateFromConfiguration()
         // Finder 右键菜单（FinderSync 扩展）。
         startRightClickMenu()
         if automaticUpdateChecks {
@@ -1627,6 +1745,9 @@ final class MacPilotModel: ObservableObject {
             screenRecording.stop()
         case ["right-click"], ["rightclick"], ["finder", "menu"]:
             requestedSection = .rightClick
+        case ["dock-groups"], ["dockgroups"], ["dock", "groups"]:
+            requestedSection = .dockGroups
+            NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
         case ["settings"], ["preferences"]:
             requestedSection = .settings
         case ["settings", "capture"], ["settings", "screenshots"]:
@@ -2213,6 +2334,9 @@ final class MacPilotModel: ObservableObject {
         MemoryMonitorModel.clearMenuCache()
         awake.shutdown()
         awakeTriggers.shutdown()
+        // Dock Groups：停掉运行状态轮询与 Workspace 监听。
+        // 生成的 Helper App 保持原样，下次启动可以直接继续用。
+        dockGroups.shutdown()
 
         for observer in lifetimeObservers { NotificationCenter.default.removeObserver(observer) }
         lifetimeObservers.removeAll(keepingCapacity: false)
@@ -2293,6 +2417,7 @@ final class MacPilotModel: ObservableObject {
         awake.applyLoadedSettings(configuration.awake)
         awakeTriggers.applyLoadedTriggers(configuration.awakeTriggers)
         remoteDeviceStore.applyLoadedSettings(configuration.remoteControl)
+        dockGroups.applyLoadedSettings(configuration.dockGroups)
     }
 
     private func scheduleInputSourceSave() {
@@ -2330,7 +2455,8 @@ final class MacPilotModel: ObservableObject {
             clipboard: clipboard.settings,
             awake: awake.settings,
             awakeTriggers: awakeTriggers.triggers,
-            remoteControl: remoteDeviceStore.settings
+            remoteControl: remoteDeviceStore.settings,
+            dockGroups: dockGroups.settings
         )
         let data: Data
         do {
@@ -2561,7 +2687,7 @@ final class MacPilotModel: ObservableObject {
 enum MainSection: CaseIterable, Hashable, Identifiable {
     case exit, launch, awake, ble, remoteControl, inputSources, compression, capture, screenRecording
     case pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick
-    case memoryMonitor, settings
+    case dockGroups, memoryMonitor, settings
 
     var id: Self { self }
 
@@ -2581,6 +2707,7 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
         case .smoothScrolling: "smoothScrolling"
         case .clipboard: "clipboard"
         case .rightClick: "rightClickMenu"
+        case .dockGroups: "dockGroups"
         case .memoryMonitor: "memoryMonitor"
         case .settings: "settings"
         }
@@ -2602,6 +2729,7 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
         case .smoothScrolling: "scroll"
         case .clipboard: "clipboard"
         case .rightClick: "contextualmenu.and.cursorarrow"
+        case .dockGroups: "square.grid.2x2"
         case .memoryMonitor: "memorychip"
         case .settings: "gearshape"
         }
@@ -2712,6 +2840,8 @@ struct ContentView: View {
             ClipboardSettingsView(clipboard: model.clipboard)
         case .rightClick:
             RightClickMenuSettingsView()
+        case .dockGroups:
+            DockGroupsView(dockGroups: model.dockGroups)
         case .memoryMonitor:
             MemoryMonitorView(monitor: model.memoryMonitor)
         case .settings:
@@ -2825,7 +2955,8 @@ struct Sidebar: View {
     private let automationSections: [MainSection] = [.exit, .launch, .awake, .ble, .remoteControl, .inputSources]
     private let utilitySections: [MainSection] = [
         .compression, .capture, .screenRecording, .pictureInPicture,
-        .windowSwitcher, .smoothScrolling, .clipboard, .rightClick, .memoryMonitor
+        .windowSwitcher, .smoothScrolling, .clipboard, .rightClick, .memoryMonitor,
+        .dockGroups
     ]
 
     var body: some View {

@@ -9,6 +9,9 @@ let package = Package(
         .executable(name: "MacPilotUpdater", targets: ["MacPilotUpdater"]),
         .executable(name: "MacPilotPowerHelper", targets: ["MacPilotPowerHelper"]),
         .library(name: "MacPilotPowerIPC", targets: ["MacPilotPowerIPC"]),
+        // Dock Groups：每个分组对应一个由 MacPilot 生成的 Helper App，
+        // 复用同一个 binary，只靠 Bundle ID / 图标 / 名称区分。
+        .executable(name: "MacPilotDockHelper", targets: ["MacPilotDockHelper"]),
         .library(name: "MacPilotOcclusionPatch", type: .dynamic, targets: ["MacPilotOcclusionPatch"])
     ],
     dependencies: [
@@ -16,14 +19,30 @@ let package = Package(
         .package(path: "Packages/MacPilotRemoteProtocol")
     ],
     targets: [
+        // Dock Groups 的共享核心：主程序写配置、Helper 读配置、测试校验完整性，
+        // 三方共用同一份模型，避免任何一方私自触碰第三方 App。
+        .target(
+            name: "MacPilotDockGroupsCore",
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("Security"),
+                .linkedFramework("CryptoKit"),
+            ]
+        ),
         .executableTarget(
             name: "MacPilot",
             dependencies: [
                 "MacPilotRightClickKit",
                 "MacPilotPowerIPC",
+                "MacPilotDockGroupsCore",
                 .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol"),
                 .product(name: "MacPilotRemoteTransport", package: "MacPilotRemoteProtocol")
             ]
+        ),
+        // Dock Groups 的 Helper：每个分组一个 App，复用同一个 binary。
+        .executableTarget(
+            name: "MacPilotDockHelper",
+            dependencies: ["MacPilotDockGroupsCore"]
         ),
         // Wire protocol shared by the app and its privileged power helper.
         // Contains only types and pure logic, never privileged operations.
@@ -70,6 +89,7 @@ let package = Package(
             dependencies: [
                 "MacPilot",
                 "MacPilotPowerIPC",
+                "MacPilotDockGroupsCore",
                 .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol")
             ]
         ),
