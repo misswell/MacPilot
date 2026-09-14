@@ -82,6 +82,43 @@ public struct DockGroupStore: Sendable {
         load().document.group(withID: id)
     }
 
+    /// 需求第 26 节：卸载 / 清理时删除 MacPilot 自己的分组配置。
+    /// 目标路径同样必须先通过管理目录校验。
+    ///
+    /// 校验放在「文件是否存在」之前：管理根目录配错时必须如实返回失败，
+    /// 而不是因为「本来就没东西可删」就报成功。
+    @discardableResult
+    public func removeGroupsFile() -> Bool {
+        guard let target = try? ManagedPathGuard.requireManaged(groupsFileURL, root: rootDirectory) else {
+            return false
+        }
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: target.path) else { return true }
+        do {
+            try fileManager.removeItem(at: target)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// 需求第 26 节：删除 MacPilot 自己拷贝进来的自定义分组图标。
+    @discardableResult
+    public func removeCustomIcons() -> Bool {
+        let icons = rootDirectory.appendingPathComponent("Icons", isDirectory: true)
+        guard let target = try? ManagedPathGuard.requireManaged(icons, root: rootDirectory) else {
+            return false
+        }
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: target.path) else { return true }
+        do {
+            try fileManager.removeItem(at: target)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// Helper 侧只读入口：拿不到配置时返回 nil（由 Helper 显示未找到提示）。
     public static func group(forHelperBundleIdentifier identifier: String?, rootDirectory: URL = DockGroupPaths.defaultRootDirectory()) -> DockGroup? {
         guard let groupID = DockGroupIdentifier.groupID(fromHelperBundleIdentifier: identifier) else { return nil }

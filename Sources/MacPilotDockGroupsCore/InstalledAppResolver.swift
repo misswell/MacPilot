@@ -53,7 +53,10 @@ public enum InstalledAppResolver {
         let bundle = url.flatMap { Bundle(url: $0) }
         let bundleIdentifier = bundle?.bundleIdentifier ?? reference.bundleIdentifier
         let name = bundle.map { displayName(of: $0, fallback: reference.name) } ?? reference.name
-        let version = bundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        // 需求第 12、17 节：版本号必须**当场读盘**，不能走 `Bundle` 的进程内缓存。
+        // 否则第三方 App 原地升级后，同一次运行里的 MacPilot 会一直看到旧版本号，
+        // 连带图标缓存的键也失效不了（旧图标会一直显示）。
+        let version = url.flatMap { freshVersion(of: $0) }
         let isRunning = bundleIdentifier.map { running.contains($0) } ?? false
 
         return ResolvedInstalledApp(
@@ -94,6 +97,21 @@ public enum InstalledAppResolver {
             path: url.standardizedFileURL.path,
             name: name
         )
+    }
+
+    /// 需求第 12、17 节：当场读取 `Info.plist` 里的版本号（只读，不缓存）。
+    ///
+    /// `Bundle.object(forInfoDictionaryKey:)` 会把结果缓存在进程内，第三方 App
+    /// 原地升级后同一次运行里读到的仍是旧值；这里直接解析 plist 避开该缓存。
+    /// 读不到就返回 nil（不影响解析，只是图标缓存键退化为「未知版本」）。
+    public static func freshVersion(of appURL: URL) -> String? {
+        let infoPlist = appURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Info.plist")
+        guard let data = try? Data(contentsOf: infoPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return nil }
+        return plist["CFBundleShortVersionString"] as? String
     }
 
     // MARK: - App 图标（只读）

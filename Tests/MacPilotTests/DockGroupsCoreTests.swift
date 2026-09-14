@@ -257,6 +257,38 @@ struct DockGroupsCoreTests {
         }
     }
 
+    /// 需求第 15、26 节：清理入口同样受路径校验保护。
+    /// 管理根目录配错成宽目录时，宁可不删也不越界。
+    @Test func cleanupRefusesToRunWithABroadManagedRoot() throws {
+        let broadRoot = DockGroupStore(rootDirectory: URL(fileURLWithPath: "/Applications"))
+        #expect(!broadRoot.removeGroupsFile())
+        #expect(!broadRoot.removeCustomIcons())
+
+        // 正常的管理目录：有就删，没有也算成功（幂等）。
+        let root = try TemporaryDirectory()
+        defer { root.cleanUp() }
+        let store = DockGroupStore(rootDirectory: root.url)
+        #expect(store.removeGroupsFile())
+        #expect(store.removeCustomIcons())
+        try store.save(DockGroupsDocument())
+        #expect(FileManager.default.fileExists(atPath: store.groupsFileURL.path))
+        #expect(store.removeGroupsFile())
+        #expect(!FileManager.default.fileExists(atPath: store.groupsFileURL.path))
+    }
+
+    /// 需求第 12 节：图标缓存键只由 Bundle ID、版本与尺寸决定，且文件名安全。
+    @Test func iconCacheKeysAreSafeFileNames() {
+        let key = DockGroupIconCacheKey(
+            bundleIdentifier: "../../etc/passwd",
+            version: "1.0",
+            size: 64
+        )
+        #expect(!key.fileName.contains("/"))
+        #expect(!key.fileName.contains(".."))
+        #expect(key.fileName.hasSuffix("@64.png"))
+        #expect(key == DockGroupIconCacheKey(bundleIdentifier: "../../etc/passwd", version: "1.0", size: 64))
+    }
+
     @Test func targetAppPolicyDeniesEveryWriteIntent() throws {
         let root = try TemporaryDirectory()
         defer { root.cleanUp() }

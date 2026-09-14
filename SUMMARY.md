@@ -827,9 +827,21 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 ### 配置与数据
 
 - `config.json` 只放开关与两个偏好（`dockGroups`，`version` 升到 24，`decodeIfPresent` 兜底，旧配置升级后行为不变）；`~/Library/Application Support/MacPilot/DockGroups/groups.json` 是分组的唯一权威来源，Helper 只读它。
-- 自定义图片拷进 `DockGroups/Icons/`，原图保持只读；App 图标不做磁盘缓存（系统本身就在缓存，重复落盘没有意义）。
+- 自定义图片拷进 `DockGroups/Icons/`，原图保持只读；App 图标另存一份 PNG 缩略图到 `~/Library/Caches/MacPilot/DockGroups/`，缓存键是「Bundle ID + 版本 + 尺寸」，删掉缓存只影响首屏速度。
 - 时间戳统一取**秒级精度**再按 ISO8601 落盘：ISO8601 没有小数位，若不先把 `Date` 归整，"保存 → 读取"会因为微秒丢失而不相等，测试里的整体比较就永远过不去。
 - 删分组/删 Helper 有两道保险：路径必须在管理目录内，且目标 `Info.plist` 的 `CFBundleIdentifier` 必须能被 `DockGroupIdentifier.groupID(fromHelperBundleIdentifier:)` 解析出 Group ID；两条不满足就原样保留（宁可留残留也不误删）。
+
+### 图标缓存与清理（补齐 §12、§26）
+
+- **图标缓存**：`DockGroupIconCache` 只把 `NSImage` 编码成 PNG 写进 `~/Library/Caches/MacPilot/DockGroups/`，写入前过一次 `ManagedPathGuard`；缓存键带 App 版本，所以升级换图标会自动失效。写失败一律忽略 —— 缓存只是加速，绝不能因为它失败就显示不出图标。
+- **清理入口**：页面上的「清理分组数据」调用 `removeAllGroupData()`，只删 MacPilot 自己的 Helper App、`groups.json`、`Icons/` 与图标缓存。返回值是「是否已无残留」：管理目录里若混进了归属不明的 `.app`，它会如实返回 `false` 而不是谎报清空。
+- 三处清理 API（`removeGroupsFile` / `removeCustomIcons` / `DockGroupIconCache.removeAll`）都把**路径校验放在「文件是否存在」之前**。原先先判断存在性再校验，管理根目录配错成 `/Applications` 时会因为"本来就没东西可删"而返回成功，把配置错误掩盖掉。
+
+### 三个只有真机才暴露的坑
+
+1. **夹具不能借用真实 App 的 Bundle ID。** 测试里原本用 `dev.zed.Zed`、`com.apple.dt.Xcode` 当夹具 ID，而本机真的装着 Zed 和 Xcode，于是 `NSWorkspace.urlForApplication(withBundleIdentifier:)` 直接解析到**真实应用**，测试看着通过、实际上没测到夹具（连"版本从 1.0 升到 1.1"都被真实 Zed 的 1.16.2 顶掉了）。现在夹具统一加唯一后缀。
+2. **`Bundle` 的 Info.plist 缓存会让"App 原地升级"看不见。** `Bundle.object(forInfoDictionaryKey:)` 在进程内缓存，第三方 App 原地升级后同一次运行里读到的还是旧版本号，连带图标缓存键也失效不了。改成 `InstalledAppResolver.freshVersion(of:)` 每次直接解析 `Contents/Info.plist`（只读），B 案才是「升级后立刻看到新版本/新图标」。
+3. **"App 被移动后仍能找到"靠的是 LaunchServices，不是 MacPilot。** §6 说"优先 bundleIdentifier、path 只是兜底"，真正的语义是：Finder 挪动 App 时系统会更新登记信息，而 MacPilot 只是重新查询。用 `FileManager.moveItem` 搬走夹具并不会更新登记，所以那条断言原来是不成立的；现在改成用一个真实安装的 App + 一个故意失效的旧路径来验证优先级，另加一个"两边都找不到时安静报未找到"的用例。
 
 ### 浮层细节
 
@@ -837,10 +849,14 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 
 ### 验证
 
-- 新增 33 个用例（`DockGroupsCoreTests` 21 + `ThirdPartyAppIntegrityTests` 12），其中 `ThirdPartyAppIntegrityTest` 在"创建分组 → 解析/查运行状态 → 生成 Helper → 改名换图标 → 拖拽排序 → 删除分组"前后对**仿真第三方 App**（临时目录里结构完整的 `.app`，ad-hoc 签名）做整体快照比较：目录项、修改时间、主可执行文件 SHA-256、Info.plist SHA-256、代码签名身份（identifier / team / cdHash / 有效性）必须 `before == after`。
-- `swift test` 631 例通过（`--no-parallel` 下稳定全绿；并行跑时偶发的失败集中在既有的 `ScreenCaptureTests` / `ClosedLidSleepTests` 计时用例上，与本功能无关）。
+- 完整性快照（§30）逐项覆盖：Bundle 目录元数据与顶层条目、主可执行文件 SHA-256、Info.plist SHA-256、代码签名身份（identifier / team / cdHash / 是否有效 / Hardened Runtime）、**Entitlements**。Entitlements 用「键=值」的排序字符串拍平，避免字典比较的不确定性；`differences(from:)` 会报出具体是哪个字段变了。
+- `ThirdPartyAppIntegrityTest` 在"创建分组 → 解析/查运行状态 → 生成 Helper → 改名换图标改布局 → 清理全部数据"前后做整体快照比较，必须 `before == after`。
+- **§29 点名的应用清单现在真的被测到**：`installedThirdPartyAppSurvivesTheWholeDockGroupLifecycle` 对 VS Code / Zed / Xcode / IntelliJ IDEA / Chrome / Safari / ChatGPT / Claude / OrbStack / DBeaver 逐个跑完整生命周期（装了就测，没装跳过；本机覆盖其中 8 个），只读快照、**不启动**这些真实应用以免打断用户。
+- 真实启动路径用仿真 App 覆盖：`launchingAnAppThroughTheWorkspaceDoesNotTouchItsBundle` 通过公开的 `NSWorkspace` API 连启两次（第二次走激活分支），Bundle 零变化。
+- §29 的其余状态各有对应用例：App 原地升级、path 失效仍按 Bundle ID 命中、Helper 被用户删掉后不崩且能重新生成、MacPilot 重启后从 `groups.json` 恢复、多个分组共享同一个 App 且可独立删除、配置损坏、App 删除、关闭状态下管理目录必须保持为空。
+- `swift test` 646 例全过（`--no-parallel` 下稳定全绿；并行跑时偶发的失败集中在既有的 `ScreenCaptureTests` / `ClosedLidSleepTests` 计时用例上，与本功能无关）。
 - release 构建（`-warnings-as-errors`）通过；`Scripts/build-app.sh` 产出的 `MacPilot.app` 里 `MacPilotPowerHelper`、`MacPilotUpdater`、`MacPilotDockHelper`、`FinderSync.appex` 都在 `codesign --verify --deep --strict` 下 prepared/validated 通过，Dock Helper 带 hardened runtime 与 Developer ID，标识符为 `com.misswell.macpilot.dock-helper`。
-- 端到端手测：把打包出来的 Helper binary 按生成流程拷进 `Dev.app`、ad-hoc 重签后 `codesign --verify` 通过，用 `MACPILOT_DOCK_GROUPS_ROOT` 指向临时 `groups.json` 启动，浮层正常弹出、进程存活、无 stderr 输出。
+- 端到端手测：把打包出来的 Helper binary 按生成流程拷进 `Dev.app`、ad-hoc 重签后 `codesign --verify` 通过，用 `MACPILOT_DOCK_GROUPS_ROOT` 指向临时 `groups.json` 启动，浮层正常弹出、进程存活、无 stderr 输出；发布出去的公证 ZIP 解包后 `Contents/MacOS/MacPilotDockHelper` 在位，`codesign --verify --deep --strict` 与 `spctl --assess` 均通过。
 
 ### 环境备注
 

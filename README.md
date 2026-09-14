@@ -74,7 +74,8 @@ The **Dock Groups** feature collects several apps into one lightweight helper yo
 - The popover has no title bar, no second Dock icon, and no normal window chrome; it closes on Escape or an outside click and supports arrow-key navigation, dark mode, and Retina.
 - Apps stay read-only. MacPilot stores a reference only (bundle identifier first, path as a fallback) and reads just the bundle identifier, name, version, icon, executable URL, and running state. It never copies, moves, patches, injects into, or re-signs a third-party app, so updates, TCC permissions, and code signatures are unaffected.
 - A group whose app moved shows “App not found” with options to relocate it or remove the reference; a missing app is never downloaded or substituted automatically.
-- Deleting a group removes only MacPilot's own helper app and configuration, and only after verifying the target lives inside MacPilot's own folder.
+- App icons are read from the system on demand and cached as PNG thumbnails in `~/Library/Caches/MacPilot/DockGroups/`; the cache key includes the app version, so a rebuilt icon invalidates automatically and deleting the cache affects no app.
+- Deleting a group removes only MacPilot's own helper app and configuration, and only after verifying the target lives inside MacPilot's own folder. “Clean Up Group Data” removes every helper, the configuration, the custom icons, and the icon cache MacPilot created — never a third-party app.
 - Off by default. While disabled, MacPilot does no app scanning, no helper management, and no background timers.
 
 ## Memory Monitor

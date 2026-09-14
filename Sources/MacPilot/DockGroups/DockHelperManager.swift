@@ -86,6 +86,23 @@ final class DockHelperManager {
         builder.removeStaleHelperApps(keepingGroupNames: names)
     }
 
+    /// 需求第 15、26 节：删除**全部** MacPilot 生成的 Helper App。
+    ///
+    /// 复用分组删除的同一套防线：每个目标都要过 `ManagedPathGuard`、
+    /// `TargetAppAccessPolicy`，且必须能确认「这是 MacPilot 自己生成的 App」。
+    /// 因此就算管理目录里混进了别的 `.app`，也只会被原样保留。
+    /// - Returns: 是否已经没有任何 Helper 残留。
+    @discardableResult
+    func removeAllHelpers() -> Bool {
+        builder.removeStaleHelperApps(keepingGroupNames: [])
+        let remaining = (try? FileManager.default.contentsOfDirectory(atPath: rootDirectory.path)) ?? []
+        let leftovers = remaining.filter { $0.lowercased().hasSuffix(".app") }
+        if !leftovers.isEmpty {
+            DiagnosticLog.write("DockGroups", "Kept \(leftovers.count) unowned .app item(s) inside the managed directory.")
+        }
+        return leftovers.isEmpty
+    }
+
     /// 需求第 14 节：第一版不直接改 com.apple.dock.plist，
     /// 只提供「在访达中显示」并由用户拖入 Dock。
     func revealInFinder(for group: DockGroup) {

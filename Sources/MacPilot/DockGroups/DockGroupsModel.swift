@@ -40,13 +40,17 @@ final class DockGroupsModel: ObservableObject {
     private var runningTask: Task<Void, Never>?
     private var workspaceObservers: [NSObjectProtocol] = []
     private var iconCache: [String: NSImage] = [:]
+    /// 需求第 12 节：图标缩略图缓存在 ~/Library/Caches/MacPilot/DockGroups/。
+    private let iconCacheStore: DockGroupIconCache
 
     init(
         store: DockGroupStore = DockGroupStore(),
-        helperManager: DockHelperManager = DockHelperManager()
+        helperManager: DockHelperManager = DockHelperManager(),
+        iconCacheDirectory: URL = DockGroupPaths.defaultCacheDirectory()
     ) {
         self.store = store
         self.helperManager = helperManager
+        iconCacheStore = DockGroupIconCache(directory: iconCacheDirectory)
     }
 
     // MARK: - 生命周期
@@ -136,11 +140,28 @@ final class DockGroupsModel: ObservableObject {
 
     /// 图标缓存在内存里（系统本身会缓存 App 图标），不做无意义的磁盘拷贝。
     func icon(for reference: DockGroupApp, size: CGFloat = 64) -> NSImage? {
-        guard let url = InstalledAppResolver.resolveURL(reference) else { return nil }
-        let key = "\(url.path)#\(Int(size))"
-        if let cached = iconCache[key] { return cached }
+        let resolved = resolvedApp(reference)
+        return icon(for: resolved, size: size)
+    }
+
+    /// 需求第 12 节：图标只从系统读取 + 缓存 MacPilot 自己的 PNG 缩略图。
+    /// 缓存键带 App 版本，第三方 App 升级换图标后会自然失效重取。
+    func icon(for resolved: ResolvedInstalledApp, size: CGFloat = 64) -> NSImage? {
+        guard let url = resolved.url else { return nil }
+        let key = DockGroupIconCacheKey(
+            bundleIdentifier: resolved.bundleIdentifier ?? url.path,
+            version: resolved.version ?? "",
+            size: Int(size)
+        )
+        if let cached = iconCache[key.fileName] { return cached }
+        if let cached = iconCacheStore.image(for: key) {
+            iconCache[key.fileName] = cached
+            return cached
+        }
         guard let image = InstalledAppResolver.icon(for: url, size: size) else { return nil }
-        iconCache[key] = image
+        iconCache[key.fileName] = image
+        // 缓存写入失败无所谓（例如磁盘只读），图标本身已经拿到了。
+        iconCacheStore.store(image, for: key)
         return image
     }
 
@@ -412,5 +433,30 @@ final class DockGroupsModel: ObservableObject {
             options: [.skipsHiddenFiles]
         ) else { return [] }
         return entries.map(\.path).sorted()
+    }
+
+    /// 需求第 26 节：卸载 / 清理 Dock Groups 时，只删除 MacPilot 自己的东西——
+    /// Helper App、分组配置、自定义图标、图标缓存。
+    ///
+    /// 第三方 App 完全不在删除范围内：所有删除都经过 `ManagedPathGuard`
+    /// （目标必须位于 MacPilot 自己的目录内）与「只删自己生成的 App」校验。
+    /// - Returns: 是否清理干净（有残留时返回 false，UI 会提示）。
+    @discardableResult
+    func removeAllGroupData() -> Bool {
+        stopMonitoring()
+        let helpersRemoved = helperManager.removeAllHelpers()
+        let configRemoved = store.removeGroupsFile()
+        let iconsRemoved = store.removeCustomIcons()
+        iconCache.removeAll()
+        iconCacheStore.removeAll()
+
+        let owned = DockGroupsDocument(groups: [])
+        groups = owned.groups
+        configWarning = nil
+        DiagnosticLog.write(
+            "DockGroups",
+            "Removed all Dock Groups data (helpers: \(helpersRemoved), config: \(configRemoved), icons: \(iconsRemoved))."
+        )
+        return helpersRemoved && configRemoved && iconsRemoved
     }
 }

@@ -22,6 +22,7 @@ struct DockGroupsView: View {
     @State private var groupPendingDeletion: DockGroup?
     @State private var dropTargetGroupID: String?
     @State private var showsAddToDockGuide = false
+    @State private var showsCleanupConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -131,9 +132,26 @@ struct DockGroupsView: View {
             }
             .disabled(!dockGroups.settings.isEnabled)
             .fixedSize()
+
+            // 需求第 26 节：清理入口只删 MacPilot 自己的 Helper / 配置 / 缓存。
+            Button {
+                showsCleanupConfirmation = true
+            } label: {
+                Label(model.t("dockGroupsCleanup"), systemImage: "trash")
+            }
+            .disabled(dockGroups.groups.isEmpty)
+            .fixedSize()
         }
         .padding(.horizontal, 36)
         .padding(.bottom, 14)
+        .alert(model.t("dockGroupsCleanup"), isPresented: $showsCleanupConfirmation) {
+            Button(model.t("dockGroupsCleanupAction"), role: .destructive) {
+                dockGroups.removeAllGroupData()
+            }
+            Button(model.t("cancel"), role: .cancel) {}
+        } message: {
+            Text(model.t("dockGroupsCleanupMessage"))
+        }
     }
 
     /// 新建分组默认使用的布局，以及是否显示运行状态。

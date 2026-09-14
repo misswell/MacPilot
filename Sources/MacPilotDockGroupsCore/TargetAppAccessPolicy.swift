@@ -109,6 +109,11 @@ public struct ThirdPartyAppIntegrity: Equatable, Sendable {
         public var teamIdentifier: String?
         public var cdHash: String?
         public var isValid: Bool
+        /// 需求第 30 节：Entitlements 也要参与比对。
+        /// 用「键=值」的排序字符串数组表示，避免字典比较的不确定性。
+        public var entitlements: [String]
+        /// Hardened Runtime 标志位；被重新签名过的 App 在这里会变化。
+        public var hasHardenedRuntime: Bool
     }
 
     public var bundlePath: String
