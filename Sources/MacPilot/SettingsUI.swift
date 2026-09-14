@@ -8,10 +8,15 @@ import SwiftUI
 //  - 卡片内小节标题：headline
 
 /// 统一的功能页卡片：macOS 26 使用原生 Liquid Glass，旧系统自动降级为毛玻璃材质。
+///
+/// `accented` 用于「开关已开启」这类需要整体高亮的卡片（首页功能网格），
+/// 只在描边上加一层 accent，不改变材质与内边距，避免多层玻璃嵌套。
 struct SettingsCard<Content: View>: View {
     private let content: Content
+    private let accented: Bool
 
-    init(@ViewBuilder content: () -> Content) {
+    init(accented: Bool = false, @ViewBuilder content: () -> Content) {
+        self.accented = accented
         self.content = content()
     }
 
@@ -19,12 +24,18 @@ struct SettingsCard<Content: View>: View {
         if #available(macOS 26.0, *) {
             cardContent
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay {
+                    if accented {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .strokeBorder(Color.accentColor.opacity(0.5))
+                    }
+                }
         } else {
             cardContent
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(.primary.opacity(0.07))
+                        .strokeBorder(accented ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.07))
                 )
                 .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
         }

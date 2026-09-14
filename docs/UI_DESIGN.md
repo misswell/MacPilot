@@ -110,6 +110,15 @@ var body: some View {
 - 不要在列表外加 `ScrollView`，也不要给列表设固定 `minHeight`。
 - 列表上方的少量设置控件（如折叠开关、添加按钮）放在页头与列表之间的普通行里。
 
+### 首页功能网格
+
+首页（`HomeView`）是唯一不使用「一张卡片装一组控件」的页面：每个功能是一张独立的开关卡片，按自适应网格排列。
+
+- 卡片列用 `GridItem(.adaptive(minimum: 250), spacing: 14, alignment: .top)`；列数随窗口宽度自动变化（默认窗口两列，拉宽后三列、四列），**不要写死列数**。
+- 每张卡片用 `SettingsCard(accented:)`：`accented == true`（功能已开启）时仅在描边上加一层 accent，不换材质、不加内边距，也不要在卡片外面再套一层玻璃（避免多层玻璃嵌套）。
+- 卡片内部结构固定：第一行是 34pt 圆角图标底座 + 右侧 `.toggleStyle(.switch)` 开关；第二行是 `.body.weight(.semibold)` 标题 + `.caption` 说明。说明文字用 `.lineLimit(3, reservesSpace: true)` 保证同一行卡片等高。
+- 分组标题（如「自动化」「效率工具」）以 `.font(.headline)` 直接放在网格上方，不放进卡片——网格本身已经是卡片，再套一层就是嵌套玻璃。
+
 ## 5. 特殊情况
 
 | 场景 | 处理方式 |
