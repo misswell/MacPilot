@@ -109,17 +109,17 @@ public enum DockGroupIconRenderer {
         )?.draw(in: rect, angle: -90)
         strokeBorder(path)
 
-        let icons = memberIconURLs.prefix(4).compactMap { url -> NSImage? in
-            let icon = NSWorkspace.shared.icon(forFile: url.path)
-            icon.size = NSSize(width: 128, height: 128)
-            return icon
-        }
-        guard !icons.isEmpty else { return }
-
         let padding = rect.width * 0.14
         let available = rect.insetBy(dx: padding, dy: padding)
         let cellSide = available.width / 2
         let iconSide = cellSide * 0.94
+
+        // 成员图标同样只取「按格子尺寸重绘过的小图」：系统原图是多表示的
+        // 1024×1024，直接画会把大位图物化出来（见 DockGroupIconThumbnail）。
+        let icons = memberIconURLs.prefix(4).compactMap { url -> NSImage? in
+            InstalledAppResolver.icon(for: url, size: iconSide)
+        }
+        guard !icons.isEmpty else { return }
 
         for (index, icon) in icons.enumerated() {
             let column = index % 2

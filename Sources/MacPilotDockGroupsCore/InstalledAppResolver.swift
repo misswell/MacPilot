@@ -117,10 +117,19 @@ public enum InstalledAppResolver {
     // MARK: - App 图标（只读）
 
     /// 需求第 12 节：图标直接读取系统 App Icon，不写入目标 Resources。
+    ///
+    /// 返回的是**按目标尺寸重绘过的小图**，而不是系统给的多表示原图：
+    /// 原图的 `size` 只是显示尺寸，底层仍是 1024×1024，任何一次
+    /// `tiffRepresentation` / 上屏都会物化出几十 MB 的位图。
     public static func icon(for url: URL, size: CGFloat = 64) -> NSImage? {
-        let icon = NSWorkspace.shared.icon(forFile: url.path)
-        icon.size = NSSize(width: size, height: size)
-        return icon
+        autoreleasepool {
+            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            return DockGroupIconThumbnail.image(
+                from: icon,
+                pointSize: size,
+                pixelSize: DockGroupIconThumbnail.pixelSize(forPoints: size)
+            )
+        }
     }
 
     // MARK: - 安装目录扫描（供 App Picker 使用）

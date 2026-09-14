@@ -279,6 +279,11 @@ struct DockGroupEditor: View {
                     .resizable()
                     .interpolation(.high)
                     .frame(width: 28, height: 28)
+            } else if resolved.isInstalled {
+                // 图标在后台加载中，先占位（不是「应用未找到」）。
+                Image(systemName: "app.dashed")
+                    .frame(width: 28, height: 28)
+                    .foregroundStyle(.secondary)
             } else {
                 Image(systemName: "questionmark.app")
                     .frame(width: 28, height: 28)

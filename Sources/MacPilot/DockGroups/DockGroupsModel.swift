@@ -39,9 +39,33 @@ final class DockGroupsModel: ObservableObject {
     private var isActive = false
     private var runningTask: Task<Void, Never>?
     private var workspaceObservers: [NSObjectProtocol] = []
+    /// 只放已经按尺寸限制过的缩略图（见 DockGroupIconThumbnail）。
     private var iconCache: [String: NSImage] = [:]
     /// 需求第 12 节：图标缩略图缓存在 ~/Library/Caches/MacPilot/DockGroups/。
     private let iconCacheStore: DockGroupIconCache
+
+    /// 已经排队或正在加载的图标，避免同一行被重复请求。
+    private var pendingIconKeys: Set<String> = []
+    /// 取图失败的键（App 被删、缓存目录不可写等），本进程内不再重试。
+    private var failedIconKeys: Set<String> = []
+    private var iconLoadQueue: [IconLoadRequest] = []
+    private var activeIconLoads = 0
+    /// 同时在跑的图标加载上限：既不排队几秒，也不把图标服务打满。
+    private let maxConcurrentIconLoads = 4
+    /// 图标就绪后合并刷新：271 个图标逐个 `objectWillChange` 会引发 271 轮重绘。
+    private var iconFlushScheduled = false
+    /// 图标加载完成后自增，SwiftUI 依赖它重新取图。
+    @Published private(set) var iconRevision = 0
+
+    /// 已渲染的分组图标：key 是「分组 + 尺寸」，值是签名与图。
+    private var groupIconCache: [String: NSImage] = [:]
+    private var groupIconSignatures: [String: String] = [:]
+
+    private struct IconLoadRequest {
+        let key: DockGroupIconCacheKey
+        let url: URL
+        let pointSize: CGFloat
+    }
 
     init(
         store: DockGroupStore = DockGroupStore(),
@@ -65,6 +89,11 @@ final class DockGroupsModel: ObservableObject {
         guard settings.isEnabled else { return }
         isActive = true
         reload()
+        // 早期版本把 1024×1024 原图当缩略图存过（单个 1–3 MB），顺手清一次。
+        let purged = iconCacheStore.removeOversizedThumbnails()
+        if purged > 0 {
+            DiagnosticLog.write("DockGroups", "Removed \(purged) oversized icon thumbnails from the cache.")
+        }
         startObservingWorkspace()
         ensureHelpersExistIfNeeded()
     }
@@ -138,7 +167,11 @@ final class DockGroupsModel: ObservableObject {
         InstalledAppResolver.resolve(reference, runningBundleIdentifiers: runningBundleIdentifiers)
     }
 
-    /// 图标缓存在内存里（系统本身会缓存 App 图标），不做无意义的磁盘拷贝。
+    /// 图标命中缓存就同步返回；未命中则排队后台加载并先返回 nil（视图显示占位图），
+    /// 加载完成后由 `iconRevision` 触发刷新。
+    ///
+    /// 这里绝不在视图 body 里同步取图标：应用选择器一次会列出两百多个 App，
+    /// 同步取图会把主线程按在图标服务上几十秒（2026-09-14 的卡死事件）。
     func icon(for reference: DockGroupApp, size: CGFloat = 64) -> NSImage? {
         let resolved = resolvedApp(reference)
         return icon(for: resolved, size: size)
@@ -153,25 +186,107 @@ final class DockGroupsModel: ObservableObject {
             version: resolved.version ?? "",
             size: Int(size)
         )
+        return cachedIcon(for: key, url: url, pointSize: size)
+    }
+
+    private func cachedIcon(for key: DockGroupIconCacheKey, url: URL, pointSize: CGFloat) -> NSImage? {
         if let cached = iconCache[key.fileName] { return cached }
         if let cached = iconCacheStore.image(for: key) {
             iconCache[key.fileName] = cached
             return cached
         }
-        guard let image = InstalledAppResolver.icon(for: url, size: size) else { return nil }
-        iconCache[key.fileName] = image
-        // 缓存写入失败无所谓（例如磁盘只读），图标本身已经拿到了。
-        iconCacheStore.store(image, for: key)
+        guard !failedIconKeys.contains(key.fileName) else { return nil }
+        requestIcon(key: key, url: url, pointSize: pointSize)
+        return nil
+    }
+
+    // MARK: - 图标异步加载
+
+    private func requestIcon(key: DockGroupIconCacheKey, url: URL, pointSize: CGFloat) {
+        guard !pendingIconKeys.contains(key.fileName) else { return }
+        pendingIconKeys.insert(key.fileName)
+        iconLoadQueue.append(IconLoadRequest(key: key, url: url, pointSize: pointSize))
+        drainIconQueue()
+    }
+
+    private func drainIconQueue() {
+        while activeIconLoads < maxConcurrentIconLoads, !iconLoadQueue.isEmpty {
+            let request = iconLoadQueue.removeFirst()
+            activeIconLoads += 1
+            Task { [weak self] in
+                // 取图 + 按尺寸重绘 + PNG 编码全部离开主线程；跨 actor 只传 Data。
+                let data = await Task.detached(priority: .userInitiated) {
+                    DockGroupIconThumbnail.pngData(forFileAt: request.url, pointSize: request.pointSize)
+                }.value
+                guard let self else { return }
+                self.activeIconLoads -= 1
+                self.pendingIconKeys.remove(request.key.fileName)
+                if let data, let image = self.iconCacheStore.storeThumbnailPNG(data, for: request.key) {
+                    self.iconCache[request.key.fileName] = image
+                } else {
+                    // 取不到就记下来，避免每次重绘都重新问一遍图标服务。
+                    self.failedIconKeys.insert(request.key.fileName)
+                }
+                self.scheduleIconFlush()
+                self.drainIconQueue()
+            }
+        }
+    }
+
+    /// 图标到达后合并刷新，避免 271 个图标触发 271 轮重绘。
+    private func scheduleIconFlush() {
+        guard !iconFlushScheduled else { return }
+        iconFlushScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard let self else { return }
+            self.iconFlushScheduled = false
+            self.iconRevision &+= 1
+        }
+    }
+
+    private func cancelPendingIconLoads() {
+        iconLoadQueue.removeAll()
+        pendingIconKeys.removeAll()
+        failedIconKeys.removeAll()
+    }
+
+    /// 分组图标按「分组内容签名 + 尺寸」缓存：编辑器标题栏每次 body 求值都会调它，
+    /// 不缓存就会不停重绘合成图标（内部还要再取成员图标）。
+    func groupIcon(for group: DockGroup, size: CGFloat) -> NSImage {
+        let memberURLs = group.apps.compactMap { InstalledAppResolver.resolveURL($0) }
+        let cacheKey = "\(group.id)@\(Int(size))"
+        let signature = Self.groupIconSignature(group: group, memberURLs: memberURLs, size: size)
+        if groupIconSignatures[cacheKey] == signature, let cached = groupIconCache[cacheKey] {
+            return cached
+        }
+        let image = DockGroupIconRenderer.image(
+            for: group,
+            size: size,
+            memberIconURLs: memberURLs,
+            customIconDirectory: helperManager.rootDirectory
+        )
+        groupIconSignatures[cacheKey] = signature
+        groupIconCache[cacheKey] = image
         return image
     }
 
-    func groupIcon(for group: DockGroup, size: CGFloat) -> NSImage {
-        DockGroupIconRenderer.image(
-            for: group,
-            size: size,
-            memberIconURLs: group.apps.compactMap { InstalledAppResolver.resolveURL($0) },
-            customIconDirectory: helperManager.rootDirectory
-        )
+    private static func groupIconSignature(group: DockGroup, memberURLs: [URL], size: CGFloat) -> String {
+        [
+            group.id,
+            group.icon.source.rawValue,
+            group.icon.value,
+            String(group.updatedAt.timeIntervalSince1970),
+            String(Int(size)),
+            memberURLs.map(\.path).joined(separator: "|")
+        ].joined(separator: ">")
+    }
+
+    /// 分组内容变化后，占位图与合成图标都可能失效。
+    private func invalidateRenderedIcons() {
+        groupIconCache.removeAll()
+        groupIconSignatures.removeAll()
+        cancelPendingIconLoads()
     }
 
     /// 需求第 13 节：自定义图片只拷贝用户选择的图片文件到 MacPilot 自己的目录，
@@ -222,6 +337,7 @@ final class DockGroupsModel: ObservableObject {
             groups = []
             configWarning = message
         }
+        invalidateRenderedIcons()
     }
 
     private func document() -> DockGroupsDocument {
@@ -232,6 +348,7 @@ final class DockGroupsModel: ObservableObject {
         var document = self.document()
         mutate(&document)
         groups = document.groups
+        invalidateRenderedIcons()
         do {
             try store.save(document)
             configWarning = nil
@@ -444,6 +561,7 @@ final class DockGroupsModel: ObservableObject {
     @discardableResult
     func removeAllGroupData() -> Bool {
         stopMonitoring()
+        invalidateRenderedIcons()
         let helpersRemoved = helperManager.removeAllHelpers()
         let configRemoved = store.removeGroupsFile()
         let iconsRemoved = store.removeCustomIcons()
