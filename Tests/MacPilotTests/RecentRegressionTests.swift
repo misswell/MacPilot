@@ -6,6 +6,31 @@ import Testing
 @testable import MacPilot
 
 struct RecentRegressionTests {
+    /// 回归：字符串表现在按数组顺序查，而不是一长串 `??`。
+    ///
+    /// 每加一个功能字典，`a[key] ?? b[key] ?? …` 就让类型检查器多枚举一倍组合，
+    /// 加到第七个（CPU 监控）时 CI 直接报
+    /// "unable to type-check this expression in reasonable time"。
+    /// 这个用例守住两件事：每个功能表都还接在查找链上，且查不到时仍然回落到 key 本身。
+    @Test func everyFeatureStringTableIsStillReachable() {
+        // 每个功能表取一个只属于它的 key。
+        let keys = [
+            "rules", "memoryMonitor", "cpuMonitor", "dockGroups",
+            "scQuickCopySavedTitle", "scRecordingQualityHighHint"
+        ]
+        for language in [AppLanguage.simplifiedChinese, .english] {
+            for key in keys {
+                let value = AppText.value(key, language: language)
+                #expect(value != key, "\(key) 在 \(language) 下没有命中任何字符串表")
+            }
+            // 完全未知的 key 仍然原样返回，不能崩也不能变空。
+            #expect(AppText.value("definitely-not-a-real-key", language: language) == "definitely-not-a-real-key")
+        }
+        // 带参数的格式化仍然生效。
+        #expect(AppText.value("dockGroupsAppCount", language: .english, 3) == "3 apps")
+        #expect(AppText.value("dockGroupsAppCount", language: .simplifiedChinese, 3) == "3 个应用")
+    }
+
     @Test @MainActor func secondPencilStrokeDoesNotContainTheFirstStroke() throws {
         let model = SmartAnnotationModel(initialTool: .pencil)
         let window = try makeAnnotationWindow(model: model)

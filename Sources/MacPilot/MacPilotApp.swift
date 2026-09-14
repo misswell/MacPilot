@@ -1044,9 +1044,44 @@ enum AppText {
         case .system: useChinese = Locale.autoupdatingCurrent.language.languageCode?.identifier == "zh"
         }
         let template = useChinese
-            ? (chinese[key] ?? recordingSelectionChinese[key] ?? memoryMonitorChinese[key] ?? cpuMonitorChinese[key] ?? screenCaptureFeedbackChinese[key] ?? dockGroupsChinese[key] ?? key)
-            : (english[key] ?? recordingSelectionEnglish[key] ?? memoryMonitorEnglish[key] ?? cpuMonitorEnglish[key] ?? screenCaptureFeedbackEnglish[key] ?? dockGroupsEnglish[key] ?? key)
+            ? lookup(key, in: chineseTables)
+            : lookup(key, in: englishTables)
         return arguments.isEmpty ? template : String(format: template, locale: language.locale, arguments: arguments)
+    }
+
+    /// 按优先级依次查表，等价于 `a[key] ?? b[key] ?? … ?? key`。
+    ///
+    /// 之前这里写成一长串 `??`：每加一个功能字典，类型检查器要枚举的组合就
+    /// 翻一倍，加到第七个（CPU 监控）时 CI 上直接报
+    /// "unable to type-check this expression in reasonable time"。
+    /// 改成遍历数组后，后续新增字典不会再触发这个问题。
+    private static func lookup(_ key: String, in tables: [[String: String]]) -> String {
+        for table in tables {
+            if let value = table[key] { return value }
+        }
+        return key
+    }
+
+    private static var chineseTables: [[String: String]] {
+        [
+            chinese,
+            recordingSelectionChinese,
+            memoryMonitorChinese,
+            cpuMonitorChinese,
+            screenCaptureFeedbackChinese,
+            dockGroupsChinese
+        ]
+    }
+
+    private static var englishTables: [[String: String]] {
+        [
+            english,
+            recordingSelectionEnglish,
+            memoryMonitorEnglish,
+            cpuMonitorEnglish,
+            screenCaptureFeedbackEnglish,
+            dockGroupsEnglish
+        ]
     }
 
     private static let english: [String: String] = [

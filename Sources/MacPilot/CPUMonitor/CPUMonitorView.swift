@@ -191,7 +191,7 @@ private struct AppCPUUsageRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(app.name), \(model.t("processCount", app.processCount)), (CPUPercentFormatter.string(from: app.cpuPercent))"
+            "\(app.name), \(model.t("processCount", app.processCount)), \(CPUPercentFormatter.string(from: app.cpuPercent))"
         )
     }
 
