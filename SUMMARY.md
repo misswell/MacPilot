@@ -798,3 +798,50 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 实现上 `handleCapturedImage`（改为 `internal` 以便测试）按开关把保存配置取成 `nil`，持久化结果新增 `skippedAutoSave` 区分"保存失败"与"用户主动关闭"两种 `nil`：前者沿用原有的错误提示与兜底，后者走 `finishSkippedAutoSave` 只做剪贴板/快捷操作/贴图收尾。
 
 新增 4 个用例：默认开启、旧配置（无该键）解码仍开启、模型 setter 持久化、关闭后双击快速复制不产生文件与统计，以及关闭自动保存的截图不落在保存文件夹；`swift test` 全过。
+
+## 三十六、Dock 分组：把多个 App 收进一个固定到原生 Dock 的 Helper（v1.1.335）
+
+目标不是再画一个 Dock，而是让用户把若干 App 归到一个**由 MacPilot 自己生成的轻量 Helper App** 上，把它拖进 macOS 原生 Dock；点这个图标弹出二级浮层列出组内 App。
+
+### 红线：第三方 App 全程只读
+
+需求里最硬的一条是"MacPilot 永远不得修改被管理的第三方 App"。这不是靠自觉，而是靠代码结构：
+
+- `TargetAppAccessPolicy` 把权限拆成 `read/write/modify/replace/sign/patch/inject/launch/activate`，只有 `read/launch/activate` 对第三方 App 放行；任何写意图先过 `decide(_:for:managedRoot:)`，落在 MacPilot 自己目录里才算 `allowedManagedArtifact`。
+- `ManagedPathGuard.requireManaged(_:root:)` 拒绝符号链接，也拒绝把 `/`、用户主目录、`/Applications`、`/Library` 这类宽目录当作管理根，防止"校验通过但删错东西"。
+- 拖入 `.app` 只存引用（`bundleIdentifier` 优先、`path` 兜底），读取范围限于 Bundle URL / Bundle ID / 名称 / 版本 / 图标 / 可执行文件路径 / 运行状态；启动走公开的 `NSWorkspace.openApplication`，已运行则 `activate(from:options:)`，`createsNewApplicationInstance = false` 保证不会起第二个实例。
+- §14 明确"第一版不许改写 `com.apple.dock.plist`"，所以只做"在访达中显示 + 拖拽引导"，绝不重建 `persistent-apps`。
+- 隐藏运行中的第三方 Dock 图标（§18/§20）**故意不做**：那必然要打补丁、注入或重签，属于明令禁止的手段；`NSRunningApplication.hide()` 也绝不用来"消 Dock 图标"。
+
+### 结构
+
+- `Sources/MacPilotDockGroupsCore/`：主程序写配置、Helper 读配置、测试校验完整性，三方共用同一份模型（SwiftPM 里 executable target 不能互相 import，所以核心必须抽成 library）。
+- `Sources/MacPilotDockHelper/`：独立可执行文件，每个分组生成一个 `.app` 复用它，只靠 `Bundle.main.bundleIdentifier` 里的 Group ID 区分。
+- `Sources/MacPilot/DockGroups/`：设置页、编辑器、App 选择器、Helper 管理器。`Package.swift` 与 `Scripts/build-app.sh` 相应新增 target 与嵌入逻辑。
+
+### 两个必须记住的坑
+
+1. **生成出来的 `<Group>.app` 必须再签一次。** 在 bundle 内部执行 `codesign --force --sign - <binary>` 时，签名标识符取自**所在 bundle** 的 `CFBundleIdentifier`（`--identifier` 在 ad-hoc 分支实测被忽略），而生成物用的是 `com.misswell.macpilot.dockgroup.<id>`。只拷二进制会让"签名里的标识符"和"Info.plist 里的 Bundle ID"对不上，`codesign --verify` 直接报 `invalid Info.plist`。解法是内容写完之后对我们**自己的**产物跑一次 `codesign --force --sign - <app>`（只调 Apple 自带的 `/usr/bin/codesign`，不经过 shell，目标路径已过 `ManagedPathGuard`），验证结果从 `invalid` 变成 `valid on disk / satisfies its Designated Requirement`。
+2. **"复用同一个 binary"不能用整文件哈希断言。** 因为上面那一步重签，拷出来的可执行文件尾部签名数据必然变化。测试改成断言更有意义的不变量：生成 Helper 的整个过程里，**MacPilot 自己随包的那个 Helper binary 零修改**（与第三方 App 用同一套 `ThirdPartyAppIntegrity` 度量，`differences(from:)` 必须为空）。
+
+### 配置与数据
+
+- `config.json` 只放开关与两个偏好（`dockGroups`，`version` 升到 24，`decodeIfPresent` 兜底，旧配置升级后行为不变）；`~/Library/Application Support/MacPilot/DockGroups/groups.json` 是分组的唯一权威来源，Helper 只读它。
+- 自定义图片拷进 `DockGroups/Icons/`，原图保持只读；App 图标不做磁盘缓存（系统本身就在缓存，重复落盘没有意义）。
+- 时间戳统一取**秒级精度**再按 ISO8601 落盘：ISO8601 没有小数位，若不先把 `Date` 归整，"保存 → 读取"会因为微秒丢失而不相等，测试里的整体比较就永远过不去。
+- 删分组/删 Helper 有两道保险：路径必须在管理目录内，且目标 `Info.plist` 的 `CFBundleIdentifier` 必须能被 `DockGroupIdentifier.groupID(fromHelperBundleIdentifier:)` 解析出 Group ID；两条不满足就原样保留（宁可留残留也不误删）。
+
+### 浮层细节
+
+`.accessory` 激活策略 + `.borderless` 面板：无标题栏、无普通 Window Chrome、不产生第二个 Dock 图标；ESC（keyCode 53 + `cancelOperation`）与 `didResignKey` 关窗，另加 mouseDown 级全局监听兜底"点击外部关闭"（鼠标全局监听不需要任何隐私授权）；关闭即 `NSApp.terminate`，浮层关掉之后不留后台进程。网格/列表两种布局、绿点表示运行中、方向键移动焦点、深色模式与 Retina 都覆盖。原先把启动失败提示塞进内容区会把预先算好的面板高度撑破，改成占用页脚的提示位。
+
+### 验证
+
+- 新增 33 个用例（`DockGroupsCoreTests` 21 + `ThirdPartyAppIntegrityTests` 12），其中 `ThirdPartyAppIntegrityTest` 在"创建分组 → 解析/查运行状态 → 生成 Helper → 改名换图标 → 拖拽排序 → 删除分组"前后对**仿真第三方 App**（临时目录里结构完整的 `.app`，ad-hoc 签名）做整体快照比较：目录项、修改时间、主可执行文件 SHA-256、Info.plist SHA-256、代码签名身份（identifier / team / cdHash / 有效性）必须 `before == after`。
+- `swift test` 631 例通过（`--no-parallel` 下稳定全绿；并行跑时偶发的失败集中在既有的 `ScreenCaptureTests` / `ClosedLidSleepTests` 计时用例上，与本功能无关）。
+- release 构建（`-warnings-as-errors`）通过；`Scripts/build-app.sh` 产出的 `MacPilot.app` 里 `MacPilotPowerHelper`、`MacPilotUpdater`、`MacPilotDockHelper`、`FinderSync.appex` 都在 `codesign --verify --deep --strict` 下 prepared/validated 通过，Dock Helper 带 hardened runtime 与 Developer ID，标识符为 `com.misswell.macpilot.dock-helper`。
+- 端到端手测：把打包出来的 Helper binary 按生成流程拷进 `Dev.app`、ad-hoc 重签后 `codesign --verify` 通过，用 `MACPILOT_DOCK_GROUPS_ROOT` 指向临时 `groups.json` 启动，浮层正常弹出、进程存活、无 stderr 输出。
+
+### 环境备注
+
+本机 `xcrun clang` 链接遮挡补丁 dylib 时会因为 `/Library/Developer/CommandLineTools/SDKs` 里那套 macOS 27 SDK 的 `.tbd`（含 `arm64e.x1` 架构）报 `tapi error: malformed file`，`Scripts/build-app.sh` 因此走不到打包步骤。这与本功能无关（失败的是没动过的 `MacPilotOcclusionPatch.m`），临时把 `SDKROOT` 指向 Xcode 的 `MacOSX26.5.sdk` 即可绕过；没有修改任何构建配置。
