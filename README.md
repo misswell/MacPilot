@@ -86,6 +86,14 @@ The **Memory Monitor** shows how much physical memory each app uses in real time
 - A system overview covers physical, used, app, wired, compressed, cached-file, and swap usage plus the current memory pressure level.
 - It refreshes every 3 seconds by default and can be paused or refreshed manually; values match Activity Monitor's Memory column.
 
+## CPU Monitor
+
+The **CPU Monitor** shows each app's CPU usage in real time:
+
+- Processes belonging to the same app are rolled up into one row; expand it to inspect each process.
+- The system overview shows total, user, system, nice, and idle usage, logical cores, and the 1/5/15-minute load averages.
+- It refreshes every 3 seconds by default; percentages are normalized to the whole machine, where full logical-core capacity is 100%.
+
 ## Window Switcher
 
 The **Window Switcher** provides fast keyboard navigation across application windows:

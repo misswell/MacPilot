@@ -1,7 +1,14 @@
 import Foundation
 
+protocol ProcessMonitorSample: Identifiable, Equatable, Sendable where ID == Int32 {
+    var pid: pid_t { get }
+    var name: String { get }
+    var executablePath: String? { get }
+    var startedAt: Date? { get }
+}
+
 /// 单个进程的内存采样。数值与活动监视器「内存」列同源，取物理占用（phys footprint）。
-struct ProcessMemorySample: Identifiable, Equatable, Sendable {
+struct ProcessMemorySample: ProcessMonitorSample {
     let pid: pid_t
     let name: String
     let executablePath: String?
@@ -43,19 +50,26 @@ enum MemoryDurationFormatter {
     }
 }
 
-/// 把分散的进程聚合到「软件」维度的纯逻辑，独立于采样便于测试。
-enum AppMemoryGrouper {
-    /// 聚合并按总内存从大到小排序。
-    static func group(_ samples: [ProcessMemorySample]) -> [AppMemoryUsage] {
-        struct Member {
-            var sample: ProcessMemorySample
-            var bundlePath: String?
-            var bundleName: String?
-        }
+struct AppProcessFamily<Sample: ProcessMonitorSample>: Sendable {
+    let familyKey: String
+    let name: String
+    let bundlePath: String?
+    let processes: [Sample]
+    let earliestStartedAt: Date?
+}
 
+private struct AppProcessFamilyMember<Sample: ProcessMonitorSample> {
+    var sample: Sample
+    var bundlePath: String?
+    var bundleName: String?
+}
+
+/// 把分散的进程聚合到「软件」维度的纯逻辑，内存与 CPU 监控共用。
+enum AppProcessFamilyGrouper {
+    static func group<Sample: ProcessMonitorSample>(_ samples: [Sample]) -> [AppProcessFamily<Sample>] {
         // 第一遍：应用包进程按包名锚定家族，其余进程先收集为独立成员。
-        var bundleEntries: [String: (anchor: (path: String, name: String), samples: [ProcessMemorySample])] = [:]
-        var standalone: [ProcessMemorySample] = []
+        var bundleEntries: [String: (anchor: (path: String, name: String), samples: [Sample])] = [:]
+        var standalone: [Sample] = []
         for sample in samples {
             if let path = sample.executablePath, let bundlePath = appBundlePath(ofExecutable: path) {
                 let name = displayName(ofBundlePath: bundlePath)
@@ -69,10 +83,10 @@ enum AppMemoryGrouper {
             }
         }
 
-        var families: [String: [Member]] = [:]
+        var families: [String: [AppProcessFamilyMember<Sample>]] = [:]
         for (key, entry) in bundleEntries {
             families[key] = entry.samples.map {
-                Member(sample: $0, bundlePath: entry.anchor.path, bundleName: entry.anchor.name)
+                AppProcessFamilyMember(sample: $0, bundlePath: entry.anchor.path, bundleName: entry.anchor.name)
             }
         }
 
@@ -89,33 +103,32 @@ enum AppMemoryGrouper {
             }
             if let anchor = matchedAnchor {
                 families[anchor.name.lowercased(), default: []].append(
-                    Member(sample: sample, bundlePath: anchor.path, bundleName: anchor.name)
+                    AppProcessFamilyMember(sample: sample, bundlePath: anchor.path, bundleName: anchor.name)
                 )
             } else {
                 let key = familyKey(of: sample)
-                families[key, default: []].append(Member(sample: sample, bundlePath: nil, bundleName: nil))
+                families[key, default: []].append(
+                    AppProcessFamilyMember(sample: sample, bundlePath: nil, bundleName: nil)
+                )
             }
         }
 
-        let usages = families.map { key, members -> AppMemoryUsage in
+        return families.map { key, members in
             let processes = members
                 .map(\.sample)
-                .sorted { $0.footprintBytes > $1.footprintBytes }
-            let total = processes.reduce(0) { $0 + $1.footprintBytes }
             let earliestStartedAt = processes.compactMap(\.startedAt).min()
             // 有应用包的成员决定展示名与图标；纯 CLI 家族使用最短的成员名。
             let primaryBundle = members
                 .compactMap { member -> (path: String, name: String, bytes: UInt64)? in
                     guard let path = member.bundlePath, let name = member.bundleName else { return nil }
-                    return (path, name, member.sample.footprintBytes)
+                    return (path, name, 0)
                 }
                 .max { $0.bytes < $1.bytes }
             if let primaryBundle {
-                return AppMemoryUsage(
+                return AppProcessFamily(
                     familyKey: key,
                     name: primaryBundle.name,
                     bundlePath: primaryBundle.path,
-                    footprintBytes: total,
                     processes: processes,
                     earliestStartedAt: earliestStartedAt
                 )
@@ -123,16 +136,14 @@ enum AppMemoryGrouper {
             let shortestName = members
                 .map(\.sample.name)
                 .min { ($0.count, $0) < ($1.count, $1) } ?? key
-            return AppMemoryUsage(
+            return AppProcessFamily(
                 familyKey: key,
                 name: shortestName,
                 bundlePath: nil,
-                footprintBytes: total,
                 processes: processes,
                 earliestStartedAt: earliestStartedAt
             )
         }
-        return usages.sorted { $0.footprintBytes > $1.footprintBytes }
     }
 
     /// 可执行文件所在的应用包路径。取路径上第一个 `.app` 组件，
@@ -183,11 +194,49 @@ enum AppMemoryGrouper {
             || path.hasPrefix("/sbin/") || path.hasPrefix("/private/")
     }
 
-    private static func familyKey(of sample: ProcessMemorySample) -> String {
+    private static func familyKey<Sample: ProcessMonitorSample>(of sample: Sample) -> String {
         if let path = sample.executablePath, isSystemExecutablePath(path) {
             return sample.name.lowercased()
         }
         return standaloneFamilyPrefix(of: sample.name)
+    }
+}
+
+/// 内存监控对通用进程家族结果的数值化投影。
+enum AppMemoryGrouper {
+    static func group(_ samples: [ProcessMemorySample]) -> [AppMemoryUsage] {
+        AppProcessFamilyGrouper.group(samples)
+            .map { family in
+                AppMemoryUsage(
+                    familyKey: family.familyKey,
+                    name: family.name,
+                    bundlePath: family.bundlePath,
+                    footprintBytes: family.processes.reduce(0) { $0 + $1.footprintBytes },
+                    processes: family.processes.sorted { $0.footprintBytes > $1.footprintBytes },
+                    earliestStartedAt: family.earliestStartedAt
+                )
+            }
+            .sorted { $0.footprintBytes > $1.footprintBytes }
+    }
+
+    static func appBundlePath(ofExecutable path: String) -> String? {
+        AppProcessFamilyGrouper.appBundlePath(ofExecutable: path)
+    }
+
+    static func displayName(ofBundlePath path: String) -> String {
+        AppProcessFamilyGrouper.displayName(ofBundlePath: path)
+    }
+
+    static func standaloneFamilyPrefix(of name: String) -> String {
+        AppProcessFamilyGrouper.standaloneFamilyPrefix(of: name)
+    }
+
+    static func pathContainsAppName(_ path: String, appName: String) -> Bool {
+        AppProcessFamilyGrouper.pathContainsAppName(path, appName: appName)
+    }
+
+    static func isSystemExecutablePath(_ path: String) -> Bool {
+        AppProcessFamilyGrouper.isSystemExecutablePath(path)
     }
 }
 

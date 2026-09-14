@@ -828,6 +828,7 @@ enum AppText {
         "pressureCritical": "严重",
         "appMemoryList": "应用内存占用",
         "processCount": "%d 个进程",
+        "processID": "PID %d",
         "memoryTopApps": "内存占用前十",
         "memoryMonitorOpen": "打开内存监控…",
         "autoRefresh": "自动刷新",
@@ -858,6 +859,7 @@ enum AppText {
         "pressureCritical": "Critical",
         "appMemoryList": "App Memory Usage",
         "processCount": "%d processes",
+        "processID": "PID %d",
         "memoryTopApps": "Top 10 by Memory",
         "memoryMonitorOpen": "Open Memory Monitor…",
         "autoRefresh": "Auto Refresh",
@@ -866,6 +868,44 @@ enum AppText {
         "noMatchingApps": "No matching apps.",
         "loadingProcesses": "Reading processes…",
         "lastUpdated": "Updated %@",
+    ]
+
+    private static let cpuMonitorChinese: [String: String] = [
+        "cpuMonitor": "CPU 监控",
+        "cpuMonitorSubtitle": "实时查看各软件的 CPU 占用，同一应用的多个进程会自动汇总。",
+        "cpuOverview": "系统 CPU 概览",
+        "cpuTotalUsage": "总使用率",
+        "cpuUserUsage": "用户占用",
+        "cpuSystemUsage": "系统占用",
+        "cpuNiceUsage": "低优先级占用",
+        "cpuIdleUsage": "空闲",
+        "cpuLogicalCores": "逻辑核心",
+        "cpuLoadOne": "1 分钟负载",
+        "cpuLoadFive": "5 分钟负载",
+        "cpuLoadFifteen": "15 分钟负载",
+        "appCPUList": "应用 CPU 占用",
+        "cpuTopApps": "CPU 占用前十",
+        "cpuMonitorOpen": "打开 CPU 监控…",
+        "cpuWaitingForSample": "正在收集 CPU 占用…",
+    ]
+
+    private static let cpuMonitorEnglish: [String: String] = [
+        "cpuMonitor": "CPU Monitor",
+        "cpuMonitorSubtitle": "See how much CPU each app uses; scattered processes are rolled up per app.",
+        "cpuOverview": "System CPU Overview",
+        "cpuTotalUsage": "Total Usage",
+        "cpuUserUsage": "User",
+        "cpuSystemUsage": "System",
+        "cpuNiceUsage": "Nice",
+        "cpuIdleUsage": "Idle",
+        "cpuLogicalCores": "Logical Cores",
+        "cpuLoadOne": "1-Minute Load",
+        "cpuLoadFive": "5-Minute Load",
+        "cpuLoadFifteen": "15-Minute Load",
+        "appCPUList": "App CPU Usage",
+        "cpuTopApps": "Top 10 by CPU",
+        "cpuMonitorOpen": "Open CPU Monitor…",
+        "cpuWaitingForSample": "Collecting CPU usage…",
     ]
 
     private static let screenCaptureFeedbackChinese: [String: String] = [
@@ -1004,8 +1044,8 @@ enum AppText {
         case .system: useChinese = Locale.autoupdatingCurrent.language.languageCode?.identifier == "zh"
         }
         let template = useChinese
-            ? (chinese[key] ?? recordingSelectionChinese[key] ?? memoryMonitorChinese[key] ?? screenCaptureFeedbackChinese[key] ?? dockGroupsChinese[key] ?? key)
-            : (english[key] ?? recordingSelectionEnglish[key] ?? memoryMonitorEnglish[key] ?? screenCaptureFeedbackEnglish[key] ?? dockGroupsEnglish[key] ?? key)
+            ? (chinese[key] ?? recordingSelectionChinese[key] ?? memoryMonitorChinese[key] ?? cpuMonitorChinese[key] ?? screenCaptureFeedbackChinese[key] ?? dockGroupsChinese[key] ?? key)
+            : (english[key] ?? recordingSelectionEnglish[key] ?? memoryMonitorEnglish[key] ?? cpuMonitorEnglish[key] ?? screenCaptureFeedbackEnglish[key] ?? dockGroupsEnglish[key] ?? key)
         return arguments.isEmpty ? template : String(format: template, locale: language.locale, arguments: arguments)
     }
 
@@ -1518,6 +1558,7 @@ final class MacPilotModel: ObservableObject {
     let awake: AwakeSessionManager
     let awakeTriggers: AwakeTriggerEngine
     let memoryMonitor = MemoryMonitorModel()
+    let cpuMonitor = CPUMonitorModel()
     /// iPhone remote control. Lazily created so it can reference `self` for
     /// persistence and share the BLE model's screen control service.
     lazy var remoteDeviceStore = RemoteDeviceStore(persist: { [weak self] in self?.saveIfReady() })
@@ -2338,6 +2379,8 @@ final class MacPilotModel: ObservableObject {
         rightClickMenu.stop()
         memoryMonitor.stopAutoRefresh()
         MemoryMonitorModel.clearMenuCache()
+        cpuMonitor.stopAutoRefresh()
+        CPUMonitorModel.clearMenuCache()
         awake.shutdown()
         awakeTriggers.shutdown()
         // Dock Groups：停掉运行状态轮询与 Workspace 监听。
@@ -2693,7 +2736,7 @@ final class MacPilotModel: ObservableObject {
 enum MainSection: CaseIterable, Hashable, Identifiable {
     case exit, launch, awake, ble, remoteControl, inputSources, compression, capture, screenRecording
     case pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick
-    case dockGroups, memoryMonitor, settings
+    case dockGroups, memoryMonitor, cpuMonitor, settings
 
     var id: Self { self }
 
@@ -2715,6 +2758,7 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
         case .rightClick: "rightClickMenu"
         case .dockGroups: "dockGroups"
         case .memoryMonitor: "memoryMonitor"
+        case .cpuMonitor: "cpuMonitor"
         case .settings: "settings"
         }
     }
@@ -2737,6 +2781,7 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
         case .rightClick: "contextualmenu.and.cursorarrow"
         case .dockGroups: "square.grid.2x2"
         case .memoryMonitor: "memorychip"
+        case .cpuMonitor: "cpu"
         case .settings: "gearshape"
         }
     }
@@ -2850,6 +2895,8 @@ struct ContentView: View {
             DockGroupsView(dockGroups: model.dockGroups)
         case .memoryMonitor:
             MemoryMonitorView(monitor: model.memoryMonitor)
+        case .cpuMonitor:
+            CPUMonitorView(monitor: model.cpuMonitor)
         case .settings:
             SettingsView()
         }
@@ -2962,7 +3009,7 @@ struct Sidebar: View {
     private let utilitySections: [MainSection] = [
         .compression, .capture, .screenRecording, .pictureInPicture,
         .windowSwitcher, .smoothScrolling, .clipboard, .rightClick, .memoryMonitor,
-        .dockGroups
+        .cpuMonitor, .dockGroups
     ]
 
     var body: some View {
@@ -4329,6 +4376,54 @@ private struct MemoryMonitorMenuSection: View {
     }
 }
 
+/// 菜单栏「CPU 监控」子菜单：系统 CPU 总览 + 占用前十的应用。
+/// 每次展开菜单时同步采样（带短缓存），底部入口跳转到监控页。
+private struct CPUMonitorMenuSection: View {
+    @EnvironmentObject private var model: MacPilotModel
+    let openMonitor: () -> Void
+
+    var body: some View {
+        let snapshot = CPUMonitorModel.menuSnapshot()
+        Menu(model.t("cpuMonitor")) {
+            if let system = snapshot.system {
+                Section(model.t("cpuOverview")) {
+                    overviewRow(model.t("cpuTotalUsage"), system.totalPercent)
+                    overviewRow(model.t("cpuUserUsage"), system.userPercent)
+                    overviewRow(model.t("cpuSystemUsage"), system.systemPercent)
+                    overviewRow(model.t("cpuNiceUsage"), system.nicePercent)
+                    overviewRow(model.t("cpuIdleUsage"), system.idlePercent)
+                    Text("\(model.t("cpuLogicalCores")): \(system.logicalCoreCount)")
+                    loadRow(model.t("cpuLoadOne"), system.loadAverage, index: 0)
+                    loadRow(model.t("cpuLoadFive"), system.loadAverage, index: 1)
+                    loadRow(model.t("cpuLoadFifteen"), system.loadAverage, index: 2)
+                }
+            }
+            Divider()
+            Section(model.t("cpuTopApps")) {
+                let topApps = snapshot.apps.prefix(10)
+                if topApps.isEmpty {
+                    Text(model.t("cpuWaitingForSample"))
+                } else {
+                    ForEach(Array(topApps.enumerated()), id: \.offset) { index, app in
+                        Text("\(index + 1). \(app.name) — \(CPUPercentFormatter.string(from: app.cpuPercent))")
+                    }
+                }
+            }
+            Divider()
+            Button(model.t("cpuMonitorOpen")) { openMonitor() }
+        }
+    }
+
+    private func overviewRow(_ label: String, _ percent: Double) -> some View {
+        Text("\(label): \(CPUPercentFormatter.string(from: percent))")
+    }
+
+    private func loadRow(_ label: String, _ values: [Double], index: Int) -> some View {
+        let value = values.indices.contains(index) ? String(format: "%.2f", values[index]) : "-"
+        return Text("\(label): \(value)")
+    }
+}
+
 struct MenuBarView: View {
     @EnvironmentObject private var model: MacPilotModel
     @Environment(\.openWindow) private var openWindow
@@ -4410,6 +4505,11 @@ struct MenuBarView: View {
         Divider()
         MemoryMonitorMenuSection {
             model.requestedSection = .memoryMonitor
+            showMainWindow()
+        }
+        Divider()
+        CPUMonitorMenuSection {
+            model.requestedSection = .cpuMonitor
             showMainWindow()
         }
         Divider()

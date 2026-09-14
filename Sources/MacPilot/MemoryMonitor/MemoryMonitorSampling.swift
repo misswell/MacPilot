@@ -1,29 +1,29 @@
 import Darwin
 import Foundation
 
-/// 进程内存采样：通过 libproc 读取全部进程的物理占用。
-/// 读取不到占用（如其他用户或 root 进程）的进程会被跳过。
-enum ProcessMemorySampler {
-    static func sample() -> [ProcessMemorySample] {
-        let entries = processEntries()
-        var samples: [ProcessMemorySample] = []
-        samples.reserveCapacity(entries.count)
-        for entry in entries {
+struct RunningProcessInfo: Sendable {
+    let pid: pid_t
+    let name: String
+    let executablePath: String?
+    let startedAt: Date?
+}
+
+/// 一次 sysctl 拿到全部进程的标识、命令名、路径与启动时间。
+/// 两次调用之间进程数可能增长，缓冲区按 10% 余量放大。
+enum RunningProcessReader {
+    static func sample() -> [RunningProcessInfo] {
+        processEntries().compactMap { entry in
             let pid = entry.kp_proc.p_pid
-            guard pid > 0, let footprint = physicalFootprint(of: pid) else { continue }
+            guard pid > 0 else { return nil }
             let path = executablePath(of: pid)
             let name = path.map { ($0 as NSString).lastPathComponent } ?? commandName(of: entry)
-            samples.append(
-                ProcessMemorySample(
-                    pid: pid,
-                    name: name.isEmpty ? "\(pid)" : name,
-                    executablePath: path,
-                    footprintBytes: footprint,
-                    startedAt: Self.date(from: entry.kp_proc.p_starttime)
-                )
+            return RunningProcessInfo(
+                pid: pid,
+                name: name.isEmpty ? "\(pid)" : name,
+                executablePath: path,
+                startedAt: date(from: entry.kp_proc.p_starttime)
             )
         }
-        return samples
     }
 
     /// 一次 sysctl 拿到全部进程的 pid、命令名与启动时间。
@@ -47,6 +47,40 @@ enum ProcessMemorySampler {
     /// libproc 的路径缓冲区上限（libproc.h: PROC_PIDPATHINFO_MAXSIZE）。
     private static let maxProcessPathLength = 4 * 1024
 
+    private static func executablePath(of pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: maxProcessPathLength)
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return string(fromNullTerminated: buffer)
+    }
+
+    private static func commandName(of entry: kinfo_proc) -> String {
+        withUnsafeBytes(of: entry.kp_proc.p_comm) { raw in
+            String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
+        }
+    }
+
+    private static func string(fromNullTerminated buffer: [CChar]) -> String {
+        String(decoding: buffer.prefix(while: { $0 != 0 }).map(UInt8.init(bitPattern:)), as: UTF8.self)
+    }
+}
+
+/// 进程内存采样：通过 libproc 读取全部进程的物理占用。
+/// 读取不到占用（如其他用户或 root 进程）的进程会被跳过。
+enum ProcessMemorySampler {
+    static func sample() -> [ProcessMemorySample] {
+        RunningProcessReader.sample().compactMap { process in
+            guard let footprint = physicalFootprint(of: process.pid) else { return nil }
+            return ProcessMemorySample(
+                pid: process.pid,
+                name: process.name,
+                executablePath: process.executablePath,
+                footprintBytes: footprint,
+                startedAt: process.startedAt
+            )
+        }
+    }
+
     /// 读取 phys footprint，即活动监视器「内存」列展示的数值。
     /// proc_pid_rusage 会把完整的 rusage_info_current 结构拷贝进参数指向的
     /// 缓冲区，因此这里必须提供一块该结构大小的内存，而不是指针槽位。
@@ -63,23 +97,6 @@ enum ProcessMemorySampler {
         let result = proc_pid_rusage(pid, RUSAGE_INFO_CURRENT, slot)
         guard result == 0 else { return nil }
         return buffer.assumingMemoryBound(to: rusage_info_v3.self).pointee.ri_phys_footprint
-    }
-
-    private static func executablePath(of pid: pid_t) -> String? {
-        var buffer = [CChar](repeating: 0, count: maxProcessPathLength)
-        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
-        guard length > 0 else { return nil }
-        return string(fromNullTerminated: buffer)
-    }
-
-    private static func commandName(of entry: kinfo_proc) -> String {
-        withUnsafeBytes(of: entry.kp_proc.p_comm) { raw in
-            String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
-        }
-    }
-
-    private static func string(fromNullTerminated buffer: [CChar]) -> String {
-        String(decoding: buffer.prefix(while: { $0 != 0 }).map(UInt8.init(bitPattern:)), as: UTF8.self)
     }
 }
 
