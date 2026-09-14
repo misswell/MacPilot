@@ -1061,6 +1061,7 @@ final class FolderCompressionModel: ObservableObject {
     private var reconciliationTask: Task<Void, Never>?
     private var monitoringGeneration = UUID()
     private var retryBackoff = FileCompressionRetryBackoff()
+    private var isActive = false
 
     deinit {
         eventMonitor.stop()
@@ -1076,12 +1077,19 @@ final class FolderCompressionModel: ObservableObject {
     }
 
     func activateFromConfiguration() {
+        isActive = true
         updateMonitoring(initialScanRoots: Set(settings.folderPaths))
+    }
+
+    func deactivateFromConfiguration() {
+        isActive = false
+        stopMonitoring()
     }
 
     /// Synchronous teardown for app termination: stops the FSEvents stream and
     /// cancels every pending scan task.
     func shutdown() {
+        isActive = false
         stopMonitoring()
     }
 
@@ -1209,7 +1217,7 @@ final class FolderCompressionModel: ObservableObject {
         if preservePendingChanges {
             pendingChanges.retainPaths(inside: Set(settings.folderPaths))
         }
-        guard settings.automaticallyCompress, !settings.folderPaths.isEmpty else { return }
+        guard isActive, settings.automaticallyCompress, !settings.folderPaths.isEmpty else { return }
 
         let generation = monitoringGeneration
         let started = eventMonitor.start(

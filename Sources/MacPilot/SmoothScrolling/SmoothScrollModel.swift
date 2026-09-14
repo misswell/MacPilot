@@ -30,8 +30,13 @@ final class SmoothScrollModel: ObservableObject {
         controller.activate(settings: settings)
     }
 
-    func shutdown() {
+    func deactivateFromConfiguration() {
         controller.shutdown()
+        isActive = false
+    }
+
+    func shutdown() {
+        deactivateFromConfiguration()
     }
 
     func setEnabled(_ enabled: Bool) {

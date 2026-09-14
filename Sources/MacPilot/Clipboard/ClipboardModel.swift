@@ -74,12 +74,12 @@ final class ClipboardModel: ObservableObject {
 
     // MARK: - Lifecycle
 
-    func applyLoadedSettings(_ loaded: ClipboardSettings) {
+    func applyLoadedSettings(_ loaded: ClipboardSettings, activate: Bool = true) {
         settings = loaded
         history.storageLimit = loaded.storageLimit
         history.pinsAtTop = loaded.pinsAtTop
         refreshPermissionStatus()
-        if settings.isEnabled {
+        if activate && settings.isEnabled {
             start()
         }
     }

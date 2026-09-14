@@ -43,7 +43,8 @@ final class AwakeTriggerEngine: ObservableObject {
         applicationStateProvider: any AwakeApplicationStateProviding = ApplicationStateProvider(),
         processStateProvider: any AwakeProcessStateProviding = ProcessStateProvider(),
         displayStateProvider: any AwakeDisplayStateProviding = DisplayStateProvider(),
-        now: @escaping () -> Date = { Date() }
+        now: @escaping () -> Date = { Date() },
+        activateImmediately: Bool = true
     ) {
         self.sessionManager = sessionManager
         self.powerStateProvider = powerStateProvider ?? sessionManager.sharedPowerStateProvider
@@ -57,7 +58,9 @@ final class AwakeTriggerEngine: ObservableObject {
             power: self.powerStateProvider.currentPowerState(),
             display: displayStateProvider.currentState
         )
-        installSystemObservers()
+        if activateImmediately {
+            installSystemObservers()
+        }
     }
 
     var activeTriggerCount: Int {
@@ -72,7 +75,7 @@ final class AwakeTriggerEngine: ObservableObject {
         runtimeStates[id] ?? TriggerRuntimeState()
     }
 
-    func applyLoadedTriggers(_ loadedTriggers: [AwakeTrigger]) {
+    func applyLoadedTriggers(_ loadedTriggers: [AwakeTrigger], activate: Bool = true) {
         let oldIDs = Set(triggers.map(\.id))
         for id in oldIDs { endTriggerSession(id) }
         cancelAllPendingTasks()
@@ -82,7 +85,10 @@ final class AwakeTriggerEngine: ObservableObject {
         )
         // Nothing may be armed while the Awake master switch is off; the switch
         // calls `setFeatureEnabled(true)` when it is turned back on.
-        guard sessionManager.settings.isEnabled else { return }
+        guard activate, sessionManager.settings.isEnabled else {
+            setFeatureEnabled(false)
+            return
+        }
         installSystemObservers()
         synchronizeMonitors()
         evaluateAll()

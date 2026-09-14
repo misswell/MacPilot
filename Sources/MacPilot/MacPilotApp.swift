@@ -52,7 +52,7 @@ private struct MenuBarIconView: View {
     var body: some View {
         Image(systemName: MenuBarIcon.systemImage(
             awakeActive: awake.isActive,
-            enforcing: model.isEnforcing
+            enforcing: model.isFeatureEnabled(.exit) && model.isEnforcing
         ))
     }
 }
@@ -390,6 +390,9 @@ enum AppLanguage: String, CaseIterable, Codable, Identifiable {
 
 enum AppText {
     private static let chinese: [String: String] = [
+        "home": "首页", "homeSubtitle": "选择需要的工具；未开启的功能不会显示在左侧，也不会在后台运行。",
+        "homeFeatureHint": "首页开关控制功能入口和后台运行。打开后，功能会出现在左侧菜单中。",
+        "homeEnabledCount": "已启用 %d 个功能", "homeAutomation": "自动化", "homeUtilities": "效率工具",
         "rules": "退出", "settings": "设置", "addApp": "添加应用", "apps": "应用",
         "versionLabel": "版本 %@（构建 %@）",
         "rulesSubtitle": "在应用闲置一段时间后自动隐藏、关闭窗口或退出。",
@@ -764,7 +767,7 @@ enum AppText {
         "smoothScrollingExcludedAppNotRunning": "未运行",
         "smoothScrollingExcludedAppReverse": "反转方向",
         "smoothScrollingRemoveExcludedApp": "移除排除应用",
-        "rightClickMenu": "访达右键菜单",
+        "rightClickMenu": "访达右键菜单", "rightClickMenuSubtitle": "在 Finder 的右键菜单中提供文件操作、应用和新建文件快捷入口。",
         "clipboard": "剪切板", "clipboardSubtitle": "记录复制历史，随时搜索、固定并重新粘贴，支持文本、图片与文件。",
         "clipboardEnable": "启用剪切板",
         "clipboardHotkey": "全局快捷键", "clipboardHotkeyRecord": "点击后按下新快捷键…",
@@ -1085,6 +1088,9 @@ enum AppText {
     }
 
     private static let english: [String: String] = [
+            "home": "Home", "homeSubtitle": "Choose the tools you need. Disabled features stay out of the sidebar and do not run in the background.",
+            "homeFeatureHint": "These switches control each feature's sidebar entry and background runtime. Turn one on to add it to the sidebar.",
+            "homeEnabledCount": "%d features enabled", "homeAutomation": "Automation", "homeUtilities": "Utilities",
             "rules": "Exit", "settings": "Settings", "addApp": "Add app", "apps": "APPS",
             "versionLabel": "Version %@ (Build %@)",
             "rulesSubtitle": "Hide, close windows, or quit apps after they’ve been inactive.", "dropApp": "Drop an app to add its rule",
@@ -1457,7 +1463,7 @@ enum AppText {
             "smoothScrollingExcludedAppNotRunning": "Not running",
             "smoothScrollingExcludedAppReverse": "Reverse direction",
             "smoothScrollingRemoveExcludedApp": "Remove excluded application",
-            "rightClickMenu": "Finder Context Menu",
+            "rightClickMenu": "Finder Context Menu", "rightClickMenuSubtitle": "Add file actions, applications, and new-file shortcuts to Finder’s context menu.",
             "clipboard": "Clipboard", "clipboardSubtitle": "Keeps your copy history so you can search, pin, and re-paste text, images, and files.",
             "clipboardEnable": "Enable clipboard",
             "clipboardHotkey": "Global hotkey", "clipboardHotkeyRecord": "Click and press a new shortcut…",
@@ -1488,6 +1494,9 @@ final class MacPilotModel: ObservableObject {
 
     private struct StoredConfiguration: Codable {
         var version: Int
+        /// Top-level feature switches introduced by the Home page. An array of
+        /// raw values keeps the configuration tolerant of future sections.
+        var enabledFeatures: [String]
         var rules: [QuitRule]
         var isEnforcing: Bool
         var language: AppLanguage
@@ -1512,8 +1521,9 @@ final class MacPilotModel: ObservableObject {
         var remoteControl: RemoteControlSettings
         var dockGroups: DockGroupsSettings
 
-        init(rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings) {
-            version = 24
+        init(enabledFeatures: Set<MainSection>, rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings) {
+            version = 25
+            self.enabledFeatures = enabledFeatures.map(\.rawValue).sorted()
             self.rules = rules
             self.isEnforcing = isEnforcing
             self.language = language
@@ -1539,6 +1549,11 @@ final class MacPilotModel: ObservableObject {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+            // Configurations written before the Home page represent an
+            // explicit opt-in through their existing settings, so preserve
+            // their visible/running feature set on the first launch.
+            enabledFeatures = try container.decodeIfPresent([String].self, forKey: .enabledFeatures)
+                ?? MainSection.featureSections.map(\.rawValue)
             rules = try container.decodeIfPresent([QuitRule].self, forKey: .rules) ?? []
             isEnforcing = try container.decodeIfPresent(Bool.self, forKey: .isEnforcing) ?? true
             language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .system
@@ -1564,6 +1579,7 @@ final class MacPilotModel: ObservableObject {
 
     @Published private(set) var rules: [QuitRule] = []
     @Published private(set) var launchRules: [LaunchRule] = []
+    @Published private(set) var enabledSections: Set<MainSection> = []
     @Published var isEnforcing = true { didSet { enforcingChanged() } }
     @Published var isLaunchSchedulingEnabled = true { didSet { launchSchedulingChanged() } }
     /// Automatic update checks. Persisted so the launch-time request can be
@@ -1637,25 +1653,22 @@ final class MacPilotModel: ObservableObject {
             closedLidSleepController: ClosedLidSleepController(),
             lidStateMonitor: LidStateMonitor()
         )
-        awakeTriggers = AwakeTriggerEngine(sessionManager: awake)
+        // The Home-page selection is loaded before Awake installs any process
+        // observers. This keeps a new installation genuinely idle until the
+        // user opts into the feature.
+        awakeTriggers = AwakeTriggerEngine(sessionManager: awake, activateImmediately: false)
         configurationURL = Self.defaultConfigurationURL()
         isLoading = true
         load()
         isLoading = false
-        awake.startDefaultSessionOnLaunchIfEnabled()
         save()
         refreshLoginItemState()
-        startObservingWorkspace()
         remoteControl.onPairingCodePresented = { [weak self] code, clientName in
             self?.presentRemotePairingCode(code: code, clientName: clientName)
         }
         remoteControl.onRunningStateChanged = { [weak self] in
             self?.refreshScreenStateObservation()
         }
-        if remoteDeviceStore.settings.isEnabled {
-            remoteControl.start()
-        }
-        startSafetyChecks()
         // One observer owns every teardown path. `willTerminate` is delivered
         // synchronously on the main thread, so `shutdown()` must stay
         // synchronous: scheduling it in a `Task` loses the work at exit.
@@ -1674,8 +1687,6 @@ final class MacPilotModel: ObservableObject {
             guard let url = notification.object as? URL else { return }
             Task { @MainActor in self?.handleDeepLink(url) }
         })
-        evaluateRules()
-        scheduleLaunchPlanForCurrentBootIfNeeded()
         clearLegacyAccessibilityRecoveryRequest()
         ble.persist = { [weak self] in
             self?.saveIfReady()
@@ -1722,7 +1733,7 @@ final class MacPilotModel: ObservableObject {
             case .recordingToggleCamera:
                 self.screenRecording.toggleCameraOverlayForSelection()
             case .recordingSettings:
-                self.requestedSection = .screenRecording
+                self.requestSection(.screenRecording)
                 NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
             default:
                 break
@@ -1755,22 +1766,22 @@ final class MacPilotModel: ObservableObject {
         dockGroups.persist = { [weak self] in self?.saveIfReady() }
         windowSwitcher.language = language
         clipboard.language = language
-        // BLE installs its own observers from `activateFromConfiguration()`; the
-        // shared screen-saver observation covers both BLE and the iPhone remote.
-        ble.activateFromConfiguration()
+        // Activate only the features selected on the Home page. Their own
+        // settings still decide the finer-grained behavior inside each page.
+        for feature in MainSection.featureSections where isFeatureEnabled(feature) {
+            activateFeatureRuntime(feature)
+        }
+        if isFeatureEnabled(.awake) {
+            awake.startDefaultSessionOnLaunchIfEnabled()
+        }
+        if isFeatureEnabled(.exit) {
+            evaluateRules()
+        }
+        if isFeatureEnabled(.launch) {
+            scheduleLaunchPlanForCurrentBootIfNeeded()
+        }
         refreshScreenStateObservation()
-        fileCompression.activateFromConfiguration()
-        screenCapture.activateFromConfiguration()
         screenRecording.language = language
-        screenRecording.activateFromConfiguration()
-        pictureInPicture.activateFromConfiguration()
-        inputSources.activateFromConfiguration()
-        windowSwitcher.activateFromConfiguration()
-        smoothScrolling.activateFromConfiguration()
-        clipboard.activateFromConfiguration()
-        dockGroups.activateFromConfiguration()
-        // Finder 右键菜单（FinderSync 扩展）。
-        startRightClickMenu()
         if automaticUpdateChecks {
             Task { [weak updater] in
                 try? await Task.sleep(for: .seconds(2))
@@ -1795,50 +1806,65 @@ final class MacPilotModel: ObservableObject {
         guard !route.isEmpty else { return }
         switch route {
         case ["capture", "fullscreen"], ["capture", "full-screen"], ["screenshot", "fullscreen"]:
+            guard isFeatureEnabled(.capture), screenCapture.settings.isEnabled else { return }
             screenCapture.captureFullscreen()
         case ["capture", "area"], ["screenshot", "area"], ["area"]:
+            guard isFeatureEnabled(.capture), screenCapture.settings.isEnabled else { return }
             screenCapture.startAreaCapture()
         case ["capture", "repeat-area"], ["screenshot", "repeat-area"], ["repeat-area"]:
+            guard isFeatureEnabled(.capture), screenCapture.settings.isEnabled else { return }
             screenCapture.repeatSmartCapture()
         case ["capture", "delayed"], ["screenshot", "delayed"], ["delayed"]:
+            guard isFeatureEnabled(.capture), screenCapture.settings.isEnabled else { return }
             screenCapture.startDelayedAreaCapture()
         case ["capture", "application"], ["capture", "window"], ["screenshot", "application"]:
+            guard isFeatureEnabled(.capture), screenCapture.settings.isEnabled else { return }
             screenCapture.startApplicationWindowCapture()
         case ["capture", "active-window"], ["capture", "focused-window"], ["screenshot", "active-window"]:
+            guard isFeatureEnabled(.capture), screenCapture.settings.isEnabled else { return }
             screenCapture.captureActiveWindow()
         case ["capture", "area-annotate"], ["screenshot", "area-annotate"]:
+            guard isFeatureEnabled(.capture), screenCapture.settings.isEnabled else { return }
             screenCapture.startAreaAnnotateCapture()
         case ["capture", "scrolling"], ["screenshot", "scrolling"]:
+            guard isFeatureEnabled(.capture), screenCapture.settings.isEnabled else { return }
             screenCapture.startScrollingCapture()
         case ["capture", "ocr"], ["screenshot", "ocr"], ["ocr"]:
+            guard isFeatureEnabled(.capture), screenCapture.settings.isEnabled else { return }
             screenCapture.startOCRCapture()
         case ["capture", "smart-element"], ["screenshot", "smart-element"]:
+            guard isFeatureEnabled(.capture), screenCapture.settings.isEnabled else { return }
             screenCapture.startSmartCapture()
         case ["capture", "object-cutout"], ["screenshot", "object-cutout"]:
+            guard isFeatureEnabled(.capture), screenCapture.settings.isEnabled else { return }
             screenCapture.startObjectCutoutCapture()
         case ["record", "screen"], ["record", "fullscreen"]:
-            requestedSection = .screenRecording
+            guard isFeatureEnabled(.screenRecording), screenRecording.settings.isEnabled else { return }
+            requestSection(.screenRecording)
             screenRecording.start()
         case ["record", "application"], ["record", "window"]:
-            requestedSection = .screenRecording
+            guard isFeatureEnabled(.screenRecording), screenRecording.settings.isEnabled else { return }
+            requestSection(.screenRecording)
             screenRecording.setCaptureMode(.application)
             screenRecording.start()
         case ["record", "stop"]:
+            guard isFeatureEnabled(.screenRecording) else { return }
             screenRecording.stop()
         case ["right-click"], ["rightclick"], ["finder", "menu"]:
-            requestedSection = .rightClick
+            requestSection(.rightClick)
         case ["dock-groups"], ["dockgroups"], ["dock", "groups"]:
-            requestedSection = .dockGroups
+            requestSection(.dockGroups)
             NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
         case ["settings"], ["preferences"]:
-            requestedSection = .settings
+            requestSection(.settings)
         case ["settings", "capture"], ["settings", "screenshots"]:
-            requestedSection = .capture
+            requestSection(.capture)
         case ["show", "shortcuts"], ["open", "shortcuts"]:
-            requestedSection = .capture
+            guard isFeatureEnabled(.capture) else { return }
+            requestSection(.capture)
             requestedCaptureShortcutEditor = true
         case ["open", "history"], ["history"]:
-            requestedSection = .capture
+            requestSection(.capture)
         default:
             break
         }
@@ -1955,7 +1981,7 @@ final class MacPilotModel: ObservableObject {
     /// Surfaces a newly derived pairing code: brings the main window forward on
     /// the remote control page and shows the six digits.
     func presentRemotePairingCode(code: String, clientName: String) {
-        requestedSection = .remoteControl
+        requestSection(.remoteControl)
         NSApp.activate(ignoringOtherApps: true)
         showAlert(t("remotePairingCodeTitle", code, clientName))
     }
@@ -2026,7 +2052,7 @@ final class MacPilotModel: ObservableObject {
     }
 
     func runLaunchPlanNow() {
-        guard isLaunchSchedulingEnabled else { return }
+        guard isFeatureEnabled(.launch), isLaunchSchedulingEnabled else { return }
         scheduleLaunchPlan()
     }
 
@@ -2147,10 +2173,15 @@ final class MacPilotModel: ObservableObject {
     }
 
     func evaluateRules() {
+        guard isFeatureEnabled(.exit) else {
+            cancelAllQuitTasks(resetRuntime: true)
+            return
+        }
         rebuildQuitSchedule()
     }
 
     private func startObservingWorkspace() {
+        guard workspaceObservers.isEmpty else { return }
         let center = NSWorkspace.shared.notificationCenter
         let names: [Notification.Name] = [
             NSWorkspace.didLaunchApplicationNotification,
@@ -2171,7 +2202,14 @@ final class MacPilotModel: ObservableObject {
         }
     }
 
+    private func stopObservingWorkspace() {
+        let center = NSWorkspace.shared.notificationCenter
+        for observer in workspaceObservers { center.removeObserver(observer) }
+        workspaceObservers.removeAll(keepingCapacity: false)
+    }
+
     private func handleWorkspaceNotification(name: Notification.Name, application: NSRunningApplication?) {
+        guard isFeatureEnabled(.exit) else { return }
         let now = Date()
         if name == NSWorkspace.didWakeNotification {
             rebuildQuitSchedule(now: now)
@@ -2213,7 +2251,7 @@ final class MacPilotModel: ObservableObject {
     }
 
     private func rebuildQuitSchedule(now: Date = Date()) {
-        guard isEnforcing else {
+        guard isFeatureEnabled(.exit), isEnforcing else {
             cancelAllQuitTasks()
             return
         }
@@ -2353,7 +2391,7 @@ final class MacPilotModel: ObservableObject {
     }
 
     private func startSafetyChecks() {
-        guard isEnforcing, safetyCheckTask == nil else { return }
+        guard isFeatureEnabled(.exit), isEnforcing, safetyCheckTask == nil else { return }
         safetyCheckTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
@@ -2383,7 +2421,8 @@ final class MacPilotModel: ObservableObject {
         // enable flag was flipped, so it would re-install the very observers
         // `ble.shutdown()` just removed.
         guard !hasShutdown else { return }
-        let needed = ble.settings.isEnabled || remoteDeviceStore.settings.isEnabled
+        let needed = (isFeatureEnabled(.ble) && ble.settings.isEnabled)
+            || (isFeatureEnabled(.remoteControl) && remoteDeviceStore.settings.isEnabled)
         ble.screenControl.setScreensaverObservationEnabled(needed)
     }
 
@@ -2424,15 +2463,14 @@ final class MacPilotModel: ObservableObject {
 
         for observer in lifetimeObservers { NotificationCenter.default.removeObserver(observer) }
         lifetimeObservers.removeAll(keepingCapacity: false)
-        let workspaceCenter = NSWorkspace.shared.notificationCenter
-        for observer in workspaceObservers { workspaceCenter.removeObserver(observer) }
-        workspaceObservers.removeAll(keepingCapacity: false)
+        stopObservingWorkspace()
     }
 
     private func wakeQuitRule(_ id: UUID) {
         quitTasks[id] = nil
         quitWakeDeadlines[id] = nil
-        guard isEnforcing,
+        guard isFeatureEnabled(.exit),
+              isEnforcing,
               let rule = rules.first(where: { $0.id == id }),
               rule.isEnabled,
               !isOwnApplication(rule.bundleIdentifier) else { return }
@@ -2482,6 +2520,9 @@ final class MacPilotModel: ObservableObject {
     }
 
     private func apply(_ configuration: StoredConfiguration) {
+        enabledSections = Set(
+            configuration.enabledFeatures.compactMap(MainSection.init(rawValue:)).filter(\.isFeature)
+        )
         isEnforcing = configuration.isEnforcing
         language = configuration.language
         rules = configuration.rules
@@ -2492,14 +2533,14 @@ final class MacPilotModel: ObservableObject {
         ble.applyLoadedSettings(configuration.bleUnlock)
         fileCompression.applyLoadedSettings(configuration.fileCompression)
         screenCapture.applyLoadedSettings(configuration.screenCapture)
-        screenRecording.applyLoadedSettings(configuration.screenRecording)
+        screenRecording.applyLoadedSettings(configuration.screenRecording, activate: false)
         pictureInPicture.applyLoadedSettings(configuration.pictureInPicture)
         inputSources.applyLoadedSettings(configuration.inputSources)
         windowSwitcher.applyLoadedSettings(configuration.windowSwitcher)
         smoothScrolling.applyLoadedSettings(configuration.smoothScrolling)
-        clipboard.applyLoadedSettings(configuration.clipboard)
-        awake.applyLoadedSettings(configuration.awake)
-        awakeTriggers.applyLoadedTriggers(configuration.awakeTriggers)
+        clipboard.applyLoadedSettings(configuration.clipboard, activate: false)
+        awake.applyLoadedSettings(configuration.awake, activate: false)
+        awakeTriggers.applyLoadedTriggers(configuration.awakeTriggers, activate: false)
         remoteDeviceStore.applyLoadedSettings(configuration.remoteControl)
         dockGroups.applyLoadedSettings(configuration.dockGroups)
     }
@@ -2521,6 +2562,7 @@ final class MacPilotModel: ObservableObject {
 
     private func save() {
         let configuration = StoredConfiguration(
+            enabledFeatures: enabledSections,
             rules: rules,
             isEnforcing: isEnforcing,
             language: language,
@@ -2575,7 +2617,7 @@ final class MacPilotModel: ObservableObject {
 
     private func enforcingChanged() {
         guard !isLoading else { return }
-        if isEnforcing {
+        if isFeatureEnabled(.exit), isEnforcing {
             startSafetyChecks()
             rebuildQuitSchedule()
         } else {
@@ -2592,7 +2634,7 @@ final class MacPilotModel: ObservableObject {
     }
 
     private func scheduleLaunchPlanForCurrentBootIfNeeded() {
-        guard isLaunchSchedulingEnabled, launchesAtLogin else { return }
+        guard isFeatureEnabled(.launch), isLaunchSchedulingEnabled, launchesAtLogin else { return }
         let bootSession = Self.bootSessionIdentifier()
         guard lastScheduledBootSession != bootSession else { return }
         lastScheduledBootSession = bootSession
@@ -2601,6 +2643,7 @@ final class MacPilotModel: ObservableObject {
     }
 
     private func scheduleLaunchPlan() {
+        guard isFeatureEnabled(.launch), isLaunchSchedulingEnabled else { return }
         cancelScheduledLaunches()
         let now = Date()
         for rule in launchRules where rule.isEnabled {
@@ -2634,7 +2677,8 @@ final class MacPilotModel: ObservableObject {
             launchStates[ruleID] = .cancelled
             return
         }
-        guard isLaunchSchedulingEnabled,
+        guard isFeatureEnabled(.launch),
+              isLaunchSchedulingEnabled,
               let rule = launchRules.first(where: { $0.id == ruleID }), rule.isEnabled else {
             launchStates[ruleID] = .cancelled
             return
@@ -2768,7 +2812,167 @@ final class MacPilotModel: ObservableObject {
     var timeString: String { lastChecked.formatted(.dateTime.hour().minute().locale(language.locale)) }
 }
 
-enum MainSection: CaseIterable, Hashable, Identifiable {
+extension MacPilotModel {
+    var enabledFeatureCount: Int { enabledSections.count }
+
+    func isFeatureEnabled(_ section: MainSection) -> Bool {
+        enabledSections.contains(section)
+    }
+
+    func isSectionAvailable(_ section: MainSection) -> Bool {
+        section == .home || section == .settings || isFeatureEnabled(section)
+    }
+
+    /// Requests a page from a menu item or a deep link. Disabled features are
+    /// intentionally redirected to Home so an external shortcut cannot expose
+    /// a page whose runtime has been switched off.
+    func requestSection(_ section: MainSection) {
+        requestedSection = isSectionAvailable(section) ? section : .home
+    }
+
+    func setFeatureEnabled(_ enabled: Bool, for section: MainSection) {
+        guard section.isFeature else { return }
+        let wasEnabled = isFeatureEnabled(section)
+        guard wasEnabled != enabled else { return }
+
+        if enabled {
+            enabledSections.insert(section)
+            prepareFeatureForUserEnable(section)
+            activateFeatureRuntime(section)
+        } else {
+            enabledSections.remove(section)
+            deactivateFeatureRuntime(section)
+            if requestedSection == section { requestedSection = .home }
+        }
+        refreshScreenStateObservation()
+        save()
+    }
+
+    /// Existing feature-level switches remain the source of detailed
+    /// preferences. When the Home switch is the first explicit opt-in, make
+    /// the feature-level master switch usable too; this keeps one Home click
+    /// sufficient to start a feature with a fresh configuration.
+    private func prepareFeatureForUserEnable(_ section: MainSection) {
+        switch section {
+        case .awake:
+            awake.setEnabled(true)
+        case .ble:
+            ble.setEnabled(true)
+        case .remoteControl:
+            remoteDeviceStore.setEnabled(true)
+        case .inputSources:
+            inputSources.setEnabled(true)
+        case .capture:
+            screenCapture.setEnabled(true)
+        case .screenRecording:
+            screenRecording.setEnabled(true)
+        case .pictureInPicture:
+            pictureInPicture.setEnabled(true)
+        case .windowSwitcher:
+            windowSwitcher.setEnabled(true)
+        case .smoothScrolling:
+            smoothScrolling.setEnabled(true)
+        case .clipboard:
+            clipboard.setEnabled(true)
+        case .dockGroups:
+            dockGroups.setEnabled(true)
+        case .home, .exit, .launch, .compression, .rightClick, .memoryMonitor, .cpuMonitor, .settings:
+            break
+        }
+    }
+
+    private func activateFeatureRuntime(_ section: MainSection) {
+        switch section {
+        case .home, .settings:
+            break
+        case .exit:
+            startObservingWorkspace()
+            startSafetyChecks()
+            rebuildQuitSchedule()
+        case .launch:
+            scheduleLaunchPlanForCurrentBootIfNeeded()
+        case .awake:
+            awake.activateFromConfiguration()
+            awakeTriggers.setFeatureEnabled(awake.settings.isEnabled)
+        case .ble:
+            ble.activateFromConfiguration()
+        case .remoteControl:
+            if remoteDeviceStore.settings.isEnabled { remoteControl.start() }
+        case .inputSources:
+            inputSources.activateFromConfiguration()
+        case .compression:
+            fileCompression.activateFromConfiguration()
+        case .capture:
+            screenCapture.activateFromConfiguration()
+        case .screenRecording:
+            screenRecording.activateFromConfiguration()
+        case .pictureInPicture:
+            pictureInPicture.activateFromConfiguration()
+        case .windowSwitcher:
+            windowSwitcher.activateFromConfiguration()
+        case .smoothScrolling:
+            smoothScrolling.activateFromConfiguration()
+        case .clipboard:
+            clipboard.activateFromConfiguration()
+        case .rightClick:
+            startRightClickMenu()
+        case .dockGroups:
+            dockGroups.activateFromConfiguration()
+        case .memoryMonitor, .cpuMonitor:
+            break
+        }
+    }
+
+    private func deactivateFeatureRuntime(_ section: MainSection) {
+        switch section {
+        case .home, .settings:
+            break
+        case .exit:
+            stopSafetyChecks()
+            cancelAllQuitTasks(resetRuntime: true)
+            stopObservingWorkspace()
+        case .launch:
+            lastScheduledBootSession = nil
+            cancelScheduledLaunches()
+        case .awake:
+            awake.deactivateFromConfiguration()
+            awakeTriggers.setFeatureEnabled(false)
+        case .ble:
+            ble.deactivateFromConfiguration()
+        case .remoteControl:
+            remoteControl.stop()
+        case .inputSources:
+            inputSources.shutdown()
+        case .compression:
+            fileCompression.deactivateFromConfiguration()
+        case .capture:
+            screenCapture.shutdown()
+        case .screenRecording:
+            screenRecording.shutdown()
+        case .pictureInPicture:
+            pictureInPicture.shutdown()
+        case .windowSwitcher:
+            windowSwitcher.shutdown()
+        case .smoothScrolling:
+            smoothScrolling.deactivateFromConfiguration()
+        case .clipboard:
+            clipboard.shutdown()
+        case .rightClick:
+            rightClickMenu.stop()
+        case .dockGroups:
+            dockGroups.shutdown()
+        case .memoryMonitor:
+            memoryMonitor.stopAutoRefresh()
+            MemoryMonitorModel.clearMenuCache()
+        case .cpuMonitor:
+            cpuMonitor.stopAutoRefresh()
+            CPUMonitorModel.clearMenuCache()
+        }
+    }
+}
+
+enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
+    case home
     case exit, launch, awake, ble, remoteControl, inputSources, compression, capture, screenRecording
     case pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick
     case dockGroups, memoryMonitor, cpuMonitor, settings
@@ -2777,6 +2981,7 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
 
     var titleKey: String {
         switch self {
+        case .home: "home"
         case .exit: "rules"
         case .launch: "launch"
         case .awake: "awake"
@@ -2800,6 +3005,7 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .home: "house"
         case .exit: "list.bullet.rectangle"
         case .launch: "play.circle"
         case .awake: "sun.max.fill"
@@ -2820,6 +3026,47 @@ enum MainSection: CaseIterable, Hashable, Identifiable {
         case .settings: "gearshape"
         }
     }
+
+    var isFeature: Bool {
+        self != .home && self != .settings
+    }
+
+    static let automationSections: [MainSection] = [
+        .exit, .launch, .awake, .ble, .remoteControl, .inputSources
+    ]
+
+    static let utilitySections: [MainSection] = [
+        .compression, .capture, .screenRecording, .pictureInPicture,
+        .windowSwitcher, .smoothScrolling, .clipboard, .rightClick,
+        .memoryMonitor, .cpuMonitor, .dockGroups
+    ]
+
+    static var featureSections: [MainSection] {
+        automationSections + utilitySections
+    }
+
+    var featureDescriptionKey: String {
+        switch self {
+        case .home, .settings: "homeFeatureHint"
+        case .exit: "rulesSubtitle"
+        case .launch: "launchSubtitle"
+        case .awake: "awakeSubtitle"
+        case .ble: "bleUnlockSubtitle"
+        case .remoteControl: "remoteControlSubtitle"
+        case .inputSources: "inputSourcesSubtitle"
+        case .compression: "fileCompressionSubtitle"
+        case .capture: "screenCaptureSubtitle"
+        case .screenRecording: "scRecordingSubtitle"
+        case .pictureInPicture: "pictureInPictureSubtitle"
+        case .windowSwitcher: "windowSwitcherSubtitle"
+        case .smoothScrolling: "smoothScrollingSubtitle"
+        case .clipboard: "clipboardSubtitle"
+        case .rightClick: "rightClickMenuSubtitle"
+        case .dockGroups: "dockGroupsSubtitle"
+        case .memoryMonitor: "memoryMonitorSubtitle"
+        case .cpuMonitor: "cpuMonitorSubtitle"
+        }
+    }
 }
 
 struct ContentView: View {
@@ -2830,7 +3077,7 @@ struct ContentView: View {
     @State private var showingLaunchAdd = false
     @State private var editingLaunchRule: LaunchRule?
     @State private var isDropTarget = false
-    @State private var section: MainSection = .exit
+    @State private var section: MainSection = .home
 
     var body: some View {
         NavigationSplitView {
@@ -2868,9 +3115,22 @@ struct ContentView: View {
         } message: { Text(model.alertMessage ?? "") }
         .onDrop(of: [.fileURL], isTargeted: $isDropTarget, perform: acceptDrop)
         .onChange(of: model.requestedSection) { _, newValue in
-            if let s = newValue { section = s; model.requestedSection = nil }
+            if let s = newValue {
+                section = model.isSectionAvailable(s) ? s : .home
+                model.requestedSection = nil
+            }
         }
-        .onAppear { if let s = model.requestedSection { section = s } }
+        .onChange(of: model.enabledSections) { _, _ in
+            if !model.isSectionAvailable(section) {
+                section = .home
+            }
+        }
+        .onAppear {
+            if let s = model.requestedSection {
+                section = model.isSectionAvailable(s) ? s : .home
+                model.requestedSection = nil
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .macPilotShowMainWindow)) { _ in
             openWindow(id: "main")
             DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
@@ -2889,6 +3149,8 @@ struct ContentView: View {
     @ViewBuilder
     private var sectionContent: some View {
         switch section {
+        case .home:
+            HomeView()
         case .exit:
             header
             enforcementStatus
@@ -3040,18 +3302,15 @@ struct Sidebar: View {
     @EnvironmentObject private var model: MacPilotModel
     @Binding var section: MainSection
 
-    private let automationSections: [MainSection] = [.exit, .launch, .awake, .ble, .remoteControl, .inputSources]
-    private let utilitySections: [MainSection] = [
-        .compression, .capture, .screenRecording, .pictureInPicture,
-        .windowSwitcher, .smoothScrolling, .clipboard, .rightClick, .memoryMonitor,
-        .cpuMonitor, .dockGroups
-    ]
-
     var body: some View {
         VStack(spacing: 0) {
             brandHeader
             List(selection: selection) {
-                navigationRows(automationSections + utilitySections + [.settings])
+                navigationRows(
+                    [.home]
+                        + MainSection.featureSections.filter { model.isFeatureEnabled($0) }
+                        + [.settings]
+                )
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
@@ -4489,63 +4748,71 @@ struct MenuBarView: View {
     }
 
     var body: some View {
-        // 移除设置页入口和规则/启动计划管理项，但保留各功能的即时操作。
-        Divider()
-        AwakeMenuView(awake: awake, triggerEngine: model.awakeTriggers) {
-            model.requestedSection = .awake
-            showMainWindow()
+        // 保留各功能的即时操作，但只展示首页已启用的功能。
+        if model.isFeatureEnabled(.awake) && awake.settings.isEnabled {
+            Divider()
+            AwakeMenuView(awake: awake, triggerEngine: model.awakeTriggers) {
+                model.requestSection(.awake)
+                showMainWindow()
+            }
         }
-        if model.ble.settings.isEnabled {
+        if model.isFeatureEnabled(.ble) && model.ble.settings.isEnabled {
             Divider()
             Button(model.t("bleLockNow")) { model.ble.lockNow() }
         }
-        if inputSources.settings.isEnabled {
+        if model.isFeatureEnabled(.inputSources) && inputSources.settings.isEnabled {
             Divider()
             Button(model.t("inputSourcesCycleNow")) { inputSources.cycleInputSource() }
                 .disabled(inputSources.availableSources.count < 2)
         }
-        if windowSwitcher.settings.isEnabled {
+        if model.isFeatureEnabled(.windowSwitcher) && windowSwitcher.settings.isEnabled {
             Divider()
             Button(model.t("windowSwitcherTestNow")) { windowSwitcher.showSwitcherNow() }
                 .disabled(!windowSwitcher.hasAccessibilityPermission)
         }
-        if clipboard.settings.isEnabled {
+        if model.isFeatureEnabled(.clipboard) && clipboard.settings.isEnabled {
             Divider()
             Button(model.t("clipboardOpenNow")) { deferCaptureAction { clipboard.openPanel() } }
         }
-        if model.screenCapture.settings.screenshotEnabled {
+        if model.isFeatureEnabled(.capture) && model.screenCapture.settings.screenshotEnabled {
             Divider()
             Button(model.t("scSmartCaptureNow")) {
                 deferCaptureAction { model.screenCapture.startSmartCapture() }
             }
         }
-        if pictureInPicture.settings.isEnabled {
+        if model.isFeatureEnabled(.pictureInPicture) && pictureInPicture.settings.isEnabled {
             Divider()
             Button(model.t("pipCaptureFocused")) { pictureInPicture.captureFocusedWindowNow() }
         }
-        Divider()
-        if screenRecording.state == .recording || screenRecording.state == .paused {
-            if screenRecording.state == .recording {
-                Button(model.t("scRecordingPause")) { screenRecording.pause() }
+        if model.isFeatureEnabled(.screenRecording) && screenRecording.settings.isEnabled {
+            Divider()
+            if screenRecording.state == .recording || screenRecording.state == .paused {
+                if screenRecording.state == .recording {
+                    Button(model.t("scRecordingPause")) { screenRecording.pause() }
+                } else {
+                    Button(model.t("scRecordingResume")) { screenRecording.resume() }
+                }
+                Button(model.t("scRecordingStop")) { screenRecording.stop() }
             } else {
-                Button(model.t("scRecordingResume")) { screenRecording.resume() }
+                Button(model.t("scRecordingStart")) {
+                    deferCaptureAction { model.screenRecording.start() }
+                }
+                .disabled(screenRecording.state != .idle || screenRecording.isDeviceRecording)
             }
-            Button(model.t("scRecordingStop")) { screenRecording.stop() }
-        } else {
-            Button(model.t("scRecordingStart")) {
-                deferCaptureAction { model.screenRecording.start() }
+        }
+        if model.isFeatureEnabled(.memoryMonitor) {
+            Divider()
+            MemoryMonitorMenuSection {
+                model.requestSection(.memoryMonitor)
+                showMainWindow()
             }
-            .disabled(screenRecording.state != .idle || screenRecording.isDeviceRecording)
         }
-        Divider()
-        MemoryMonitorMenuSection {
-            model.requestedSection = .memoryMonitor
-            showMainWindow()
-        }
-        Divider()
-        CPUMonitorMenuSection {
-            model.requestedSection = .cpuMonitor
-            showMainWindow()
+        if model.isFeatureEnabled(.cpuMonitor) {
+            Divider()
+            CPUMonitorMenuSection {
+                model.requestSection(.cpuMonitor)
+                showMainWindow()
+            }
         }
         Divider()
         Button(model.t("turnOffScreenNow")) {
@@ -4556,10 +4823,10 @@ struct MenuBarView: View {
         }
         Divider()
         UpdateMenuItems(updater: model.updater) {
-            model.requestedSection = .settings
+            model.requestSection(.settings)
             showMainWindow()
         }
-        Button(model.t("settings")) { model.requestedSection = .settings; showMainWindow() }
+        Button(model.t("settings")) { model.requestSection(.settings); showMainWindow() }
         Button(model.t("showApp"), action: showMainWindow)
         Button(model.t("quitApp")) { NSApp.terminate(nil) }
     }

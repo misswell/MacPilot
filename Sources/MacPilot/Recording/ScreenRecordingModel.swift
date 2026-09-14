@@ -140,9 +140,9 @@ final class ScreenRecordingModel: ObservableObject {
         timerTask?.cancel()
     }
 
-    func applyLoadedSettings(_ settings: ScreenRecordingSettings) {
+    func applyLoadedSettings(_ settings: ScreenRecordingSettings, activate: Bool = true) {
         self.settings = settings
-        if settings.isEnabled { refreshCaptureDeviceLists() }
+        if activate && settings.isEnabled { refreshCaptureDeviceLists() }
     }
 
     func activateFromConfiguration() {

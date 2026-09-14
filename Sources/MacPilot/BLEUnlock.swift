@@ -813,6 +813,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         if hasMonitoredDevice { startConfiguredMonitoring() }
     }
 
+    /// Releases BLE monitoring without shutting down the shared screen
+    /// control service used by other features.
+    func deactivateFromConfiguration() {
+        stopMonitoring()
+        stopObservingSystemState()
+    }
+
     /// Releases every runtime resource owned by the feature. Called on app
     /// termination; disabling the feature goes through `setEnabled(false)`.
     func shutdown() {

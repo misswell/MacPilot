@@ -280,13 +280,38 @@ final class AwakeSessionManager: ObservableObject {
         refreshPowerState()
     }
 
-    func applyLoadedSettings(_ newSettings: AwakeSettings) {
+    func applyLoadedSettings(_ newSettings: AwakeSettings, activate: Bool = true) {
         settings = newSettings
-        if newSettings.isEnabled {
+        if activate {
+            activateFromConfiguration()
+        } else {
+            deactivateFromConfiguration()
+        }
+    }
+
+    /// Starts the observers and power reconnect monitor needed by the stored
+    /// Awake settings. This is separate from loading so the Home switch can
+    /// keep the feature completely dormant until the user enables it.
+    func activateFromConfiguration() {
+        guard !isShutdown else { return }
+        if settings.isEnabled {
             installSystemObservers()
         } else {
             removeSystemObservers()
         }
+        powerState = powerStateProvider.currentPowerState()
+        updatePowerReconnectMonitoring()
+        refreshDesiredState()
+    }
+
+    /// Releases Awake's runtime assertions and observers while keeping the
+    /// settings object reusable if the Home switch is turned on again.
+    func deactivateFromConfiguration() {
+        guard !isShutdown else { return }
+        endAllSessions()
+        removeSystemObservers()
+        stopLidMonitoring()
+        closedLidSleepController?.setEnabled(false)
         powerState = powerStateProvider.currentPowerState()
         updatePowerReconnectMonitoring()
         refreshDesiredState()
