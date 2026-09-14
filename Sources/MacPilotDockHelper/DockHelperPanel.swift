@@ -8,6 +8,7 @@
 //
 
 import AppKit
+import MacPilotDockGroupsCore
 import SwiftUI
 
 /// 无标题栏、可成为 key window 的浮层（ESC / 键盘导航需要 key 状态）。
@@ -35,8 +36,18 @@ final class DockHelperPanel: NSPanel {
 final class DockHelperPanelController {
     static var shared: DockHelperPanelController?
 
+    /// 自动终止（TAL, Transparent App Lifecycle）的说明字符串。
+    /// 面板可见期间必须禁用：日志显示 macOS 会在浮层已经显示后
+    /// （启动 5 秒）仍把 Helper 标记为「可被系统回收」，
+    /// 于是用户什么都没做，进程也可能被系统自己收走。
+    private static let automaticTerminationReason = "Dock group panel is open"
+
     private var panel: DockHelperPanel?
     private var outsideClickMonitor: Any?
+    /// 「点外部 / 失去 key」的判定闸门（见 DockGroupPanelDismissalPolicy）。
+    private var dismissalPolicy: DockGroupPanelDismissalPolicy?
+    /// 只在真正禁用过自动终止之后才恢复，保证 disable/enable 成对。
+    private var disabledAutomaticTermination = false
     private let model: DockHelperModel
 
     init(model: DockHelperModel) {
@@ -52,6 +63,12 @@ final class DockHelperPanelController {
         }
 
         model.start()
+
+        // 浮层可见 = 这个进程必须活着；禁用自动终止，避免被系统回收。
+        if !disabledAutomaticTermination {
+            ProcessInfo.processInfo.disableAutomaticTermination(Self.automaticTerminationReason)
+            disabledAutomaticTermination = true
+        }
 
         let group = model.group
         let size = group.map { DockHelperLayout.size(for: $0) } ?? NSSize(width: 280, height: 190)
@@ -86,6 +103,9 @@ final class DockHelperPanelController {
         NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
 
+        // 从这一刻起，真正的「点外部 / 失去 key」才算数；启动手势的残留事件被挡掉。
+        dismissalPolicy = DockGroupPanelDismissalPolicy(shownAt: ProcessInfo.processInfo.systemUptime)
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(panelDidResignKey(_:)),
@@ -97,6 +117,7 @@ final class DockHelperPanelController {
 
     func close() {
         guard let panel else { return }
+        dismissalPolicy = nil
         NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: panel)
         removeOutsideClickMonitor()
         panel.orderOut(nil)
@@ -104,6 +125,7 @@ final class DockHelperPanelController {
         self.panel = nil
         model.stop()
         // Helper 不常驻：浮层关闭后结束进程，保证「关闭后无额外后台开销」。
+        restoreAutomaticTermination()
         NSApp.terminate(nil)
     }
 
@@ -113,11 +135,22 @@ final class DockHelperPanelController {
             NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: panel)
             self.panel = nil
         }
+        dismissalPolicy = nil
         removeOutsideClickMonitor()
         model.stop()
+        restoreAutomaticTermination()
+    }
+
+    private func restoreAutomaticTermination() {
+        guard disabledAutomaticTermination else { return }
+        ProcessInfo.processInfo.enableAutomaticTermination(Self.automaticTerminationReason)
+        disabledAutomaticTermination = false
     }
 
     @objc private func panelDidResignKey(_ notification: Notification) {
+        guard dismissalPolicy?.allowsDismissalForResignKey(now: ProcessInfo.processInfo.systemUptime) == true else {
+            return
+        }
         close()
     }
 
@@ -133,6 +166,10 @@ final class DockHelperPanelController {
         ) { [weak self] event in
             Task { @MainActor in
                 guard let self, let panel = self.panel else { return }
+                // 启动手势的残留（双击的第二下、排队中的旧事件）不算「点了别处」。
+                guard self.dismissalPolicy?
+                    .allowsDismissalForOutsideClick(eventTimestamp: event.timestamp) == true
+                else { return }
                 if !panel.frame.contains(event.locationInWindow) {
                     self.close()
                 }
