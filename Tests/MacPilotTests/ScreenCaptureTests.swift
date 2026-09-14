@@ -289,11 +289,13 @@ struct ScreenCaptureTests {
 
     @Test func postCapturePreferencesDefaultToCopyAndQuickAccess() throws {
         let defaults = ScreenCaptureSettings()
+        #expect(defaults.saveAfterCapture)
         #expect(defaults.copyAfterCapture)
         #expect(defaults.showQuickAccess)
         #expect(!defaults.pinAfterCapture)
 
         let customized = ScreenCaptureSettings(
+            saveAfterCapture: false,
             copyAfterCapture: false,
             showQuickAccess: false,
             pinAfterCapture: true
@@ -302,9 +304,16 @@ struct ScreenCaptureTests {
             ScreenCaptureSettings.self,
             from: JSONEncoder().encode(customized)
         )
+        #expect(decoded.saveAfterCapture == false)
         #expect(decoded.copyAfterCapture == false)
         #expect(decoded.showQuickAccess == false)
         #expect(decoded.pinAfterCapture)
+    }
+
+    @Test func autoSavePreferenceKeepsDefaultOnForExistingConfigurations() throws {
+        // 旧配置里没有 saveAfterCapture 时保持默认开启，升级后截图仍然自动落盘。
+        let legacy = try JSONDecoder().decode(ScreenCaptureSettings.self, from: Data("{}".utf8))
+        #expect(legacy.saveAfterCapture)
     }
 
     @Test func quickAccessStackKeepsTheFiveNewestItemsInOrder() {
@@ -628,6 +637,62 @@ struct ScreenCaptureTests {
         #expect(FileManager.default.fileExists(atPath: item.path))
         // 保存到指定输出目录下按日期命名的子目录中
         #expect(item.url.deletingLastPathComponent().path.hasPrefix(folder.path))
+    }
+
+    @Test @MainActor func screenCaptureModelPersistsTheAutoSavePreference() {
+        let model = ScreenCaptureModel()
+        model.setSmartCaptureEnabled(false)
+        var didPersist = false
+        model.persist = { didPersist = true }
+
+        model.setSaveAfterCapture(false)
+        #expect(!model.settings.saveAfterCapture)
+        #expect(didPersist)
+
+        model.setSaveAfterCapture(true)
+        #expect(model.settings.saveAfterCapture)
+    }
+
+    @Test @MainActor func disablingAutoSaveSkipsQuickCopyWriteAndStats() throws {
+        let model = ScreenCaptureModel()
+        model.setSmartCaptureEnabled(false)
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macpilot-nosave-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        model.setOutputFolder(folder)
+        model.setSaveAfterCapture(false)
+
+        let image = try #require(makeTestImage(width: 8, height: 6, color: .systemGreen))
+        model.saveSmartCaptureQuickCopy(image)
+
+        // 关闭自动保存后不再产生文件，也不写入历史与磁盘统计。
+        #expect(model.captureHistory.isEmpty)
+        #expect(model.screenshotCount == 0)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+    }
+
+    @Test @MainActor func disablingAutoSaveKeepsCapturesOutOfTheOutputFolder() async throws {
+        let model = ScreenCaptureModel()
+        model.setSmartCaptureEnabled(false)
+        model.setShowQuickAccess(false)
+        model.setCopyAfterCapture(false)
+        model.setPinAfterCapture(false)
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macpilot-nosave-capture-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        model.setOutputFolder(folder)
+        model.setSaveAfterCapture(false)
+
+        let image = try #require(makeTestImage(width: 8, height: 6, color: .systemOrange))
+        model.handleCapturedImage(image)
+
+        // 关闭自动保存且没有剪贴板/快捷操作/贴图需求时，截图不应留下任何文件。
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(model.captureHistory.isEmpty)
+        #expect(model.screenshotCount == 0)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
     }
 
     @Test func selectionGeometryNormalizesBothDragDirections() {

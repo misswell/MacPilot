@@ -72,6 +72,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
     var objectCutoutShortcut: SmartCaptureShortcutBinding
     var pinCaptureShortcut: SmartCaptureShortcutBinding
     var postSelectionPinShortcut: SmartCaptureShortcutBinding
+    /// 截图后是否自动写入保存文件夹。关闭后截图只保留剪贴板、快捷操作与贴图。
+    var saveAfterCapture: Bool
     var copyAfterCapture: Bool
     var showQuickAccess: Bool
     var pinAfterCapture: Bool
@@ -105,6 +107,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         objectCutoutShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.objectCutout.defaultBinding,
         pinCaptureShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.pin.defaultBinding,
         postSelectionPinShortcut: SmartCaptureShortcutBinding = ScreenCaptureShortcutKind.postSelectionPin.defaultBinding,
+        saveAfterCapture: Bool = true,
         copyAfterCapture: Bool = true,
         showQuickAccess: Bool = true,
         pinAfterCapture: Bool = false,
@@ -147,6 +150,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.objectCutoutShortcut = objectCutoutShortcut.isValid ? objectCutoutShortcut : ScreenCaptureShortcutKind.objectCutout.defaultBinding
         self.pinCaptureShortcut = pinCaptureShortcut.isValid ? pinCaptureShortcut : ScreenCaptureShortcutKind.pin.defaultBinding
         self.postSelectionPinShortcut = postSelectionPinShortcut.isValid ? postSelectionPinShortcut : ScreenCaptureShortcutKind.postSelectionPin.defaultBinding
+        self.saveAfterCapture = saveAfterCapture
         self.copyAfterCapture = copyAfterCapture
         self.showQuickAccess = showQuickAccess
         self.pinAfterCapture = pinAfterCapture
@@ -159,7 +163,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         case maxRetentionDays, captureAllDisplays, showsCursor, smartCaptureEnabled
         case smartCaptureShortcut, areaCaptureShortcut, repeatAreaCaptureShortcut, delayedAreaCaptureShortcut, delayedCaptureSeconds, applicationWindowCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut, pinCaptureShortcut, postSelectionPinShortcut
         case screenshotEnabled
-        case copyAfterCapture, showQuickAccess, pinAfterCapture, imageHosting
+        case saveAfterCapture, copyAfterCapture, showQuickAccess, pinAfterCapture, imageHosting
     }
 
     init(from decoder: Decoder) throws {
@@ -192,6 +196,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
             objectCutoutShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .objectCutoutShortcut) ?? ScreenCaptureShortcutKind.objectCutout.defaultBinding,
             pinCaptureShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .pinCaptureShortcut) ?? ScreenCaptureShortcutKind.pin.defaultBinding,
             postSelectionPinShortcut: try c.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .postSelectionPinShortcut) ?? ScreenCaptureShortcutKind.postSelectionPin.defaultBinding,
+            saveAfterCapture: try c.decodeIfPresent(Bool.self, forKey: .saveAfterCapture) ?? true,
             copyAfterCapture: try c.decodeIfPresent(Bool.self, forKey: .copyAfterCapture) ?? true,
             showQuickAccess: try c.decodeIfPresent(Bool.self, forKey: .showQuickAccess) ?? true,
             pinAfterCapture: try c.decodeIfPresent(Bool.self, forKey: .pinAfterCapture) ?? false,
@@ -266,6 +271,8 @@ private struct ScreenCapturePersistenceOutcome: Sendable {
     let quickAccessWriteSucceeded: Bool
     let fallbackURL: URL?
     let errorDescription: String?
+    /// 用户关闭“截图后自动保存到本地”时为 true；此时没有保存失败，只是不落盘。
+    let skippedAutoSave: Bool
 }
 
 private struct ScreenCaptureStorageStatistics: Sendable {
@@ -760,6 +767,10 @@ final class ScreenCaptureModel: ObservableObject {
         updateSettings { $0.copyAfterCapture = value }
     }
 
+    func setSaveAfterCapture(_ value: Bool) {
+        updateSettings { $0.saveAfterCapture = value }
+    }
+
     func setShowQuickAccess(_ value: Bool) {
         updateSettings { $0.showQuickAccess = value }
     }
@@ -1245,16 +1256,22 @@ final class ScreenCaptureModel: ObservableObject {
         return ScreenCaptureMediaMetadata(width: width, height: height, duration: duration, byteCount: byteCount, kind: kind)
     }
 
-    private func handleCapturedImage(
+    /// 截图后的统一产出入口：按设置写入保存文件夹（可关闭）、剪贴板、
+    /// 快捷操作与贴图。`internal` 以便测试关闭自动保存后的产出行为。
+    func handleCapturedImage(
         _ image: CGImage,
         displayIndex: Int? = nil,
         imageFormat: ScreenCaptureImageFormat? = nil
     ) {
-        let configuration = ScreenCaptureSaveConfiguration(
-            outputFolder: smartCaptureOutputFolder(),
-            imageFormat: imageFormat ?? settings.imageFormat,
-            quality: settings.quality
-        )
+        let saveAfterCapture = settings.saveAfterCapture
+        // 关闭“截图后自动保存到本地”时连保存配置都不准备，避免创建空目录。
+        let configuration = saveAfterCapture
+            ? ScreenCaptureSaveConfiguration(
+                outputFolder: smartCaptureOutputFolder(),
+                imageFormat: imageFormat ?? settings.imageFormat,
+                quality: settings.quality
+            )
+            : nil
         let copyAfterCapture = settings.copyAfterCapture
         let showQuickAccess = settings.showQuickAccess
         let pinAfterCapture = settings.pinAfterCapture
@@ -1276,9 +1293,18 @@ final class ScreenCaptureModel: ObservableObject {
             quickAccessPreviewID = nil
             quickAccessURL = nil
         }
-        let clipboardFallbackURL = copyAfterCapture
-            ? (quickAccessURL ?? TempCaptureManager.shared.makeScreenshotURL())
-            : nil
+        // 临时文件服务两类需求：保存失败时给剪贴板兜底，以及关闭自动保存后
+        // 给剪贴板/贴图提供文件；两者都不需要时不为截图留任何磁盘文件。
+        let temporaryCaptureURL: URL? = {
+            if saveAfterCapture {
+                return copyAfterCapture
+                    ? (quickAccessURL ?? TempCaptureManager.shared.makeScreenshotURL())
+                    : nil
+            }
+            return (copyAfterCapture || pinAfterCapture)
+                ? (quickAccessURL ?? TempCaptureManager.shared.makeScreenshotURL())
+                : nil
+        }()
         let imageWidth = image.width
         let imageHeight = image.height
         // Keep one persistence task per captured image. The previous code
@@ -1295,6 +1321,22 @@ final class ScreenCaptureModel: ObservableObject {
                 )
             }
 
+            guard let configuration else {
+                var temporaryURL = quickAccessWriteSucceeded ? quickAccessURL : nil
+                if temporaryURL == nil,
+                   let temporaryCaptureURL,
+                   TempCaptureManager.writeScreenshot(sendableImage, to: temporaryCaptureURL) {
+                    temporaryURL = temporaryCaptureURL
+                }
+                return ScreenCapturePersistenceOutcome(
+                    savedImage: nil,
+                    quickAccessWriteSucceeded: quickAccessWriteSucceeded,
+                    fallbackURL: temporaryURL,
+                    errorDescription: nil,
+                    skippedAutoSave: true
+                )
+            }
+
             do {
                 let savedImage = try autoreleasepool {
                     try ScreenCaptureStorage.save(
@@ -1308,31 +1350,43 @@ final class ScreenCaptureModel: ObservableObject {
                     savedImage: savedImage,
                     quickAccessWriteSucceeded: quickAccessWriteSucceeded,
                     fallbackURL: nil,
-                    errorDescription: nil
+                    errorDescription: nil,
+                    skippedAutoSave: false
                 )
             } catch {
                 var fallbackURL: URL?
-                if let clipboardFallbackURL {
+                if let temporaryCaptureURL {
                     if quickAccessURL == nil || !quickAccessWriteSucceeded {
                         quickAccessWriteSucceeded = TempCaptureManager.writeScreenshot(
                             sendableImage,
-                            to: clipboardFallbackURL
+                            to: temporaryCaptureURL
                         )
                     }
                     if quickAccessWriteSucceeded {
-                        fallbackURL = clipboardFallbackURL
+                        fallbackURL = temporaryCaptureURL
                     }
                 }
                 return ScreenCapturePersistenceOutcome(
                     savedImage: nil,
                     quickAccessWriteSucceeded: quickAccessWriteSucceeded,
                     fallbackURL: fallbackURL,
-                    errorDescription: error.localizedDescription
+                    errorDescription: error.localizedDescription,
+                    skippedAutoSave: false
                 )
             }
         }
         Task { [weak self] in
             let outcome = await persistenceTask.value
+            if outcome.skippedAutoSave {
+                await self?.finishSkippedAutoSave(
+                    outcome,
+                    quickAccessPreviewID: quickAccessPreviewID,
+                    copyAfterCapture: copyAfterCapture,
+                    showQuickAccess: showQuickAccess,
+                    pinAfterCapture: pinAfterCapture
+                )
+                return
+            }
             guard let saved = outcome.savedImage else {
                 Self.logger.error(
                     "Smart capture save failed: \(outcome.errorDescription ?? "unknown error", privacy: .public)"
@@ -1382,9 +1436,37 @@ final class ScreenCaptureModel: ObservableObject {
         }
     }
 
+    /// 关闭“截图后自动保存到本地”后的收尾：不写保存文件夹，也不计入截图
+    /// 历史与磁盘占用，只把临时文件交给剪贴板、快捷操作与贴图。
+    private func finishSkippedAutoSave(
+        _ outcome: ScreenCapturePersistenceOutcome,
+        quickAccessPreviewID: UUID?,
+        copyAfterCapture: Bool,
+        showQuickAccess: Bool,
+        pinAfterCapture: Bool
+    ) async {
+        if !outcome.quickAccessWriteSucceeded, let quickAccessPreviewID {
+            QuickAccessManager.shared.removeScreenshot(id: quickAccessPreviewID)
+        }
+        if copyAfterCapture, let fallbackURL = outcome.fallbackURL {
+            SmartCaptureClipboard.copy(imageURL: fallbackURL)
+        }
+        if showQuickAccess,
+           quickAccessPreviewID == nil,
+           let fallbackURL = outcome.fallbackURL {
+            await QuickAccessManager.shared.addScreenshot(url: fallbackURL)
+        }
+        if pinAfterCapture, let fallbackURL = outcome.fallbackURL {
+            _ = await QuickAccessManager.shared.pinScreenshot(url: fallbackURL)
+        }
+        errorMessage = nil
+    }
+
     /// 双击快速复制后的自动落盘：沿用常规截图的输出目录、格式与命名，
-    /// 并把结果计入截图历史与磁盘占用统计。
+    /// 并把结果计入截图历史与磁盘占用统计。关闭“截图后自动保存到本地”
+    /// 时只保留剪贴板复制，不再产生本地文件。
     func saveSmartCaptureQuickCopy(_ image: CGImage) {
+        guard settings.saveAfterCapture else { return }
         let configuration = ScreenCaptureSaveConfiguration(
             outputFolder: smartCaptureOutputFolder(),
             imageFormat: settings.imageFormat,
@@ -2020,6 +2102,18 @@ struct ScreenCaptureView: View {
             Text(t("scQuickAccessHint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Toggle(isOn: Binding(
+                get: { capture.settings.saveAfterCapture },
+                set: { capture.setSaveAfterCapture($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(t("scSaveAfterCapture"))
+                    Text(t("scSaveAfterCaptureHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.checkbox)
             Toggle(t("scCopyAfterCapture"), isOn: Binding(
                 get: { capture.settings.copyAfterCapture },
                 set: { capture.setCopyAfterCapture($0) }
