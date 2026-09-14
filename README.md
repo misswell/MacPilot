@@ -88,7 +88,7 @@ The **Screenshot** sidebar adds Snapzy-style capture and quick actions to MacPil
 - Area, application window, fullscreen, current window, area + annotate, OCR, scrolling screenshot, and object-cutout entry points are also available from the Screenshot settings page.
 - Area and application-window selections remain in a PixPin-style editing state with eight resize handles, a size badge, and a floating toolbar; move or resize the selection before copying, saving, annotating, running OCR, pinning, or cancelling.
 - Annotate directly on the current capture with shapes, arrows, lines, pencil/highlighter strokes, blur, spotlight, counters, text, watermarks, and crop; adjust line width and opacity with the toolbar or mouse wheel.
-- After capture, MacPilot can copy the image to the clipboard, show a quick-access preview card, pin it on screen, run OCR, open the annotation editor, upload it manually to GitHub or Gitee, or reveal the file in Finder.
+- After capture, MacPilot can save the image to the output folder, copy it to the clipboard, show a quick-access preview card, pin it on screen, run OCR, open the annotation editor, upload it manually to GitHub or Gitee, or reveal the file in Finder. Automatic saving can be turned off in Screenshot settings; captures then only reach the clipboard, the quick-access stack, and pins.
 - Explicit image uploads show progress and success/error feedback, then copy the public image URL to the clipboard.
 - Screenshot shortcuts are configurable in Settings and can be edited per entry point.
 
