@@ -23,6 +23,18 @@ enum DDCPacket {
     static let subAddress: UInt32 = 0x51
     /// MCCS "image adjustment: luminance" — the panel backlight.
     static let brightness: UInt8 = 0x10
+    /// MCCS "display power mode": the monitor's own power switch. On plenty of
+    /// monitors brightness zero is a *dim but visible* level rather than a dark
+    /// panel, so this is the only control that makes an external display truly
+    /// black.
+    static let powerMode: UInt8 = 0xD6
+    /// `powerMode` value for "on".
+    static let powerOn: UInt16 = 0x01
+    /// `powerMode` value for DPMS "off (soft)": panel and backlight go dark while
+    /// the monitor keeps answering DDC, which is what makes it reversible in
+    /// software. Verified on an `HP 24w`, which also ignores the standby value
+    /// `0x02` outright, so the soft-off state is the one to use.
+    static let powerOff: UInt16 = 0x04
     /// EDID lives on the I2C bus DDC/CI shares, at this address and offset.
     static let edidAddress: UInt32 = 0x50
     static let edidLength = 128
@@ -109,6 +121,16 @@ struct DDCBacklight: Sendable {
     let level: @Sendable (CGDirectDisplayID) -> Double?
     /// Writes a level and reads it back; false when the display did not confirm.
     let setLevel: @Sendable (Double, CGDirectDisplayID) -> Bool
+    /// The power mode the monitor reports, or nil when it does not answer.
+    let powerMode: @Sendable (CGDirectDisplayID) -> UInt16?
+    /// Writes a power mode and waits for the monitor to report it back.
+    ///
+    /// Waking is the slow direction: right after "on" the monitor stops
+    /// answering DDC for about a second, so this retries rather than treating the
+    /// first silent read as a failure. False means the monitor never confirmed —
+    /// for `powerOff` that is the signal to fall back to another blank mechanism
+    /// instead of claiming a dark screen.
+    let setPowerMode: @Sendable (UInt16, CGDirectDisplayID) -> Bool
 
     static let shared: DDCBacklight? = DDCBacklightIO.driver()
 }
@@ -154,14 +176,14 @@ private enum DDCBacklightIO {
             level: { displayID in
                 busLock.lock()
                 defer { busLock.unlock() }
-                return cachedReply(for: displayID, create: create, read: read, write: write)?.level
+                return cachedReply(for: displayID, vcp: DDCPacket.brightness, create: create, read: read, write: write)?.level
             },
             setLevel: { level, displayID in
                 busLock.lock()
                 defer { busLock.unlock() }
                 guard let service = service(for: displayID, create: create, read: read) else { return false }
                 defer { release(service) }
-                guard let before = cachedReply(for: displayID, create: create, read: read, write: write) else {
+                guard let before = cachedReply(for: displayID, vcp: DDCPacket.brightness, create: create, read: read, write: write) else {
                     return false
                 }
                 let raw = DDCPacket.rawValue(for: level, maximum: before.maximum)
@@ -173,41 +195,112 @@ private enum DDCBacklightIO {
                 guard let after = reply(from: service, vcp: DDCPacket.brightness, read: read, write: write) else { return false }
                 // The read-back is also the freshest thing known about this
                 // display, so it replaces whatever the probe had cached.
-                replyCache = (displayID, after, Date())
+                cache(after, for: displayID, vcp: DDCPacket.brightness)
                 return DDCPacket.confirms(wrote: raw, readback: after.current)
+            },
+            powerMode: { displayID in
+                busLock.lock()
+                defer { busLock.unlock() }
+                return cachedReply(for: displayID, vcp: DDCPacket.powerMode, create: create, read: read, write: write)?.current
+            },
+            setPowerMode: { mode, displayID in
+                busLock.lock()
+                defer { busLock.unlock() }
+                // A monitor that ignored this a moment ago will ignore it again;
+                // without remembering that, every blank would spend the whole
+                // confirm window waiting for a state that is never coming. The
+                // memory is short, so a display that was only slow gets another
+                // chance instead of losing real black for the whole session.
+                if mode == DDCPacket.powerOff,
+                   let verdict = powerModeUnsupported[displayID],
+                   Date().timeIntervalSince(verdict) < unsupportedLifetime {
+                    return false
+                }
+                guard let service = service(for: displayID, create: create, read: read) else { return false }
+                defer { release(service) }
+                guard send(DDCPacket.writeRequest(vcp: DDCPacket.powerMode, value: mode), to: service, write: write) else { return false }
+                // Going dark is quick; coming back the monitor stops answering DDC
+                // for about a second, so that direction waits longer.
+                let attempts = mode == DDCPacket.powerOn ? 8 : 5
+                let pause: UInt32 = mode == DDCPacket.powerOn ? 300_000 : 200_000
+                for _ in 0..<attempts {
+                    usleep(pause)
+                    guard let reply = reply(from: service, vcp: DDCPacket.powerMode, read: read, write: write) else { continue }
+                    guard reply.current == mode else { continue }
+                    cache(reply, for: displayID, vcp: DDCPacket.powerMode)
+                    powerModeUnsupported[displayID] = nil
+                    return true
+                }
+                if mode == DDCPacket.powerOff { powerModeUnsupported[displayID] = Date() }
+                return false
             }
         )
     }
 
     /// A monitor's I2C bus is slow — resolving the channel plus a brightness read
-    /// is around 70 ms — and one state request asks for the same level twice: the
-    /// blank probe and the brightness read that follows it. Remembering the last
-    /// answer for a moment turns the second into nothing, while the short lifetime
-    /// keeps a display that was unplugged, woken or changed from being described
-    /// by a stale answer.
+    /// is around 70 ms — and one state request asks for the same control twice:
+    /// the blank probe and the brightness read that follows it. Remembering the
+    /// last answer per control for a moment turns the second into nothing, while
+    /// the short lifetime keeps a display that was unplugged, woken or changed
+    /// from being described by a stale answer.
     private static let replyCacheLifetime: TimeInterval = 1
     /// `busLock`-guarded, which the compiler cannot see through.
-    nonisolated(unsafe) private static var replyCache: (displayID: CGDirectDisplayID, reply: DDCPacket.Reply?, at: Date)?
+    nonisolated(unsafe) private static var replyCache: (displayID: CGDirectDisplayID, replies: [UInt8: CachedAnswer], at: Date)?
+    /// Displays seen to ignore `powerOff`, so the next blank skips straight to the
+    /// next mechanism. `busLock`-guarded.
+    nonisolated(unsafe) private static var powerModeUnsupported: [CGDirectDisplayID: Date] = [:]
+    /// How long a display stays marked as ignoring `powerOff`.
+    private static let unsupportedLifetime: TimeInterval = 60
+
+    /// One control's answer, remembered per control: asking a second control of
+    /// the same monitor must not make that one look like a monitor which never
+    /// answered.
+    private enum CachedAnswer {
+        case reply(DDCPacket.Reply)
+        /// Asked, and nothing came back. Also worth remembering, so a display that
+        /// does not implement a control is not interrogated on every call.
+        case noAnswer
+
+        var reply: DDCPacket.Reply? {
+            if case let .reply(reply) = self { return reply }
+            return nil
+        }
+    }
+
+    private static func cacheIsFresh(_ at: Date) -> Bool {
+        Date().timeIntervalSince(at) < replyCacheLifetime
+    }
+
+    private static func cache(_ reply: DDCPacket.Reply, for displayID: CGDirectDisplayID, vcp: UInt8) {
+        let cached = replyCache.flatMap { $0.displayID == displayID && cacheIsFresh($0.at) ? $0 : nil }
+        var replies = cached?.replies ?? [:]
+        replies[vcp] = .reply(reply)
+        replyCache = (displayID, replies, Date())
+    }
 
     /// Caller must hold `busLock`.
     private static func cachedReply(
         for displayID: CGDirectDisplayID,
+        vcp: UInt8,
         create: CreateWithService,
         read: Transfer,
         write: Transfer
     ) -> DDCPacket.Reply? {
-        if let cached = replyCache, cached.displayID == displayID, Date().timeIntervalSince(cached.at) < replyCacheLifetime {
-            return cached.reply
+        let cached = replyCache.flatMap { $0.displayID == displayID && cacheIsFresh($0.at) ? $0 : nil }
+        // Remembered for this control specifically: another control's answer says
+        // nothing about this one.
+        if let answer = cached?.replies[vcp] { return answer.reply }
+
+        var replies = cached?.replies ?? [:]
+        let reply: DDCPacket.Reply?
+        if let service = service(for: displayID, create: create, read: read) {
+            defer { release(service) }
+            reply = self.reply(from: service, vcp: vcp, read: read, write: write)
+        } else {
+            reply = nil
         }
-        guard let service = service(for: displayID, create: create, read: read) else {
-            // Remembered too: a monitor that does not answer should not cost an
-            // I2C round trip on every single state request.
-            replyCache = (displayID, nil, Date())
-            return nil
-        }
-        defer { release(service) }
-        let reply = reply(from: service, vcp: DDCPacket.brightness, read: read, write: write)
-        replyCache = (displayID, reply, Date())
+        replies[vcp] = reply.map(CachedAnswer.reply) ?? .noAnswer
+        replyCache = (displayID, replies, Date())
         return reply
     }
 

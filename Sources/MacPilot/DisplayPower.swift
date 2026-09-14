@@ -135,6 +135,9 @@ enum DisplayPower {
     @MainActor private static var blankedDisplays: [CGDirectDisplayID: Float] = [:]
     /// Same, for external displays blacked through their own DDC/CI control.
     @MainActor private static var ddcBlankedDisplays: [CGDirectDisplayID: Double] = [:]
+    /// External displays MacPilot switched off through DDC power mode. Nothing was
+    /// written to their brightness, so bringing one back is a single power-on.
+    @MainActor private static var ddcPoweredOffDisplays: Set<CGDirectDisplayID> = []
     /// True while black windows are covering the displays whose backlight could
     /// not be driven.
     @MainActor private static var isOverlayShowing = false
@@ -149,7 +152,7 @@ enum DisplayPower {
 
     /// True while MacPilot is holding the screen black.
     @MainActor static var isBlanked: Bool {
-        !blankedDisplays.isEmpty || !ddcBlankedDisplays.isEmpty || isOverlayShowing
+        !blankedDisplays.isEmpty || !ddcBlankedDisplays.isEmpty || !ddcPoweredOffDisplays.isEmpty || isOverlayShowing
     }
 
     /// Blacks every online display *without* putting any of them to sleep, so
@@ -174,6 +177,7 @@ enum DisplayPower {
 
         var blanked: [CGDirectDisplayID: Float] = [:]
         var ddcBlanked: [CGDirectDisplayID: Double] = [:]
+        var ddcPoweredOff: Set<CGDirectDisplayID> = []
         var overlayScreens: [NSScreen] = []
         for step in steps {
             // Trust the probe, then verify: the state between the two can change
@@ -186,33 +190,45 @@ enum DisplayPower {
                 blanked[step.displayID] = original
                 continue
             }
-            if step.action == .ddcBacklight,
-               let ddc = DDCBacklight.shared,
-               let original = ddc.level(step.displayID),
-               ddc.setLevel(0, step.displayID) {
-                // Already confirmed at zero by the read-back inside setLevel.
-                ddcBlanked[step.displayID] = original
-                continue
+            if step.action == .ddcBacklight, let ddc = DDCBacklight.shared {
+                // The monitor's own power switch is what makes an external panel
+                // actually dark: on plenty of them — the HP 24w included —
+                // brightness zero is a *dim but visible* level, which is exactly
+                // the "black screen that is only dimmed" MacPilot must not ship.
+                // Soft-off is confirmed by a read-back and keeps the monitor
+                // answering DDC, so it is always reversible in software.
+                if ddc.setPowerMode(DDCPacket.powerOff, step.displayID) {
+                    ddcPoweredOff.insert(step.displayID)
+                    continue
+                }
+                // Monitors that do not implement power mode still take brightness.
+                if let original = ddc.level(step.displayID), ddc.setLevel(0, step.displayID) {
+                    // Already confirmed at zero by the read-back inside setLevel.
+                    ddcBlanked[step.displayID] = original
+                    continue
+                }
             }
             overlayScreens.append(contentsOf: screens(for: step.displayID))
         }
 
-        guard !blanked.isEmpty || !ddcBlanked.isEmpty || !overlayScreens.isEmpty else {
+        guard !blanked.isEmpty || !ddcBlanked.isEmpty || !ddcPoweredOff.isEmpty || !overlayScreens.isEmpty else {
             DiagnosticLog.write("DisplayPower", "display blank failed reason=noDisplayCouldBeBlacked")
             return false
         }
 
         blankedDisplays = blanked
         ddcBlankedDisplays = ddcBlanked
-        // Persist the captured originals for as long as the blank is held: a
-        // force quit or crash would otherwise leave the panels dark with the
-        // recovery values lost. An overlay-only blank has no backlight state
-        // to lose, so nothing is written for it.
-        if !blanked.isEmpty || !ddcBlanked.isEmpty {
+        ddcPoweredOffDisplays = ddcPoweredOff
+        // Persist the state for as long as the blank is held: a force quit or
+        // crash would otherwise leave the panels dark with the values needed to
+        // bring them back lost. An overlay-only blank has no display state to
+        // lose, so nothing is written for it.
+        if !blanked.isEmpty || !ddcBlanked.isEmpty || !ddcPoweredOff.isEmpty {
             snapshotStore.save(DisplayBlankSnapshot(
                 capturedAt: Date(),
                 systemBacklight: Dictionary(uniqueKeysWithValues: blanked.map { (String($0.key), $0.value) }),
-                ddcBacklight: Dictionary(uniqueKeysWithValues: ddcBlanked.map { (String($0.key), $0.value) })
+                ddcBacklight: Dictionary(uniqueKeysWithValues: ddcBlanked.map { (String($0.key), $0.value) }),
+                ddcPowerOff: ddcPoweredOff.map(String.init)
             ))
         }
         if !overlayScreens.isEmpty {
@@ -223,7 +239,7 @@ enum DisplayPower {
         startUnblankWatcher(idleAtBlank: idleAtBlank)
         DiagnosticLog.write(
             "DisplayPower",
-            "display blanked without sleeping backlight=\(blanked.count) ddc=\(ddcBlanked.count) overlay=\(overlayScreens.count) displays=\(steps.map(\.displayID))"
+            "display blanked without sleeping backlight=\(blanked.count) ddc=\(ddcBlanked.count) ddcOff=\(ddcPoweredOff.count) overlay=\(overlayScreens.count) displays=\(steps.map(\.displayID))"
         )
         return true
     }
@@ -244,12 +260,19 @@ enum DisplayPower {
         }
         blankedDisplays.removeAll()
         if let ddc = DDCBacklight.shared {
+            // Power first: a display MacPilot switched off has to be answering
+            // DDC again before a brightness write to it can land, and the driver
+            // waits for it to come back rather than assuming it is there.
+            for displayID in ddcPoweredOffDisplays {
+                _ = ddc.setPowerMode(DDCPacket.powerOn, displayID)
+            }
             for (displayID, original) in ddcBlankedDisplays {
                 // Best effort: the level the user had before the blank is the one
                 // thing worth restoring even if the monitor does not confirm it.
                 _ = ddc.setLevel(original, displayID)
             }
         }
+        ddcPoweredOffDisplays.removeAll()
         ddcBlankedDisplays.removeAll()
         // Cleared only after the restores: a crash between a restore and this
         // line leaves the snapshot in place, and the next launch re-decides per

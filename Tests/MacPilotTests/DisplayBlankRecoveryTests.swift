@@ -74,8 +74,13 @@ struct DisplayBlankRecoveryTests {
         var ddcLevels: [UInt32: Double] = [
             2: 0,    // still dark external monitor
         ]
+        var powerModes: [UInt32: UInt16] = [
+            4: DDCPacket.powerOff,  // still switched off
+            5: DDCPacket.powerOn,   // the user pressed the monitor's own button
+        ]
         var systemWrites: [(UInt32, Float)] = []
         var ddcWrites: [(UInt32, Double)] = []
+        var powerWrites: [(UInt32, UInt16)] = []
         let appliers = DisplayBlankRecovery.Appliers(
             readSystem: { systemLevels[$0] },
             writeSystem: { id, level in
@@ -88,18 +93,25 @@ struct DisplayBlankRecoveryTests {
                 ddcWrites.append((id, level))
                 ddcLevels[id] = level
                 return true
+            },
+            readPower: { powerModes[$0] },
+            writePower: { id, mode in
+                powerWrites.append((id, mode))
+                powerModes[id] = mode
+                return true
             }
         )
 
         store.save(DisplayBlankSnapshot(
             capturedAt: Date(),
             systemBacklight: ["1": 0.5, "3": 0.8],
-            ddcBacklight: ["2": 40, "9": 55]
+            ddcBacklight: ["2": 40, "9": 55],
+            ddcPowerOff: ["4", "5"]
         ))
 
         let restored = DisplayBlankRecovery.recover(store: store, appliers: appliers)
 
-        #expect(restored == 2)
+        #expect(restored == 3)
         #expect(systemWrites.count == 1)
         #expect(systemWrites.first?.0 == 1)
         #expect(systemWrites.first?.1 == 0.5)
@@ -109,6 +121,12 @@ struct DisplayBlankRecoveryTests {
         #expect(systemLevels[1] == 0.5)
         #expect(systemLevels[3] == 0.9)
         #expect(ddcLevels[2] == 40)
+        // Only the display still switched off is powered on; the one already on
+        // stays untouched, so a manual power-on is not fought over.
+        #expect(powerWrites.count == 1)
+        #expect(powerWrites.first?.0 == 4)
+        #expect(powerWrites.first?.1 == DDCPacket.powerOn)
+        #expect(powerModes[5] == DDCPacket.powerOn)
         // Fully successful: nothing may survive for a second launch to replay.
         #expect(store.load() == nil)
     }
@@ -124,18 +142,52 @@ struct DisplayBlankRecoveryTests {
             readSystem: { _ in 0 },
             writeSystem: { _, _ in false },
             readDDC: { _ in 0 },
-            writeDDC: { _, _ in false }
+            writeDDC: { _, _ in false },
+            readPower: { _ in DDCPacket.powerOff },
+            writePower: { _, _ in false }
         )
         store.save(DisplayBlankSnapshot(
             capturedAt: Date(),
             systemBacklight: ["1": 0.5],
-            ddcBacklight: ["2": 40]
+            ddcBacklight: ["2": 40],
+            ddcPowerOff: ["4"]
         ))
 
-        #expect(DisplayBlankRecovery.recover(store: store, appliers: appliers) == 2)
+        #expect(DisplayBlankRecovery.recover(store: store, appliers: appliers) == 3)
 
         let remaining = store.load()
         #expect(remaining?.systemBacklight == ["1": 0.5])
         #expect(remaining?.ddcBacklight == ["2": 40])
+        #expect(remaining?.poweredOffDisplays == ["4"])
+    }
+}
+
+extension DisplayBlankRecoveryTests {
+    /// Recovery of a switched-off display is decided by state, not by level: only
+    /// the monitor's own soft-off means it is still MacPilot's blank.
+    @Test func onlyASwitchedOffDisplayIsPoweredBackOn() {
+        #expect(DisplayBlankRecovery.powerDecision(current: DDCPacket.powerOff) == .restore)
+        #expect(DisplayBlankRecovery.powerDecision(current: DDCPacket.powerOn) == .alreadyRepaired)
+        #expect(DisplayBlankRecovery.powerDecision(current: nil) == .undrivable)
+    }
+
+    /// A snapshot written before power mode existed has no `ddcPowerOff` key, and
+    /// must still decode: refusing it would strand whichever panels it does
+    /// describe.
+    @Test func anOlderSnapshotWithoutPowerStateStillDecodes() throws {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        let legacy = """
+        {"version":1,"capturedAt":760000000,"systemBacklight":{"1":0.5},"ddcBacklight":{"2":40}}
+        """
+        try FileManager.default.createDirectory(
+            at: store.fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(legacy.utf8).write(to: store.fileURL)
+
+        let snapshot = try #require(store.load())
+        #expect(snapshot.systemBacklight == ["1": 0.5])
+        #expect(snapshot.poweredOffDisplays.isEmpty)
     }
 }

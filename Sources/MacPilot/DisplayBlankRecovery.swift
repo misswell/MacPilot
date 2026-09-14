@@ -20,8 +20,17 @@ struct DisplayBlankSnapshot: Codable, Equatable {
     var systemBacklight: [String: Float]
     /// Originals captured through DDC/CI (external monitors).
     var ddcBacklight: [String: Double]
+    /// Displays MacPilot switched off through DDC power mode. Their brightness was
+    /// never touched, so recovery only has to power them back on — but it has to,
+    /// because a monitor left in soft-off stays dark until something tells it
+    /// otherwise. Optional so that a snapshot written before this field existed
+    /// still decodes: a default value alone would make the key required.
+    var ddcPowerOff: [String]?
 
-    static let currentVersion = 1
+    /// The displays recorded as switched off.
+    var poweredOffDisplays: [String] { ddcPowerOff ?? [] }
+
+    static let currentVersion = 2
 }
 
 /// Reads and writes the snapshot file. Every operation is best effort: the
@@ -87,13 +96,17 @@ enum DisplayBlankRecovery {
         let writeSystem: (UInt32, Float) -> Bool
         let readDDC: (UInt32) -> Double?
         let writeDDC: (UInt32, Double) -> Bool
+        let readPower: (UInt32) -> UInt16?
+        let writePower: (UInt32, UInt16) -> Bool
 
         static var live: Appliers {
             Appliers(
                 readSystem: { BrightnessDriver.shared?.current($0) },
                 writeSystem: { id, level in BrightnessDriver.shared?.apply(level, to: id) ?? false },
                 readDDC: { DDCBacklight.shared?.level($0) },
-                writeDDC: { id, level in DDCBacklight.shared?.setLevel(level, id) ?? false }
+                writeDDC: { id, level in DDCBacklight.shared?.setLevel(level, id) ?? false },
+                readPower: { DDCBacklight.shared?.powerMode($0) },
+                writePower: { id, mode in DDCBacklight.shared?.setPowerMode(mode, id) ?? false }
             )
         }
     }
@@ -101,6 +114,15 @@ enum DisplayBlankRecovery {
     static func decision(current: Double?) -> DisplayBlankRecoveryDecision {
         guard let current else { return .undrivable }
         return current <= 0 ? .restore : .alreadyRepaired
+    }
+
+    /// Power mode is a state rather than a level, so "still dark" means the
+    /// monitor reports MacPilot's soft-off value. A display that reports anything
+    /// else — including one switched back on by hand or by its own power button —
+    /// is left alone.
+    static func powerDecision(current: UInt16?) -> DisplayBlankRecoveryDecision {
+        guard let current else { return .undrivable }
+        return current == DDCPacket.powerOff ? .restore : .alreadyRepaired
     }
 
     /// Restores every recorded display that is still dark and reports how many
@@ -122,6 +144,7 @@ enum DisplayBlankRecovery {
         var restored = 0
         var unresolvedSystem: [String: Float] = [:]
         var unresolvedDDC: [String: Double] = [:]
+        var unresolvedPower: [String] = []
 
         for (key, original) in snapshot.systemBacklight {
             guard let id = UInt32(key) else { continue }
@@ -139,12 +162,21 @@ enum DisplayBlankRecovery {
                 unresolvedDDC[key] = original
             }
         }
+        for key in snapshot.poweredOffDisplays {
+            guard let id = UInt32(key) else { continue }
+            guard powerDecision(current: appliers.readPower(id)) == .restore else { continue }
+            restored += 1
+            if !appliers.writePower(id, DDCPacket.powerOn) {
+                unresolvedPower.append(key)
+            }
+        }
 
-        if unresolvedSystem.isEmpty, unresolvedDDC.isEmpty {
+        if unresolvedSystem.isEmpty, unresolvedDDC.isEmpty, unresolvedPower.isEmpty {
             store.clear()
         } else {
             snapshot.systemBacklight = unresolvedSystem
             snapshot.ddcBacklight = unresolvedDDC
+            snapshot.ddcPowerOff = unresolvedPower
             store.save(snapshot)
         }
         if restored > 0 {

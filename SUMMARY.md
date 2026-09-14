@@ -861,3 +861,33 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 ### 环境备注
 
 本机 `xcrun clang` 链接遮挡补丁 dylib 时会因为 `/Library/Developer/CommandLineTools/SDKs` 里那套 macOS 27 SDK 的 `.tbd`（含 `arm64e.x1` 架构）报 `tapi error: malformed file`，`Scripts/build-app.sh` 因此走不到打包步骤。这与本功能无关（失败的是没动过的 `MacPilotOcclusionPatch.m`），临时把 `SDKROOT` 指向 Xcode 的 `MacOSX26.5.sdk` 即可绕过；没有修改任何构建配置。
+
+## 三十四、外接屏「真黑屏」：用显示器自己的电源开关（v1.1.342）
+
+### 问题：DDC 亮度 0 只是「很暗」
+
+用户反馈手机点「黑屏」后屏幕只是变暗、并没有变黑。真机读回给出解释：这台 HP 24w 接受 DDC 亮度写 0 并且读回也是 0，但**它的 0 档是一个很暗的低亮度，不是关背光**——很多廉价显示器都有这个下限。所以「写亮度 0」这条路对它们永远只能得到「暗」。
+
+关键发现：**显示器的 DDC 电源模式（MCCS `0xD6`）可写**。真机实测：
+
+- 写 `0xD6 = 4`（DPMS soft off）→ 读回 4，面板真的熄灭（用户肉眼确认：内容没了、鼠标指针也看不见）；写 `2`（standby）被显示器直接忽略（读回 1），所以用 4。
+- **macOS 不认为显示器睡了**（全程 `CGDisplayIsAsleep == 0`）→ 不触发「显示器关闭后要求密码」策略，会话不锁 ✓ 这正是「黑屏但不锁屏」要的性质。
+- 熄灭期间**显示器仍然应答 DDC**（这是它可逆的前提）；反过来「开机」后约 1 秒内 DDC 会不应答，所以点亮必须重试而不能一读定成败。
+
+### 实现
+
+- `DDCPacket` 增加 `powerMode = 0xD6`、`powerOn = 0x01`、`powerOff = 0x04`；`DDCBacklight` 增加 `powerMode(_:)` 与 `setPowerMode(_:for:)`（写后读回确认，熄灭方向 5×200 ms、点亮方向 8×300 ms；被忽略的显示器记 60 秒，期间直接走下一档机制）。
+- `DisplayPower.blankDisplay()` 的外接屏档位变成三级：**DDC 电源关闭 → DDC 亮度 0 → 黑色遮罩**（最后手段，因为只有它会留下亮着的面板）；`isBlanked`/`unblankDisplay()` 增加电源恢复（点亮优先，因为点亮前对它写亮度也落不下去）。
+- 崩溃恢复同步扩展：`DisplayBlankSnapshot` 增加 `ddcPowerOff`（**可选字段**，否则旧快照会解码失败，那会把里面的面板永远留在暗处），`DisplayBlankRecovery` 用 `powerDecision(current:)` 判断「还是我关的（4）就点亮，已经亮了就不碰」。
+- 修掉一个自己引入的缓存缺陷：读回缓存改成**按控制器分别记忆**。之前只按显示器缓存，导致先问 `0xD6` 之后再问 `0x10` 会拿到 nil（被误判成「显示器不应答」）——真机探针当场复现：黑屏退回遮罩、电源模式仍是 1。
+
+### 验证
+
+- `swift test`：DDC 包/恢复相关 30 例全绿（含电源包校验和、旧快照兼容、仅点亮仍处于关机的显示器、被拒写入继续排队等用例）。
+- 产品代码路径真机探针：`before power=1 level=0.71` → `blankDisplay()` → **`power=4`**（且滑杆仍报 0.71，不跳 0）→ `unblankDisplay()` → `power=1 level=0.71`，`isBlanked=false`。
+
+### 「亮屏」的语义（本次确认，未改行为）
+
+- 黑屏过（MacPilot 自己压黑的）→ `wakeDisplay` 先解除黑屏：外接屏点亮、内置屏恢复亮度，**不解锁**。
+- 锁屏态（显示器被系统/`黑屏` 真睡眠）→ 只把显示器唤醒到**锁屏界面**，同样不解锁；要解锁是另一个动作「唤醒解锁」。
+- 注意：人在 Mac 旁边时，BLE 就近解锁也可能会把锁屏解掉——那不是「亮屏」干的。

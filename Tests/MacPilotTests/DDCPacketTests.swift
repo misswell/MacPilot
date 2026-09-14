@@ -29,6 +29,27 @@ struct DDCPacketTests {
         #expect(DDCPacket.writeRequest(vcp: DDCPacket.brightness, value: 100) == brightnessWriteFull)
     }
 
+    /// Power mode is what actually blacks an external panel; the checksums below
+    /// are the ones the live HP accepted (writing the soft-off packet is what put
+    /// the panel out, and `0x02` is the value it ignores).
+    @Test func thePowerModePacketsMatchWhatTheMonitorAccepts() {
+        #expect(DDCPacket.powerMode == 0xD6)
+        #expect(DDCPacket.powerOn == 0x01)
+        #expect(DDCPacket.powerOff == 0x04)
+        #expect(DDCPacket.readRequest(vcp: DDCPacket.powerMode) == [0x82, 0x01, 0xD6, 0x6A])
+        #expect(DDCPacket.writeRequest(vcp: DDCPacket.powerMode, value: DDCPacket.powerOff) == [0x84, 0x03, 0xD6, 0x00, 0x04, 0x6A])
+        #expect(DDCPacket.writeRequest(vcp: DDCPacket.powerMode, value: DDCPacket.powerOn) == [0x84, 0x03, 0xD6, 0x00, 0x01, 0x6F])
+    }
+
+    /// The reply the monitor gives while it is switched off: current `0x04`, and
+    /// `level` has no meaning for a state rather than a range.
+    @Test func aPowerReplyReadsBackTheStateThatWasWritten() throws {
+        let off: [UInt8] = [0x6E, 0x88, 0x02, 0x00, 0xD6, 0x00, 0x00, 0x05, 0x00, 0x04, 0x69]
+        let reply = try #require(DDCPacket.parse(reply: off, expecting: DDCPacket.powerMode))
+        #expect(reply.current == DDCPacket.powerOff)
+        #expect(reply.maximum == 5)
+    }
+
     @Test func aReplyCarriesTheCurrentLevelOutOfItsRange() throws {
         let reply = try #require(DDCPacket.parse(reply: fullBrightnessReply, expecting: DDCPacket.brightness))
         #expect(reply.current == 100)
