@@ -69,7 +69,8 @@ public struct DockHelperBundleBuilder {
         group: DockGroup,
         memberIconURLs: [URL],
         version: String,
-        build: String
+        build: String,
+        appearance: DockGroupIconAppearance
     ) throws -> URL {
         let appURL = try ManagedPathGuard.requireManaged(
             DockGroupPaths.helperAppURL(in: rootDirectory, groupName: group.name),
@@ -97,19 +98,26 @@ public struct DockHelperBundleBuilder {
             try FileManager.default.copyItem(at: helperExecutableURL, to: executable)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
-            // Dock 图标固定用浅色版本：`.icns` 没有外观变体，Dock 里第三方 App 的图标
-            // 也不随系统外观变化；若跟随「生成那一刻」的外观，用户之后切换外观就会不一致。
-            // 深浅外观只影响 MacPilot 界面内与浮层里的绘制（见 DockGroupIconAppearance）。
+            // Dock 图标用哪套外观由分组自己的「图标外观」决定（默认跟随系统）。
+            //
+            // `.icns` 本身没有外观变体，所以「跟随系统」是靠**重建 Helper** 实现的：
+            // 外观变化时 MacPilot 会重新生成这个 `.app`（见 DockHelperManager
+            // 的 `helperNeedsRegeneration`），系统因此拿到一张新的图标。
             let icon = DockGroupIconRenderer.image(
                 for: group,
                 size: 1024,
                 memberIconURLs: memberIconURLs,
-                appearance: .light
+                appearance: appearance
             )
             let iconData = ICNSWriter.data(from: icon)
             try iconData.write(to: resources.appendingPathComponent(Self.helperIconName), options: .atomic)
 
-            let info = Self.infoDictionary(group: group, version: version, build: build)
+            let info = Self.infoDictionary(
+                group: group,
+                version: version,
+                build: build,
+                iconAppearance: appearance
+            )
             let infoData = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
             try infoData.write(to: contents.appendingPathComponent("Info.plist"), options: .atomic)
 
@@ -214,7 +222,12 @@ public struct DockHelperBundleBuilder {
 
     // MARK: - Info.plist
 
-    static func infoDictionary(group: DockGroup, version: String, build: String) -> [String: Any] {
+    static func infoDictionary(
+        group: DockGroup,
+        version: String,
+        build: String,
+        iconAppearance: DockGroupIconAppearance
+    ) -> [String: Any] {
         [
             "CFBundleInfoDictionaryVersion": "6.0",
             "CFBundlePackageType": "APPL",
@@ -235,6 +248,9 @@ public struct DockHelperBundleBuilder {
             // 于是「不留后台进程」依然成立：待命不是常驻。
             "NSSupportsAutomaticTermination": true,
             "NSSupportsSuddenTermination": true,
+            // 记录这张图标是按哪套外观画的。跟随系统时，外观一变这里就和当前外观
+            // 对不上，`helperNeedsRegeneration` 据此重建 Helper（`.icns` 没有外观变体）。
+            "MacPilotDockGroupIconAppearance": iconAppearance == .dark ? "dark" : "light",
             "MacPilotDockGroupID": group.id
         ]
     }

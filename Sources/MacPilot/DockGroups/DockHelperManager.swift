@@ -47,9 +47,9 @@ final class DockHelperManager {
         FileManager.default.fileExists(atPath: helperAppURL(for: group).path)
     }
 
-    /// Helper 是否需要（重新）生成：不存在，或者它记录的 MacPilot 版本已经过期。
+    /// Helper 是否需要（重新）生成：不存在，记录的 MacPilot 版本过期，或者图标外观对不上。
     ///
-    /// 后一条很关键：Helper 是主程序 binary 的**拷贝**。App 升级后如果只补「缺失」的
+    /// 前一条很关键：Helper 是主程序 binary 的**拷贝**。App 升级后如果只补「缺失」的
     /// Helper，Dock 上跑的会一直是旧 binary（旧行为、旧 Info.plist），
     /// 用户升级完也拿不到任何 Helper 侧的修复。
     func helperNeedsRegeneration(for group: DockGroup) -> Bool {
@@ -64,8 +64,21 @@ final class DockHelperManager {
         else { return true }
 
         let current = AppVersionInfo.current()
-        return (plist["CFBundleShortVersionString"] as? String) != current.version
-            || (plist["CFBundleVersion"] as? String) != current.build
+        guard (plist["CFBundleShortVersionString"] as? String) == current.version,
+              (plist["CFBundleVersion"] as? String) == current.build else { return true }
+
+        // `.icns` 没有外观变体，「跟随系统」只能靠重建 Helper 实现：外观一变，
+        // 这里记录的绘制外观就和当前系统对不上。老版本没有这个键，也一并重建。
+        return (plist["MacPilotDockGroupIconAppearance"] as? String) != Self.recordedAppearanceName(for: group)
+    }
+
+    /// 分组当前该用哪套外观绘制 Dock 图标（把「跟随系统」解析成浅色或深色）。
+    static func appearance(for group: DockGroup) -> DockGroupIconAppearance {
+        group.iconStyle.appearance(isDark: DockGroupIconAppearance.current() == .dark)
+    }
+
+    private static func recordedAppearanceName(for group: DockGroup) -> String {
+        appearance(for: group) == .dark ? "dark" : "light"
     }
 
     /// 生成或刷新分组对应的 Helper App。
@@ -81,7 +94,8 @@ final class DockHelperManager {
                 group: group,
                 memberIconURLs: memberIconURLs,
                 version: version.version,
-                build: version.build
+                build: version.build,
+                appearance: Self.appearance(for: group)
             )
             DiagnosticLog.write("DockGroups", "Generated Dock helper for group \(group.id) at \(url.path)")
             return url

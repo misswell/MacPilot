@@ -1063,3 +1063,65 @@ soft-off write sent=true at t=0ms
 
 - **DDC 的「写后读回」不能拿写入值做等值比较**：同一台显示器在不同固件/状态下会回 `standby` 而不是 `soft off`，把「没回显」当成「没生效」会得到一个已经黑了却没人认领的面板。
 - **有副作用的写操作，状态要从「发出去了」记起，而不是从「被承认了」记起**。确认只能决定要不要再补一层兜底，不能决定要不要记住。
+
+## 四十三、Dock 分组：图标外观可选、浮层严格贴图标（v1.1.352）
+
+用户在真机上提了三个问题：**图标在深色 Dock 上是一块白的**、**展开还是跟着鼠标上下移动**、**展开后的齿轮点了没反应**。三件事都要落到真机行为上，不能只看代码。
+
+### 一、图标外观：把「固定浅色」换成「跟随系统 / 浅色 / 深色」
+
+§37（v1.1.344）当初的取舍是「写进 Helper 的 `.icns` 固定浅色」，理由是「`.icns` 没有外观变体，跟随生成时的外观会在用户之后切换外观时不一致」。用户看到的结果就是深色 Dock 上一块刺眼的白，而设置页里明明是深色图标——**同一个分组，两处显示不一致，这本身就是 bug**。
+
+改法：
+
+1. `DockGroup` 新增 `iconStyle`（`system` / `light` / `dark`，默认 `system`），旧 `groups.json` 缺这个键时按 `system` 解码。
+2. `DockGroupIconStyle.appearance(isDark:)` 把「跟随系统」解析成实际绘制外观；`DockHelperBundleBuilder.build(...)` 收这个参数出图，并把结果写进 Helper 的 `Info.plist`：`MacPilotDockGroupIconAppearance = light|dark`。
+3. `DockHelperManager.helperNeedsRegeneration` 增加一条：**Info.plist 里记录的外观 ≠ 当前该用的外观（或缺这个键）就要重建**。老版本生成的 Helper 没有这个键，所以升级后第一次启动会自动把 Dock 图标换成正确外观，不需要用户做什么。
+4. `DockGroupsModel` 订阅 `AppleInterfaceThemeChangedNotification`，300ms 合并后 `ensureHelpersExistIfNeeded()` + 重读 Dock 图标位置；分组列表、编辑器预览、Helper 图标三处都按配置的外观绘制。
+
+### 二、浮层严格贴图标：由 MacPilot 把图标矩形写进配置
+
+「跟着鼠标上下移动」的根因不是数学，是**信息**：`DockHelperPanelPlacement` 原先只能拿 `NSEvent.mouseLocation` 沿 Dock 方向定位，而真机实测 Dock 图标槽位是 49.33 × 37.33 点，点在图标上沿和下沿会让浮层差出整整一个身位。
+
+Helper 自己拿不到图标位置——它是 ad-hoc 重签的另一个 App，**没有辅助功能授权**（真机实测 `AXIsProcessTrusted()=false`，读 Dock 的辅助功能树直接返回 `-25211` / `kAXErrorAPIDisabled`）。让用户为了一个每次升级都重建的 Helper 去授权也不合理。所以：
+
+- 新增 `DockTileLocator`（主程序侧，MacPilot 本来就有辅助功能权限）：读 Dock 的 `AXList`，按每项的 `kAXURLAttribute` 匹配分组的 Helper 路径，把 frame 从「主屏左上角原点」换算成 Cocoa 全局坐标。
+- `DockGroupsModel.refreshDockTileAnchors()` 把结果写进 `groups.json` 的 `dockTile`（含 `updatedAt`）。**只在位置真的变了（>0.5 点）时才写盘**，1 秒节流；触发点是激活、应用启停、前台切换、唤醒、外观变化与重建 Helper 之后。日志里会留一行 `Dock tile anchors: trusted=… groups=… found=…`，排查「为什么没贴到图标上」先看它。
+- **必须丢掉跑到屏幕外的几何**：Dock 自动隐藏时、或显示器刚重新配置过而 Dock 还没回到当前屏幕时，整条 Dock 的 AX 坐标会变成负数（实测容器 `frame=(-52, 61, 52, 988)`，图标 x=-57），此时读到的根本不是「图标在哪」。`DockTileLocator.intersectsAnyScreen` 会把这些矩形全部滤掉（`NSScreen.screens` 一个都不相交就不存），Helper 于是退回按点击位置落点 —— 这比存一个错误位置安全得多。真机上这条守卫是有用的：显示器重新配置后 Dock 真的卡在了屏幕外，`killall Dock` 才让它回到 x=10。
+- Helper 侧 `DockHelperPanelPlacement.origin(..., tile:)`：点击点落在记录的图标矩形里（±12 点容差）就用**图标中心**沿 Dock 定位，垂直于 Dock 的方向永远不看鼠标；点击点落到矩形外（Dock 刚增删过图标、布局平移了）或压根没有这份几何，就退回按点击位置落点，绝不落在一个错误的图标旁边。
+
+Helper 依然只读 `groups.json`，一个字节都不写。
+
+### 三、齿轮「点了没反应」：在当前版本上已经好了
+
+真机上用辅助功能 `AXPress` 直接按浮层里的齿轮（`AXButton` desc「设置…」，CG 117,730，13×13）：返回成功，MacPilot 变成前台、窗口切到「Dock 分组」；`open macpilot://dock-groups` 同样正常。根因是 v1.1.347 之前的 `close()` 在 `open(url)` 之后立刻 `NSApp.terminate`，把还在飞的 URL 请求一起杀了；改成 `dismiss()`（不终止进程）之后就不存在了。
+
+### 四、真机实测：**已经固定在 Dock 上的图标，macOS 会缓存那张图**
+
+这是这次最花时间、也最值得记下来的一条。为了确认「跟随系统」到底能不能在 Dock 上生效，做了这些对照实验（每次都截图比对 Dock 那一格）：
+
+| 操作 | Dock 图标是否更新 |
+| --- | --- |
+| 替换 `Contents/Resources/AppIcon.icns` + 重新 ad-hoc 签名 | 否 |
+| `touch` 整个 `.app` + `lsregister -f` | 否 |
+| 改 `CFBundleVersion` / `CFBundleShortVersionString` | 否 |
+| 改 `CFBundleIdentifier` | 否 |
+| `rm -rf` 后重新拷贝整个 `.app`（新 inode） | 否 |
+| `killall Dock` / 清 `~/Library/Saved Application State/com.apple.dock.savedState` | 否 |
+| `killall iconservicesagent` | 否 |
+| `NSWorkspace.setIcon(_:forFile:)` 设自定义图标 | 否 |
+| 启动该 Helper（含点 Dock 图标） | 否 |
+
+同时 `NSWorkspace.shared.icon(forFile:)` 早就是新图标（中心像素纯品红），说明**磁盘与 IconServices 都对，只有 Dock 那个已固定的格子还捧着旧图**。所以：
+
+- 「跟随系统」在**新固定 / 重新拖入**的图标上一定正确；已经固定的图标要等 macOS 自己过期（或重新登录）才会刷新。
+- 因此编辑器里加了一行明确提示（`dockGroupsDockIconCacheHint`），README 也写清楚了：改完外观若 Dock 上还是旧图标，把图标从 Dock 移除再拖回来即可。
+- 这是系统行为，不是 MacPilot 能绕过的：能立刻刷新的两条路（改写 `com.apple.dock.plist` 里的 bookmark、或 `sudo` 清系统图标缓存）分别违反「MacPilot 不改写用户的 Dock 配置」和「不许要 sudo」。
+
+### 验证
+
+- `swift test`：`DockHelperPanelPlacementTests` 增加「同一个图标点上沿/下沿落点必须完全相同」「Dock 平移后旧矩形失效要退回点击点」「±12 点容差」等用例；`DockGroupDockTileTests`（新）覆盖外观解析、`groups.json` 旧配置兼容与往返、`contains`/`isClose` 容差、AX 坐标翻转与路径匹配；`DockGroupsIntegrityTests` 里那条「Helper 图标必须固定浅色」的用例改成「跟随图标外观」（深色系统下默认出深色图、固定浅色时依旧出浅色图、Info.plist 记录一致、系统切深色后判定为需要重建）。
+- `swift build -c release -Xswiftc -warnings-as-errors` 干净。
+- 真机（未锁屏时）：把新 Helper 二进制临时装进已固定的分组，手写一份 `dockTile` 到 `groups.json`（取真机 AX 读到的矩形，49–52 点宽、37–40 点高），分别在图标上沿与下沿合成鼠标点击 —— **两次浮层落点完全一致**（cocoa `(67, 25)`，正对图标中心 185.5 − 160）；抽掉 `dockTile` 再点同样的两处，落点分别回到 `(67, 38)` 与 `(67, 12)`，差出 26 点，正是用户说的「跟着鼠标上下移动」。
+- 真机跑发布版：装上 1.1.352 后 MacPilot 自动做了三件事 —— 重建 Helper（旧 Helper 没有 `MacPilotDockGroupIconAppearance` 键，判定过期）、把 `iconStyle: system` 与 `dockTile: {x: 5, y: 132.52, w: 52.15, h: 40.15}` 写进 `groups.json`、日志里留下 `trusted=true groups=1 found=1` + `Published Dock tile anchors for 1 group(s)`。Helper 的 `.icns` 中心像素从 0.94（浅色底）变成 0.29（深色底），与「跟随系统 + 深色外观」一致。
+- 锁屏状态下合成点击不会送到 Dock（点击被锁屏吃掉），真机交互验证必须在解锁状态做；期间那次「点了没反应」是锁屏，不是回归。

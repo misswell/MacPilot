@@ -90,7 +90,7 @@ struct DockGroupEditor: View {
                 Image(nsImage: dockGroups.groupIcon(
                     for: group,
                     size: 72,
-                    appearance: DockGroupIconAppearance(isDark: colorScheme == .dark)
+                    appearance: group.iconStyle.appearance(isDark: colorScheme == .dark)
                 ))
 
                     .resizable()
@@ -184,7 +184,27 @@ struct DockGroupEditor: View {
             }
 
             iconChoices(group)
+
+            HStack(spacing: 12) {
+                Text(model.t("dockGroupsIconStyle")).frame(width: 70, alignment: .leading)
+                Picker("", selection: Binding(
+                    get: { group.iconStyle },
+                    set: { dockGroups.setIconStyle($0, for: groupID) }
+                )) {
+                    Text(model.t("dockGroupsIconStyleSystem")).tag(DockGroupIconStyle.system)
+                    Text(model.t("dockGroupsIconStyleLight")).tag(DockGroupIconStyle.light)
+                    Text(model.t("dockGroupsIconStyleDark")).tag(DockGroupIconStyle.dark)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 260)
+                Spacer()
+            }
+
             Text(model.t("dockGroupsIconHint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(model.t("dockGroupsIconStyleHint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -368,6 +388,11 @@ struct DockGroupEditor: View {
                 }
                 .disabled(!dockGroups.helperExists(for: group))
             }
+
+            Label(model.t("dockGroupsDockIconCacheHint"), systemImage: "arrow.triangle.2.circlepath")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Label(model.t("dockGroupsReadOnlyNote"), systemImage: "lock.shield")
                 .font(.caption)

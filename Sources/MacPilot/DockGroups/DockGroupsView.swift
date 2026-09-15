@@ -266,7 +266,7 @@ struct DockGroupsView: View {
                 Image(nsImage: dockGroups.groupIcon(
                     for: group,
                     size: 72,
-                    appearance: DockGroupIconAppearance(isDark: colorScheme == .dark)
+                    appearance: group.iconStyle.appearance(isDark: colorScheme == .dark)
                 ))
                     .resizable()
                     .interpolation(.high)

@@ -167,4 +167,82 @@ struct DockHelperPanelPlacementTests {
             #expect(origin.y + panel.height <= leftDockFrame.maxY)
         }
     }
+
+    // MARK: - 有 Dock 图标位置时：只认图标，不认鼠标
+
+    /// 真机上「集合」图标的 AX frame（左上角原点）换算成 Cocoa 之后的矩形。
+    private let tile = CGRect(x: 5.0, y: 197.44, width: 49.33, height: 37.33)
+
+    /// 同一个图标，点在它的上沿还是下沿，浮层都必须落在同一个位置
+    /// ——「点击展开依然随着鼠标上下移动」就是这么修掉的。
+    @Test func tileAnchorIgnoresWhereInsideTheIconTheClickLands() {
+        let top = DockHelperPanelPlacement.origin(
+            panelSize: panel,
+            screenFrame: leftDockFrame,
+            visibleFrame: leftDockVisible,
+            pointer: CGPoint(x: tile.midX, y: tile.maxY - 2),
+            tile: tile
+        )
+        let bottom = DockHelperPanelPlacement.origin(
+            panelSize: panel,
+            screenFrame: leftDockFrame,
+            visibleFrame: leftDockVisible,
+            pointer: CGPoint(x: tile.midX, y: tile.minY + 2),
+            tile: tile
+        )
+        #expect(top == bottom)
+        // 浮层纵向居中到**图标中心**，而不是点击点。
+        #expect(top.y == tile.midY - panel.height / 2)
+        #expect(top.x == leftDockVisible.minX + DockHelperPanelPlacement.defaultGap)
+    }
+
+    @Test func bottomDockTileCentersHorizontallyOnTheIcon() {
+        let icon = CGRect(x: 700, y: 20, width: 49.33, height: 37.33)
+        let origin = DockHelperPanelPlacement.origin(
+            panelSize: panel,
+            screenFrame: bottomDockFrame,
+            visibleFrame: bottomDockVisible,
+            pointer: CGPoint(x: icon.minX + 3, y: icon.midY),
+            tile: icon
+        )
+        #expect(origin.x == icon.midX - panel.width / 2)
+        #expect(origin.y == bottomDockVisible.minY + DockHelperPanelPlacement.defaultGap)
+    }
+
+    /// Dock 里插入/移除图标会让整列平移：此时旧矩形不包含这次的点击点，
+    /// 必须退回「按点击位置落点」，否则浮层会跑到别的图标旁边。
+    @Test func staleTileIsIgnoredWhenTheClickLandsOutsideIt() {
+        // 取一个远离屏幕上下边缘的图标，落点就不会被夹取影响，
+        // 能干净地看出用的是「点击点」还是「旧图标中心」。
+        let stale = CGRect(x: 5, y: 600, width: 49.33, height: 37.33)
+        let pointer = CGPoint(x: stale.midX, y: stale.minY - 80)
+        let origin = DockHelperPanelPlacement.origin(
+            panelSize: panel,
+            screenFrame: leftDockFrame,
+            visibleFrame: leftDockVisible,
+            pointer: pointer,
+            tile: stale
+        )
+        #expect(origin.y == pointer.y - panel.height / 2)
+        #expect(origin.y != stale.midY - panel.height / 2)
+    }
+
+    /// 容差之内（Dock 图标放大等小幅变化）仍然认这份几何。
+    @Test func tileAnchorToleratesASmallOverflowFromIconMagnification() {
+        let anchor = DockHelperPanelPlacement.alongDockAnchor(
+            pointer: CGPoint(x: tile.midX, y: tile.maxY + 6),
+            tile: tile,
+            edge: .left
+        )
+        #expect(anchor == tile.midY)
+    }
+
+    @Test func anchorFallsBackToThePointerWithoutAnyTileGeometry() {
+        let anchor = DockHelperPanelPlacement.alongDockAnchor(
+            pointer: CGPoint(x: 29, y: 512),
+            tile: nil,
+            edge: .left
+        )
+        #expect(anchor == 512)
+    }
 }

@@ -259,8 +259,12 @@ final class DockHelperPanelController {
 
     // MARK: - 落点
 
-    /// 始终贴在**被点击的那个 Dock 图标**旁边：沿 Dock 方向居中到图标，
+    /// 始终贴在**被点击的那个 Dock 图标**旁边：沿 Dock 方向居中到图标中心，
     /// 垂直于 Dock 的方向紧贴 Dock 内侧（不再跟着鼠标跑）。
+    ///
+    /// 图标位置来自 `groups.json` 里的 `dockTile`——Helper 自己没有辅助功能授权，
+    /// 算不出 Dock 图标在哪，只能由 MacPilot 读出来写进配置；
+    /// 那份几何失效时（没授权 / 还没固定到 Dock / 布局刚变过）会自动退回按点击位置定位。
     /// 具体数学在 `DockHelperPanelPlacement` 里，由单元测试锁住。
     private func position(_ panel: NSPanel, size: NSSize) {
         let pointer = NSEvent.mouseLocation
@@ -274,7 +278,8 @@ final class DockHelperPanelController {
             panelSize: size,
             screenFrame: screenFrame,
             visibleFrame: visibleFrame,
-            pointer: pointer
+            pointer: pointer,
+            tile: model.group?.dockTile?.rect
         )
         panel.setFrame(NSRect(origin: origin, size: size), display: false)
     }

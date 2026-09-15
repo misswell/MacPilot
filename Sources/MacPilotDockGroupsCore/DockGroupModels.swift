@@ -83,6 +83,88 @@ public struct DockGroupIcon: Codable, Equatable, Sendable {
     public static let emojiChoices = ["🛠", "💻", "🤖", "🎨", "🎬", "🎵", "🌐", "💬", "🎮", "📦", "📊", "🚀"]
 }
 
+// MARK: - 图标外观
+
+/// 分组图标用哪套外观绘制。
+///
+/// 以前只有「生成时是什么外观就用什么外观」，于是深色模式下的 Dock 图标会是一块
+/// 亮白色，和界面里显示的深色图标对不上。现在由用户选：跟随系统 / 固定浅色 / 固定深色。
+public enum DockGroupIconStyle: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// 跟随系统深浅外观（默认）。切换外观时会重建 Helper，让 Dock 图标跟着变。
+    case system
+    /// 固定浅色版本。
+    case light
+    /// 固定深色版本。
+    case dark
+
+    public var id: String { rawValue }
+
+    public static let fallback: DockGroupIconStyle = .system
+
+    /// 在当前系统外观下实际使用哪套绘制。
+    public func appearance(isDark: Bool) -> DockGroupIconAppearance {
+        switch self {
+        case .system: return isDark ? .dark : .light
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
+// MARK: - Dock 图标位置
+
+/// 分组 Helper 在 Dock 上的图标位置（**Cocoa 全局坐标**，原点在主屏左下角）。
+///
+/// 为什么要把这个位置存进配置：Helper 是 ad-hoc 重签的另一个 App，没有辅助功能
+/// 授权（`AXIsProcessTrusted()` 实测为 false，读 Dock 的辅助功能树直接返回 -25211），
+/// 它自己永远算不出「Dock 上那个图标在哪」。而「浮层贴在图标旁边」必须知道图标位置，
+/// 所以由**有授权的 MacPilot** 读出来写进 `groups.json`，Helper 只读。
+///
+/// `updatedAt` 与 `contains(pointer:)` 一起兜底：Dock 布局会因为增删图标而整体平移，
+/// 这时旧几何就不再包含点击点，Helper 会退回「按点击位置落点」而不是落在一个错误的
+/// 位置上（见 DockHelperPanelPlacement）。
+public struct DockGroupDockTile: Codable, Equatable, Sendable {
+    /// Cocoa 全局坐标下的矩形。
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+    /// MacPilot 最后一次读到这个位置的时间。
+    public var updatedAt: Date
+
+    public init(x: Double, y: Double, width: Double, height: Double, updatedAt: Date = DockGroupTimestamp.now()) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.updatedAt = updatedAt
+    }
+
+    public init(rect: CGRect, updatedAt: Date = DockGroupTimestamp.now()) {
+        self.init(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height, updatedAt: updatedAt)
+    }
+
+    public var rect: CGRect {
+        CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    /// 点击点是否落在这个图标里（带容差，容忍 Dock 图标放大等小幅变化）。
+    ///
+    /// 这是「这份几何还有效吗」的判据：Dock 里插入/移除图标会让整列平移一个身位，
+    /// 此时用户的点击不可能还落在旧矩形里。
+    public func contains(pointer: CGPoint, tolerance: CGFloat = 12) -> Bool {
+        rect.insetBy(dx: -tolerance, dy: -tolerance).contains(pointer)
+    }
+
+    /// 两个位置是否已经足够接近（避免每次刷新都写盘）。
+    public func isClose(to other: DockGroupDockTile, tolerance: CGFloat = 0.5) -> Bool {
+        abs(x - other.x) <= tolerance
+            && abs(y - other.y) <= tolerance
+            && abs(width - other.width) <= tolerance
+            && abs(height - other.height) <= tolerance
+    }
+}
+
 // MARK: - 成员 App
 
 /// 分组中的一个第三方 App 引用。
@@ -141,10 +223,14 @@ public struct DockGroup: Codable, Identifiable, Equatable, Sendable {
     public var name: String
     /// 分组图标。
     public var icon: DockGroupIcon
+    /// 图标外观：跟随系统（默认）/ 固定浅色 / 固定深色。
+    public var iconStyle: DockGroupIconStyle
     /// Grid / List。
     public var layout: DockGroupLayout
     /// 成员 App（顺序即展示顺序，支持拖拽排序）。
     public var apps: [DockGroupApp]
+    /// Dock 上这个分组图标的位置（由 MacPilot 读辅助功能树写入，Helper 只读）。
+    public var dockTile: DockGroupDockTile?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -152,22 +238,26 @@ public struct DockGroup: Codable, Identifiable, Equatable, Sendable {
         id: String,
         name: String,
         icon: DockGroupIcon = .default,
+        iconStyle: DockGroupIconStyle = .fallback,
         layout: DockGroupLayout = .fallback,
         apps: [DockGroupApp] = [],
+        dockTile: DockGroupDockTile? = nil,
         createdAt: Date = DockGroupTimestamp.now(),
         updatedAt: Date = DockGroupTimestamp.now()
     ) {
         self.id = id
         self.name = name
         self.icon = icon
+        self.iconStyle = iconStyle
         self.layout = layout
         self.apps = apps
+        self.dockTile = dockTile
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, icon, layout, apps, createdAt, updatedAt
+        case id, name, icon, iconStyle, layout, apps, dockTile, createdAt, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -175,8 +265,10 @@ public struct DockGroup: Codable, Identifiable, Equatable, Sendable {
         id = try container.decode(String.self, forKey: .id)
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? id
         icon = try container.decodeIfPresent(DockGroupIcon.self, forKey: .icon) ?? .default
+        iconStyle = try container.decodeIfPresent(DockGroupIconStyle.self, forKey: .iconStyle) ?? .fallback
         layout = try container.decodeIfPresent(DockGroupLayout.self, forKey: .layout) ?? .fallback
         apps = try container.decodeIfPresent([DockGroupApp].self, forKey: .apps) ?? []
+        dockTile = try container.decodeIfPresent(DockGroupDockTile.self, forKey: .dockTile)
         createdAt = DockGroupTimestamp.normalized(try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date())
         updatedAt = DockGroupTimestamp.normalized(try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date())
     }

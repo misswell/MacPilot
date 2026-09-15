@@ -721,7 +721,7 @@ struct ThirdPartyAppIntegrityTests {
     /// 注意 `NSApp?.appearance = …`：测试进程里 `NSApp` 起初是 nil，可选链赋值会
     /// 静默失效、用例随「深色渲染」一起通过——必须先用 `NSApplication.shared`
     /// 把 App 建出来，再用一个前置断言确认环境真的变深色了。
-    @Test @MainActor func generatedHelperIconDoesNotFollowTheDarkAppearance() throws {
+    @Test @MainActor func generatedHelperIconFollowsTheGroupsIconStyle() throws {
         let application = NSApplication.shared
         let previousAppearance = application.appearance
         application.appearance = NSAppearance(named: .darkAqua)
@@ -734,19 +734,79 @@ struct ThirdPartyAppIntegrityTests {
         model.setEnabled(true)
         let group = model.createGroup(named: "Dev")
 
+        // 默认「跟随系统」：深色系统下必须出深色版本
+        // （以前这里固定出浅色，于是深色 Dock 上是一块刺眼的白）。
         model.regenerateAllHelpers()
+        #expect(try helperIconData(model: model, groupID: group.id) == renderedIcon(for: group, appearance: .dark))
+        #expect(try recordedAppearance(model: model, groupID: group.id) == "dark")
 
-        let iconURL = model.helperAppURL(for: group)
+        // 固定浅色：即使系统处于深色也要出浅色版本。
+        model.setIconStyle(.light, for: group.id)
+        #expect(try helperIconData(model: model, groupID: group.id) == renderedIcon(for: group, appearance: .light))
+        #expect(try recordedAppearance(model: model, groupID: group.id) == "light")
+    }
+
+    /// 「跟随系统」的分组，一旦系统外观变了就必须被判定为「需要重建」——
+    /// `.icns` 没有外观变体，Dock 图标只能靠重建 Helper 跟上。
+    @Test @MainActor func themeChangeMarksSystemStyleHelpersForRegeneration() throws {
+        let application = NSApplication.shared
+        let previousAppearance = application.appearance
+        application.appearance = NSAppearance(named: .aqua)
+        defer { application.appearance = previousAppearance }
+
+        let workspace = try TestAppWorkspace()
+        defer { workspace.cleanUp() }
+        let model = workspace.makeModel()
+        model.setEnabled(true)
+        let group = model.createGroup(named: "Dev")
+        model.regenerateAllHelpers()
+        #expect(try recordedAppearance(model: model, groupID: group.id) == "light")
+        #expect(!model.helperManager.helperNeedsRegeneration(for: try #require(model.groups.first)))
+
+        // 系统切到深色：同一个分组（内容没变）现在必须重建。
+        application.appearance = NSAppearance(named: .darkAqua)
+        #expect(DockGroupIconAppearance.current() == .dark, "前提不成立：环境没有切到深色")
+        #expect(model.helperManager.helperNeedsRegeneration(for: try #require(model.groups.first)))
+
+        // 而「固定浅色」的分组不受系统外观影响。
+        model.setIconStyle(.light, for: group.id)
+        #expect(!model.helperManager.helperNeedsRegeneration(for: try #require(model.groups.first)))
+    }
+
+    /// 读 Helper 里生成的 `.icns`。
+    private func helperIconData(model: DockGroupsModel, groupID: String) throws -> Data {
+        try Data(contentsOf: helperIconURL(model: model, groupID: groupID))
+    }
+
+    private func helperIconURL(model: DockGroupsModel, groupID: String) -> URL {
+        helperAppURL(model: model, groupID: groupID)
             .appendingPathComponent("Contents/Resources/\(DockHelperBundleBuilder.helperIconName)")
-        let generated = try Data(contentsOf: iconURL)
-        let light = ICNSWriter.data(from: DockGroupIconRenderer.image(
+    }
+
+    /// 读 Helper 的 Info.plist 里记录的那套绘制外观。
+    private func recordedAppearance(model: DockGroupsModel, groupID: String) throws -> String? {
+        let plistURL = helperAppURL(model: model, groupID: groupID)
+            .appendingPathComponent("Contents/Info.plist")
+        let plist = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: plistURL),
+            format: nil
+        ) as? [String: Any]
+        return plist?["MacPilotDockGroupIconAppearance"] as? String
+    }
+
+    private func helperAppURL(model: DockGroupsModel, groupID: String) -> URL {
+        let group = model.groups.first { $0.id == groupID }
+        guard let group else { return URL(fileURLWithPath: "/dev/null") }
+        return model.helperAppURL(for: group)
+    }
+
+    private func renderedIcon(for group: DockGroup, appearance: DockGroupIconAppearance) -> Data {
+        ICNSWriter.data(from: DockGroupIconRenderer.image(
             for: group,
             size: 1024,
             memberIconURLs: [],
-            appearance: .light
+            appearance: appearance
         ))
-
-        #expect(generated == light, "生成的 Dock 图标跟随了深色外观")
     }
 
     /// 彩色符号图标在深色模式下要压暗，否则在暗色界面上过于刺眼；色相必须保持，

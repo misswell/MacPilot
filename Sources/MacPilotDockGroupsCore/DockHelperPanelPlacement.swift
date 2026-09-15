@@ -8,15 +8,23 @@
 //  与 `NSScreen.frame` / `NSScreen.visibleFrame` / `NSEvent.mouseLocation`
 //  完全一致，调用方不需要做任何翻转。
 //
-//  为什么只能用推的：Helper 是独立进程，没有辅助功能权限（`AXIsProcessTrusted`
-//  在 Helper 里实测为 false），拿不到 Dock 图标的 AX frame。所以落点只用两样东西：
+//  落点由两样东西决定：
 //
-//    1. **Dock 贴哪一边** —— 可见区域相对屏幕内缩的那条边；
-//    2. **图标在 Dock 上的位置** —— 点击 Dock 图标的那一刻，鼠标就在图标上，
-//       因此取鼠标「沿 Dock 方向」的那个坐标，把浮层居中到图标上。
+//    1. **Dock 贴哪一边** —— 可见区域相对屏幕内缩的那条边（自动隐藏时退化成
+//       「鼠标离哪条边最近」，点击 Dock 图标时鼠标必然贴在那条边上）；
+//    2. **图标沿 Dock 方向的位置** —— 首选 MacPilot 读出来写进配置的图标矩形
+//       （`DockGroupDockTile`，见下），把浮层居中到图标中心。
 //
-//  垂直于 Dock 的那一轴**不看鼠标**：浮层永远紧贴 Dock 内侧的固定间距，
-//  于是「点哪个图标就在哪个图标旁边出现」，与鼠标在图标上的具体落点无关。
+//  垂直于 Dock 的那一轴**永远不看鼠标**：浮层始终紧贴 Dock 内侧的固定间距。
+//
+//  为什么图标位置要靠配置而不是自己算：Helper 是独立进程，没有辅助功能权限
+//  （`AXIsProcessTrusted` 在 Helper 里实测为 false，读 Dock 的 AX 树返回 -25211），
+//  它根本不知道 Dock 图标在哪。所以由**有授权的 MacPilot** 读出来写进 `groups.json`。
+//
+//  万一没有那份几何（用户没给 MacPilot 辅助功能授权、分组还没被固定到 Dock 上、
+//  或者 Dock 布局刚刚变过导致旧矩形已经不包含这次的点击点），就退回
+//  「按点击位置落点」：点击那一刻鼠标就在这个图标上，沿 Dock 方向取鼠标坐标
+//  虽然不如图标中心精确，但永远不会跑偏到别的图标上。
 //
 
 import CoreGraphics
@@ -71,26 +79,29 @@ public enum DockHelperPanelPlacement {
     ///   - screenFrame: 图标所在屏幕的 `frame`。
     ///   - visibleFrame: 同一屏幕的 `visibleFrame`（已扣掉 Dock 与菜单栏）。
     ///   - pointer: 点击 Dock 图标时的鼠标位置（`NSEvent.mouseLocation`）。
+    ///   - tile: Dock 图标的矩形（MacPilot 读出来的那份）；有效时以它的中心定位。
     public static func origin(
         panelSize: CGSize,
         screenFrame: CGRect,
         visibleFrame: CGRect,
         pointer: CGPoint,
+        tile: CGRect? = nil,
         gap: CGFloat = defaultGap,
         edgeMargin: CGFloat = edgeMargin
     ) -> CGPoint {
         let edge = dockEdge(screenFrame: screenFrame, visibleFrame: visibleFrame, pointer: pointer)
+        let anchor = alongDockAnchor(pointer: pointer, tile: tile, edge: edge)
 
         var origin: CGPoint
         switch edge {
         case .left:
-            // 紧贴 Dock 右侧，纵向居中到被点的图标。
-            origin = CGPoint(x: visibleFrame.minX + gap, y: pointer.y - panelSize.height / 2)
+            // 紧贴 Dock 右侧，纵向居中到图标。
+            origin = CGPoint(x: visibleFrame.minX + gap, y: anchor - panelSize.height / 2)
         case .right:
-            origin = CGPoint(x: visibleFrame.maxX - panelSize.width - gap, y: pointer.y - panelSize.height / 2)
+            origin = CGPoint(x: visibleFrame.maxX - panelSize.width - gap, y: anchor - panelSize.height / 2)
         case .bottom:
-            // 紧贴 Dock 上侧，横向居中到被点的图标。
-            origin = CGPoint(x: pointer.x - panelSize.width / 2, y: visibleFrame.minY + gap)
+            // 紧贴 Dock 上侧，横向居中到图标。
+            origin = CGPoint(x: anchor - panelSize.width / 2, y: visibleFrame.minY + gap)
         }
 
         // 先夹进可见区域，保证永远不会压住 Dock；可见区域装不下时再用屏幕 frame 兜底。
@@ -100,6 +111,23 @@ public enum DockHelperPanelPlacement {
         origin.y = clamp(origin.y, lower: screenFrame.minY, upper: screenFrame.maxY - panelSize.height)
         return origin
     }
+
+    /// 沿 Dock 方向用来居中的那个坐标：优先图标中心，其次点击点。
+    ///
+    /// 只有在「这次的点击确实落在 MacPilot 记录的那个图标里」时才相信图标矩形——
+    /// Dock 里插入/移除图标会让整列平移，此时旧矩形已经不包含点击点，
+    /// 用它的中心反而会把浮层放到别的图标旁边。
+    static func alongDockAnchor(pointer: CGPoint, tile: CGRect?, edge: DockEdge) -> CGFloat {
+        let pointerCoordinate = edge == .bottom ? pointer.x : pointer.y
+        guard let tile else { return pointerCoordinate }
+        let reach = tile.insetBy(dx: -Self.tileTolerance, dy: -Self.tileTolerance)
+        guard reach.contains(pointer) else { return pointerCoordinate }
+        return edge == .bottom ? tile.midX : tile.midY
+    }
+
+    /// 图标位置的容差（点）：Dock 图标被放大、或几何读到的是放大前的尺寸时，
+    /// 点击点仍应被认作「落在这个图标里」。
+    static let tileTolerance: CGFloat = 12
 
     /// 夹取。`upper < lower`（浮层比可用区域还大）时返回 `upper`，
     /// 即优先保证「不越出可见区域的上/右边界」。

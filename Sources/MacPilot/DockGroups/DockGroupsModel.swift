@@ -39,6 +39,12 @@ final class DockGroupsModel: ObservableObject {
     private var isActive = false
     private var runningTask: Task<Void, Never>?
     private var workspaceObservers: [NSObjectProtocol] = []
+    /// 系统深浅外观变化（`.icns` 没有外观变体，只能靠重建 Helper 让 Dock 图标跟上）。
+    private var appearanceObserver: NSObjectProtocol?
+    /// 外观 / Dock 布局变化后的合并刷新，避免连续通知触发多次重建。
+    private var dockRefreshTask: Task<Void, Never>?
+    /// 读取 Dock 图标位置的最小间隔：Dock 树的读取要跨进程，别被高频通知打满。
+    private var lastDockTileRefresh: Date = .distantPast
     /// 只放已经按尺寸限制过的缩略图（见 DockGroupIconThumbnail）。
     private var iconCache: [String: NSImage] = [:]
     /// 需求第 12 节：图标缩略图缓存在 ~/Library/Caches/MacPilot/DockGroups/。
@@ -96,11 +102,15 @@ final class DockGroupsModel: ObservableObject {
         }
         startObservingWorkspace()
         ensureHelpersExistIfNeeded()
+        scheduleDockRefresh()
     }
 
     func shutdown() {
         isActive = false
         stopObservingWorkspace()
+        stopObservingAppearance()
+        dockRefreshTask?.cancel()
+        dockRefreshTask = nil
         stopMonitoring()
     }
 
@@ -409,6 +419,12 @@ final class DockGroupsModel: ObservableObject {
         updateGroup(groupID) { $0.layout = layout }
     }
 
+    /// 「图标外观」：跟随系统 / 固定浅色 / 固定深色。
+    /// `.icns` 没有外观变体，所以改动最终体现为重建 Helper（`updateGroup` 已经会做）。
+    func setIconStyle(_ style: DockGroupIconStyle, for groupID: String) {
+        updateGroup(groupID) { $0.iconStyle = style }
+    }
+
     private func updateGroup(_ groupID: String, _ mutate: (inout DockGroup) -> Void) {
         var updated: DockGroup?
         commit { document in
@@ -481,6 +497,7 @@ final class DockGroupsModel: ObservableObject {
         if helperManager.ensureHelper(for: group, memberIconURLs: iconURLs) == nil {
             helperUnavailable = true
         }
+        scheduleDockRefresh()
     }
 
     func regenerateAllHelpers() {
@@ -526,13 +543,28 @@ final class DockGroupsModel: ObservableObject {
         let center = NSWorkspace.shared.notificationCenter
         let names: [Notification.Name] = [
             NSWorkspace.didLaunchApplicationNotification,
-            NSWorkspace.didTerminateApplicationNotification
+            NSWorkspace.didTerminateApplicationNotification,
+            // Dock 里图标的位置会随应用启停、Dock 设置变化而整体平移，
+            // 所以每次前台应用切换都顺手刷新一次（有节流）。
+            NSWorkspace.didActivateApplicationNotification,
+            NSWorkspace.didWakeNotification
         ]
         for name in names {
             let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.refreshRunningState() }
+                Task { @MainActor in
+                    self?.refreshRunningState()
+                    self?.scheduleDockRefresh()
+                }
             }
             workspaceObservers.append(observer)
+        }
+
+        appearanceObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.scheduleDockRefresh() }
         }
     }
 
@@ -542,6 +574,70 @@ final class DockGroupsModel: ObservableObject {
             center.removeObserver(observer)
         }
         workspaceObservers.removeAll()
+    }
+
+    private func stopObservingAppearance() {
+        if let appearanceObserver {
+            DistributedNotificationCenter.default().removeObserver(appearanceObserver)
+        }
+        appearanceObserver = nil
+    }
+
+    // MARK: - Dock 图标位置
+
+    /// 合并刷新：外观变化要重建 Helper，Dock 布局变化要重读图标位置。
+    /// 系统会连着发好几条通知，这里合成一次（300ms）。
+    private func scheduleDockRefresh() {
+        guard settings.isEnabled else { return }
+        dockRefreshTask?.cancel()
+        dockRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self, !Task.isCancelled else { return }
+            // 外观变了：跟随系统的分组需要按新外观重建 Helper（Info.plist 里记录了外观）。
+            self.ensureHelpersExistIfNeeded()
+            self.refreshDockTileAnchors()
+        }
+    }
+
+    /// 读出 Dock 上每个分组图标的位置并写进配置（Helper 没有辅助功能授权，只能读这里）。
+    ///
+    /// 位置没变就不写盘：Dock 布局在大多数时候是稳定的，而写配置会动用整个文档。
+    func refreshDockTileAnchors() {
+        guard settings.isEnabled, isActive else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastDockTileRefresh) >= 1 else { return }
+        lastDockTileRefresh = now
+
+        let helperURLs = groups.map { helperManager.helperAppURL(for: $0) }
+        let rects = DockTileLocator.tileRects(forHelperAppsAt: helperURLs)
+        DiagnosticLog.write(
+            "DockGroups",
+            "Dock tile anchors: trusted=\(DockTileLocator.isTrusted) groups=\(helperURLs.count) found=\(rects.count)"
+        )
+        guard !rects.isEmpty else { return }
+
+        var document = self.document()
+        var updated = 0
+        for index in document.groups.indices {
+            let group = document.groups[index]
+            let path = helperManager.helperAppURL(for: group).standardizedFileURL.path
+            guard let rect = rects[path] else { continue }
+            let tile = DockGroupDockTile(rect: rect)
+            if let existing = group.dockTile, existing.isClose(to: tile) { continue }
+            document.groups[index].dockTile = tile
+            updated += 1
+        }
+        guard updated > 0 else { return }
+
+        groups = document.groups
+        do {
+            try store.save(document)
+            configWarning = nil
+            DiagnosticLog.write("DockGroups", "Published Dock tile anchors for \(updated) group(s)")
+        } catch {
+            configWarning = error.localizedDescription
+            Self.logger.error("Failed to save Dock tile anchors: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     // MARK: - 诊断
