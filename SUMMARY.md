@@ -976,10 +976,12 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 
 ### 验证
 
-- 真机鼠标点击 Dock 图标（`CGWarpMouseCursorPosition` + `CGEvent` 左右键，辅助功能已授权）：冷启动 214 ms、待命进程二次展开 **10–16 ms**；面板 cocoa 落点 `(66, 56)`，正对 1080p 左边 Dock 上图标中心 y=216、高度 320 的浮层（55 + 10 贴边、216 − 160 居中）。
+- 真机鼠标点击 Dock 图标（`CGWarpMouseCursorPosition` + `CGEvent`，辅助功能已授权）：冷启动 214 ms（换过二进制后第一次还会到 498 ms——文件缓存和图标服务都是冷的）；关掉之后再点是 **22 / 49 / 55 ms**，而且 pid 不变（面板本来就开着时再点只要 10–16 ms）。面板 cocoa 落点横坐标恒为 `可见区左边缘 + 10`，纵坐标正对图标中心（1080p 左边 Dock：图标中心 y=216、浮层高 320 → 落点 y=56）。
+- 那 20–50 ms 里有一大半是 Dock 自己的点击处理与抬起后的派发，不是 Helper 的活，别再拿「比 10 ms 慢」当回归。
+- 「点外部关闭」用**中键**点 Dock 上方空白区来做最干净：全局监听同样收得到（事件是送给别的 App 的），又不会激活任何 App、不会弹菜单。左键点菜单栏/桌面会把焦点交给 Dock/Finder，测出来的就不是热展开那条路径了。
 - 关掉浮层后 `pgrep` 确认 Helper 进程仍在，再点图标直接复用同一个 pid。
 - 截图确认 3×3 图标 + 名称 + 绿点正常，浮层无页脚（320pt）。
-- 单元测试：新增 `DockHelperPanelPlacementTests`（左/下/右/自动隐藏、垂直轴不看鼠标、贴边夹取、超大浮层不越出屏幕）；`DockGroupsIntegrityTests` 补两条 Helper Info.plist 断言。`swift test` 45 项全过。
+- 单元测试：新增 `DockHelperPanelPlacementTests`（左/下/右/自动隐藏、垂直轴不看鼠标、贴边夹取、超大浮层不越出屏幕）；`DockGroupsIntegrityTests` 补两条 Helper Info.plist 断言。三个 Dock 分组套件 45 项全过。全量 `swift test` 里 `ScreenCaptureTests.startupShortcutRegistrationRetriesTransientFailure` 与 `ClosedLidSleepControllerTests.heartbeatFailureTriggersABoundedReconnect` 会因为并行负载偶发失败（单独跑必过），与本次改动无关。
 - 量完把用户机器上那份 Helper 恢复原状（本轮只借它做真机测试，正式生效走 App 重新生成）。
 
 ### 踩坑
