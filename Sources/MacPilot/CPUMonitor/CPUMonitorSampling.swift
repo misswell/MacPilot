@@ -18,6 +18,37 @@ struct SystemCPUSnapshot: Equatable, Sendable {
     let loadAverage: [Double]
 }
 
+/// `proc_taskinfo` 的 CPU 计数单位是 mach absolute time，而不是纳秒。
+/// Apple Silicon 的 timebase 是 125/3（一个 tick ≈ 41.67 ns），把它当成纳秒会按同样的
+/// 倍数低估每个应用的占用：系统显示 25%、列表却全是 0.1% 就是这么来的。
+/// Intel 机器的 timebase 是 1/1，所以这个换算在那边是恒等变换。
+enum MachCPUTime {
+    private static let timebase: (numer: UInt64, denom: UInt64) = {
+        var info = mach_timebase_info_data_t()
+        guard mach_timebase_info(&info) == KERN_SUCCESS, info.numer > 0, info.denom > 0 else {
+            return (1, 1)
+        }
+        return (UInt64(info.numer), UInt64(info.denom))
+    }()
+
+    static func nanoseconds(fromMachTicks ticks: UInt64) -> UInt64 {
+        let timebase = timebase
+        return nanoseconds(fromMachTicks: ticks, numer: timebase.numer, denom: timebase.denom)
+    }
+
+    /// 先整除再乘，避免长时间运行进程累计的 tick 在乘法里溢出 UInt64。
+    static func nanoseconds(fromMachTicks ticks: UInt64, numer: UInt64, denom: UInt64) -> UInt64 {
+        guard numer > 0, denom > 0 else { return ticks }
+        let quotient = ticks / denom
+        let remainder = ticks % denom
+        let (high, highOverflow) = quotient.multipliedReportingOverflow(by: numer)
+        let (low, lowOverflow) = remainder.multipliedReportingOverflow(by: numer)
+        guard !highOverflow, !lowOverflow else { return UInt64.max }
+        let (total, overflow) = high.addingReportingOverflow(low / denom)
+        return overflow ? UInt64.max : total
+    }
+}
+
 enum CPUUsageCalculator {
     /// Converts process CPU nanoseconds to a percentage of the whole machine.
     /// One fully busy logical core therefore contributes 100 / coreCount percent.
@@ -141,7 +172,7 @@ final class CPUUsageSampler: @unchecked Sendable {
                     name: process.name,
                     executablePath: process.executablePath,
                     cpuPercent: CPUUsageCalculator.processPercent(
-                        deltaCPUTime: delta,
+                        deltaCPUTime: MachCPUTime.nanoseconds(fromMachTicks: delta),
                         elapsed: elapsed,
                         logicalCoreCount: logicalCoreCount
                     ),
@@ -186,6 +217,8 @@ final class CPUUsageSampler: @unchecked Sendable {
 
     private var previousSampleUptime: TimeInterval?
 
+    /// 返回累计 CPU 时间，单位是 mach absolute time（不是纳秒），
+    /// 需要经 MachCPUTime 换算后才能和纳秒口径的 elapsed 一起做百分比。
     private static func cpuTime(of pid: pid_t) -> UInt64? {
         var taskInfo = proc_taskinfo()
         let result = proc_pidinfo(
