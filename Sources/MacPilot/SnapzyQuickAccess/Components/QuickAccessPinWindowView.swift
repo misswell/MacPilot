@@ -27,7 +27,7 @@ struct QuickAccessPinWindowView: View {
 
   var body: some View {
     ZStack {
-      screenshotImage
+      content
       chromeLayer
     }
     .frame(width: state.displaySize.width, height: state.displaySize.height)
@@ -39,16 +39,49 @@ struct QuickAccessPinWindowView: View {
     .background(Color.clear)
   }
 
-  private var screenshotImage: some View {
-    Image(nsImage: state.image)
+  @ViewBuilder
+  private var content: some View {
+    if let text = state.text {
+      textCard(text)
+    } else if let image = state.image {
+      screenshotImage(image)
+    } else {
+      Color.clear
+    }
+  }
+
+  private func screenshotImage(_ image: NSImage) -> some View {
+    Image(nsImage: image)
       .resizable()
       .aspectRatio(contentMode: .fit)
       .frame(width: state.displaySize.width, height: state.displaySize.height)
       .background(Color.black.opacity(0.03))
       .clipped()
-      .opacity(state.isLocked && state.isMouseInside ? 0.18 : 1)
+      .opacity(pinOpacity)
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: state.isMouseInside)
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: state.isLocked)
+  }
+
+  /// Clipboard-text pins render as a readable card: the text bubble the old
+  /// text-pin window drew is now the whole content surface of the same window.
+  private func textCard(_ text: String) -> some View {
+    Text(text)
+      .font(Font(QuickAccessPinTextMetrics.font))
+      .foregroundStyle(Color(nsColor: .labelColor))
+      .multilineTextAlignment(.leading)
+      .lineLimit(nil)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .padding(.horizontal, QuickAccessPinTextMetrics.padding)
+      .padding(.top, QuickAccessPinTextMetrics.chromeBand)
+      .padding(.bottom, QuickAccessPinTextMetrics.padding)
+      .background(Color(nsColor: .textBackgroundColor).opacity(0.97))
+      .opacity(pinOpacity)
+      .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: state.isMouseInside)
+      .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: state.isLocked)
+  }
+
+  private var pinOpacity: Double {
+    state.isLocked && state.isMouseInside ? 0.18 : 1
   }
 
   private var chromeLayer: some View {
@@ -69,13 +102,17 @@ struct QuickAccessPinWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(controlInset)
 
-      zoomMenu
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.top, controlInset)
+      if state.supportsZoom {
+        zoomMenu
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+          .padding(.top, controlInset)
+      }
 
-      dragHandle
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .padding(.bottom, controlInset)
+      if let fileURL = state.url {
+        dragHandle(fileURL: fileURL)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+          .padding(.bottom, controlInset)
+      }
     }
   }
 
@@ -160,11 +197,11 @@ struct QuickAccessPinWindowView: View {
     .shadow(color: Color.black.opacity(0.18), radius: 14, x: 0, y: 8)
   }
 
-  private var dragHandle: some View {
+  private func dragHandle(fileURL: URL) -> some View {
     QuickAccessPinDragHandleView(
-      fileURL: state.url,
-      image: state.image,
-      thumbnail: state.thumbnail,
+      fileURL: fileURL,
+      image: state.image ?? state.thumbnail ?? NSImage(),
+      thumbnail: state.thumbnail ?? state.image ?? NSImage(),
       onDragStateChanged: { isDragActive = $0 }
     )
     .frame(width: 72, height: 32)

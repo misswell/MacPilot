@@ -1059,22 +1059,41 @@ struct SnapzyCaptureTests {
     @Test func doubleEscapeWithinWindowDismissesThePins() {
         let first = Date(timeIntervalSinceReferenceDate: 100)
         // 第一按下：仅记录时间点，不关闭任何贴图。
-        #expect(!SmartPinEscapeRouting.shouldDismissPins(lastEscapeAt: nil, now: first))
+        #expect(!QuickAccessPinEscapeRouting.shouldDismissPins(lastEscapeAt: nil, now: first))
         // 0.8 秒窗口内的第二下：关闭全部贴图。
-        #expect(SmartPinEscapeRouting.shouldDismissPins(
+        #expect(QuickAccessPinEscapeRouting.shouldDismissPins(
             lastEscapeAt: first,
             now: first.addingTimeInterval(0.5)
         ))
         // 恰好在窗口边界上也算连按。
-        #expect(SmartPinEscapeRouting.shouldDismissPins(
+        #expect(QuickAccessPinEscapeRouting.shouldDismissPins(
             lastEscapeAt: first,
-            now: first.addingTimeInterval(SmartPinEscapeRouting.doublePressInterval)
+            now: first.addingTimeInterval(QuickAccessPinEscapeRouting.doublePressInterval)
         ))
         // 超出窗口：不关闭，重新开始计时。
-        #expect(!SmartPinEscapeRouting.shouldDismissPins(
+        #expect(!QuickAccessPinEscapeRouting.shouldDismissPins(
             lastEscapeAt: first,
             now: first.addingTimeInterval(1.5)
         ))
+    }
+
+    @Test @MainActor func clipboardTextPinsGetTheirOwnUnzoomedSurface() {
+        // The unified pin window hosts clipboard text as a card: it declares
+        // itself unzoomable and grows with the text while keeping a floor so
+        // the close/lock chrome always fits.
+        let short = QuickAccessPinTextMetrics.baseSize(for: "hi")
+        let long = QuickAccessPinTextMetrics.baseSize(
+            for: String(repeating: "a much longer clipboard line ", count: 8)
+        )
+        #expect(short.width >= QuickAccessPinTextMetrics.minimumSize.width)
+        #expect(short.height >= QuickAccessPinTextMetrics.minimumSize.height)
+        #expect(long.height > short.height)
+        #expect(long.width <= QuickAccessPinTextMetrics.maximumTextWidth + QuickAccessPinTextMetrics.padding * 2 + 1)
+
+        let state = QuickAccessPinWindowState(id: UUID(), text: "hi", baseSize: short)
+        #expect(state.isText)
+        #expect(!state.supportsZoom)
+        #expect(state.applyZoomStep(0.5) == short)
     }
 
     @Test func barLayoutKeepsHorizontalAndVerticalBarsApartForSmallSelections() {

@@ -1475,11 +1475,10 @@ final class SmartScreenshotController {
     private var currentTarget: CGRect?
     private var manualSelectionStart: CGPoint?
     private var manualSelectionRect: CGRect?
-    private var pinControllers: [UUID: SmartPinWindowController] = [:]
-    private var textPinControllers: [UUID: SmartTextPinWindowController] = [:]
-    private var pinEscapeMonitor: Any?
-    private var pinEscapeGlobalMonitor: Any?
-    private var lastPinEscapeAt: Date?
+    /// Pins this controller opened from the capture UI, so disabling the
+    /// screenshot feature can close exactly those (the unified pin manager also
+    /// owns Quick Access card pins, which are not ours to close).
+    private var directPinWindowIDs: Set<UUID> = []
     private var quickAccessControllers: [UUID: SmartQuickAccessWindowController] = [:]
     private var mediaQuickAccessControllers: [UUID: SmartMediaQuickAccessWindowController] = [:]
     private var quickAccessStack = SmartQuickAccessStackState()
@@ -2228,13 +2227,11 @@ final class SmartScreenshotController {
         manualSelectionRect = nil
         selectionMode = .smartElement
         unregisterShortcut()
-        let controllers = Array(pinControllers.values)
-        pinControllers.removeAll(keepingCapacity: false)
-        for controller in controllers { controller.close() }
-        let textPinControllers = Array(self.textPinControllers.values)
-        self.textPinControllers.removeAll(keepingCapacity: false)
-        for controller in textPinControllers { controller.close() }
-        removePinEscapeMonitors()
+        let pinWindowIDs = Array(directPinWindowIDs)
+        directPinWindowIDs.removeAll()
+        for pinWindowID in pinWindowIDs {
+            QuickAccessPinWindowManager.shared.close(id: pinWindowID)
+        }
         let quickAccessControllers = Array(self.quickAccessControllers.values)
         self.quickAccessControllers.removeAll(keepingCapacity: false)
         for controller in quickAccessControllers { controller.close() }
@@ -2970,21 +2967,17 @@ final class SmartScreenshotController {
     }
 
     /// `at` 传入框选的屏幕区域时，贴图显示在截取的原位；为 nil（剪贴板贴图）
-    /// 时保持居中。
+    /// 时保持居中。所有贴图入口共用同一个贴图窗口。
     func pin(image: CGImage, scaleFactor: CGFloat = 1, at screenRect: CGRect? = nil) {
-        let id = UUID()
-        let controller = SmartPinWindowController(
-            image: image,
+        let id = QuickAccessPinWindowManager.shared.showImage(
+            image,
             scaleFactor: scaleFactor,
+            at: screenRect,
             language: language()
-        ) { [weak self] in
-            Self.logger.info("Pin controller removed")
-            self?.pinControllers.removeValue(forKey: id)
-            self?.stopPinEscapeMonitorIfNeeded()
+        ) { [weak self] closedID in
+            self?.directPinWindowIDs.remove(closedID)
         }
-        pinControllers[id] = controller
-        controller.show(at: screenRect)
-        startPinEscapeMonitorIfNeeded()
+        directPinWindowIDs.insert(id)
     }
 
     /// Uploads only after the user explicitly selected the toolbar action.
@@ -3045,70 +3038,14 @@ final class SmartScreenshotController {
 
     /// 把剪贴板文字直接贴到屏幕上（文字贴图）。
     func pinClipboardText(_ text: String) {
-        let id = UUID()
-        let controller = SmartTextPinWindowController(
-            text: text,
-            language: language()
-        ) { [weak self] in
-            Self.logger.info("Text pin controller removed")
-            self?.textPinControllers.removeValue(forKey: id)
-            self?.stopPinEscapeMonitorIfNeeded()
-        }
-        textPinControllers[id] = controller
-        controller.show()
-        startPinEscapeMonitorIfNeeded()
-    }
-
-    // MARK: - 双击 ESC 退出贴图
-
-    /// 有贴图在场时监听 ESC；0.8 秒内连按两次关闭全部贴图（图片 + 文字）。
-    /// 本地监听覆盖本应用获得按键的情况，全局监听覆盖贴图在前台应用之上的
-    /// 场景（依赖应用已有的辅助功能权限）。监听从不吞掉事件。
-    private func startPinEscapeMonitorIfNeeded() {
-        guard pinEscapeMonitor == nil, pinEscapeGlobalMonitor == nil else { return }
-        lastPinEscapeAt = nil
-        pinEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            self?.handlePinEscapeKeyEvent(event)
-            return event
-        }
-        pinEscapeGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            self?.handlePinEscapeKeyEvent(event)
-        }
-    }
-
-    private func stopPinEscapeMonitorIfNeeded() {
-        guard pinControllers.isEmpty, textPinControllers.isEmpty else { return }
-        removePinEscapeMonitors()
-    }
-
-    private func removePinEscapeMonitors() {
-        if let monitor = pinEscapeMonitor {
-            NSEvent.removeMonitor(monitor)
-            pinEscapeMonitor = nil
-        }
-        if let monitor = pinEscapeGlobalMonitor {
-            NSEvent.removeMonitor(monitor)
-            pinEscapeGlobalMonitor = nil
-        }
-        lastPinEscapeAt = nil
-    }
-
-    private func handlePinEscapeKeyEvent(_ event: NSEvent) {
-        guard event.keyCode == 53 else { return } // kVK_Escape
-        guard !pinControllers.isEmpty || !textPinControllers.isEmpty else { return }
-        let now = Date()
-        if SmartPinEscapeRouting.shouldDismissPins(lastEscapeAt: lastPinEscapeAt, now: now) {
-            lastPinEscapeAt = nil
-            Self.logger.info("Double ESC dismisses all pinned windows")
-            for controller in Array(pinControllers.values) {
-                controller.close()
+        guard let id = QuickAccessPinWindowManager.shared.showText(
+            text,
+            language: language(),
+            onUserClose: { [weak self] closedID in
+                self?.directPinWindowIDs.remove(closedID)
             }
-            for controller in Array(textPinControllers.values) {
-                controller.close()
-            }
-        } else {
-            lastPinEscapeAt = now
-        }
+        ) else { return }
+        directPinWindowIDs.insert(id)
     }
 
     func presentInlineAnnotation(
@@ -4486,10 +4423,9 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     }
 
     private func recognizeText() {
-        let sendableImage = SendableSmartImage(value: image)
         Task { [weak self] in
             guard let self else { return }
-            guard let text = try? await SmartOCRService.recognize(image: sendableImage), !text.isEmpty else {
+            guard let text = try? await SmartOCRService.recognize(image: image), !text.isEmpty else {
                 showMessage(
                     title: AppText.value("scOCR", language: language),
                     message: AppText.value("scOCRNoText", language: language)
@@ -5132,639 +5068,16 @@ private struct SmartMediaEditorView: View {
     }
 }
 
-@MainActor
-private final class SmartPinWindowController: NSObject, NSWindowDelegate {
-    nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
-    private var image: CGImage
-    private let scaleFactor: CGFloat
-    private let language: AppLanguage
-    private let onClose: () -> Void
-    private var panel: NSPanel?
-    private var annotationHostView: NSView?
-
-    init(image: CGImage, scaleFactor: CGFloat = 1, language: AppLanguage, onClose: @escaping () -> Void) {
-        self.image = image
-        self.scaleFactor = max(0.25, scaleFactor)
-        self.language = language
-        self.onClose = onClose
-    }
-
-    func show(at screenRect: CGRect? = nil) {
-        // 贴图按「框选区域的实际点尺寸」显示（原图比例），即 像素 / 缩放比例；
-        // 只有图片超过屏幕可见区域时才缩小到适配屏幕。
-        let naturalImageSize = CGSize(
-            width: CGFloat(image.width) / scaleFactor,
-            height: CGFloat(image.height) / scaleFactor
-        )
-        let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
-        let maxImageWidth = max(180, visibleFrame.width - 32)
-        let maxImageHeight = max(120, visibleFrame.height - 48)
-        let scale = min(
-            1,
-            maxImageWidth / naturalImageSize.width,
-            maxImageHeight / naturalImageSize.height
-        )
-        let imageSize = CGSize(
-            width: max(1, naturalImageSize.width * scale),
-            height: max(1, naturalImageSize.height * scale)
-        )
-        let panel = NSPanel(
-            contentRect: CGRect(
-                origin: .zero,
-                size: CGSize(
-                    width: imageSize.width + SmartPinImageView.badgeOverhang,
-                    height: imageSize.height + SmartPinImageView.badgeOverhang
-                )
-            ),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.level = .floating
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.isMovable = false
-        panel.isMovableByWindowBackground = false
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isReleasedWhenClosed = false
-        panel.delegate = self
-        installContent(in: panel)
-        if let screenRect {
-            // 贴图显示在框选的原位；输出带阴影/圆角垫边或被屏幕缩放时，
-            // 以原框选区域为中心摆放。窗口左/上含角标悬出垫边，定位时
-            // 扣掉垫边让图片本体仍居中于框选区域。
-            panel.setFrameOrigin(CGPoint(
-                x: screenRect.midX - imageSize.width / 2 - SmartPinImageView.badgeOverhang,
-                y: screenRect.midY - imageSize.height / 2
-            ))
-        } else {
-            panel.center()
-        }
-        panel.orderFrontRegardless()
-        self.panel = panel
-        Self.logger.info("Pin window shown")
-    }
-
-    func close() {
-        Self.logger.info("Pin close requested")
-        panel?.close()
-        panel = nil
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        Self.logger.info("Pin window will close")
-        annotationHostView = nil
-        panel?.contentView = nil
-        panel = nil
-        onClose()
-    }
-
-    private func installContent(in panel: NSPanel) {
-        panel.contentView = SmartPinImageView(
-            image: image,
-            language: language,
-            onCopy: { [weak self] in self?.copyImage() },
-            onOCR: { [weak self] in self?.recognizeText() },
-            onAnnotate: { [weak self] in self?.openAnnotation() },
-            onUpload: { [weak self] in self?.uploadImage() },
-            onClose: { [weak self] in self?.close() }
-        )
-    }
-
-    private func copyImage() {
-        // Use the same file-backed provider as normal screenshot capture so a
-        // pin action never keeps a full PNG Data object in the pasteboard.
-        SmartCaptureClipboard.copy(image: image)
-    }
-
-    private func recognizeText() {
-        let sendableImage = SendableSmartImage(value: image)
-        Task { [weak self] in
-            guard let text = try? await SmartOCRService.recognize(image: sendableImage), !text.isEmpty else {
-                self?.showMessage(title: AppText.value("scOCR", language: self?.language ?? .system), message: AppText.value("scOCRNoText", language: self?.language ?? .system))
-                return
-            }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-            self?.showMessage(title: AppText.value("scOCRCopied", language: self?.language ?? .system), message: text)
-        }
-    }
-
-    private func uploadImage() {
-        let image = self.image
-        let language = self.language
-        guard ImageHostingUploadHUD.shared.begin(language: language) else {
-            showMessage(
-                title: AppText.value("scImageHostingUploadFailed", language: language),
-                message: ImageHostingError.uploadInProgress.localizedDescription(language: language)
-            )
-            return
-        }
-        let progressHandler = ImageHostingUploadHUD.makeProgressHandler(language: language)
-        Task { @MainActor in
-            do {
-                let result = try await ImageHostingUploadCoordinator.upload(
-                    image: image,
-                    onProgress: progressHandler
-                )
-                ImageHostingClipboard.copy(urls: [result.publicURL])
-                ImageHostingUploadHUD.shared.succeed(url: result.publicURL, language: language)
-            } catch {
-                ImageHostingUploadHUD.shared.fail(error: error, language: language)
-            }
-        }
-    }
-
-    private func openAnnotation() {
-        Self.logger.info("Annotation requested in pin window")
-        guard let panel else { return }
-        let originalImage = image
-        let model = SmartAnnotationModel(initialTool: .rectangle)
-        let editor = NSHostingView(rootView: SmartAnnotationEditor(
-            image: originalImage,
-            language: language,
-            model: model,
-            embedded: true,
-            onCancel: { [weak self] in
-                self?.restoreAnnotationEditor()
-            },
-            onComplete: { [weak self] in
-                guard let self,
-                      let annotated = SmartAnnotationRenderer.render(
-                          image: originalImage,
-                          annotations: model.annotations,
-                          styles: model.styledAnnotations.map(\.style)
-                      ) else { return }
-                Self.logger.info("Annotation completed; updating pin image")
-                self.image = annotated
-                self.restoreAnnotationEditor()
-            }
-        ))
-        annotationHostView = editor
-        panel.contentView = editor
-        panel.makeKeyAndOrderFront(nil)
-    }
-
-    private func restoreAnnotationEditor() {
-        annotationHostView = nil
-        guard let panel else { return }
-        installContent(in: panel)
-        panel.makeKeyAndOrderFront(nil)
-    }
-
-    private func showMessage(title: String, message: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = String(message.prefix(1_000))
-        alert.addButton(withTitle: AppText.value("scOK", language: language))
-        alert.runModal()
-    }
-}
-
-/// 贴图视图基类：左上角关闭角标默认隐藏，鼠标悬停在贴图上时才显示；
-/// 角标中心始终对齐内容的左上角尖（由子类给出角尖坐标）。
-@MainActor
-private class SmartPinContentView: NSView {
-    let closeButton = PinCloseButton()
-
-    /// 内容（图片矩形/文字气泡）左上角的角尖，view 坐标系。
-    var closeButtonCenter: CGPoint { .zero }
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        addSubview(closeButton)
-        closeButton.isHidden = true
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas where area.owner === self {
-            removeTrackingArea(area)
-        }
-        addTrackingArea(NSTrackingArea(
-            rect: .zero,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self
-        ))
-    }
-
-    override func layout() {
-        super.layout()
-        let diameter = PinCloseButton.diameter
-        let center = closeButtonCenter
-        closeButton.frame = CGRect(
-            x: center.x - diameter / 2,
-            y: center.y - diameter / 2,
-            width: diameter,
-            height: diameter
-        )
-    }
-
-    override func mouseEntered(with _: NSEvent) {
-        closeButton.isHidden = false
-    }
-
-    override func mouseExited(with _: NSEvent) {
-        closeButton.isHidden = true
-    }
-}
-
-@MainActor
-private final class SmartPinImageView: SmartPinContentView {
-    /// 窗口在图片左/上侧让出的透明垫边 = 角标半径，使角标中心恰好
-    /// 落在图片左上角尖且完整可见（不被窗口裁剪）。
-    static let badgeOverhang = PinCloseButton.diameter / 2
-    private let image: CGImage
-    private let language: AppLanguage
-    private let onCopy: () -> Void
-    private let onOCR: () -> Void
-    private let onAnnotate: () -> Void
-    private let onUpload: () -> Void
-    private let onClose: () -> Void
-    private var dragOffset: CGPoint?
-
-    init(
-        image: CGImage,
-        language: AppLanguage,
-        onCopy: @escaping () -> Void,
-        onOCR: @escaping () -> Void,
-        onAnnotate: @escaping () -> Void,
-        onUpload: @escaping () -> Void,
-        onClose: @escaping () -> Void
-    ) {
-        self.image = image
-        self.language = language
-        self.onCopy = onCopy
-        self.onOCR = onOCR
-        self.onAnnotate = onAnnotate
-        self.onUpload = onUpload
-        self.onClose = onClose
-        super.init(frame: .zero)
-        setAccessibilityElement(true)
-        setAccessibilityRole(.image)
-        setAccessibilityLabel(AppText.value("scPinTitle", language: language))
-        closeButton.target = self
-        closeButton.action = #selector(closeRequested)
-        let tooltip = AppText.value("scClose", language: language)
-        closeButton.toolTip = tooltip
-        closeButton.setAccessibilityLabel(tooltip)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    /// 图片内容区：窗口左/上是角标悬出的透明垫边。
-    private var imageRect: NSRect {
-        NSRect(
-            x: Self.badgeOverhang,
-            y: 0,
-            width: bounds.width - Self.badgeOverhang,
-            height: bounds.height - Self.badgeOverhang
-        )
-    }
-
-    override var closeButtonCenter: CGPoint {
-        // 图片为直角内容，角尖即图片矩形左上角点。
-        CGPoint(x: Self.badgeOverhang, y: bounds.height - Self.badgeOverhang)
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height)).draw(
-            in: imageRect,
-            from: .zero,
-            operation: .copy,
-            fraction: 1
-        )
-    }
-
-    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        // 双击贴图复制到剪贴板（与右键菜单的「复制」同一链路）；第二击仍
-        // 记录 dragOffset，双击后按住拖动依旧有效。
-        if event.clickCount == 2 {
-            onCopy()
-        }
-        dragOffset = event.locationInWindow
-    }
-
-    override func mouseDragged(with _: NSEvent) {
-        guard let window, let dragOffset else { return }
-        let pointer = NSEvent.mouseLocation
-        window.setFrameOrigin(CGPoint(
-            x: pointer.x - dragOffset.x,
-            y: pointer.y - dragOffset.y
-        ))
-    }
-
-    override func mouseUp(with _: NSEvent) {
-        dragOffset = nil
-    }
-
-    override func rightMouseDown(with event: NSEvent) {
-        NSMenu.popUpContextMenu(makeContextMenu(), with: event, for: self)
-    }
-
-    private func makeContextMenu() -> NSMenu {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        menu.addItem(menuItem("scCopy", action: #selector(copyRequested)))
-        menu.addItem(menuItem("scOCR", action: #selector(ocrRequested)))
-        menu.addItem(menuItem("scAnnotate", action: #selector(annotateRequested)))
-        menu.addItem(menuItem("scImageHostingUpload", action: #selector(uploadRequested)))
-        menu.addItem(.separator())
-        menu.addItem(menuItem("scClose", action: #selector(closeRequested)))
-        return menu
-    }
-
-    private func menuItem(_ key: String, action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(
-            title: AppText.value(key, language: language),
-            action: action,
-            keyEquivalent: ""
-        )
-        item.target = self
-        return item
-    }
-
-    @objc private func copyRequested() { onCopy() }
-    @objc private func ocrRequested() { onOCR() }
-    @objc private func annotateRequested() { onAnnotate() }
-    @objc private func uploadRequested() { onUpload() }
-    @objc private func closeRequested() { onClose() }
-}
-
-/// 左上角圆形关闭角标；acceptsFirstMouse 让首击即可关闭贴图。
-@MainActor
-private final class PinCloseButton: NSButton {
-    /// 角标直径；贴图窗口按 `diameter / 2` 预留悬出垫边。
-    static let diameter: CGFloat = 18
-
-    init() {
-        super.init(frame: .zero)
-        let symbol = NSImage(
-            systemSymbolName: "xmark",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(.init(pointSize: 8, weight: .bold))
-        image = symbol ?? NSImage()
-        isBordered = false
-        imagePosition = .imageOnly
-        contentTintColor = .white
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
-        layer?.cornerRadius = Self.diameter / 2
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.6).cgColor
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
-}
-
-/// 双击 ESC 退出贴图的时间窗判定（可测纯函数）：两次 ESC 间隔不超过
-/// `doublePressInterval` 视为「连按两次」。
-enum SmartPinEscapeRouting {
-    static let doublePressInterval: TimeInterval = 0.8
-
-    static func shouldDismissPins(lastEscapeAt: Date?, now: Date) -> Bool {
-        guard let lastEscapeAt, now >= lastEscapeAt else { return false }
-        return now.timeIntervalSince(lastEscapeAt) <= doublePressInterval
-    }
-}
-
-@MainActor
-private final class SmartTextPinWindowController: NSObject, NSWindowDelegate {
-    nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
-    private let text: String
-    private let language: AppLanguage
-    private let onClose: () -> Void
-    private var panel: NSPanel?
-
-    init(text: String, language: AppLanguage, onClose: @escaping () -> Void) {
-        self.text = text
-        self.language = language
-        self.onClose = onClose
-    }
-
-    func show() {
-        let font = NSFont.systemFont(ofSize: 14, weight: .regular)
-        let maxWidth: CGFloat = 360
-        let padding: CGFloat = 12
-        let textSize = (text as NSString).boundingRect(
-            with: NSSize(width: maxWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: font]
-        ).size
-        let bubbleSize = CGSize(
-            width: max(72, ceil(textSize.width) + padding * 2 + 6),
-            height: max(40, ceil(textSize.height) + padding * 2 + 6)
-        )
-        // 窗口比气泡大出一圈角标悬出垫边（左/上），角标中心才能落在
-        // 气泡左上角尖上且完整可见。
-        let size = CGSize(
-            width: bubbleSize.width + SmartTextPinView.badgeOverhang,
-            height: bubbleSize.height + SmartTextPinView.badgeOverhang
-        )
-        let panel = NSPanel(
-            contentRect: CGRect(origin: .zero, size: size),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.level = .floating
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.isMovable = false
-        panel.isMovableByWindowBackground = false
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isReleasedWhenClosed = false
-        panel.delegate = self
-        panel.contentView = SmartTextPinView(
-            text: text,
-            font: font,
-            language: language,
-            onClose: { [weak self] in self?.close() }
-        )
-        // 文字贴图贴在鼠标附近（Snipaste/iShot 的粘贴习惯），并夹回可见屏幕。
-        let mouse = NSEvent.mouseLocation
-        let visibleFrame = NSScreen.screens.first(where: { $0.frame.contains(mouse) })?.visibleFrame
-            ?? NSScreen.main?.visibleFrame
-            ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
-        let origin = CGPoint(
-            x: min(max(visibleFrame.minX + 4, mouse.x + 8), visibleFrame.maxX - size.width - 4),
-            y: min(max(visibleFrame.minY + 4, mouse.y - size.height - 8), visibleFrame.maxY - size.height - 4)
-        )
-        panel.setFrameOrigin(origin)
-        panel.orderFrontRegardless()
-        self.panel = panel
-        Self.logger.info("Text pin window shown")
-    }
-
-    func close() {
-        panel?.close()
-        panel = nil
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        panel?.contentView = nil
-        panel = nil
-        onClose()
-    }
-}
-
-@MainActor
-private final class SmartTextPinView: SmartPinContentView {
-    /// 窗口在气泡左/上侧让出的透明垫边 = 角标半径，使角标中心恰好
-    /// 落在气泡左上角尖且完整可见（不被窗口裁剪）。
-    static let badgeOverhang = PinCloseButton.diameter / 2
-    private static let bubbleRadius: CGFloat = 8
-    private let text: String
-    private let font: NSFont
-    private let language: AppLanguage
-    private let onClose: () -> Void
-    private var dragOffset: CGPoint?
-    private let textPadding: CGFloat = 12
-    private let textAttributes: [NSAttributedString.Key: Any]
-
-    init(text: String, font: NSFont, language: AppLanguage, onClose: @escaping () -> Void) {
-        self.text = text
-        self.font = font
-        self.language = language
-        self.onClose = onClose
-        self.textAttributes = [
-            .font: font,
-            .foregroundColor: NSColor.labelColor,
-        ]
-        super.init(frame: .zero)
-        wantsLayer = true
-        let tooltip = AppText.value("scClose", language: language)
-        closeButton.target = self
-        closeButton.action = #selector(closeRequested)
-        closeButton.toolTip = tooltip
-        closeButton.setAccessibilityLabel(tooltip)
-        setAccessibilityElement(true)
-        setAccessibilityRole(.staticText)
-        setAccessibilityLabel(text)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    /// 文字气泡内容区：窗口左/上是角标悬出的透明垫边。
-    private var bubbleRect: NSRect {
-        NSRect(
-            x: Self.badgeOverhang,
-            y: 0,
-            width: bounds.width - Self.badgeOverhang,
-            height: bounds.height - Self.badgeOverhang
-        )
-    }
-
-    override var closeButtonCenter: CGPoint {
-        // 圆角气泡的角尖 = 圆弧上离中心最远的点（45° 处）。
-        let tipInset = Self.bubbleRadius * (1 - sqrt(2) / 2)
-        return CGPoint(
-            x: bubbleRect.minX + tipInset,
-            y: bubbleRect.maxY - tipInset
-        )
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        let bubble = NSBezierPath(
-            roundedRect: bubbleRect,
-            xRadius: Self.bubbleRadius,
-            yRadius: Self.bubbleRadius
-        )
-        NSColor.white.withAlphaComponent(0.96).setFill()
-        bubble.fill()
-        NSColor.black.withAlphaComponent(0.18).setStroke()
-        bubble.lineWidth = 1
-        bubble.stroke()
-        // 角标默认隐藏、悬停时才显示在左上角尖，常规内边距即可容纳首行文字。
-        let textRect = bubbleRect.insetBy(dx: textPadding, dy: textPadding)
-        (text as NSString).draw(in: textRect, withAttributes: textAttributes)
-    }
-
-    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        dragOffset = event.locationInWindow
-    }
-
-    override func mouseDragged(with _: NSEvent) {
-        guard let window, let dragOffset else { return }
-        let pointer = NSEvent.mouseLocation
-        window.setFrameOrigin(CGPoint(
-            x: pointer.x - dragOffset.x,
-            y: pointer.y - dragOffset.y
-        ))
-    }
-
-    override func mouseUp(with _: NSEvent) {
-        dragOffset = nil
-    }
-
-    override func rightMouseDown(with event: NSEvent) {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        let copy = NSMenuItem(
-            title: AppText.value("scCopy", language: language),
-            action: #selector(copyRequested),
-            keyEquivalent: ""
-        )
-        copy.target = self
-        menu.addItem(copy)
-        menu.addItem(.separator())
-        let close = NSMenuItem(
-            title: AppText.value("scClose", language: language),
-            action: #selector(closeRequested),
-            keyEquivalent: ""
-        )
-        close.target = self
-        menu.addItem(close)
-        NSMenu.popUpContextMenu(menu, with: event, for: self)
-    }
-
-    @objc private func copyRequested() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-    }
-
-    @objc private func closeRequested() { onClose() }
-}
-
-private struct SendableSmartImage: @unchecked Sendable {
-    let value: CGImage
-}
-
-private enum SmartOCRService {
-    static func recognize(image: SendableSmartImage) async throws -> String {
+/// Shared OCR entry point for the capture HUD and the unified pin window.
+enum SmartOCRService {
+    static func recognize(image: CGImage) async throws -> String {
         try await Task.detached(priority: .userInitiated) {
             try autoreleasepool {
                 let request = VNRecognizeTextRequest()
                 request.recognitionLevel = .accurate
                 request.usesLanguageCorrection = true
                 request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]
-                let handler = VNImageRequestHandler(cgImage: image.value, options: [:])
+                let handler = VNImageRequestHandler(cgImage: image, options: [:])
                 try handler.perform([request])
                 return (request.results ?? [])
                     .compactMap { $0.topCandidates(1).first?.string }
