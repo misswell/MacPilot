@@ -129,7 +129,6 @@ enum DockHelperLayout {
     static let gridRowHeight: CGFloat = 82
     static let listRowHeight: CGFloat = 34
     static let listWidth: CGFloat = 260
-    static let footerHeight: CGFloat = 30
     static let gap: CGFloat = 10
     static let cornerRadius: CGFloat = 14
 
@@ -152,16 +151,12 @@ enum DockHelperLayout {
                 + headerHeight
                 + sectionSpacing
                 + CGFloat(rows) * gridRowHeight
-                + sectionSpacing
-                + footerHeight
             return NSSize(width: max(200, width), height: max(160, height))
         case .list:
             let height = padding * 2
                 + headerHeight
                 + sectionSpacing
                 + CGFloat(group.apps.count) * listRowHeight
-                + sectionSpacing
-                + footerHeight
             return NSSize(width: listWidth, height: max(160, height))
         }
     }

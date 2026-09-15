@@ -19,8 +19,6 @@ struct DockHelperView: View {
         VStack(alignment: .leading, spacing: DockHelperLayout.sectionSpacing) {
             header
             content
-            Spacer(minLength: 0)
-            footer
         }
         .padding(DockHelperLayout.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -34,8 +32,9 @@ struct DockHelperView: View {
 
     // MARK: - 页头
 
-    /// 只放标题 + 一个设置齿轮：分组图标在这里没有信息量（点开的就是这个分组），
-    /// 设置项也从页脚挪到标题旁边，避免和「点击图标打开或切换到应用」的提示挤在一行。
+    /// 只有标题 + 一个设置齿轮：分组图标在这里没有信息量（点开的就是这个分组）。
+    /// 启动失败的提示占用标题右侧的空白，不再单独占一行页脚——页脚那句话和它上面的
+    /// 分隔线都是多余的噪声，去掉之后浮层高度也少了一整行。
     private var header: some View {
         HStack(spacing: 6) {
             Text(model.groupName)
@@ -55,7 +54,16 @@ struct DockHelperView: View {
             .accessibilityLabel(model.t("settings"))
             .keyboardShortcut(",", modifiers: .command)
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
+
+            if let errorMessage = model.errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(1)
+            }
         }
         .frame(height: DockHelperLayout.headerHeight, alignment: .leading)
     }
@@ -216,31 +224,6 @@ struct DockHelperView: View {
             .background(Circle().fill(app.isRunning ? .green : .clear))
             .frame(width: 8, height: 8)
             .accessibilityHidden(true)
-    }
-
-    // MARK: - 页脚
-
-    private var footer: some View {
-        HStack(spacing: 8) {
-            // 启动失败等提示直接占用页脚的提示位，
-            // 这样浮层尺寸始终是预先算好的那一份，不会被撑高或裁切。
-            if let errorMessage = model.errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                    .lineLimit(1)
-            } else {
-                Text(model.t("hint"))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(height: DockHelperLayout.footerHeight)
-        .overlay(alignment: .top) {
-            Divider().offset(y: -DockHelperLayout.sectionSpacing / 2)
-        }
     }
 
     /// 方向键在 Grid / List 中移动焦点，符合「支持键盘导航」的要求。

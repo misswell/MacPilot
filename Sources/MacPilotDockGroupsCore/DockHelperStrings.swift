@@ -37,8 +37,7 @@ public enum DockHelperStrings {
         "running": "正在运行",
         "notRunning": "未运行",
         "launchFailed": "无法打开「%@」",
-        "showInFinder": "在访达中显示",
-        "hint": "点击图标打开或切换到应用"
+        "showInFinder": "在访达中显示"
     ]
 
     private static let english: [String: String] = [
@@ -55,7 +54,6 @@ public enum DockHelperStrings {
         "running": "Running",
         "notRunning": "Not running",
         "launchFailed": "Could not open “%@”",
-        "showInFinder": "Reveal in Finder",
-        "hint": "Click an icon to open or switch to the app"
+        "showInFinder": "Reveal in Finder"
     ]
 }
