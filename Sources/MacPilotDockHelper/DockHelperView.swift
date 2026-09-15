@@ -13,7 +13,6 @@ import SwiftUI
 
 struct DockHelperView: View {
     @ObservedObject var model: DockHelperModel
-    @Environment(\.colorScheme) private var colorScheme
     @FocusState private var focusedIndex: Int?
 
     var body: some View {
@@ -35,21 +34,27 @@ struct DockHelperView: View {
 
     // MARK: - 页头
 
+    /// 只放标题 + 一个设置齿轮：分组图标在这里没有信息量（点开的就是这个分组），
+    /// 设置项也从页脚挪到标题旁边，避免和「点击图标打开或切换到应用」的提示挤在一行。
     private var header: some View {
-        HStack(spacing: 8) {
-            if let group = model.group {
-                Image(nsImage: DockGroupIconRenderer.image(
-                    for: group,
-                    size: 44,
-                    memberIconURLs: group.apps.compactMap { InstalledAppResolver.resolveURL($0) },
-                    appearance: DockGroupIconAppearance(isDark: colorScheme == .dark)
-                ))
-                .resizable()
-                .frame(width: 22, height: 22)
-            }
+        HStack(spacing: 6) {
             Text(model.groupName)
                 .font(.headline)
                 .lineLimit(1)
+
+            Button {
+                model.openMacPilotSettings()
+            } label: {
+                // 只放图标：设置从页脚挪到标题旁，横向空间只够一个小齿轮，
+                // 语义交给下面的 accessibilityLabel。
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.borderless)
+            .help(model.t("settings"))
+            .accessibilityLabel(model.t("settings"))
+            .keyboardShortcut(",", modifiers: .command)
+
             Spacer(minLength: 0)
         }
         .frame(height: DockHelperLayout.headerHeight, alignment: .leading)
@@ -231,12 +236,6 @@ struct DockHelperView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            Button(model.t("settings")) {
-                model.openMacPilotSettings()
-            }
-            .buttonStyle(.borderless)
-            .font(.caption)
-            .keyboardShortcut(",", modifiers: .command)
         }
         .frame(height: DockHelperLayout.footerHeight)
         .overlay(alignment: .top) {

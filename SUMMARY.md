@@ -921,3 +921,14 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 - 像素级用例：深色版底色亮度 < 1.2、浅色版 > 2.0（三通道之和）；符号图标深色版更暗且色相不变；模型缓存对两种外观返回不同对象且各自命中。
 - 真机：把 `MACPILOT_DOCK_GROUPS_ROOT` 指向临时 `groups.json`、用 `open -a` 启动 Helper（直接跑二进制会因为抢不到 key window 被「失去 key 即关闭」收掉，走 LaunchServices 才是真实路径），截图确认深色浮层 + 深色分组图标 + 绿点运行状态。
 - 截图本身的两个坑：桌面被别的窗口压住时，`screencapture -l <windowID>` 可以直接抓被遮挡的窗口（窗口号用 `CGWindowListCopyWindowInfo` 取）；另外本机同时装着一份同 Bundle ID 的构建，`open macpilot://…` 会一直被路由到**已安装**的那份，必须写成 `open -a <自己那份>.app "macpilot://…"` 才送得到指定构建。
+
+## 三十八、浮层页头改成「标题 + 齿轮」（v1.1.345）
+
+- 页头不再画分组图标：点开的就是这个分组，图标在这里没有信息量。现在只有标题，紧跟一个 12pt 齿轮。
+- 设置从页脚挪到标题旁（保留 `⌘,` 快捷键），页脚只剩「点击图标打开或切换到应用」这行提示，不再和「设置…」挤在一行。
+- 顺带删掉页头里为图标准备的 `colorScheme` 环境变量——浮层不再画分组图标，深浅外观对浮层已经无事可做（浅色/深色切换仍由 `.regularMaterial` 自适应）。
+
+### 验证方式（值得留给下次）
+
+- 屏幕锁定时**浮层的窗口根本不会被合成**：`CGWindowListCopyWindowInfo` 里查不到，`screencapture` 全是黑的，进程却还活着——别误判成「浮层没弹出来」。
+- 于是临时给 `main.swift` 加了一个 `MACPILOT_DOCK_HELPER_SNAPSHOT` 环境变量，用 `ImageRenderer` 把 `DockHelperView` 离屏渲染成 PNG（验证完立刻还原，未提交）。这招能拿到页头/页脚的布局，但**受限于离屏渲染**：`Button` 里的 SF Symbol 在锁屏环境会渲染成「缺图」黄色占位符（同一个 `Image(systemName:)` 不在 Button 里就正常，纯文字 Button 也正常）。真实窗口里这个组合是正常的——早前非锁屏时的真机截图里，`Label(_, systemImage:)` 按钮图形都正确，别把这个占位符当成 bug。
