@@ -968,6 +968,10 @@ enum AppText {
         "dockGroupsAlreadyAdded": "已添加",
         "dockGroupsDefaultLayout": "默认布局",
         "dockGroupsShowRunningState": "显示运行状态",
+        "dockGroupsGroupSettings": "分组设置",
+        "dockGroupsLayoutHint": "新建分组时默认使用的布局。",
+        "dockGroupsGroupsSection": "分组",
+        "dockGroupsGroupSummary": "%d 个分组 · %d 个应用",
     ]
 
     private static let dockGroupsEnglish: [String: String] = [
@@ -1024,6 +1028,10 @@ enum AppText {
         "dockGroupsAlreadyAdded": "Added",
         "dockGroupsDefaultLayout": "Default layout",
         "dockGroupsShowRunningState": "Show running state",
+        "dockGroupsGroupSettings": "Group settings",
+        "dockGroupsLayoutHint": "The layout new groups start with.",
+        "dockGroupsGroupsSection": "Groups",
+        "dockGroupsGroupSummary": "%d groups · %d apps",
     ]
 
     static func value(_ key: String, language: AppLanguage, arguments: [CVarArg]) -> String {

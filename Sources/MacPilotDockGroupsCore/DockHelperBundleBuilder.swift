@@ -97,7 +97,15 @@ public struct DockHelperBundleBuilder {
             try FileManager.default.copyItem(at: helperExecutableURL, to: executable)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
-            let icon = DockGroupIconRenderer.image(for: group, size: 1024, memberIconURLs: memberIconURLs)
+            // Dock 图标固定用浅色版本：`.icns` 没有外观变体，Dock 里第三方 App 的图标
+            // 也不随系统外观变化；若跟随「生成那一刻」的外观，用户之后切换外观就会不一致。
+            // 深浅外观只影响 MacPilot 界面内与浮层里的绘制（见 DockGroupIconAppearance）。
+            let icon = DockGroupIconRenderer.image(
+                for: group,
+                size: 1024,
+                memberIconURLs: memberIconURLs,
+                appearance: .light
+            )
             let iconData = ICNSWriter.data(from: icon)
             try iconData.write(to: resources.appendingPathComponent(Self.helperIconName), options: .atomic)
 

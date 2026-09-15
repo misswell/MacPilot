@@ -891,3 +891,33 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 - 黑屏过（MacPilot 自己压黑的）→ `wakeDisplay` 先解除黑屏：外接屏点亮、内置屏恢复亮度，**不解锁**。
 - 锁屏态（显示器被系统/`黑屏` 真睡眠）→ 只把显示器唤醒到**锁屏界面**，同样不解锁；要解锁是另一个动作「唤醒解锁」。
 - 注意：人在 Mac 旁边时，BLE 就近解锁也可能会把锁屏解掉——那不是「亮屏」干的。
+
+## 三十七、Dock 分组：设置页布局与深色图标（v1.1.344）
+
+### 页面布局
+
+- 改前：页头下面直接是一行**右对齐**的按钮（左边空着），再一行偏好，看不出哪行是「设置」哪行是「操作」。
+- 改后：两个偏好进 `SettingsCard`（标题「分组设置」）；列表上方改成「分组」小节标题 + `n 个分组 · m 个应用` 统计，四个操作按钮挂在这一行右侧——与内存监控页的小节行一致。
+- **详情页不要再加功能总开关**。`3d25c41` 把 11 个详情页的总开关全部移除，改成「首页开关同时控制功能入口与后台运行」。我第一版按老结构又加了「启用 Dock 分组」，与那次重构直接冲突，已改成卡片里只放偏好。
+
+### 深色模式
+
+- 渲染器原先有三处硬编码浅色底（合成图标 / Emoji / 自定义图片），描边固定黑色 10% 透明——在深色界面上就是一块刺眼的白。
+- 现在由 `DockGroupIconAppearance` 决定一整套 Palette：深色底 `0.24 → 0.15` 渐变、描边换成白色 18%、强调色降饱和（0.62 → 0.52）降亮度（0.86 → 0.66，**色相不动**，同一个分组在两种外观下仍是同一种颜色）。
+- 视图侧显式传 SwiftUI 的 `colorScheme`，而不是让渲染器自己去读 `NSApp.effectiveAppearance`：视图重绘的时机和 App 外观不一定同步。
+
+### 三个坑
+
+1. **`drawEmoji` 没设 `.foregroundColor`**。`NSAttributedString` 不带前景色时 AppKit 按**黑色**绘制，深色底上的兜底符号与文字直接看不见。Emoji 是彩色字形不受影响，所以只在「符号缺失 → 文字兜底」这条路径上暴露。
+2. **图标缓存键必须带外观**。`DockGroupsModel` 原先按 `group@size` 记忆，切到深色模式会原样返回上一次渲染的浅色图；外观已并进 cacheKey。
+3. **默认参数撞上主 actor 隔离**。`current(_ appearance: NSAppearance? = NSApp?.effectiveAppearance)` 里的 `NSApp` 是主 actor 隔离的，非隔离函数用它会报 `main actor-isolated default value in a nonisolated context`；拆成 `@MainActor current()` + 非隔离 `current(_:)` 即可。
+
+### 边界
+
+- 写进 Helper `.app` 的 `.icns` **仍然是浅色版本**：`.icns` 没有外观变体，Dock 里第三方 App 的图标本来也不随系统外观变化，而按「生成那一刻的外观」出图会在用户之后切换外观时变得不一致。这个取舍写进了 README。
+
+### 验证
+
+- 像素级用例：深色版底色亮度 < 1.2、浅色版 > 2.0（三通道之和）；符号图标深色版更暗且色相不变；模型缓存对两种外观返回不同对象且各自命中。
+- 真机：把 `MACPILOT_DOCK_GROUPS_ROOT` 指向临时 `groups.json`、用 `open -a` 启动 Helper（直接跑二进制会因为抢不到 key window 被「失去 key 即关闭」收掉，走 LaunchServices 才是真实路径），截图确认深色浮层 + 深色分组图标 + 绿点运行状态。
+- 截图本身的两个坑：桌面被别的窗口压住时，`screencapture -l <windowID>` 可以直接抓被遮挡的窗口（窗口号用 `CGWindowListCopyWindowInfo` 取）；另外本机同时装着一份同 Bundle ID 的构建，`open macpilot://…` 会一直被路由到**已安装**的那份，必须写成 `open -a <自己那份>.app "macpilot://…"` 才送得到指定构建。

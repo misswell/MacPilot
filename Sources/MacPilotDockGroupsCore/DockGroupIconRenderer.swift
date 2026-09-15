@@ -12,11 +12,75 @@
 import AppKit
 import Foundation
 
+/// 分组图标要按哪种外观绘制。
+///
+/// 深色模式下 macOS 自己的文件夹图标会换成压暗的版本，白色的分组图标在深色
+/// 界面里则会亮得刺眼，所以分组图标也必须有深色版本。
+///
+/// 注意：**只有界面内绘制跟随外观**。写进 Helper `.app` 的 Dock 图标仍然使用
+/// 浅色版本——`.icns` 无法携带外观变体，Dock 里的第三方图标本来也不随系统
+/// 外观变化，跟随生成时的外观反而会让图标在用户切换外观后变得不一致。
+public enum DockGroupIconAppearance: Sendable {
+    case light
+    case dark
+
+    public init(isDark: Bool) {
+        self = isDark ? .dark : .light
+    }
+
+    /// 由 AppKit 当前外观推断；SwiftUI 视图里更推荐显式传 `colorScheme`。
+    /// `NSApp` 只在主线程可读，所以这里跟着主 actor 走。
+    @MainActor
+    public static func current() -> DockGroupIconAppearance {
+        current(NSApp?.effectiveAppearance)
+    }
+
+    static func current(_ appearance: NSAppearance?) -> DockGroupIconAppearance {
+        guard let appearance,
+              appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        else { return .light }
+        return .dark
+    }
+}
+
 @MainActor
 public enum DockGroupIconRenderer {
     /// Dock 图标画布的常用留白比例。
     static let contentInsetRatio: CGFloat = 0.08
     static let cornerRadiusRatio: CGFloat = 0.2237
+
+    /// 一套按外观取的绘制颜色。
+    private struct Palette {
+        let baseFill: NSColor
+        let gradientStart: NSColor
+        let gradientEnd: NSColor
+        let border: NSColor
+        /// 文字 / 兜底符号的前景色。Emoji 本身是彩色字形，不受它影响。
+        let glyph: NSColor
+
+        static func make(for appearance: DockGroupIconAppearance) -> Palette {
+            switch appearance {
+            case .light:
+                Palette(
+                    baseFill: NSColor(calibratedWhite: 0.93, alpha: 1),
+                    gradientStart: NSColor(calibratedWhite: 0.99, alpha: 1),
+                    gradientEnd: NSColor(calibratedWhite: 0.86, alpha: 1),
+                    border: NSColor(calibratedWhite: 0, alpha: 0.10),
+                    glyph: NSColor(calibratedWhite: 0.12, alpha: 1)
+                )
+            case .dark:
+                // 对齐 macOS 深色模式的文件夹图标：整体压暗，描边改成浅色，
+                // 否则在深色背景上完全看不出边界。
+                Palette(
+                    baseFill: NSColor(calibratedWhite: 0.24, alpha: 1),
+                    gradientStart: NSColor(calibratedWhite: 0.30, alpha: 1),
+                    gradientEnd: NSColor(calibratedWhite: 0.15, alpha: 1),
+                    border: NSColor(calibratedWhite: 1, alpha: 0.18),
+                    glyph: NSColor(calibratedWhite: 0.96, alpha: 1)
+                )
+            }
+        }
+    }
 
     /// 渲染分组图标。
     /// - Parameters:
@@ -24,12 +88,15 @@ public enum DockGroupIconRenderer {
     ///   - size: 输出边长（点）。
     ///   - memberIconURLs: 组合图标时使用的成员 App 路径（最多取前 4 个）。
     ///   - customIconDirectory: 自定义图片所在目录；默认 MacPilot 的管理目录。
+    ///   - appearance: 按浅色还是深色绘制；默认跟随当前 App 外观。
     public static func image(
         for group: DockGroup,
         size: CGFloat,
         memberIconURLs: [URL] = [],
-        customIconDirectory: URL? = nil
+        customIconDirectory: URL? = nil,
+        appearance: DockGroupIconAppearance = .current()
     ) -> NSImage {
+        let palette = Palette.make(for: appearance)
         let canvas = max(64, size)
         let image = NSImage(size: NSSize(width: canvas, height: canvas))
         image.lockFocus()
@@ -45,18 +112,24 @@ public enum DockGroupIconRenderer {
 
         switch group.icon.source {
         case .symbol:
-            drawSymbolBackground(in: path, rect: content, group: group)
+            drawSymbolBackground(in: path, rect: content, group: group, palette: palette, appearance: appearance)
             drawSymbol(named: group.icon.value, in: content, fallback: group.name)
         case .emoji:
-            drawEmojiBackground(in: path, rect: content)
-            drawEmoji(group.icon.value, in: content, fallback: group.name)
+            drawEmojiBackground(in: path, rect: content, palette: palette)
+            drawEmoji(group.icon.value, in: content, fallback: group.name, glyph: palette.glyph)
         case .customImage:
-            if !drawCustomImage(named: group.icon.value, in: path, rect: content, directory: customIconDirectory) {
-                drawComposite(in: path, rect: content, memberIconURLs: memberIconURLs)
-                drawFallbackSymbol(in: content)
+            if !drawCustomImage(
+                named: group.icon.value,
+                in: path,
+                rect: content,
+                directory: customIconDirectory,
+                palette: palette
+            ) {
+                drawComposite(in: path, rect: content, memberIconURLs: memberIconURLs, palette: palette, appearance: appearance)
+                drawFallbackSymbol(in: content, glyph: palette.glyph)
             }
         case .composite:
-            drawComposite(in: path, rect: content, memberIconURLs: memberIconURLs)
+            drawComposite(in: path, rect: content, memberIconURLs: memberIconURLs, palette: palette, appearance: appearance)
         }
 
         return image
@@ -73,41 +146,56 @@ public enum DockGroupIconRenderer {
     }
 
     /// 由分组 ID 派生稳定的强调色，让每个分组一眼可辨。
-    static func accentColor(for group: DockGroup) -> NSColor {
+    /// 深色模式下略微降低饱和与亮度，避免彩色图标在暗色界面里过于刺眼。
+    static func accentColor(
+        for group: DockGroup,
+        appearance: DockGroupIconAppearance = .light
+    ) -> NSColor {
         let hash = group.id.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFFFF }
         let hue = CGFloat(hash % 360) / 360
-        return NSColor(calibratedHue: hue, saturation: 0.62, brightness: 0.86, alpha: 1)
+        switch appearance {
+        case .light:
+            return NSColor(calibratedHue: hue, saturation: 0.62, brightness: 0.86, alpha: 1)
+        case .dark:
+            return NSColor(calibratedHue: hue, saturation: 0.52, brightness: 0.66, alpha: 1)
+        }
     }
 
-    private static func drawSymbolBackground(in path: NSBezierPath, rect: NSRect, group: DockGroup) {
-        let base = accentColor(for: group)
+    private static func drawSymbolBackground(
+        in path: NSBezierPath,
+        rect: NSRect,
+        group: DockGroup,
+        palette: Palette,
+        appearance: DockGroupIconAppearance
+    ) {
+        let base = accentColor(for: group, appearance: appearance)
         let lighter = base.blended(withFraction: 0.28, of: .white) ?? base
         let darker = base.blended(withFraction: 0.22, of: .black) ?? base
         path.addClip()
         NSGradient(starting: lighter, ending: darker)?.draw(in: rect, angle: -90)
-        strokeBorder(path)
+        strokeBorder(path, palette: palette)
     }
 
-    private static func drawEmojiBackground(in path: NSBezierPath, rect: NSRect) {
+    private static func drawEmojiBackground(in path: NSBezierPath, rect: NSRect, palette: Palette) {
         path.addClip()
-        NSColor(calibratedWhite: 0.97, alpha: 1).setFill()
+        palette.baseFill.setFill()
         rect.fill()
-        NSGradient(
-            starting: NSColor(calibratedWhite: 1.0, alpha: 1),
-            ending: NSColor(calibratedWhite: 0.88, alpha: 1)
-        )?.draw(in: rect, angle: -90)
-        strokeBorder(path)
+        NSGradient(starting: palette.gradientStart, ending: palette.gradientEnd)?.draw(in: rect, angle: -90)
+        strokeBorder(path, palette: palette)
     }
 
-    private static func drawComposite(in path: NSBezierPath, rect: NSRect, memberIconURLs: [URL]) {
+    private static func drawComposite(
+        in path: NSBezierPath,
+        rect: NSRect,
+        memberIconURLs: [URL],
+        palette: Palette,
+        appearance: DockGroupIconAppearance
+    ) {
         path.addClip()
-        NSColor(calibratedWhite: 0.93, alpha: 1).setFill()
+        palette.baseFill.setFill()
         rect.fill()
-        NSGradient(
-            starting: NSColor(calibratedWhite: 0.99, alpha: 1),
-            ending: NSColor(calibratedWhite: 0.86, alpha: 1)
-        )?.draw(in: rect, angle: -90)
-        strokeBorder(path)
+        NSGradient(starting: palette.gradientStart, ending: palette.gradientEnd)?.draw(in: rect, angle: -90)
+        strokeBorder(path, palette: palette)
 
         let padding = rect.width * 0.14
         let available = rect.insetBy(dx: padding, dy: padding)
@@ -141,22 +229,23 @@ public enum DockGroupIconRenderer {
         named fileName: String,
         in path: NSBezierPath,
         rect: NSRect,
-        directory: URL?
+        directory: URL?,
+        palette: Palette
     ) -> Bool {
         guard !fileName.isEmpty else { return false }
         let base = directory ?? DockGroupPaths.defaultRootDirectory()
         let url = DockGroupPaths.customIconURL(in: base, fileName: fileName)
         guard let image = NSImage(contentsOf: url) else { return false }
         path.addClip()
-        NSColor(calibratedWhite: 0.97, alpha: 1).setFill()
+        palette.baseFill.setFill()
         rect.fill()
         image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
-        strokeBorder(path)
+        strokeBorder(path, palette: palette)
         return true
     }
 
-    private static func strokeBorder(_ path: NSBezierPath) {
-        NSColor(calibratedWhite: 0, alpha: 0.10).setStroke()
+    private static func strokeBorder(_ path: NSBezierPath, palette: Palette) {
+        palette.border.setStroke()
         path.lineWidth = 2
         path.stroke()
     }
@@ -166,7 +255,7 @@ public enum DockGroupIconRenderer {
     private static func drawSymbol(named name: String, in rect: NSRect, fallback: String) {
         let symbolName = name.isEmpty ? fallbackSymbolName(for: fallback) : name
         guard let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else {
-            drawEmoji(fallback.first.map(String.init) ?? "▦", in: rect, fallback: "▦")
+            drawEmoji(fallback.first.map(String.init) ?? "▦", in: rect, fallback: "▦", glyph: .white)
             return
         }
 
@@ -192,15 +281,17 @@ public enum DockGroupIconRenderer {
         tinted.draw(in: target, from: .zero, operation: .sourceOver, fraction: 1)
     }
 
-    private static func drawFallbackSymbol(in rect: NSRect) {
-        drawEmoji("▦", in: rect, fallback: "▦")
+    private static func drawFallbackSymbol(in rect: NSRect, glyph: NSColor) {
+        drawEmoji("▦", in: rect, fallback: "▦", glyph: glyph)
     }
 
-    private static func drawEmoji(_ value: String, in rect: NSRect, fallback: String) {
+    private static func drawEmoji(_ value: String, in rect: NSRect, fallback: String, glyph: NSColor) {
         let text = value.isEmpty ? String(fallback.prefix(2)) : value
         let fontSize = rect.width * 0.56
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: fontSize)
+            .font: NSFont.systemFont(ofSize: fontSize),
+            // 不指定前景色时 AppKit 按黑色绘制，深色背景下会完全看不见。
+            .foregroundColor: glyph
         ]
         let string = NSAttributedString(string: text, attributes: attributes)
         let size = string.size()

@@ -680,6 +680,131 @@ struct ThirdPartyAppIntegrityTests {
             #expect(String(data: data.prefix(4), encoding: .ascii) == "icns")
         }
     }
+
+    // MARK: - 深色模式
+
+    /// 深色模式必须真的换掉底色，而不是继续沿用浅色版的白色背景。
+    @Test func darkAppearancePaintsADarkBackground() throws {
+        for icon in [
+            DockGroupIcon(source: .composite, value: ""),
+            DockGroupIcon(source: .emoji, value: "🛠")
+        ] {
+            let group = DockGroup(id: "dev", name: "Dev", icon: icon)
+
+            let light = try #require(backgroundBrightness(
+                of: DockGroupIconRenderer.image(for: group, size: 256, appearance: .light)
+            ))
+            let dark = try #require(backgroundBrightness(
+                of: DockGroupIconRenderer.image(for: group, size: 256, appearance: .dark)
+            ))
+
+            #expect(light > 2.0, "\(icon.source) 浅色版底色不是浅色（亮度 \(light)）")
+            #expect(dark < 1.2, "\(icon.source) 深色版底色不够深（亮度 \(dark)）")
+        }
+    }
+
+    @Test func lightAndDarkIconsAreDifferentImages() throws {
+        let group = DockGroup(id: "dev", name: "Dev", icon: DockGroupIcon(source: .composite, value: ""))
+        let light = DockGroupIconRenderer.image(for: group, size: 256, appearance: .light)
+        let dark = DockGroupIconRenderer.image(for: group, size: 256, appearance: .dark)
+
+        #expect(light.tiffRepresentation != dark.tiffRepresentation)
+    }
+
+    /// Helper 的 Dock 图标必须固定浅色：`.icns` 没有外观变体，跟随生成时的外观
+    /// 会让图标在用户切换外观后变得不一致。这里把 App 外观真的切成深色再生成，
+    /// 产出的 `.icns` 仍必须逐字节等于浅色渲染。
+    ///
+    /// 注意 `NSApp?.appearance = …`：测试进程里 `NSApp` 起初是 nil，可选链赋值会
+    /// 静默失效、用例随「深色渲染」一起通过——必须先用 `NSApplication.shared`
+    /// 把 App 建出来，再用一个前置断言确认环境真的变深色了。
+    @Test @MainActor func generatedHelperIconDoesNotFollowTheDarkAppearance() throws {
+        let application = NSApplication.shared
+        let previousAppearance = application.appearance
+        application.appearance = NSAppearance(named: .darkAqua)
+        defer { application.appearance = previousAppearance }
+        #expect(DockGroupIconAppearance.current() == .dark, "前提不成立：环境没有处于深色外观")
+
+        let workspace = try TestAppWorkspace()
+        defer { workspace.cleanUp() }
+        let model = workspace.makeModel()
+        model.setEnabled(true)
+        let group = model.createGroup(named: "Dev")
+
+        model.regenerateAllHelpers()
+
+        let iconURL = model.helperAppURL(for: group)
+            .appendingPathComponent("Contents/Resources/\(DockHelperBundleBuilder.helperIconName)")
+        let generated = try Data(contentsOf: iconURL)
+        let light = ICNSWriter.data(from: DockGroupIconRenderer.image(
+            for: group,
+            size: 1024,
+            memberIconURLs: [],
+            appearance: .light
+        ))
+
+        #expect(generated == light, "生成的 Dock 图标跟随了深色外观")
+    }
+
+    /// 彩色符号图标在深色模式下要压暗，否则在暗色界面上过于刺眼；色相必须保持，
+    /// 否则同一个分组在两种外观下会变成两种颜色。
+    @Test func symbolIconDimsForDarkAppearance() throws {
+        let group = DockGroup(id: "dev", name: "Dev", icon: DockGroupIcon(source: .symbol, value: "hammer"))
+        let light = DockGroupIconRenderer.image(for: group, size: 256, appearance: .light)
+        let dark = DockGroupIconRenderer.image(for: group, size: 256, appearance: .dark)
+
+        let lightSample = try #require(backgroundColor(of: light, at: [0.3, 0.7]))
+        let darkSample = try #require(backgroundColor(of: dark, at: [0.3, 0.7]))
+
+        let lightBrightness = lightSample.redComponent + lightSample.greenComponent + lightSample.blueComponent
+        let darkBrightness = darkSample.redComponent + darkSample.greenComponent + darkSample.blueComponent
+        #expect(darkBrightness < lightBrightness)
+
+        // 色相稳定（容差取一个色阶，取色空间转换会有极小误差）。
+        #expect(abs(darkSample.hueComponent - lightSample.hueComponent) < 0.02)
+    }
+
+    /// 图标缓存必须按外观分开，否则切换深色模式会拿到上一次渲染的结果。
+    @Test func iconCacheKeepsBothAppearances() throws {
+        let workspace = try TestAppWorkspace()
+        defer { workspace.cleanUp() }
+        let model = workspace.makeModel()
+        model.setEnabled(true)
+        let group = model.createGroup(named: "Dev")
+
+        let light = model.groupIcon(for: group, size: 72, appearance: .light)
+        let dark = model.groupIcon(for: group, size: 72, appearance: .dark)
+        #expect(light !== dark, "两种外观返回了同一个缓存对象")
+
+        // 再取一次仍然各自命中自己的缓存，而不是互相覆盖。
+        #expect(model.groupIcon(for: group, size: 72, appearance: .light) === light)
+        #expect(model.groupIcon(for: group, size: 72, appearance: .dark) === dark)
+    }
+
+    /// 取几个偏离中心的采样点的平均亮度。中心是成员图标或 Emoji 字形，
+    /// 这几个点落在只有底色的区域，因此亮度反映的就是背景色。
+    private func backgroundBrightness(of image: NSImage) -> CGFloat? {
+        var samples: [NSColor] = []
+        for x in [0.25, 0.75] as [CGFloat] {
+            for y in [0.25, 0.75] as [CGFloat] {
+                if let color = backgroundColor(of: image, at: [x, y]) { samples.append(color) }
+            }
+        }
+        guard !samples.isEmpty else { return nil }
+        return samples.reduce(0) { $0 + $1.redComponent + $1.greenComponent + $1.blueComponent } / CGFloat(samples.count)
+    }
+
+    private func backgroundColor(of image: NSImage, at point: [CGFloat]) -> NSColor? {
+        guard point.count == 2,
+              let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff)
+        else { return nil }
+        let x = Int(CGFloat(rep.pixelsWide) * point[0])
+        // NSImage 原点在左下，位图行号自上而下，需要翻转 y。
+        let y = rep.pixelsHigh - 1 - Int(CGFloat(rep.pixelsHigh) * point[1])
+        guard x >= 0, x < rep.pixelsWide, y >= 0, y < rep.pixelsHigh else { return nil }
+        return rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+    }
 }
 
 // MARK: - 测试夹具

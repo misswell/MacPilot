@@ -251,11 +251,15 @@ final class DockGroupsModel: ObservableObject {
         failedIconKeys.removeAll()
     }
 
-    /// 分组图标按「分组内容签名 + 尺寸」缓存：编辑器标题栏每次 body 求值都会调它，
-    /// 不缓存就会不停重绘合成图标（内部还要再取成员图标）。
-    func groupIcon(for group: DockGroup, size: CGFloat) -> NSImage {
+    /// 分组图标按「分组内容签名 + 尺寸 + 深浅外观」缓存：编辑器标题栏每次 body
+    /// 求值都会调它，不缓存就会不停重绘合成图标（内部还要再取成员图标）。
+    func groupIcon(
+        for group: DockGroup,
+        size: CGFloat,
+        appearance: DockGroupIconAppearance = .current()
+    ) -> NSImage {
         let memberURLs = group.apps.compactMap { InstalledAppResolver.resolveURL($0) }
-        let cacheKey = "\(group.id)@\(Int(size))"
+        let cacheKey = "\(group.id)@\(Int(size))@\(appearance)"
         let signature = Self.groupIconSignature(group: group, memberURLs: memberURLs, size: size)
         if groupIconSignatures[cacheKey] == signature, let cached = groupIconCache[cacheKey] {
             return cached
@@ -264,7 +268,8 @@ final class DockGroupsModel: ObservableObject {
             for: group,
             size: size,
             memberIconURLs: memberURLs,
-            customIconDirectory: helperManager.rootDirectory
+            customIconDirectory: helperManager.rootDirectory,
+            appearance: appearance
         )
         groupIconSignatures[cacheKey] = signature
         groupIconCache[cacheKey] = image

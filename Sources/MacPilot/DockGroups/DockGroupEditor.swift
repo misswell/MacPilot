@@ -20,6 +20,7 @@ struct DockGroupEditor: View {
     let groupID: String
     @EnvironmentObject private var model: MacPilotModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var nameDraft = ""
     @State private var showsAppPicker = false
@@ -86,7 +87,12 @@ struct DockGroupEditor: View {
     private var titleBar: some View {
         HStack(spacing: 12) {
             if let group {
-                Image(nsImage: dockGroups.groupIcon(for: group, size: 72))
+                Image(nsImage: dockGroups.groupIcon(
+                    for: group,
+                    size: 72,
+                    appearance: DockGroupIconAppearance(isDark: colorScheme == .dark)
+                ))
+
                     .resizable()
                     .interpolation(.high)
                     .frame(width: 28, height: 28)

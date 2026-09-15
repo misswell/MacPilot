@@ -13,6 +13,7 @@ import SwiftUI
 
 struct DockHelperView: View {
     @ObservedObject var model: DockHelperModel
+    @Environment(\.colorScheme) private var colorScheme
     @FocusState private var focusedIndex: Int?
 
     var body: some View {
@@ -40,7 +41,8 @@ struct DockHelperView: View {
                 Image(nsImage: DockGroupIconRenderer.image(
                     for: group,
                     size: 44,
-                    memberIconURLs: group.apps.compactMap { InstalledAppResolver.resolveURL($0) }
+                    memberIconURLs: group.apps.compactMap { InstalledAppResolver.resolveURL($0) },
+                    appearance: DockGroupIconAppearance(isDark: colorScheme == .dark)
                 ))
                 .resizable()
                 .frame(width: 22, height: 22)

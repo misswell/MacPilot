@@ -17,6 +17,7 @@ import UniformTypeIdentifiers
 struct DockGroupsView: View {
     @ObservedObject var dockGroups: DockGroupsModel
     @EnvironmentObject private var model: MacPilotModel
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var editingGroupID: String?
     @State private var groupPendingDeletion: DockGroup?
@@ -27,8 +28,7 @@ struct DockGroupsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            controls
-            options
+            settingsCard
 
             if let warning = dockGroups.configWarning {
                 warningBanner(Text(model.t("dockGroupsConfigWarning", warning)))
@@ -39,6 +39,8 @@ struct DockGroupsView: View {
                     .padding(.horizontal, 36)
                     .padding(.bottom, 12)
             }
+
+            groupSectionControls
 
             if dockGroups.groups.isEmpty {
                 emptyState
@@ -82,7 +84,7 @@ struct DockGroupsView: View {
         )
     }
 
-    // MARK: - 页头与控件
+    // MARK: - 页头
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -92,8 +94,65 @@ struct DockGroupsView: View {
         .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 22)
     }
 
-    private var controls: some View {
+    // MARK: - 设置卡片
+
+    /// 偏好在同一张卡片里：它们都是「设置」，混在针对列表的操作行里会让那一行
+    /// 既没有标题也没有重心。功能总开关在首页，这里不重复放一个。
+    private var settingsCard: some View {
+        SettingsCard {
+            Text(model.t("dockGroupsGroupSettings"))
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+
+            HStack(spacing: 16) {
+                Text(model.t("dockGroupsDefaultLayout"))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Picker("", selection: Binding(
+                    get: { dockGroups.settings.defaultLayout },
+                    set: { dockGroups.setDefaultLayout($0) }
+                )) {
+                    Text(model.t("dockGroupsLayoutGrid")).tag(DockGroupLayout.grid)
+                    Text(model.t("dockGroupsLayoutList")).tag(DockGroupLayout.list)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 160)
+
+                Spacer(minLength: 24)
+
+                Toggle(model.t("dockGroupsShowRunningState"), isOn: Binding(
+                    get: { dockGroups.settings.showsRunningState },
+                    set: { dockGroups.setShowsRunningState($0) }
+                ))
+                .toggleStyle(.switch)
+                .fixedSize()
+            }
+
+            Text(model.t("dockGroupsLayoutHint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 36)
+        .padding(.bottom, 20)
+    }
+
+    // MARK: - 分组列表上方的操作行
+
+    /// 与内存监控页一致：左侧是小节标题 + 一句统计，右侧才是操作按钮。
+    private var groupSectionControls: some View {
         HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.t("dockGroupsGroupsSection"))
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                Text(groupSummaryText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Spacer(minLength: 16)
 
             Button {
@@ -103,14 +162,14 @@ struct DockGroupsView: View {
                 Label(model.t("dockGroupsNewGroup"), systemImage: "plus")
             }
             .macPilotProminentButtonStyle()
-            .fixedSize()
+                        .fixedSize()
 
             Button {
                 dockGroups.regenerateAllHelpers()
             } label: {
                 Label(model.t("dockGroupsRegenerate"), systemImage: "arrow.clockwise")
             }
-            .disabled(dockGroups.isRegeneratingHelpers)
+            .disabled(dockGroups.isRegeneratingHelpers || dockGroups.groups.isEmpty)
             .fixedSize()
 
             Button {
@@ -130,7 +189,7 @@ struct DockGroupsView: View {
             .fixedSize()
         }
         .padding(.horizontal, 36)
-        .padding(.bottom, 14)
+        .padding(.bottom, 12)
         .alert(model.t("dockGroupsCleanup"), isPresented: $showsCleanupConfirmation) {
             Button(model.t("dockGroupsCleanupAction"), role: .destructive) {
                 dockGroups.removeAllGroupData()
@@ -141,38 +200,13 @@ struct DockGroupsView: View {
         }
     }
 
-    /// 新建分组默认使用的布局，以及是否显示运行状态。
-    private var options: some View {
-        HStack(spacing: 16) {
-            Text(model.t("dockGroupsDefaultLayout"))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            Picker("", selection: Binding(
-                get: { dockGroups.settings.defaultLayout },
-                set: { dockGroups.setDefaultLayout($0) }
-            )) {
-                Text(model.t("dockGroupsLayoutGrid")).tag(DockGroupLayout.grid)
-                Text(model.t("dockGroupsLayoutList")).tag(DockGroupLayout.list)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 160)
-
-            Toggle(model.t("dockGroupsShowRunningState"), isOn: Binding(
-                get: { dockGroups.settings.showsRunningState },
-                set: { dockGroups.setShowsRunningState($0) }
-            ))
-            .toggleStyle(.switch)
-            .fixedSize()
-
-            Spacer()
-        }
-        .padding(.horizontal, 36)
-        .padding(.bottom, 12)
+    private var groupSummaryText: String {
+        let appCount = dockGroups.groups.reduce(0) { $0 + $1.apps.count }
+        return model.t("dockGroupsGroupSummary", dockGroups.groups.count, appCount)
     }
 
-    private func warningBanner(_ content: Text) -> some View {        content
+    private func warningBanner(_ content: Text) -> some View {
+        content
             .font(.subheadline)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -229,7 +263,11 @@ struct DockGroupsView: View {
             editingGroupID = group.id
         } label: {
             HStack(spacing: 12) {
-                Image(nsImage: dockGroups.groupIcon(for: group, size: 72))
+                Image(nsImage: dockGroups.groupIcon(
+                    for: group,
+                    size: 72,
+                    appearance: DockGroupIconAppearance(isDark: colorScheme == .dark)
+                ))
                     .resizable()
                     .interpolation(.high)
                     .frame(width: 36, height: 36)
