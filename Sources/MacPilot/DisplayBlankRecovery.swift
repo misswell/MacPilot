@@ -106,7 +106,7 @@ enum DisplayBlankRecovery {
                 readDDC: { DDCBacklight.shared?.level($0) },
                 writeDDC: { id, level in DDCBacklight.shared?.setLevel(level, id) ?? false },
                 readPower: { DDCBacklight.shared?.powerMode($0) },
-                writePower: { id, mode in DDCBacklight.shared?.setPowerMode(mode, id) ?? false }
+                writePower: { id, mode in DDCBacklight.shared?.setPowerMode(mode, id).didConfirm ?? false }
             )
         }
     }
@@ -117,12 +117,15 @@ enum DisplayBlankRecovery {
     }
 
     /// Power mode is a state rather than a level, so "still dark" means the
-    /// monitor reports MacPilot's soft-off value. A display that reports anything
-    /// else — including one switched back on by hand or by its own power button —
-    /// is left alone.
+    /// monitor reports *any* of the dark DPMS states — not only the soft-off byte
+    /// MacPilot happened to write. A monitor is not obliged to echo it: the
+    /// `SSN-24` here answers a soft-off with standby (`0x02`), and insisting on
+    /// the written value would declare that panel repaired and leave it dark. A
+    /// display that reports anything else — including one switched back on by
+    /// hand or by its own power button — is left alone.
     static func powerDecision(current: UInt16?) -> DisplayBlankRecoveryDecision {
         guard let current else { return .undrivable }
-        return current == DDCPacket.powerOff ? .restore : .alreadyRepaired
+        return DDCPacket.isPoweredDown(current) ? .restore : .alreadyRepaired
     }
 
     /// Restores every recorded display that is still dark and reports how many

@@ -30,11 +30,35 @@ enum DDCPacket {
     static let powerMode: UInt8 = 0xD6
     /// `powerMode` value for "on".
     static let powerOn: UInt16 = 0x01
+    /// `powerMode` values for the dark DPMS states: standby, suspend, soft off
+    /// and hard off.
+    static let powerStandby: UInt16 = 0x02
+    static let powerSuspend: UInt16 = 0x03
     /// `powerMode` value for DPMS "off (soft)": panel and backlight go dark while
     /// the monitor keeps answering DDC, which is what makes it reversible in
     /// software. Verified on an `HP 24w`, which also ignores the standby value
     /// `0x02` outright, so the soft-off state is the one to use.
     static let powerOff: UInt16 = 0x04
+    static let powerHardOff: UInt16 = 0x05
+
+    /// Whether a reported power mode means the panel is not lit.
+    ///
+    /// A monitor is not obliged to echo the value it was written: the `SSN-24`
+    /// here answers the soft-off (`0x04`) with standby (`0x02`), and other
+    /// panels go silent instead. So "is it off?" has to accept any of the dark
+    /// DPMS states rather than compare against the byte that went out — doing
+    /// the latter is what left a switched-off external panel with no record
+    /// that anything had been written to it.
+    static func isPoweredDown(_ mode: UInt16) -> Bool {
+        (powerStandby...powerHardOff).contains(mode)
+    }
+
+    /// Whether a monitor's reported power mode confirms a write of `mode`.
+    /// Turning on is confirmed only by "on"; turning off is confirmed by any
+    /// dark state.
+    static func confirms(powerMode mode: UInt16, reported: UInt16) -> Bool {
+        mode == powerOn ? reported == powerOn : isPoweredDown(reported)
+    }
     /// EDID lives on the I2C bus DDC/CI shares, at this address and offset.
     static let edidAddress: UInt32 = 0x50
     static let edidLength = 128
@@ -123,16 +147,40 @@ struct DDCBacklight: Sendable {
     let setLevel: @Sendable (Double, CGDirectDisplayID) -> Bool
     /// The power mode the monitor reports, or nil when it does not answer.
     let powerMode: @Sendable (CGDirectDisplayID) -> UInt16?
-    /// Writes a power mode and waits for the monitor to report it back.
+    /// Writes a power mode and waits for the monitor to report a matching state.
     ///
     /// Waking is the slow direction: right after "on" the monitor stops
-    /// answering DDC for about a second, so this retries rather than treating the
-    /// first silent read as a failure. False means the monitor never confirmed —
-    /// for `powerOff` that is the signal to fall back to another blank mechanism
-    /// instead of claiming a dark screen.
-    let setPowerMode: @Sendable (UInt16, CGDirectDisplayID) -> Bool
+    /// answering DDC for about a second, so this retries rather than treating
+    /// the first silent read as a failure.
+    let setPowerMode: @Sendable (UInt16, CGDirectDisplayID) -> PowerModeWrite
 
     static let shared: DDCBacklight? = DDCBacklightIO.driver()
+}
+
+/// The outcome of a `Set VCP Feature` write to a monitor's power control.
+///
+/// The two halves are kept apart because they mean different things to a caller
+/// holding a screen dark. `sent` is the point of no return — the command is on
+/// the I2C bus and the panel may already be out — while `confirmed` only says
+/// the monitor admitted it. A blank that recorded its state from `confirmed`
+/// alone left a dark panel with nothing recorded to undo it, which is the
+/// "external monitor never wakes" bug this shape exists to prevent.
+struct PowerModeWrite: Equatable, Sendable {
+    /// The write reached the I2C bus (false also when it was deliberately skipped).
+    let sent: Bool
+    /// The monitor reported back a mode that matches the write.
+    let confirmed: Bool
+
+    static let notSent = PowerModeWrite(sent: false, confirmed: false)
+
+    /// Whether the display may be dark now and has to be remembered as switched
+    /// off. True past a successful write even without confirmation: a monitor
+    /// that answers a soft-off with "standby", or with silence, is dark all the
+    /// same.
+    var mayHavePoweredDown: Bool { sent }
+
+    /// Whether the monitor ended up in the requested state.
+    var didConfirm: Bool { confirmed }
 }
 
 /// The IOKit half, kept apart so the packet rules above stay testable without a
@@ -214,11 +262,13 @@ private enum DDCBacklightIO {
                 if mode == DDCPacket.powerOff,
                    let verdict = powerModeUnsupported[displayID],
                    Date().timeIntervalSince(verdict) < unsupportedLifetime {
-                    return false
+                    return .notSent
                 }
-                guard let service = service(for: displayID, create: create, read: read) else { return false }
+                guard let service = service(for: displayID, create: create, read: read) else { return .notSent }
                 defer { release(service) }
-                guard send(DDCPacket.writeRequest(vcp: DDCPacket.powerMode, value: mode), to: service, write: write) else { return false }
+                guard send(DDCPacket.writeRequest(vcp: DDCPacket.powerMode, value: mode), to: service, write: write) else {
+                    return .notSent
+                }
                 // Going dark is quick; coming back the monitor stops answering DDC
                 // for about a second, so that direction waits longer.
                 let attempts = mode == DDCPacket.powerOn ? 8 : 5
@@ -226,13 +276,17 @@ private enum DDCBacklightIO {
                 for _ in 0..<attempts {
                     usleep(pause)
                     guard let reply = reply(from: service, vcp: DDCPacket.powerMode, read: read, write: write) else { continue }
-                    guard reply.current == mode else { continue }
+                    // Matched by state, not by equality: a monitor is free to
+                    // answer a soft-off with standby instead of echoing the byte.
+                    guard DDCPacket.confirms(powerMode: mode, reported: reply.current) else { continue }
                     cache(reply, for: displayID, vcp: DDCPacket.powerMode)
                     powerModeUnsupported[displayID] = nil
-                    return true
+                    return PowerModeWrite(sent: true, confirmed: true)
                 }
                 if mode == DDCPacket.powerOff { powerModeUnsupported[displayID] = Date() }
-                return false
+                // Sent but not acknowledged. The caller is told both facts, so a
+                // panel that is probably dark is still recorded as such.
+                return PowerModeWrite(sent: true, confirmed: false)
             }
         )
     }

@@ -50,6 +50,41 @@ struct DDCPacketTests {
         #expect(reply.maximum == 5)
     }
 
+    /// What the `SSN-24` on this machine actually answers to a soft-off, captured
+    /// from the live monitor: standby (`0x02`), never the `0x04` that was written.
+    /// Comparing the reply to the byte that went out made MacPilot conclude the
+    /// panel was still on while it was already dark — and then never power it
+    /// back on, which is the external monitor that "never wakes".
+    @Test func aSoftOffIsConfirmedByAnyDarkStateRatherThanTheExactByte() throws {
+        let standby: [UInt8] = [0x6E, 0x88, 0x02, 0x00, 0xD6, 0x00, 0x00, 0x05, 0x00, 0x02, 0x65]
+        let reply = try #require(DDCPacket.parse(reply: standby, expecting: DDCPacket.powerMode))
+        #expect(reply.current == DDCPacket.powerStandby)
+        #expect(DDCPacket.isPoweredDown(reply.current))
+
+        #expect(DDCPacket.confirms(powerMode: DDCPacket.powerOff, reported: DDCPacket.powerStandby))
+        #expect(DDCPacket.confirms(powerMode: DDCPacket.powerOff, reported: DDCPacket.powerSuspend))
+        #expect(DDCPacket.confirms(powerMode: DDCPacket.powerOff, reported: DDCPacket.powerOff))
+        #expect(DDCPacket.confirms(powerMode: DDCPacket.powerOff, reported: DDCPacket.powerHardOff))
+        // A panel that still answers "on", or an unknown code, is not dark.
+        #expect(!DDCPacket.confirms(powerMode: DDCPacket.powerOff, reported: DDCPacket.powerOn))
+        #expect(!DDCPacket.confirms(powerMode: DDCPacket.powerOff, reported: 0))
+        // Waking is the strict direction: only "on" means on.
+        #expect(DDCPacket.confirms(powerMode: DDCPacket.powerOn, reported: DDCPacket.powerOn))
+        #expect(!DDCPacket.confirms(powerMode: DDCPacket.powerOn, reported: DDCPacket.powerStandby))
+    }
+
+    /// The point of no return. A soft-off that went out but was never
+    /// acknowledged still has to be remembered, because the panel may be dark
+    /// all the same and a wake that trusted only the acknowledgment would have
+    /// nothing to turn back on.
+    @Test func aSoftOffThatWasSentButNotAcknowledgedStillCountsAsPoweredDown() {
+        #expect(PowerModeWrite(sent: true, confirmed: false).mayHavePoweredDown)
+        #expect(PowerModeWrite(sent: true, confirmed: true).mayHavePoweredDown)
+        #expect(!PowerModeWrite.notSent.mayHavePoweredDown)
+        #expect(!PowerModeWrite(sent: true, confirmed: false).didConfirm)
+        #expect(PowerModeWrite(sent: true, confirmed: true).didConfirm)
+    }
+
     @Test func aReplyCarriesTheCurrentLevelOutOfItsRange() throws {
         let reply = try #require(DDCPacket.parse(reply: fullBrightnessReply, expecting: DDCPacket.brightness))
         #expect(reply.current == 100)

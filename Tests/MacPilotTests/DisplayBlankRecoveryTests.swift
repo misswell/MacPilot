@@ -163,11 +163,20 @@ struct DisplayBlankRecoveryTests {
 }
 
 extension DisplayBlankRecoveryTests {
-    /// Recovery of a switched-off display is decided by state, not by level: only
-    /// the monitor's own soft-off means it is still MacPilot's blank.
-    @Test func onlyASwitchedOffDisplayIsPoweredBackOn() {
+    /// Recovery of a switched-off display is decided by state, not by level. Any
+    /// dark DPMS state counts as "still MacPilot's blank", because a monitor is
+    /// free to answer a soft-off with standby — the `SSN-24` here does — and
+    /// insisting on the written byte would declare that panel repaired while it
+    /// is still dark.
+    @Test func aDisplayStillReportingADarkStateIsPoweredBackOn() {
+        #expect(DisplayBlankRecovery.powerDecision(current: DDCPacket.powerStandby) == .restore)
+        #expect(DisplayBlankRecovery.powerDecision(current: DDCPacket.powerSuspend) == .restore)
         #expect(DisplayBlankRecovery.powerDecision(current: DDCPacket.powerOff) == .restore)
+        #expect(DisplayBlankRecovery.powerDecision(current: DDCPacket.powerHardOff) == .restore)
+        // Already on, or reporting a code that says nothing: leave it alone
+        // rather than fight a power-on the user did themselves.
         #expect(DisplayBlankRecovery.powerDecision(current: DDCPacket.powerOn) == .alreadyRepaired)
+        #expect(DisplayBlankRecovery.powerDecision(current: 0) == .alreadyRepaired)
         #expect(DisplayBlankRecovery.powerDecision(current: nil) == .undrivable)
     }
 

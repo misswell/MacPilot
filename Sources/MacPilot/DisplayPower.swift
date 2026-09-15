@@ -195,13 +195,21 @@ enum DisplayPower {
                 // actually dark: on plenty of them — the HP 24w included —
                 // brightness zero is a *dim but visible* level, which is exactly
                 // the "black screen that is only dimmed" MacPilot must not ship.
-                // Soft-off is confirmed by a read-back and keeps the monitor
-                // answering DDC, so it is always reversible in software.
-                if ddc.setPowerMode(DDCPacket.powerOff, step.displayID) {
+                let write = ddc.setPowerMode(DDCPacket.powerOff, step.displayID)
+                if write.mayHavePoweredDown {
+                    // Recorded from the write, not from the confirmation. The
+                    // monitor may be dark already and simply refuse to say so —
+                    // this machine's SSN-24 answers a soft-off with "standby",
+                    // and some panels stop answering DDC at all — and a wake
+                    // with no record of the switch-off has nothing to power
+                    // back on. That is the external monitor that "never wakes".
                     ddcPoweredOff.insert(step.displayID)
-                    continue
+                    if write.didConfirm { continue }
                 }
-                // Monitors that do not implement power mode still take brightness.
+                // Unconfirmed: still fall back, so a monitor that ignored the
+                // write is dark *now* rather than left lit behind a claim of
+                // black. Monitors that do not implement power mode still take
+                // brightness.
                 if let original = ddc.level(step.displayID), ddc.setLevel(0, step.displayID) {
                     // Already confirmed at zero by the read-back inside setLevel.
                     ddcBlanked[step.displayID] = original
@@ -253,18 +261,32 @@ enum DisplayPower {
         // `blankedDisplays` on another path must not strand the assertion.
         defer { releaseDisplaySleepAssertion() }
         guard isBlanked else { return }
+
+        let restoredBacklights = blankedDisplays.count
+        let hidOverlay = isOverlayShowing
         if let driver = BrightnessDriver.shared {
             for (displayID, original) in blankedDisplays {
                 driver.apply(original, to: displayID)
             }
         }
         blankedDisplays.removeAll()
+        var poweredOn = 0
+        var stillWaiting: [CGDirectDisplayID] = []
         if let ddc = DDCBacklight.shared {
             // Power first: a display MacPilot switched off has to be answering
             // DDC again before a brightness write to it can land, and the driver
             // waits for it to come back rather than assuming it is there.
             for displayID in ddcPoweredOffDisplays {
-                _ = ddc.setPowerMode(DDCPacket.powerOn, displayID)
+                let write = ddc.setPowerMode(DDCPacket.powerOn, displayID)
+                if write.didConfirm {
+                    poweredOn += 1
+                } else if write.sent {
+                    // The command went out and the monitor never acknowledged.
+                    // Dropping it here is what leaves a panel dark with nothing
+                    // left that knows to try again, so it goes into the crash
+                    // snapshot for the next launch to retry.
+                    stillWaiting.append(displayID)
+                }
             }
             for (displayID, original) in ddcBlankedDisplays {
                 // Best effort: the level the user had before the blank is the one
@@ -276,12 +298,34 @@ enum DisplayPower {
         ddcBlankedDisplays.removeAll()
         // Cleared only after the restores: a crash between a restore and this
         // line leaves the snapshot in place, and the next launch re-decides per
-        // display, skipping the ones already raised.
-        snapshotStore.clear()
+        // display, skipping the ones already raised. A power-on still waiting
+        // for its monitor is the one case that must survive on purpose.
+        if stillWaiting.isEmpty {
+            snapshotStore.clear()
+        } else {
+            keepSnapshot(forPoweredOff: stillWaiting)
+        }
         if isOverlayShowing {
             ScreenBlankOverlay.shared.hide()
             isOverlayShowing = false
         }
+        DiagnosticLog.write(
+            "DisplayPower",
+            "display unblanked backlight=\(restoredBacklights) ddcOn=\(poweredOn) ddcOnPending=\(stillWaiting.count) overlay=\(hidOverlay ? 1 : 0)"
+        )
+    }
+
+    /// Narrows the crash snapshot down to the displays still waiting for their
+    /// power-on, so a launch after an unsuccessful wake retries exactly those and
+    /// has nothing else left to replay.
+    @MainActor
+    private static func keepSnapshot(forPoweredOff displayIDs: [CGDirectDisplayID]) {
+        var snapshot = snapshotStore.load()
+            ?? DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: [:], ddcBacklight: [:])
+        snapshot.systemBacklight = [:]
+        snapshot.ddcBacklight = [:]
+        snapshot.ddcPowerOff = displayIDs.map(String.init)
+        snapshotStore.save(snapshot)
     }
 
     /// Termination teardown: stops the 400 ms wake watcher and hands the display

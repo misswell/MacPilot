@@ -1017,3 +1017,49 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 - **`NSHostingView` 子类里别用 SwiftUI 手势做贴图交互**：`.onTapGesture(count: 2)` 会消费 mouseDown，`isMovableByWindowBackground` 的窗口拖拽随即失效；重写 `mouseDown` / `rightMouseDown` 并调用 `super` 才两全。
 - **文字贴图必须给 chrome 留位置**：未锁定时关闭/锁定按钮是常驻的，文字卡片按普通内边距排版会让第一行字被左上角关闭按钮压住。
 - **临时贴图不要预先写盘**：`QuickAccessPinDragHandleNSView` 拖拽时会用内存里的图另写一个拖拽文件，贴图只要给一个用于命名的「保留路径」即可；否则每次剪贴板贴图都会在 `Captures/` 留下一份没人回收的 PNG。
+
+## 四十二、外接屏「点亮不了」：软关机写下去了，但显示器不承认
+
+### 现象
+
+手机上先点「黑屏」再点「亮屏」：内屏正常回来，外接屏一直黑着，怎么点都不亮。日志（`~/Library/Logs/MacPilot/Diagnostics.log`）只有这一行关键信息：
+
+```
+[DisplayPower] display blanked without sleeping backlight=1 ddc=0 ddcOff=0 overlay=1 displays=[1, 2]
+```
+
+`ddcOff=0` 就是说「DDC 电源关没生效」，于是外接屏退回了黑色遮罩；可遮罩在 `亮屏` 时明明被收掉了（`display unblank requested` 之后 `isBlanked` 立刻变回 false），屏幕却依然黑着。
+
+### 真机实测：问题不在遮罩，在「确认」这一步
+
+写了个探针按 `DDCBacklight` 一模一样的包和节奏跑这台 SSN-24（displayID=2，内置屏是 1）：
+
+```
+baseline power = 1
+soft-off write sent=true at t=0ms
+  t=318ms read power = NIL (no answer)
+  t=632ms read power = 2      ← 面板已经灭了，但它回答的是 standby(0x02)
+  ...（3 秒内始终是 2）
+```
+
+**写 `0x04`（DPMS soft off）面板确实灭了，但显示器回读的是 `0x02`（standby），永远不是 `0x04`。** 旧代码 `guard reply.current == mode` 拿写入值去比对回读值，5×200ms 轮询全落空 → `setPowerMode(powerOff)` 返回 `false` → `ddcPoweredOff.insert` 被跳过 → MacPilot **没有记下这台显示器被关过**。
+
+而写命令早就发出去了，面板也真的灭了。于是：`unblankDisplay()` 里那一轮「点亮」根本不会执行（集合是空的），内屏恢复亮度、遮罩收起，外接屏留在 DPMS 关断状态没人管 —— 这就是「睡死了」。次要点「黑屏」时 `canDriveDDC` 探测也失败（面板已灭），所以两次 blank 的日志都是 `ddc=0 ddcOff=0 overlay=1`，把线索指错了方向。第一次 `displayOff` 的 `latency=1604ms` 正是那 1.25 秒的空轮询。
+
+### 修法：按状态确认，按写入记账
+
+1. **关机确认改成「任何暗态都算」**。新增 `DDCPacket.isPoweredDown(_:)`（`0x02...0x05` 即 standby / suspend / soft off / hard off）与 `DDCPacket.confirms(powerMode:reported:)`：开机只认 `0x01`，关机认任意暗态。显示器没有义务回显你写进去的那个字节。
+2. **写入即记账，确认只用来决定要不要兜底**。`setPowerMode` 的返回值从 `Bool` 换成 `PowerModeWrite { sent, confirmed }`。`blankDisplay()` 用 `write.mayHavePoweredDown`（即 `sent`）决定是否 `ddcPoweredOff.insert`；只有 `confirmed` 时才 `continue`，否则继续走亮度 0 / 遮罩兜底，保证「现在就是黑的」。**这是本次的核心不变式：让面板变黑的是那次写入，不是显示器的承认，所以状态必须从写入记起。**
+3. **恢复路径同一套规则**。`DisplayBlankRecovery.powerDecision(current:)` 同样改成 `isPoweredDown`；否则强杀后重开，这台回报 `0x02` 的显示器会被判为「用户已经自己弄好了」而永远不被点亮。
+4. **点亮没确认不再被静默丢弃**。`unblankDisplay()` 里 `sent` 但未确认的点亮会写进崩溃快照（只留 `ddcPowerOff` 字段）留给下次启动重试，而不是随着内存状态一起消失。
+5. **补上唤醒日志**。原来 `unblankDisplay()` 一行日志都没有，用户只能靠 `isBlanked` 的副作用猜；现在是 `display unblanked backlight=… ddcOn=… ddcOnPending=… overlay=…`。
+
+### 验证
+
+- 真机探针按新规则重跑：软关机 **523ms 确认**（旧规则 1250ms 后返回 false），点亮 368ms 确认，最终 `power=1`。
+- `swift test`：`DDCPacketTests` 增加真机 standby 回包夹具（`6E 88 02 00 D6 00 00 05 00 02 65`）与 `mayHavePoweredDown` 语义用例；`DisplayBlankRecoveryTests` 的电源决策用例覆盖 standby / suspend / hard off / on / 未知值；三个套件全绿。
+
+### 教训
+
+- **DDC 的「写后读回」不能拿写入值做等值比较**：同一台显示器在不同固件/状态下会回 `standby` 而不是 `soft off`，把「没回显」当成「没生效」会得到一个已经黑了却没人认领的面板。
+- **有副作用的写操作，状态要从「发出去了」记起，而不是从「被承认了」记起**。确认只能决定要不要再补一层兜底，不能决定要不要记住。
