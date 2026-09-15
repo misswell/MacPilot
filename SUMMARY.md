@@ -947,3 +947,71 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 - **离屏渲染的代码必须放在 `NSApplication.shared` 之后**：一开始插在文件顶部，`DockHelperModel` 一碰 AppKit 就 `Segmentation fault: 11`，而且连提前写的日志都没输出——看着像业务崩溃，其实是「App 还没建出来」。
 - 浮层窗口在**抢不到 key window** 时会按设计立刻关闭，所以用脚本 `open -n` 拉起后往往抓不到窗口（用户此刻正在别的 App 里操作）。`CGWindowListCopyWindowInfo` 找不到窗口时先分辨是「没弹出来」还是「已经被焦点策略关掉」。
 - 屏幕锁定时窗口根本不会被合成（截图全黑）；解锁后再渲染才拿到正常结果。
+
+## 四十、Dock 分组：点开即现 + 贴着图标出现（v1.1.346 之后）
+
+用户报的两个问题：点 Dock 图标要等 2 秒浮层才出来；浮层跟着鼠标位置出现，而不是贴着 Dock 图标。
+
+### 先量，再改
+
+拿真机把整条路径拆开量（本轮所有数字都在同一台机器上）：
+
+- 直接 `spawn` Helper 二进制：135–290 ms 窗口上屏；
+- 用辅助功能 `AXPress` 点 Dock 图标（等价真实点击）：230–270 ms；
+- 真机**鼠标点击** Dock 图标：鼠标抬起后 214 ms 面板上屏；
+- 面板已经开着时再点一次：1–6 ms（LaunchServices 走 reopen，不再起进程）。
+
+所以「2 秒」不在解析里（9 个 App 的解析实测 7 ms、图标 60 ms 上下），而在**冷进程那条路径**：LaunchServices + 进程启动本身就占掉了大头，机器忙或图标服务冷启动时会成倍放大。结论是**别每次都付这个钱**，同时把「首次冷启动」里能挪走的都挪到面板上屏之后。
+
+### 改了什么
+
+1. **面板先上屏、内容后到**。`DockHelperModel` 拆成 `loadConfiguration()`（只读 `groups.json`，毫秒级，面板尺寸只取决于它）与 `loadContent()`（解析版本 / 运行状态 + 渲染图标）。`show()` 建完面板立刻 `makeKeyAndOrderFront`，内容在**已经上屏之后**才补，每画一张图标 `await Task.yield()` 一次。图标没到位的格子画中性占位方块（不是「应用未找到」的黄色问号）。
+2. **进程留在原地待命**。浮层关掉只 `orderOut`，不 `NSApp.terminate`；`applicationShouldHandleReopen` 与 `applicationDidBecomeActive` 两条路径都指向同一个 `show()`（重复调用幂等）。待命 5 分钟后自退，Info.plist 另外加上 `NSSupportsAutomaticTermination` / `NSSupportsSuddenTermination`，让系统在内存吃紧时提前回收——「不留后台进程」的约束仍在，只是有了上限。
+   * 顺带修掉一个隐藏很久的问题：Helper 的 Info.plist 一直没有 `NSSupportsAutomaticTermination`，所以原来那套 `disable/enableAutomaticTermination` 其实是空转。
+   * 待命期间 Dock 图标**不会**多出运行小圆点（accessory 策略，真机截图对比过，前后像素完全一致）。
+3. **图标与轮询不再重复干活**。图标结果进内存缓存（`Entry.icon` + 版本键），不再在每次 SwiftUI body 求值时重画（原先一次展开要重画 3 遍，27 次取图）；2 秒一次的轮询只改 `isRunning`，不再重新解析整个分组，而且**真的变了才写回** `@Published`（`@Published` 不看内容是否相等，无脑赋值会让浮层每 2 秒白重绘一次）。
+4. **落点贴着 Dock 图标**。新增纯函数 `DockHelperPanelPlacement`（在 Core 里，便于测试）：Dock 贴哪一边由「可见区域往哪边内缩」判断（自动隐藏时退化成「鼠标离哪条边最近」）；沿 Dock 方向用点击那一刻的鼠标坐标把浮层居中到图标上，垂直于 Dock 的方向**完全不看鼠标**，永远紧贴 Dock 内侧 10pt。左 / 下 / 右三种 Dock 都覆盖，最后再夹进可见区域。
+   * 为什么不用 Dock 图标的精确 AX frame：Helper 进程 `AXIsProcessTrusted()` 实测为 **false**（它是 ad-hoc 重签的另一个 bundle），拿不到 Dock 的 AX 树；为了这个去要一次辅助功能授权不值得。点击那一刻鼠标必然在图标上，沿 Dock 轴取鼠标坐标就是这个图标的位置。
+5. **App 升级后 Helper 会自己重做**。`ensureHelpersExistIfNeeded` 原来只补「缺失」的 Helper，于是 App 升级后 Dock 上跑的一直是**旧 binary**（本机实测：App 1.1.345、Helper 还停在 1.1.344，连浮层页脚都还是老布局）。现在改成按 Helper Info.plist 里的版本号 / build 判断，不一致就重新生成。
+
+### 验证
+
+- 真机鼠标点击 Dock 图标（`CGWarpMouseCursorPosition` + `CGEvent` 左右键，辅助功能已授权）：冷启动 214 ms、待命进程二次展开 **10–16 ms**；面板 cocoa 落点 `(66, 56)`，正对 1080p 左边 Dock 上图标中心 y=216、高度 320 的浮层（55 + 10 贴边、216 − 160 居中）。
+- 关掉浮层后 `pgrep` 确认 Helper 进程仍在，再点图标直接复用同一个 pid。
+- 截图确认 3×3 图标 + 名称 + 绿点正常，浮层无页脚（320pt）。
+- 单元测试：新增 `DockHelperPanelPlacementTests`（左/下/右/自动隐藏、垂直轴不看鼠标、贴边夹取、超大浮层不越出屏幕）；`DockGroupsIntegrityTests` 补两条 Helper Info.plist 断言。`swift test` 45 项全过。
+- 量完把用户机器上那份 Helper 恢复原状（本轮只借它做真机测试，正式生效走 App 重新生成）。
+
+### 踩坑
+
+- **别用 `open -b` 或 `AXPress` 量落点**：这两条路径都不会移动鼠标，`NSEvent.mouseLocation` 还停在用户上次放鼠标的地方，于是浮层会出现在鼠标那里——看着像「落点算错了」，其实是「点击位置不是图标」。要么用真鼠标点击，要么先把鼠标 warp 到图标中心。
+- 想确认「面板是否真的出现」，`CGWindowListCopyWindowInfo` 只说明窗口被 order 到屏幕上，不说明内容画完了；要判断「有没有白屏两秒」得看窗口内是不是已经成型（截图或计时日志）。
+- `NSApp.hide(nil)` 要放在 `dismiss()` 里：没有窗口的 accessory App 不该继续占着最前面，否则 ESC 关掉浮层后焦点会停在一个什么都没有的 App 上。
+
+## 四十一、贴图只留一套：把「直接贴图」并回快捷操作贴图窗口
+
+截图链路上长期存在两套贴图窗口，用户点不同入口会得到两种完全不同的贴图：
+
+- **直接贴图**：`SmartScreenshot.swift` 里的 `SmartPinWindowController` / `SmartTextPinWindowController`。入口是框选工具栏的贴图（⌘T）、剪贴板贴图快捷键（F3）和「截图后自动贴图」。行为是贴回框选原位、双击复制、右键菜单（复制 / OCR / 标注 / 上传），还支持剪贴板文字贴图与双击 ESC 关闭全部贴图。
+- **快捷操作卡片贴图**：从 Snapzy 迁移的 `QuickAccessPinWindowManager` / `QuickAccessPinWindow`。入口是快速操作卡片右下角的 pin 按钮，行为是缩放（滚轮 / 捏合 / 百分比菜单）、锁定穿透、拖拽手柄。
+
+同一件事在两条入口长得不一样，用户没法预期点下去得到哪一种。这次统一到后者，并把前者的能力补进去。
+
+### 改了什么
+
+1. **一套窗口状态**。`QuickAccessPinWindowState` 从「图片 + 文件 URL」扩展成「图片或文字」二选一：文字贴图没有栅格可缩放，于是 `supportsZoom` 为 false，顶部缩放菜单和底部拖拽手柄自动隐藏；文字底尺寸由 `QuickAccessPinTextMetrics` 量出，顶部额外留 40pt 的 chrome 带，保证关闭/锁定按钮不会压住第一行字。
+2. **能力取并集**。右键菜单（复制 / OCR / 标注 / 上传 / 关闭）和双击复制放在 `QuickAccessPinHostingView`（`NSHostingView` 子类）里用 AppKit 实现——SwiftUI 的 `.contextMenu` / `.onTapGesture` 会抢走 mouseDown，而贴图窗口靠 `isMovableByWindowBackground` 拖动。标注是原地编辑：把 `SmartAnnotationEditor` 换进同一个窗口，完成后 `state.updateImage` 再换回贴图界面。
+3. **所有入口走同一个管理器**。`QuickAccessPinWindowManager` 新增 `showImage(_:scaleFactor:at:language:)` 与 `showText(_:language:)`；`at:` 沿用「贴回框选原位」，`nil` 时居中到鼠标所在屏幕。直接贴图是**临时贴图**：不进快捷操作卡片栈，只登记一个保留的临时路径给拖拽命名，真正落盘发生在用户真的把贴图拖出去那一刻。
+4. **删掉旧的一套**。`SmartPinWindowController`、`SmartTextPinWindowController`、`SmartPinImageView`、`SmartPinContentView`、`PinCloseButton`，以及控制器里的 `pinControllers` / `textPinControllers` / ESC 监听全部移除（净减 620 行）。双击 ESC 关闭全部贴图的行为搬到 `QuickAccessPinWindowManager.registerEscapePress()` + `QuickAccessPinEscapeRouting`：第一次 ESC 关掉当前这一张，0.8 秒内的第二下关掉全部。
+5. **生命周期各归其主**。截图控制器只记录自己开出来的贴图 id（`directPinWindowIDs`），关闭截图功能时只关这些；快捷操作卡片那边的贴图仍由 `QuickAccessManager` 管理。
+
+### 验证
+
+- `swift build` 无警告；`swift test --no-parallel` 689 项全过。并行跑时 `startupShortcutRegistrationRetriesTransientFailure`、`heartbeatFailureTriggersABoundedReconnect`、`quickCopyAutoSaveWritesFileAndRecordsStats` 会因主 actor 被画中画与远程看门狗测试占满而偶发超时，单独跑均通过，与本次改动无关。
+- 新增 `clipboardTextPinsGetTheirOwnUnzoomedSurface`：文字贴图底尺寸随文字增长、有下限、不可缩放；`doubleEscapeWithinWindowDismissesThePins` 改用新的路由类型。
+
+### 踩坑
+
+- **`NSHostingView` 子类里别用 SwiftUI 手势做贴图交互**：`.onTapGesture(count: 2)` 会消费 mouseDown，`isMovableByWindowBackground` 的窗口拖拽随即失效；重写 `mouseDown` / `rightMouseDown` 并调用 `super` 才两全。
+- **文字贴图必须给 chrome 留位置**：未锁定时关闭/锁定按钮是常驻的，文字卡片按普通内边距排版会让第一行字被左上角关闭按钮压住。
+- **临时贴图不要预先写盘**：`QuickAccessPinDragHandleNSView` 拖拽时会用内存里的图另写一个拖拽文件，贴图只要给一个用于命名的「保留路径」即可；否则每次剪贴板贴图都会在 `Captures/` 留下一份没人回收的 PNG。

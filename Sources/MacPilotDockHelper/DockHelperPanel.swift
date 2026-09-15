@@ -6,6 +6,16 @@
 //  无标题栏、无普通 Window Chrome、点击外部自动关闭、支持 ESC 与键盘导航、
 //  支持深色模式与 Retina。视觉接近 macOS 原生 Dock Folder。
 //
+//  性能（见 SUMMARY「Dock 分组：点开即现」）：
+//
+//  * **面板先上屏**：`show()` 只做「读配置 → 算尺寸 → 建面板 → 显示」，
+//    解析与图标交给 `model.loadContent()` 在显示之后跑。
+//  * **进程留在原地**：浮层关掉只 `orderOut`，不 `terminate`。下一次点 Dock 图标
+//    走 `applicationShouldHandleReopen` / `applicationDidBecomeActive`，实测 5ms 级；
+//    冷启动要重新走 LaunchServices + 进程启动 + 解析，实测 0.25 秒起，机器忙时更久。
+//    空转 `warmLifetime` 后自动退出，配合 `NSSupportsAutomaticTermination`
+//    让系统在内存吃紧时提前回收，所以「不留后台进程」的约束仍在，只是有了时长上限。
+//
 
 import AppKit
 import MacPilotDockGroupsCore
@@ -36,6 +46,10 @@ final class DockHelperPanel: NSPanel {
 final class DockHelperPanelController {
     static var shared: DockHelperPanelController?
 
+    /// 浮层关掉之后进程继续待命的时长。
+    /// 这段时间内再次点 Dock 图标是「热展开」——面板已经在内存里，直接显示。
+    static let warmLifetime: TimeInterval = 5 * 60
+
     /// 自动终止（TAL, Transparent App Lifecycle）的说明字符串。
     /// 面板可见期间必须禁用：日志显示 macOS 会在浮层已经显示后
     /// （启动 5 秒）仍把 Helper 标记为「可被系统回收」，
@@ -48,30 +62,40 @@ final class DockHelperPanelController {
     private var dismissalPolicy: DockGroupPanelDismissalPolicy?
     /// 只在真正禁用过自动终止之后才恢复，保证 disable/enable 成对。
     private var disabledAutomaticTermination = false
+    /// 空转退出的定时器（只在浮层关掉后跑）。
+    private var warmExitTimer: Timer?
     private let model: DockHelperModel
 
     init(model: DockHelperModel) {
         self.model = model
     }
 
+    /// 浮层当前是否在屏幕上（`main.swift` 用它判断「是 reopen 还是真的需要展开」）。
+    var isPanelVisible: Bool { panel?.isVisible ?? false }
+
     func show() {
-        // 已经有了就只把它重新提到前面，避免重复创建浮层。
+        cancelWarmExit()
+        disableAutomaticTermination()
+
+        // 配置可能刚在 MacPilot 里改过（改名 / 增删 App），每次都重新读一遍；
+        // 这一步是毫秒级的，面板尺寸也由此确定。
+        model.loadConfiguration()
+        model.startRefreshing()
+
+        let size = model.group.map { DockHelperLayout.size(for: $0) } ?? NSSize(width: 280, height: 190)
+
         if let panel {
-            panel.makeKeyAndOrderFront(nil)
-            NSApp.activate()
+            // 热路径：面板还在内存里，只需要按最新配置改一下尺寸、
+            // 重新定位到这次点击的 Dock 图标旁边，再显示出来。
+            if panel.frame.size != size {
+                panel.contentView?.frame = NSRect(origin: .zero, size: size)
+            }
+            position(panel, size: size)
+            observeDismissal(for: panel)
+            present(panel)
+            model.startLoadingContent()
             return
         }
-
-        model.start()
-
-        // 浮层可见 = 这个进程必须活着；禁用自动终止，避免被系统回收。
-        if !disabledAutomaticTermination {
-            ProcessInfo.processInfo.disableAutomaticTermination(Self.automaticTerminationReason)
-            disabledAutomaticTermination = true
-        }
-
-        let group = model.group
-        let size = group.map { DockHelperLayout.size(for: $0) } ?? NSSize(width: 280, height: 190)
 
         let hosting = NSHostingView(rootView: DockHelperView(model: model))
         hosting.frame = NSRect(origin: .zero, size: size)
@@ -95,17 +119,91 @@ final class DockHelperPanelController {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.animationBehavior = .utilityWindow
-        panel.onCancel = { [weak self] in self?.close() }
+        panel.onCancel = { [weak self] in self?.dismiss() }
 
         position(panel, size: size)
 
         self.panel = panel
+        observeDismissal(for: panel)
+        present(panel)
+
+        // 面板已经上屏，版本 / 运行状态 / 图标随后补齐（每张图之间让出主线程）。
+        model.startLoadingContent()
+    }
+
+    /// 把面板提到前面并成为 key window。启动手势的残留事件由闸门挡掉。
+    private func present(_ panel: DockHelperPanel) {
+        if NSApp.isHidden {
+            NSApp.unhide(nil)
+        }
         NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
-
-        // 从这一刻起，真正的「点外部 / 失去 key」才算数；启动手势的残留事件被挡掉。
+        // 从这一刻起，真正的「点外部 / 失去 key」才算数。
         dismissalPolicy = DockGroupPanelDismissalPolicy(shownAt: ProcessInfo.processInfo.systemUptime)
+    }
 
+    /// 关闭浮层：只把面板收起来，进程留着待命（见 `warmLifetime`）。
+    ///
+    /// ESC、点外部、启动 App、打开设置都走这里。之所以不 `terminate`：
+    /// 重新拉起一个进程是「点开后要等」的唯一来源，而面板本身在内存里几乎不花钱。
+    func dismiss() {
+        guard let panel else { return }
+        dismissalPolicy = nil
+        stopObservingDismissal(for: panel)
+        panel.orderOut(nil)
+        model.stopRefreshing()
+        restoreAutomaticTermination()
+        scheduleWarmExit()
+        // 没有窗口的 accessory App 不该继续占着最前面：让焦点回到用户原来的 App。
+        if NSApp.isActive {
+            NSApp.hide(nil)
+        }
+    }
+
+    /// 进程退出前的兜底清理（不触发 terminate，避免递归）。
+    func shutdown() {
+        stopObservingDismissal(for: panel)
+        panel = nil
+        dismissalPolicy = nil
+        cancelWarmExit()
+        model.stopRefreshing()
+        restoreAutomaticTermination()
+    }
+
+    /// 空转到期：关掉 Helper，回到「不点就不占进程」的状态。
+    private func terminate() {
+        shutdown()
+        NSApp.terminate(nil)
+    }
+
+    private func scheduleWarmExit() {
+        warmExitTimer?.invalidate()
+        warmExitTimer = Timer.scheduledTimer(withTimeInterval: Self.warmLifetime, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.terminate() }
+        }
+    }
+
+    private func cancelWarmExit() {
+        warmExitTimer?.invalidate()
+        warmExitTimer = nil
+    }
+
+    private func disableAutomaticTermination() {
+        guard !disabledAutomaticTermination else { return }
+        ProcessInfo.processInfo.disableAutomaticTermination(Self.automaticTerminationReason)
+        disabledAutomaticTermination = true
+    }
+
+    private func restoreAutomaticTermination() {
+        guard disabledAutomaticTermination else { return }
+        ProcessInfo.processInfo.enableAutomaticTermination(Self.automaticTerminationReason)
+        disabledAutomaticTermination = false
+    }
+
+    // MARK: - 关闭信号
+
+    private func observeDismissal(for panel: NSPanel) {
+        stopObservingDismissal(for: panel)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(panelDidResignKey(_:)),
@@ -115,43 +213,18 @@ final class DockHelperPanelController {
         installOutsideClickMonitor(for: panel)
     }
 
-    func close() {
-        guard let panel else { return }
-        dismissalPolicy = nil
-        NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: panel)
-        removeOutsideClickMonitor()
-        panel.orderOut(nil)
-        panel.contentView = nil
-        self.panel = nil
-        model.stop()
-        // Helper 不常驻：浮层关闭后结束进程，保证「关闭后无额外后台开销」。
-        restoreAutomaticTermination()
-        NSApp.terminate(nil)
-    }
-
-    /// 进程退出前的兜底清理（不触发 terminate，避免递归）。
-    func shutdown() {
+    private func stopObservingDismissal(for panel: NSPanel?) {
         if let panel {
             NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: panel)
-            self.panel = nil
         }
-        dismissalPolicy = nil
         removeOutsideClickMonitor()
-        model.stop()
-        restoreAutomaticTermination()
-    }
-
-    private func restoreAutomaticTermination() {
-        guard disabledAutomaticTermination else { return }
-        ProcessInfo.processInfo.enableAutomaticTermination(Self.automaticTerminationReason)
-        disabledAutomaticTermination = false
     }
 
     @objc private func panelDidResignKey(_ notification: Notification) {
         guard dismissalPolicy?.allowsDismissalForResignKey(now: ProcessInfo.processInfo.systemUptime) == true else {
             return
         }
-        close()
+        dismiss()
     }
 
     // MARK: - 点击外部自动关闭
@@ -171,7 +244,7 @@ final class DockHelperPanelController {
                     .allowsDismissalForOutsideClick(eventTimestamp: event.timestamp) == true
                 else { return }
                 if !panel.frame.contains(event.locationInWindow) {
-                    self.close()
+                    self.dismiss()
                 }
             }
         }
@@ -184,25 +257,25 @@ final class DockHelperPanelController {
         outsideClickMonitor = nil
     }
 
-    /// 把浮层放在鼠标（也就是 Dock 图标）上方，并夹在各屏幕的可见区域内。
+    // MARK: - 落点
+
+    /// 始终贴在**被点击的那个 Dock 图标**旁边：沿 Dock 方向居中到图标，
+    /// 垂直于 Dock 的方向紧贴 Dock 内侧（不再跟着鼠标跑）。
+    /// 具体数学在 `DockHelperPanelPlacement` 里，由单元测试锁住。
     private func position(_ panel: NSPanel, size: NSSize) {
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let frame = screen?.frame ?? visible
+        let pointer = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { $0.frame.contains(pointer) }
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        let screenFrame = screen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let visibleFrame = screen?.visibleFrame ?? screenFrame
 
-        var origin = NSPoint(x: mouse.x - size.width / 2, y: mouse.y + 10)
-        // 上方放不下时改放到下方。
-        if origin.y + size.height > visible.maxY {
-            origin.y = mouse.y - size.height - 10
-        }
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-        origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
-
-        // 夹取后仍可能越界（屏幕过小），以屏幕 frame 兜底。
-        origin.x = min(max(origin.x, frame.minX), frame.maxX - size.width)
-        origin.y = min(max(origin.y, frame.minY), frame.maxY - size.height)
-
+        let origin = DockHelperPanelPlacement.origin(
+            panelSize: size,
+            screenFrame: screenFrame,
+            visibleFrame: visibleFrame,
+            pointer: pointer
+        )
         panel.setFrame(NSRect(origin: origin, size: size), display: false)
     }
 }

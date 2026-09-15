@@ -230,6 +230,11 @@ public struct DockHelperBundleBuilder {
             // 需求第 7 节：Helper 不打开普通主窗口，运行时自行切换为 accessory，
             // 因此这里刻意不写 LSUIElement，Dock 中仍可固定该 App 图标。
             "LSUIElement": false,
+            // 浮层关掉之后进程会待命一段时间（点开即现，见 DockHelperPanel），
+            // 这两个键让系统在内存吃紧 / 注销时能把没有窗口的 Helper 直接回收，
+            // 于是「不留后台进程」依然成立：待命不是常驻。
+            "NSSupportsAutomaticTermination": true,
+            "NSSupportsSuddenTermination": true,
             "MacPilotDockGroupID": group.id
         ]
     }

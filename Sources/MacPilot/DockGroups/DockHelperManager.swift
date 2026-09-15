@@ -47,6 +47,27 @@ final class DockHelperManager {
         FileManager.default.fileExists(atPath: helperAppURL(for: group).path)
     }
 
+    /// Helper 是否需要（重新）生成：不存在，或者它记录的 MacPilot 版本已经过期。
+    ///
+    /// 后一条很关键：Helper 是主程序 binary 的**拷贝**。App 升级后如果只补「缺失」的
+    /// Helper，Dock 上跑的会一直是旧 binary（旧行为、旧 Info.plist），
+    /// 用户升级完也拿不到任何 Helper 侧的修复。
+    func helperNeedsRegeneration(for group: DockGroup) -> Bool {
+        let appURL = helperAppURL(for: group)
+        guard FileManager.default.fileExists(atPath: appURL.path) else { return true }
+
+        let infoPlist = appURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Info.plist")
+        guard let data = try? Data(contentsOf: infoPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return true }
+
+        let current = AppVersionInfo.current()
+        return (plist["CFBundleShortVersionString"] as? String) != current.version
+            || (plist["CFBundleVersion"] as? String) != current.build
+    }
+
     /// 生成或刷新分组对应的 Helper App。
     @discardableResult
     func ensureHelper(for group: DockGroup, memberIconURLs: [URL]) -> URL? {

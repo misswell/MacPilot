@@ -6,6 +6,10 @@
 //  Grid / List 两种布局、运行状态圆点、键盘导航、深色模式适配。
 //  刻意保持简单——这不是 MacPilot 主界面的缩小版。
 //
+//  性能：视图只读 `model.entries` 里已经算好的东西（名字、图标、运行状态），
+//  自己不取图标。图标还没到位的那些格子画一个中性占位方块，
+//  于是「浮层先出现、图标随后补」对用户是连续可见的，而不是先白屏两秒。
+//
 
 import AppKit
 import MacPilotDockGroupsCore
@@ -27,7 +31,7 @@ struct DockHelperView: View {
             RoundedRectangle(cornerRadius: DockHelperLayout.cornerRadius, style: .continuous)
                 .strokeBorder(.primary.opacity(0.10))
         )
-        .onAppear { focusedIndex = model.apps.isEmpty ? nil : 0 }
+        .onAppear { focusedIndex = model.entries.isEmpty ? nil : 0 }
     }
 
     // MARK: - 页头
@@ -74,7 +78,7 @@ struct DockHelperView: View {
     private var content: some View {
         if model.group == nil {
             missingGroupState
-        } else if model.apps.isEmpty {
+        } else if model.entries.isEmpty {
             emptyState
         } else if model.group?.layout == .list {
             listLayout
@@ -117,33 +121,33 @@ struct DockHelperView: View {
             ),
             spacing: 6
         ) {
-            ForEach(Array(model.apps.enumerated()), id: \.element.reference.id) { index, app in
-                appCell(app, index: index)
+            ForEach(Array(model.entries.enumerated()), id: \.element.id) { index, entry in
+                appCell(entry, index: index)
             }
         }
     }
 
     private var listLayout: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(model.apps.enumerated()), id: \.element.reference.id) { index, app in
-                appRow(app, index: index)
+            ForEach(Array(model.entries.enumerated()), id: \.element.id) { index, entry in
+                appRow(entry, index: index)
             }
         }
     }
 
     // MARK: - 单元格
 
-    private func appCell(_ app: ResolvedInstalledApp, index: Int) -> some View {
+    private func appCell(_ entry: DockHelperModel.Entry, index: Int) -> some View {
         Button {
-            model.open(app)
+            model.open(entry)
         } label: {
             VStack(spacing: 4) {
-                appIcon(app, side: 46)
-                Text(app.displayName)
+                appIcon(entry, side: 46)
+                Text(entry.displayName)
                     .font(.caption2)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(app.isInstalled ? .primary : .secondary)
+                    .foregroundStyle(entry.isMissing ? .secondary : .primary)
                     .frame(maxWidth: .infinity)
             }
             .frame(width: DockHelperLayout.gridCellWidth, height: DockHelperLayout.gridRowHeight - 4, alignment: .top)
@@ -155,28 +159,28 @@ struct DockHelperView: View {
         .onKeyPress(.leftArrow) { moveFocus(to: index - 1) }
         .onKeyPress(.downArrow) { moveFocus(to: index + columns) }
         .onKeyPress(.upArrow) { moveFocus(to: index - columns) }
-        .help(app.isInstalled ? app.displayName : model.t("appMissing"))
-        .accessibilityLabel(app.isInstalled ? app.displayName : "\(app.displayName) — \(model.t("appMissing"))")
-        .accessibilityValue(app.isRunning ? model.t("running") : model.t("notRunning"))
+        .help(entry.isMissing ? model.t("appMissing") : entry.displayName)
+        .accessibilityLabel(entry.isMissing ? "\(entry.displayName) — \(model.t("appMissing"))" : entry.displayName)
+        .accessibilityValue(entry.isRunning ? model.t("running") : model.t("notRunning"))
     }
 
-    private func appRow(_ app: ResolvedInstalledApp, index: Int) -> some View {
+    private func appRow(_ entry: DockHelperModel.Entry, index: Int) -> some View {
         Button {
-            model.open(app)
+            model.open(entry)
         } label: {
             HStack(spacing: 10) {
-                appIcon(app, side: 22)
-                Text(app.displayName)
+                appIcon(entry, side: 22)
+                Text(entry.displayName)
                     .font(.subheadline)
                     .lineLimit(1)
-                    .foregroundStyle(app.isInstalled ? .primary : .secondary)
+                    .foregroundStyle(entry.isMissing ? .secondary : .primary)
                 Spacer(minLength: 4)
-                if !app.isInstalled {
+                if entry.isMissing {
                     Text(model.t("appMissing"))
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
-                runningDot(app)
+                runningDot(entry)
             }
             .frame(height: DockHelperLayout.listRowHeight - 2)
             .contentShape(Rectangle())
@@ -185,19 +189,19 @@ struct DockHelperView: View {
         .focused($focusedIndex, equals: index)
         .onKeyPress(.downArrow) { moveFocus(to: index + 1) }
         .onKeyPress(.upArrow) { moveFocus(to: index - 1) }
-        .accessibilityLabel(app.isInstalled ? app.displayName : "\(app.displayName) — \(model.t("appMissing"))")
-        .accessibilityValue(app.isRunning ? model.t("running") : model.t("notRunning"))
+        .accessibilityLabel(entry.isMissing ? "\(entry.displayName) — \(model.t("appMissing"))" : entry.displayName)
+        .accessibilityValue(entry.isRunning ? model.t("running") : model.t("notRunning"))
     }
 
     @ViewBuilder
-    private func appIcon(_ app: ResolvedInstalledApp, side: CGFloat) -> some View {
+    private func appIcon(_ entry: DockHelperModel.Entry, side: CGFloat) -> some View {
         ZStack(alignment: .bottomTrailing) {
-            if let icon = model.icon(for: app) {
+            if let icon = entry.icon {
                 Image(nsImage: icon)
                     .resizable()
                     .interpolation(.high)
                     .frame(width: side, height: side)
-            } else {
+            } else if entry.isMissing {
                 RoundedRectangle(cornerRadius: side * 0.22, style: .continuous)
                     .fill(.quaternary)
                     .frame(width: side, height: side)
@@ -206,8 +210,13 @@ struct DockHelperView: View {
                             .font(.system(size: side * 0.5))
                             .foregroundStyle(.secondary)
                     )
+            } else {
+                // 图标还在渲染：中性占位方块，不要画成「应用未找到」。
+                RoundedRectangle(cornerRadius: side * 0.22, style: .continuous)
+                    .fill(.quaternary)
+                    .frame(width: side, height: side)
             }
-            if app.isRunning {
+            if entry.isRunning {
                 Circle()
                     .fill(.green)
                     .frame(width: side * 0.24, height: side * 0.24)
@@ -218,18 +227,18 @@ struct DockHelperView: View {
         .frame(width: side, height: side)
     }
 
-    private func runningDot(_ app: ResolvedInstalledApp) -> some View {
+    private func runningDot(_ entry: DockHelperModel.Entry) -> some View {
         Circle()
-            .strokeBorder(app.isRunning ? .green : .secondary.opacity(0.5), lineWidth: app.isRunning ? 0 : 1.5)
-            .background(Circle().fill(app.isRunning ? .green : .clear))
+            .strokeBorder(entry.isRunning ? .green : .secondary.opacity(0.5), lineWidth: entry.isRunning ? 0 : 1.5)
+            .background(Circle().fill(entry.isRunning ? .green : .clear))
             .frame(width: 8, height: 8)
             .accessibilityHidden(true)
     }
 
     /// 方向键在 Grid / List 中移动焦点，符合「支持键盘导航」的要求。
     private func moveFocus(to index: Int) -> KeyPress.Result {
-        guard !model.apps.isEmpty else { return .ignored }
-        focusedIndex = min(max(index, 0), model.apps.count - 1)
+        guard !model.entries.isEmpty else { return .ignored }
+        focusedIndex = min(max(index, 0), model.entries.count - 1)
         return .handled
     }
 }

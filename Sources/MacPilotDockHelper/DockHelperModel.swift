@@ -8,6 +8,18 @@
 //  Helper 由 MacPilot 生成，不加载外部 dylib、不执行第三方脚本、
 //  不运行 shell 命令，也绝不修改任何第三方 App。
 //
+//  性能约定（见 SUMMARY「Dock 分组：点开即现」）：
+//  展开浮层分成两步，**面板先上屏、内容后到**：
+//
+//  1. `loadConfiguration()`：只读 `groups.json`（毫秒级），面板尺寸只取决于它，
+//     所以这一步之后就能建面板并显示；
+//  2. `loadContent()`：解析版本 / 运行状态、渲染图标，全部在面板已经出现在
+//     屏幕上之后进行，每画一个图标让出一次主线程。
+//
+//  于是「按图标服务的速度」不再决定「浮层出现的速度」。图标结果留在内存里
+//  （`Entry.icon`），不在每次 SwiftUI body 求值时重画；2 秒一次的运行状态轮询
+//  也只改 `isRunning`，不重新解析（原先每次轮询都要读盘 + 问 LaunchServices）。
+//
 
 import AppKit
 import Combine
@@ -16,14 +28,43 @@ import SwiftUI
 
 @MainActor
 final class DockHelperModel: ObservableObject {
+    /// 浮层里的一格/一行。
+    /// `resolved` 与 `icon` 都是**后到**的：面板先按配置里的原始引用出现，
+    /// 解析结果与图标随后补齐，因此两者都必须是可空的。
+    struct Entry: Identifiable {
+        let reference: DockGroupApp
+        var resolved: ResolvedInstalledApp?
+        var icon: NSImage?
+        /// 图标对应的缓存键（Bundle ID + 版本 + 尺寸）：键没变就不重画。
+        var iconKey: String?
+
+        var id: UUID { reference.id }
+
+        var displayName: String {
+            let live = resolved?.displayName ?? ""
+            if !live.isEmpty { return live }
+            return reference.name.isEmpty ? reference.path : reference.name
+        }
+
+        /// 只在**已经解析完**且确实找不到时才说「应用未找到」；
+        /// 还在解析中时按正常状态显示，避免闪一下错误样式。
+        var isMissing: Bool { resolved.map { !$0.isInstalled } ?? false }
+        var isRunning: Bool { resolved?.isRunning ?? false }
+    }
+
+    /// 浮层里图标的目标尺寸（点）。图标准备好之前只显示占位方块。
+    static let iconSize: CGFloat = 56
+
     @Published private(set) var group: DockGroup?
-    @Published private(set) var apps: [ResolvedInstalledApp] = []
+    @Published private(set) var entries: [Entry] = []
     @Published private(set) var errorMessage: String?
 
     let language: DockHelperLanguage
     private let store: DockGroupStore
     private let groupID: String?
     private var refreshTimer: Timer?
+    /// 每次重新读配置都自增：让上一轮还没跑完的异步加载结果作废。
+    private var contentGeneration = 0
 
     init(
         bundleIdentifier: String? = Bundle.main.bundleIdentifier,
@@ -43,24 +84,19 @@ final class DockHelperModel: ObservableObject {
         DockHelperStrings.value(key, language: language)
     }
 
-    /// 读取配置并开始轮询运行状态（只在浮层显示期间运行）。
-    func start() {
-        loadGroup()
-        refreshRunningState()
-        refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshRunningState() }
-        }
-    }
+    // MARK: - 第一步：只读配置（毫秒级）
 
-    func stop() {
-        refreshTimer?.invalidate()
-        refreshTimer = nil
-    }
+    /// 读取分组配置并立刻铺好占位条目。
+    ///
+    /// 这一步之后 `group` 与每个 App 的名字就是对的，面板可以马上显示；
+    /// 版本号、运行状态与图标都留到 `loadContent()`。
+    func loadConfiguration() {
+        contentGeneration += 1
+        errorMessage = nil
 
-    private func loadGroup() {
         guard groupID != nil else {
             group = nil
+            entries = []
             return
         }
         switch store.load() {
@@ -69,28 +105,117 @@ final class DockHelperModel: ObservableObject {
         case .missing, .corrupt:
             group = nil
         }
+
+        // 重新读配置时保留「引用没变」的条目：热进程再次展开时不会闪一下占位图。
+        let previous = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        entries = (group?.apps ?? []).map { reference in
+            var entry = Entry(reference: reference, resolved: nil, icon: nil, iconKey: nil)
+            if let old = previous[reference.id], old.reference == reference {
+                entry.resolved = old.resolved
+                entry.icon = old.icon
+                entry.iconKey = old.iconKey
+            }
+            return entry
+        }
+    }
+
+    // MARK: - 第二步：解析内容（面板已经在屏幕上之后再调用）
+
+    /// 后台开始解析与画图标；面板此刻已经在屏幕上，所以这一步不影响出现速度。
+    func startLoadingContent() {
+        Task { [weak self] in
+            await self?.loadContent()
+        }
+    }
+
+    /// 解析每个 App 的版本 / 运行状态，然后逐个渲染图标。
+    /// 每次 `await Task.yield()` 都把主线程还给 SwiftUI，图标因此是「渐次到位」的。
+    func loadContent() async {
+        let generation = contentGeneration
+        guard let group, !group.apps.isEmpty else { return }
+
+        let running = InstalledAppResolver.runningBundleIdentifiers()
+        var resolved: [ResolvedInstalledApp] = []
+        resolved.reserveCapacity(group.apps.count)
+        for reference in group.apps {
+            resolved.append(InstalledAppResolver.resolve(reference, runningBundleIdentifiers: running))
+        }
+        guard generation == contentGeneration else { return }
+        apply(resolved)
+
+        for (index, app) in resolved.enumerated() {
+            guard let url = app.url, entries.indices.contains(index) else { continue }
+            let key = iconKey(for: app, url: url)
+            if entries[index].iconKey == key, entries[index].icon != nil { continue }
+            let icon = InstalledAppResolver.icon(for: url, size: Self.iconSize)
+            guard generation == contentGeneration, entries.indices.contains(index) else { return }
+            entries[index].icon = icon
+            entries[index].iconKey = icon == nil ? nil : key
+            await Task.yield()
+        }
+    }
+
+    private func apply(_ resolved: [ResolvedInstalledApp]) {
+        for (index, app) in resolved.enumerated() where entries.indices.contains(index) {
+            guard entries[index].reference == app.reference else { continue }
+            entries[index].resolved = app
+        }
+    }
+
+    private func iconKey(for app: ResolvedInstalledApp, url: URL) -> String {
+        "\(app.bundleIdentifier ?? url.path)@\(app.version ?? "")@\(Int(Self.iconSize))"
+    }
+
+    // MARK: - 运行状态轮询（只在浮层显示期间运行）
+
+    func startRefreshing() {
+        refreshRunningState()
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshRunningState() }
+        }
+    }
+
+    func stopRefreshing() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
     }
 
     /// 需求第 9 节：按 bundleIdentifier 匹配 NSWorkspace.runningApplications，
     /// 不注入、不读内存、不修改目标进程。
+    ///
+    /// 只更新运行状态：解析要读 `Info.plist`、问 LaunchServices，没必要 2 秒来一次。
+    /// 而且真的变了才写回 `entries`——`@Published` 不看内容是否相等，
+    /// 每 2 秒无脑赋值会让整个浮层白重绘一次。
     func refreshRunningState() {
-        guard let group else { return }
+        guard !entries.isEmpty else { return }
         let running = InstalledAppResolver.runningBundleIdentifiers()
-        apps = group.apps.map { InstalledAppResolver.resolve($0, runningBundleIdentifiers: running) }
+        var updated = entries
+        var changed = false
+        for index in updated.indices {
+            guard var resolved = updated[index].resolved else { continue }
+            let isRunning = resolved.bundleIdentifier.map { running.contains($0) } ?? false
+            guard isRunning != resolved.isRunning else { continue }
+            resolved.isRunning = isRunning
+            updated[index].resolved = resolved
+            changed = true
+        }
+        guard changed else { return }
+        entries = updated
     }
 
     // MARK: - 动作
 
     /// 需求第 10 节：未运行 → 启动；已运行 → 激活。
-    func open(_ app: ResolvedInstalledApp) {
-        guard app.isInstalled else {
+    func open(_ entry: Entry) {
+        guard let app = entry.resolved, app.isInstalled else {
             errorMessage = t("appMissing")
             return
         }
         Task { @MainActor in
             do {
                 try await AppLaunchService.open(app.reference)
-                DockHelperPanelController.shared?.close()
+                DockHelperPanelController.shared?.dismiss()
             } catch {
                 errorMessage = String(
                     format: t("launchFailed"),
@@ -100,20 +225,15 @@ final class DockHelperModel: ObservableObject {
         }
     }
 
-    func icon(for app: ResolvedInstalledApp) -> NSImage? {
-        guard let url = app.url else { return nil }
-        return InstalledAppResolver.icon(for: url, size: 56)
-    }
-
     /// 需求第 7 节：浮层里的「设置…」打开 MacPilot 的 Dock 分组页面。
     func openMacPilotSettings() {
         guard let url = URL(string: "macpilot://dock-groups") else { return }
         NSWorkspace.shared.open(url)
-        DockHelperPanelController.shared?.close()
+        DockHelperPanelController.shared?.dismiss()
     }
 
-    func revealInFinder(_ app: ResolvedInstalledApp) {
-        guard let url = app.url else { return }
+    func revealInFinder(_ entry: Entry) {
+        guard let url = entry.resolved?.url else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 }

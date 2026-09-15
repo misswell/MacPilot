@@ -499,12 +499,12 @@ final class DockGroupsModel: ObservableObject {
         helperManager.revealGroupsFolder()
     }
 
-    /// 启动时只做一次「Helper 缺失就补」的轻量校验，避免每次启动都重写磁盘。
+    /// 启动时做一次「缺失 / 版本过期就重做」的轻量校验，避免每次启动都无脑重写磁盘。
     private func ensureHelpersExistIfNeeded(force: Bool = false) {
         guard settings.isEnabled, helperManager.isHelperExecutableAvailable else { return }
         var missing = false
         for group in groups {
-            if force || !helperManager.helperExists(for: group) {
+            if force || helperManager.helperNeedsRegeneration(for: group) {
                 regenerateHelper(for: group)
                 missing = true
             }

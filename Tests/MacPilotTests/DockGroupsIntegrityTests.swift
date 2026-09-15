@@ -168,6 +168,9 @@ struct ThirdPartyAppIntegrityTests {
         #expect(plist["MacPilotDockGroupID"] as? String == "dev")
         // 没有 Hardened Runtime 之外的沙盒 / 特殊权限要求。
         #expect(plist["LSUIElement"] as? Bool == false)
+        // 浮层关掉之后 Helper 会待命一段时间，这两个键让系统能按内存压力 / 注销回收它。
+        #expect(plist["NSSupportsAutomaticTermination"] as? Bool == true)
+        #expect(plist["NSSupportsSuddenTermination"] as? Bool == true)
 
         // 图标必须是真实可解析的 ICNS。
         let iconData = try Data(contentsOf: icon)
