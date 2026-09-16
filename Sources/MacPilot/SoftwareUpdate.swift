@@ -303,6 +303,10 @@ final class SoftwareUpdater: ObservableObject {
             try launchInstaller(for: package)
             NSApp.terminate(nil)
         } catch {
+            // The user-facing message groups several distinct checks; keep the
+            // exact reason in the diagnostic log so a failed update stays
+            // diagnosable without reading the validator source.
+            DiagnosticLog.write("SoftwareUpdate", "Update failed: \(String(describing: error))")
             state = .failed(SoftwareUpdateFailure(error))
         }
     }
@@ -438,12 +442,19 @@ enum UpdatePackageValidator {
                 throw SoftwareUpdateError.wrongDeveloperTeam
             }
             // Privacy grants (Accessibility, Screen Recording, Apple Events)
-            // are bound to the app's designated requirement. Refuse an
-            // update whose requirement differs from the running app, or
-            // macOS would discard every grant and re-prompt on relaunch.
+            // are recorded together with a requirement derived from the
+            // designated requirement of the app that was granted, and macOS
+            // validates that recorded requirement against the candidate's
+            // certificate chain. An incoming app therefore keeps every grant
+            // whenever it satisfies the running app's requirement, even when
+            // the two requirements are not textually identical -- and they are
+            // not always: a signing host that cannot see Apple's Developer ID
+            // intermediate writes a weaker requirement than the canonical
+            // Developer ID one. Compare semantics rather than text, or a
+            // legitimate update gets rejected as an identity change.
             let runningRequirement = try designatedRequirement(of: Bundle.main.bundleURL)
-            let incomingRequirement = try designatedRequirement(of: applicationURL)
-            guard !runningRequirement.isEmpty, runningRequirement == incomingRequirement else {
+            guard !runningRequirement.isEmpty,
+                  satisfies(runningRequirement, at: applicationURL) else {
                 throw SoftwareUpdateError.identityMismatch
             }
             do {
@@ -480,6 +491,23 @@ enum UpdatePackageValidator {
             }
         }
         return ""
+    }
+
+    /// Whether the code at `bundleURL` satisfies `requirement`. This is the
+    /// check macOS performs against the requirement recorded when a privacy
+    /// grant was made, so it is also the right test for "does this update keep
+    /// the grants the running app already has".
+    static func satisfies(_ requirement: String, at bundleURL: URL) -> Bool {
+        guard !requirement.isEmpty else { return false }
+        do {
+            try run(
+                "/usr/bin/codesign",
+                arguments: ["--verify", "--strict", "-R", "=\(requirement)", bundleURL.path]
+            )
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Removes the Gatekeeper quarantine attribute; a no-op when the

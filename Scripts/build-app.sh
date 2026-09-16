@@ -107,6 +107,9 @@ REXT_APPEX="$APP/Contents/PlugIns/FinderSync.appex"
 ENTITLEMENTS="$ROOT/Resources/MacPilot.entitlements"
 DEVELOPER_ID="${MACPILOT_DEVELOPER_ID:-${OCTOPILOT_DEVELOPER_ID:-}}"
 EXPECTED_DEVELOPER_ID="Developer ID Application: Guofeng Liu (U8U443D7ZL)"
+# Apple's canonical Developer ID requirement pins the signing team; a build
+# whose requirement can be satisfied by another team must never ship.
+DEVELOPER_TEAM_IDENTIFIER="U8U443D7ZL"
 SIGNING_IDENTITY="$DEVELOPER_ID"
 if [[ -n "$DEVELOPER_ID" ]]; then
     if [[ "$DEVELOPER_ID" != "$EXPECTED_DEVELOPER_ID" ]]; then
@@ -156,10 +159,19 @@ else
 fi
 
 if [[ -n "$SIGNING_IDENTITY" ]]; then
-    # TCC stores the designated requirement when Screen Recording or
-    # Accessibility is granted. Keep the bundle identifier and Apple signing
-    # anchor stable across local and release builds.
-    SHARED_REQUIREMENT="designated => identifier \"$BUNDLE_IDENTIFIER\" and anchor apple generic"
+    # TCC records a requirement derived from the designated requirement when
+    # Screen Recording or Accessibility is granted, and the in-app updater
+    # refuses a package that the running app's requirement rejects. Apple
+    # derives the canonical Developer ID requirement below from the certificate
+    # chain, but only while the signing keychain can see Apple's Developer ID
+    # intermediate: a CI keychain without it silently bakes in the weaker
+    # "identifier X and anchor apple generic" form instead, which no build
+    # signed elsewhere can match. Pass the requirement explicitly so every
+    # signing host produces the same bytes.
+    SHARED_REQUIREMENT=""
+    if [[ "$SIGNING_IDENTITY" == "Developer ID Application:"* ]]; then
+        SHARED_REQUIREMENT="designated => identifier \"$BUNDLE_IDENTIFIER\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = $DEVELOPER_TEAM_IDENTIFIER"
+    fi
 
     # Sign nested code independently. Passing the main app's custom
     # requirement through --deep would incorrectly give MacPilotUpdater the
@@ -193,9 +205,29 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
             --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/MacPilotDockHelper"
         codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
             "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
-        codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
-            --requirements "=$SHARED_REQUIREMENT" --sign "$SIGNING_IDENTITY" "$APP"
+        if [[ -n "$SHARED_REQUIREMENT" ]]; then
+            codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
+                --requirements "=$SHARED_REQUIREMENT" --sign "$SIGNING_IDENTITY" "$APP"
+        else
+            # An Apple Development signature cannot satisfy the canonical
+            # Developer ID requirement, so let codesign derive its own.
+            codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
+                --sign "$SIGNING_IDENTITY" "$APP"
+        fi
     fi
-    echo "Shared designated requirement: $SHARED_REQUIREMENT"
+    if [[ -n "$SHARED_REQUIREMENT" ]]; then
+        # A release whose designated requirement lost the Developer ID
+        # pinning cannot be installed by an app signed on another host.
+        # Catch that here instead of shipping an unusable update.
+        SIGNED_REQUIREMENT="$(codesign --display -r- "$APP" 2>&1 \
+            | sed -n 's/^designated => //p')"
+        if [[ "$SIGNED_REQUIREMENT" != *"certificate leaf[subject.OU] = $DEVELOPER_TEAM_IDENTIFIER"* ]]; then
+            echo "ERROR: $APP was signed with a non-canonical designated requirement:" >&2
+            echo "  ${SIGNED_REQUIREMENT:-<none>}" >&2
+            echo "The in-app updater cannot match such a build, so packaging stops here." >&2
+            exit 1
+        fi
+        echo "Designated requirement: $SIGNED_REQUIREMENT"
+    fi
 fi
 echo "Built $APP (version $VERSION, build $BUILD_NUMBER, bundle id $BUNDLE_IDENTIFIER)"
