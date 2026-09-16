@@ -360,18 +360,12 @@ private final class QuickAccessPinWindowController: NSObject {
     Task { [weak self] in
       guard let self else { return }
       guard let text = try? await SmartOCRService.recognize(image: cgImage), !text.isEmpty else {
-        self.showMessage(
-          title: AppText.value("scOCR", language: self.language),
-          message: AppText.value("scOCRNoText", language: self.language)
-        )
+        SmartCaptureToast.shared.showOCRNoText(language: self.language)
         return
       }
       NSPasteboard.general.clearContents()
       NSPasteboard.general.setString(text, forType: .string)
-      self.showMessage(
-        title: AppText.value("scOCRCopied", language: self.language),
-        message: text
-      )
+      SmartCaptureToast.shared.showOCRCopied(text: text, language: self.language)
     }
   }
 

@@ -1493,14 +1493,14 @@ final class ScreenCaptureModel: ObservableObject {
                         imageWidth: imageWidth,
                         imageHeight: imageHeight
                     )
-                    SmartCaptureSaveToast.shared.showSaved(url: savedImage.url, language: language)
+                    SmartCaptureToast.shared.showSaved(url: savedImage.url, language: language)
                 }
             } catch {
                 await MainActor.run { [weak self] in
                     Self.logger.error(
                         "Quick copy auto save failed: \(error.localizedDescription, privacy: .public)"
                     )
-                    SmartCaptureSaveToast.shared.showFailure(error: error, language: language)
+                    SmartCaptureToast.shared.showFailure(error: error, language: language)
                     self?.errorMessage = error.localizedDescription
                 }
             }
@@ -1535,6 +1535,7 @@ final class ScreenCaptureModel: ObservableObject {
 
     private func handleOCRCapture(_ image: CGImage) {
         let sendableImage = SendableScreenCaptureImage(value: image)
+        let language = self.language
         Task.detached(priority: .userInitiated) {
             do {
                 let request = VNRecognizeTextRequest()
@@ -1549,8 +1550,15 @@ final class ScreenCaptureModel: ObservableObject {
                 let qrCodes = (try? ScreenCaptureQRCode.detect(in: sendableImage.value)) ?? []
                 let combined = (qrCodes + (text.isEmpty ? [] : [text])).joined(separator: "\n")
                 await MainActor.run {
+                    // 识别为空时不要用空字符串覆盖剪贴板，只提示没识别到。
+                    let copied = combined.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !copied.isEmpty else {
+                        SmartCaptureToast.shared.showOCRNoText(language: language)
+                        return
+                    }
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(combined, forType: .string)
+                    SmartCaptureToast.shared.showOCRCopied(text: copied, language: language)
                 }
             } catch {
                 Task { @MainActor [weak self] in

@@ -1232,3 +1232,24 @@ func refreshLoginItemState() { launchesAtLogin = SMAppService.mainApp.status == 
 - 全量 `swift test`：721 条通过；仍旧只有 `ScreenCaptureTests` 那两条并行负载下的偶发超时（单独复跑 74 条全绿，与本次无关）。
 - `./Scripts/build-app.sh`：universal arm64 + x86_64、Developer ID 签名、`codesign --verify --deep --strict` 通过。
 - 真机登录项状态实测：`SMAppService.mainApp.status = enabled`，`register()` 返回 OK；`sfltool dumpbtm` 中该 App 记录 `Disposition: [enabled, allowed, notified]`。
+
+## 四十六、OCR 复制后给一个「已复制」轻提示（v1.1.356）
+
+截图链路里有三条 OCR 入口，复制完文字后的反馈各不相同：框选工具栏的 OCR 按钮**完全静默**（识别完直接写剪贴板），快速操作卡片的 OCR 按钮和贴图右键菜单的 OCR 则弹一个模态 `NSAlert`，把整段识别文字塞进 `informativeText`、还必须点一下「好」。用户看到的是「点了 OCR 没反应」或者「弹一个挡住操作的框」。
+
+### 改了什么
+
+1. **复用已有的截图轻提示**。`SmartCaptureSaveToast` 泛化成 `SmartCaptureToast`（不抢焦点、不拦截鼠标、自动消失，本来就用于「快速复制已落盘」），新增两个入口：`showOCRCopied(text:language:)` 与 `showOCRNoText(language:language:)`；文案直接复用既有 key（`scOCRCopied` / `scOCR` + `scOCRNoText`），中英文不需要新增条目。
+2. **三条入口统一**。`ScreenCaptureModel.handleOCRCapture`（框选工具栏）、`SmartQuickAccessWindowController.recognizeText`（快捷操作卡片）、`QuickAccessPinWindowController.recognizeText`（贴图右键）都改成走这个轻提示；卡片控制器里那个只服务 OCR 的 `showMessage` 随之删除。
+3. **不再用空字符串覆盖剪贴板**。框选工具栏那条路径过去把「识别文本 + 二维码」拼起来无条件写入剪贴板，两者都为空时也会清空剪贴板；现在先 trim 判空，为空就只提示「未识别到文字。」，剪贴板保持原样。
+4. **长文本压成一行摘要**。`SmartCaptureToast.preview(of:limit:)`（`nonisolated`，纯函数，可单测）把换行/连续空白折叠成空格并按 80 字符截断加省略号——轻提示是个固定尺寸的 HUD，塞进整段 OCR 文本既看不清也撑不开。
+
+### 为什么不用模态弹窗
+
+模态 `NSAlert` 在被截图浮层「借用」的场景里本来就不合适：截图浮层与贴图窗口是 `.nonactivatingPanel`，App 可能不是前台，`runModal()` 出来的框既可能被压在别的 App 后面，又强制用户点一次「好」才能继续。轻提示面板是 `.floating` + `orderFrontRegardless`，与截图链路里其他反馈（已保存 / 保存失败）保持同一种观感。
+
+### 验证
+
+- `swift test --filter QuickAccessTests`：5 条全绿，其中新增的 `ocrToastPreviewCollapsesAndTruncatesRecognizedText` 覆盖折叠空白、全空白输入与截断长度。
+- 全量 `swift test`：723 条；失败的仍只有那几条并行负载下的偶发超时（`quickCopyAutoSaveWritesFileAndRecordsStats`、`startupShortcutRegistrationRetriesTransientFailure`、`heartbeatFailureTriggersABoundedReconnect`），单独复跑全绿，与本次改动无关。
+- `swift build`（含 `-warnings-as-errors` 的 release 打包路径）通过。

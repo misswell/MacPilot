@@ -86,4 +86,15 @@ struct QuickAccessTests {
         #expect(decoded == original)
         #expect(decoded.displayString.contains("⌘"))
     }
+
+    @Test func ocrToastPreviewCollapsesAndTruncatesRecognizedText() {
+        // OCR 复制后的轻提示只显示一行摘要，长文本必须被收敛。
+        #expect(SmartCaptureToast.preview(of: "发票 金额\n合计 128.00 元") == "发票 金额 合计 128.00 元")
+        #expect(SmartCaptureToast.preview(of: "   ") == "")
+
+        let long = String(repeating: "识", count: 200)
+        let preview = SmartCaptureToast.preview(of: long, limit: 20)
+        #expect(preview == String(repeating: "识", count: 20) + "…")
+        #expect(SmartCaptureToast.preview(of: long).count == 81)
+    }
 }

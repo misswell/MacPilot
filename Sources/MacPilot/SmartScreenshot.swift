@@ -1307,10 +1307,11 @@ final class ImageHostingUploadHUD {
     }
 }
 
-/// 双击快速复制后自动落盘的轻提示：不抢焦点、不拦截鼠标，自动消失。
+/// 截图流程里一次性结果的轻提示（快速复制落盘、OCR 复制成功等）：
+/// 不抢焦点、不拦截鼠标，自动消失。
 @MainActor
-final class SmartCaptureSaveToast {
-    static let shared = SmartCaptureSaveToast()
+final class SmartCaptureToast {
+    static let shared = SmartCaptureToast()
 
     private var panel: NSPanel?
     private var titleLabel: NSTextField?
@@ -1331,6 +1332,31 @@ final class SmartCaptureSaveToast {
             detail: error.localizedDescription,
             autoDismissAfter: 6
         )
+    }
+
+    /// OCR 文字已写入剪贴板；副标题用识别结果的一行摘要。
+    func showOCRCopied(text: String, language: AppLanguage) {
+        show(
+            title: AppText.value("scOCRCopied", language: language),
+            detail: Self.preview(of: text),
+            autoDismissAfter: 3
+        )
+    }
+
+    /// OCR 没有识别到可复制的内容。
+    func showOCRNoText(language: AppLanguage) {
+        show(
+            title: AppText.value("scOCR", language: language),
+            detail: AppText.value("scOCRNoText", language: language),
+            autoDismissAfter: 3
+        )
+    }
+
+    /// 把识别结果压成一行摘要，避免长文本把轻提示撑开。
+    nonisolated static func preview(of text: String, limit: Int = 80) -> String {
+        let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard collapsed.count > limit else { return collapsed }
+        return String(collapsed.prefix(limit)) + "…"
     }
 
     private func show(title: String, detail: String, autoDismissAfter seconds: Int) {
@@ -4426,27 +4452,13 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
         Task { [weak self] in
             guard let self else { return }
             guard let text = try? await SmartOCRService.recognize(image: image), !text.isEmpty else {
-                showMessage(
-                    title: AppText.value("scOCR", language: language),
-                    message: AppText.value("scOCRNoText", language: language)
-                )
+                SmartCaptureToast.shared.showOCRNoText(language: language)
                 return
             }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
-            showMessage(
-                title: AppText.value("scOCRCopied", language: language),
-                message: text
-            )
+            SmartCaptureToast.shared.showOCRCopied(text: text, language: language)
         }
-    }
-
-    private func showMessage(title: String, message: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = String(message.prefix(1_000))
-        alert.addButton(withTitle: AppText.value("scOK", language: language))
-        alert.runModal()
     }
 
     private func revealSavedImage() {
