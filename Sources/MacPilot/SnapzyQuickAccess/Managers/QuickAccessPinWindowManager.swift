@@ -303,6 +303,12 @@ private final class QuickAccessPinWindowController: NSObject {
       onClose: { [weak self] in
         self?.handleUserClose()
       },
+      onDoubleClick: { [weak self] in
+        self?.copyToPasteboard()
+      },
+      onContextMenu: { [weak self] event in
+        self?.presentContextMenu(with: event)
+      },
       onZoomSizeChange: { [weak self] _ in
         self?.resizeForCurrentZoom(animated: true)
       },
@@ -313,12 +319,6 @@ private final class QuickAccessPinWindowController: NSObject {
     let hostingView = QuickAccessPinHostingView(rootView: view)
     hostingView.onMagnify = { [weak self] magnification in
       self?.window.requestMagnifyZoom(magnification: magnification)
-    }
-    hostingView.onDoubleClick = { [weak self] in
-      self?.copyToPasteboard()
-    }
-    hostingView.onContextMenu = { [weak self] event in
-      self?.presentContextMenu(with: event)
     }
     hostingView.frame = NSRect(origin: .zero, size: size)
     return hostingView
@@ -588,9 +588,6 @@ private final class QuickAccessPinWindowController: NSObject {
 @MainActor
 private final class QuickAccessPinHostingView: NSHostingView<QuickAccessPinWindowView> {
   var onMagnify: ((CGFloat) -> Void)?
-  /// Double-clicking the pin copies it, matching the old direct-pin behavior.
-  var onDoubleClick: (() -> Void)?
-  var onContextMenu: ((NSEvent) -> Void)?
 
   private var lastMagnification: CGFloat = 0
 
@@ -602,22 +599,6 @@ private final class QuickAccessPinHostingView: NSHostingView<QuickAccessPinWindo
   required init?(coder: NSCoder) {
     super.init(coder: coder)
     setupGestureRecognizer()
-  }
-
-  override func mouseDown(with event: NSEvent) {
-    if event.clickCount == 2, let onDoubleClick {
-      onDoubleClick()
-      return
-    }
-    super.mouseDown(with: event)
-  }
-
-  override func rightMouseDown(with event: NSEvent) {
-    guard let onContextMenu else {
-      super.rightMouseDown(with: event)
-      return
-    }
-    onContextMenu(event)
   }
 
   private func setupGestureRecognizer() {

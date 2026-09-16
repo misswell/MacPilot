@@ -12,6 +12,8 @@ struct QuickAccessPinWindowView: View {
   @ObservedObject var state: QuickAccessPinWindowState
 
   let onClose: () -> Void
+  let onDoubleClick: () -> Void
+  let onContextMenu: (NSEvent) -> Void
   let onZoomSizeChange: (CGSize) -> Void
   let onLockChanged: () -> Void
 
@@ -27,7 +29,9 @@ struct QuickAccessPinWindowView: View {
 
   var body: some View {
     ZStack {
+      dragSurface
       content
+        .allowsHitTesting(false)
       chromeLayer
     }
     .frame(width: state.displaySize.width, height: state.displaySize.height)
@@ -37,6 +41,17 @@ struct QuickAccessPinWindowView: View {
         .stroke(Color.white.opacity(0.22), lineWidth: 1)
     )
     .background(Color.clear)
+  }
+
+  private var dragSurface: some View {
+    QuickAccessPinWindowDragView(
+      isEnabled: !state.isLocked,
+      onDoubleClick: onDoubleClick,
+      onContextMenu: onContextMenu
+    )
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .allowsHitTesting(!state.isLocked)
+    .accessibilityHidden(true)
   }
 
   @ViewBuilder
@@ -94,6 +109,9 @@ struct QuickAccessPinWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(controlInset)
     }
+    .opacity(state.isMouseInside ? 1 : 0)
+    .allowsHitTesting(state.isMouseInside)
+    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: state.isMouseInside)
   }
 
   private var unlockedControls: some View {
