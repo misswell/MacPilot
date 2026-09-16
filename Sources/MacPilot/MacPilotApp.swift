@@ -1860,6 +1860,26 @@ final class MacPilotModel: ObservableObject {
         dockGroups.persist = { [weak self] in self?.saveIfReady() }
         windowSwitcher.language = language
         clipboard.language = language
+        // StateObject can construct this model while SwiftUI is still building
+        // its AttributeGraph. Runtime activation mutates published state and
+        // Dock Groups may synchronously run codesign, so doing that work here
+        // can re-enter the graph during layout and make AttributeGraph abort.
+        // Let the initial graph finish before starting configured runtimes.
+        DispatchQueue.main.async { [weak self] in
+            self?.activateConfiguredRuntimes()
+        }
+        if automaticUpdateChecks {
+            Task { [weak updater] in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                await updater?.checkForUpdates()
+            }
+        }
+    }
+
+    private func activateConfiguredRuntimes() {
+        guard !hasShutdown else { return }
+
         // Activate only the features selected on the Home page. Their own
         // settings still decide the finer-grained behavior inside each page.
         for feature in MainSection.featureSections where isFeatureEnabled(feature) {
@@ -1876,13 +1896,6 @@ final class MacPilotModel: ObservableObject {
         }
         refreshScreenStateObservation()
         screenRecording.language = language
-        if automaticUpdateChecks {
-            Task { [weak updater] in
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled else { return }
-                await updater?.checkForUpdates()
-            }
-        }
     }
 
     var enabledCount: Int { rules.filter(\.isEnabled).count }
