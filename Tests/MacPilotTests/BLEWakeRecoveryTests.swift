@@ -31,6 +31,16 @@ struct BLEWakeRecoveryTests {
         #expect(BLEWakeRecoveryPlan.make(isEnabled: true, hasMonitoredDevice: false) == nil)
     }
 
+    @Test func displayWakeRetriesMonitoringWhenNoFreshSignalExists() throws {
+        let plan = try #require(BLEMonitoringRecoveryPlan.make(
+            isEnabled: true,
+            hasMonitoredDevice: true
+        ))
+
+        #expect(plan.restartDelays == [0, 3, 10])
+        #expect(BLEMonitoringRecoveryPlan.make(isEnabled: false, hasMonitoredDevice: true) == nil)
+    }
+
     @Test func unlockAttemptPlanRetriesAfterARealDisplayWake() {
         #expect(BLEUnlockAttemptPlan.standard.deadlines == [2, 5, 9, 14, 20])
         #expect(BLEUnlockAttemptPlan.standard.deadlines == BLEUnlockAttemptPlan.standard.deadlines.sorted())

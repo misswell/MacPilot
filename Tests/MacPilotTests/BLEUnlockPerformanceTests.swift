@@ -129,6 +129,24 @@ struct BLEUnlockPerformanceTests {
         #expect(!gate.isInFlight)
     }
 
+    @Test func stalledBluetoothRSSIRequestStaysClosedUntilRecoveryTearsDownTheConnection() {
+        var gate = BLERequestGate()
+        let start = Date(timeIntervalSinceReferenceDate: 1_000)
+
+        let firstRequestStarted = gate.begin(at: start)
+        let requestIsStillPending = !gate.hasTimedOut(at: start.addingTimeInterval(11))
+        let requestTimedOut = gate.hasTimedOut(at: start.addingTimeInterval(12))
+        let replacementIsBlocked = !gate.begin(at: start.addingTimeInterval(12))
+        gate.reset()
+        let replacementRequestStarted = gate.begin(at: start.addingTimeInterval(12))
+
+        #expect(firstRequestStarted)
+        #expect(requestIsStillPending)
+        #expect(requestTimedOut)
+        #expect(replacementIsBlocked)
+        #expect(replacementRequestStarted)
+    }
+
     @Test func bluetoothConnectionRetriesAreThrottledWhileConnecting() {
         var gate = BLEConnectionRetryGate()
         let firstAttempt = Date(timeIntervalSinceReferenceDate: 1_000)

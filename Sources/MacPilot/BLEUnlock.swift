@@ -405,6 +405,17 @@ struct BLEWakeRecoveryPlan: Equatable {
     }
 }
 
+/// Repairs monitoring after a display-only wake or a lost CoreBluetooth
+/// callback. A fresh RSSI sample is still required before proximity unlock.
+struct BLEMonitoringRecoveryPlan: Equatable {
+    let restartDelays: [TimeInterval]
+
+    static func make(isEnabled: Bool, hasMonitoredDevice: Bool) -> BLEMonitoringRecoveryPlan? {
+        guard isEnabled, hasMonitoredDevice else { return nil }
+        return BLEMonitoringRecoveryPlan(restartDelays: [0, 3, 10])
+    }
+}
+
 /// Gives the lock screen time to become interactive after the display wakes.
 /// The first attempt is intentionally delayed; later attempts cover both a
 /// slow wake and a missed `screensDidWake` notification without running
@@ -476,6 +487,7 @@ private final class BLEMonitoredDeviceRuntime {
     var signalTimer: Timer?
     var activeModeTimer: Timer?
     var connectionTimer: Timer?
+    var rssiRequestTimeoutTimer: Timer?
 
     init(uuid: UUID) {
         self.uuid = uuid
@@ -490,6 +502,8 @@ private final class BLEMonitoredDeviceRuntime {
         activeModeTimer = nil
         connectionTimer?.invalidate()
         connectionTimer = nil
+        rssiRequestTimeoutTimer?.invalidate()
+        rssiRequestTimeoutTimer = nil
         rssiReadGate.reset()
         connectionRetryGate.reset()
         activeMode = false
@@ -500,21 +514,33 @@ private final class BLEMonitoredDeviceRuntime {
 /// an XPC/Mach message region. Never submit a second RSSI read until the first
 /// one has produced its delegate callback (or the connection is torn down).
 struct BLERequestGate {
+    static let requestTimeout: TimeInterval = 12
+
     private(set) var isInFlight = false
+    private var startedAt: Date?
 
     @discardableResult
-    mutating func begin() -> Bool {
+    mutating func begin(at now: Date = Date()) -> Bool {
         guard !isInFlight else { return false }
         isInFlight = true
+        startedAt = now
         return true
     }
 
     mutating func finish() {
         isInFlight = false
+        startedAt = nil
+    }
+
+    func hasTimedOut(at now: Date) -> Bool {
+        guard let startedAt,
+              now.timeIntervalSince(startedAt) >= Self.requestTimeout else { return false }
+        return true
     }
 
     mutating func reset() {
         isInFlight = false
+        startedAt = nil
     }
 }
 
@@ -617,6 +643,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var monitoredRuntimes: [UUID: BLEMonitoredDeviceRuntime] = [:]
     private var wakeRetryTask: Task<Void, Never>?
     private var systemWakeRecoveryTask: Task<Void, Never>?
+    private var monitoringRecoveryTask: Task<Void, Never>?
     private var unlockAttemptTask: Task<Void, Never>?
     private var unlockAttemptGeneration = 0
     private var lastLoggedRSSIAt = Date.distantPast
@@ -978,6 +1005,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         deviceRefreshTask?.cancel(); deviceRefreshTask = nil
         wakeRetryTask?.cancel(); wakeRetryTask = nil
         systemWakeRecoveryTask?.cancel(); systemWakeRecoveryTask = nil
+        cancelMonitoringRecovery(reason: "monitoringStopped")
         cancelUnlockAttempt()
         centralMgr?.stopScan()
         clearDiscoveredDevices()
@@ -1068,6 +1096,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 } else {
                     self.refreshPublishedMonitoringState()
                 }
+                self.startMonitoringRecovery(reason: "signalTimeout", restartImmediately: true)
             }
         }
         if let timer = runtime.signalTimer {
@@ -1094,6 +1123,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
         let estimated = estimatedRSSI(rssi, for: runtime)
         runtime.lastRSSI = estimated
+        stopMonitoringRecovery(reason: "freshRSSI")
         runtime.activeMode = runtime.activeModeTimer != nil
         refreshPublishedMonitoringState()
         logMonitoredRSSI(raw: rssi, estimated: estimated)
@@ -1198,7 +1228,28 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         guard let peripheral = runtime.peripheral,
               peripheral.state == .connected,
               runtime.rssiReadGate.begin() else { return }
+        scheduleRSSIRequestTimeout(for: runtime)
         peripheral.readRSSI()
+    }
+
+    private func scheduleRSSIRequestTimeout(for runtime: BLEMonitoredDeviceRuntime) {
+        runtime.rssiRequestTimeoutTimer?.invalidate()
+        let uuid = runtime.uuid
+        runtime.rssiRequestTimeoutTimer = Timer.scheduledTimer(
+            withTimeInterval: BLERequestGate.requestTimeout,
+            repeats: false
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let currentRuntime = self.runtime(for: uuid) else { return }
+                currentRuntime.rssiRequestTimeoutTimer = nil
+                guard currentRuntime.rssiReadGate.hasTimedOut(at: Date()) else { return }
+                self.log("RSSI request timed out uuid=\(currentRuntime.uuid.uuidString) timeout=\(BLERequestGate.requestTimeout)")
+                self.startMonitoringRecovery(reason: "rssiRequestTimeout", restartImmediately: true)
+            }
+        }
+        if let timer = runtime.rssiRequestTimeoutTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
     }
 
     // MARK: CBCentralManagerDelegate
@@ -1311,6 +1362,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         if let runtime = runtime(for: peripheral.identifier) {
             runtime.connectionTimer?.invalidate()
             runtime.connectionTimer = nil
+            runtime.rssiRequestTimeoutTimer?.invalidate()
+            runtime.rssiRequestTimeoutTimer = nil
             runtime.rssiReadGate.reset()
         }
     }
@@ -1320,6 +1373,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         if let runtime = runtime(for: peripheral.identifier) {
             runtime.connectionTimer?.invalidate()
             runtime.connectionTimer = nil
+            runtime.rssiRequestTimeoutTimer?.invalidate()
+            runtime.rssiRequestTimeoutTimer = nil
             runtime.rssiReadGate.reset()
             runtime.activeMode = runtime.activeModeTimer != nil
             refreshPublishedMonitoringState()
@@ -1330,8 +1385,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
         guard let runtime = runtime(for: peripheral.identifier) else { return }
+        runtime.rssiRequestTimeoutTimer?.invalidate()
+        runtime.rssiRequestTimeoutTimer = nil
         runtime.rssiReadGate.finish()
-        if let error { logRSSIError(error) }
+        if let error {
+            logRSSIError(error)
+            startMonitoringRecovery(reason: "rssiReadFailed", restartImmediately: true)
+            return
+        }
         let rssi = RSSI.intValue > 0 ? 0 : RSSI.intValue
         updateMonitoredPeripheral(rssi, for: runtime.uuid)
 
@@ -1775,6 +1836,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         wakeRetryTask?.cancel(); wakeRetryTask = nil
         cancelUnlockAttempt()
         systemWakeRecoveryTask?.cancel(); systemWakeRecoveryTask = nil
+        cancelMonitoringRecovery(reason: "systemSleep")
 
         // Run-loop timers become immediately overdue after a long sleep. Stop
         // them here so they cannot turn a pre-sleep sample into a false wake
@@ -1841,6 +1903,89 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         scanForPeripherals()
     }
 
+    private var monitoringHasFreshSignal: Bool {
+        BLEDevicePresencePolicy.isSatisfied(
+            presences: monitoredUUIDs.map { monitoredRuntimes[$0]?.lastRSSI != nil },
+            relation: settings.deviceRelation
+        )
+    }
+
+    private func restartMonitoringAfterRecovery(reason: String) {
+        guard settings.isEnabled, hasMonitoredDevice, !systemSleep else { return }
+        log("restarting monitoring after recovery reason=\(reason)")
+
+        let central = centralMgr
+        central?.stopScan()
+        for runtime in monitoredRuntimes.values {
+            runtime.invalidateTimers()
+            if let peripheral = runtime.peripheral {
+                central?.cancelPeripheralConnection(peripheral)
+                peripheral.delegate = nil
+            }
+            runtime.peripheral = nil
+            runtime.lastRSSI = nil
+            runtime.latestRSSIs.removeAll(keepingCapacity: true)
+            runtime.presence = false
+        }
+        presence = false
+        refreshPublishedMonitoringState()
+
+        // Recreate the central manager rather than trusting a scan session
+        // which may still claim to be active after an idle display wake.
+        central?.delegate = nil
+        centralMgr = nil
+        ensureCentralManager()
+    }
+
+    private func startMonitoringRecovery(reason: String, restartImmediately: Bool = false) {
+        guard !systemSleep,
+              let plan = BLEMonitoringRecoveryPlan.make(
+                isEnabled: settings.isEnabled,
+                hasMonitoredDevice: hasMonitoredDevice
+              ) else { return }
+        guard monitoringRecoveryTask == nil else {
+            log("monitoring recovery already scheduled reason=\(reason)")
+            return
+        }
+
+        let restartDelays: [TimeInterval]
+        if restartImmediately {
+            restartMonitoringAfterRecovery(reason: reason)
+            guard !monitoringHasFreshSignal else { return }
+            restartDelays = plan.restartDelays.filter { $0 > 0 }
+        } else {
+            restartDelays = plan.restartDelays
+        }
+        log("monitoring recovery scheduled reason=\(reason) delays=\(plan.restartDelays)")
+        monitoringRecoveryTask = Task { [weak self] in
+            var previousDeadline: TimeInterval = 0
+            for deadline in restartDelays {
+                let wait = deadline - previousDeadline
+                if wait > 0 {
+                    try? await Task.sleep(for: .milliseconds(Int64(wait * 1_000)))
+                }
+                guard !Task.isCancelled, let self else { return }
+                guard !self.monitoringHasFreshSignal else { break }
+                self.restartMonitoringAfterRecovery(reason: reason)
+                previousDeadline = deadline
+            }
+            self?.monitoringRecoveryTask = nil
+            self?.log("monitoring recovery finished freshSignal=\(self?.monitoringHasFreshSignal ?? false)")
+        }
+    }
+
+    private func stopMonitoringRecovery(reason: String) {
+        guard monitoringRecoveryTask != nil, monitoringHasFreshSignal else { return }
+        cancelMonitoringRecovery(reason: reason)
+    }
+
+    private func cancelMonitoringRecovery(reason: String) {
+        guard monitoringRecoveryTask != nil else { return }
+        monitoringRecoveryTask?.cancel()
+        monitoringRecoveryTask = nil
+        log("monitoring recovery cancelled reason=\(reason)")
+    }
+
     private var monitoringNeedsWakeRestart: Bool {
         monitoredUUIDs.contains { monitoredRuntimes[$0]?.lastRSSI == nil }
     }
@@ -1880,6 +2025,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         log("system did wake")
         systemSleep = false
         screenControl.noteSystemSleeping(false)
+        cancelMonitoringRecovery(reason: "systemWake")
         guard let plan = BLEWakeRecoveryPlan.make(
             isEnabled: settings.isEnabled,
             hasMonitoredDevice: hasMonitoredDevice
@@ -1915,6 +2061,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 self?.screenControl.noteDisplaySleeping(false)
                 self?.recoveringFromSystemSleep = false
                 self?.wakeRetryTask?.cancel()
+                self?.startMonitoringRecovery(reason: "displayWake", restartImmediately: true)
                 self?.tryUnlockScreen(trigger: "screensDidWake")
             }
         })
