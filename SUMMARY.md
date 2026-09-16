@@ -58,10 +58,13 @@ BLE 板块采用独立的视觉语言，区别于普通列表：
 从 ad-hoc 签名升级为 Apple 公证的可分发应用：
 
 - `Resources/MacPilot.entitlements`：Hardened Runtime 所需权限。
-- `Scripts/build-app.sh`：优先用 Developer ID，否则自动选择 Apple Development；Developer ID 路径显式写入 Apple 规范的 designated requirement（含 Team ID `U8U443D7ZL`）并在签名后断言校验——各处签名机产出的 requirement 必须逐字节一致，否则应用内更新无法匹配（签名机钥匙串缺少 Developer ID 中间证书时，codesign 会退化成弱 requirement）；Apple Development 回退沿用 codesign 自身推导的 requirement；嵌套 updater/dylib 独立签名，找不到稳定身份时才回退 ad-hoc；旧环境变量别名仍可用。
+- `Scripts/build-app.sh`：优先用 Developer ID，否则自动选择 Apple Development；**四种签名路径（Developer ID / Apple Distribution / Apple Development / ad-hoc）都写同一串 designated requirement**，定义只有一处 —— `Scripts/signing-requirement.sh`，内容是 `identifier "<bundle id>" and anchor apple generic and certificate leaf[subject.OU] = U8U443D7ZL`（只钉 bundle id + 团队 OU，不含 Developer ID 专用 OID、也不含 CN 断言，否则开发证书满足不了它）。签名后立刻用 `Scripts/verify-signing-requirement.sh` 逐字节校验；嵌套 updater/dylib 独立签名，找不到稳定身份时才回退 ad-hoc；旧环境变量别名仍可用。
+  - 为什么必须这样：让 codesign 自行推导会随签名机器/钥匙串/证书类型漂移（有 Developer ID 中间证书 → 规范形式；没有 → 弱形式；Apple Development → 带 CN 的另一串），任一处漂移都会让已装好的 App 拒绝新包。钉到团队 OU 这一层之后，"本机开发版"和"CI 发布版"对 macOS 就是同一个 App：TCC 授权互通、应用内更新永远匹配。
+  - 三道闸 + 一道 tripwire：`build-app.sh`（签名后）、`distribute-app.sh`（重新打 zip 后）、CI `dist` job（发布前）都会调用校验脚本；`Tests/MacPilotTests/SigningRequirementTests.swift` 保证这些闸不会被悄悄摘掉，且团队 ID 与更新器里的校验保持一致。详见 `AGENTS.md`「Signing identity & designated requirement (invariant)」。
 - **更新器隐私授权保护（v1.1.241）**：应用内更新在既有 SHA-256 / codesign / Team ID / Gatekeeper 四重校验之上，新增「更新包必须满足运行中应用的 designated requirement」校验——TCC 记录的是授权时的 requirement 并按其校验新代码，所以只比较语义而不再比较文本（v1.1.355 起）：身份不同的更新包直接拒绝安装，杜绝更新后辅助功能/屏幕录制/自动化授权全部失效。校验通过后移除更新包的隔离属性，避免重启后 App Translocation；从隔离位置（下载目录直开）运行时启动即提示移到「应用程序」，且拒绝在转移位置执行更新。
-- `Scripts/distribute-app.sh`：一键签名 → 提交 Apple 公证 → 装订票据 → 打 zip → Gatekeeper 校验；支持钥匙串公证 profile（不接触明文密码）。
-- `.github/workflows/build.yml`：日常 push/PR 使用本机可用的稳定开发签名或回退 ad-hoc artifact；打 `v*` tag 自动以同一共享 requirement 签名、公证并发布 Release。
+- ⚠️ **一次真实的断点（v1.1.354 → v1.1.355）**：v1.1.355 曾把 requirement 收紧成 Apple 规范形式（Developer ID 专用 OID 断言 + OU）。规范形式本身没错，但**已经在用户机器上运行的旧版（≤ v1.1.354）用的是逐字节比较**，它们自己带的是旧文本，于是把新包判成"身份不同"并拒绝安装——应用内更新通道彻底断掉，只能手动装一次才能恢复。教训：requirement 的字节是**已经发布出去的代码在比较**，改这串文本等于和全部存量安装对赌；现在统一钉到团队 OU 一层、只有一处定义、三道校验闸 + tripwire 测试托底，并且**不要再改这串文本**。
+- `Scripts/distribute-app.sh`：一键签名 → 提交 Apple 公证 → 装订票据 → 打 zip → Gatekeeper 校验；**并对最终 zip 校验 designated requirement**；支持钥匙串公证 profile（不接触明文密码）。
+- `.github/workflows/build.yml`：日常 push/PR 使用本机可用的稳定开发签名或回退 ad-hoc artifact；打 `v*` tag 自动以同一串 designated requirement 签名、公证并发布 Release，发布前再对两个 zip 跑一次 requirement 校验。
 - tag 工作流依赖 6 个 Actions secrets：`APPLE_CERTIFICATE_P12`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_DEVELOPER_ID`、`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`；已于 2026-07-24 配齐。
 - 签名身份：`Developer ID Application: Guofeng Liu (U8U443D7ZL)`。本机钥匙串中有签名身份，但不得据此假定存在名为 `MacPilot` 的 notarytool profile；使用本地 profile 前必须实际验证。
 

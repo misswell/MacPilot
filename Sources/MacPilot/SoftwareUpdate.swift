@@ -398,7 +398,13 @@ struct VerifiedUpdatePackage: Sendable {
 }
 
 enum UpdatePackageValidator {
-    private static let developerTeamIdentifier = "U8U443D7ZL"
+    /// The team every MacPilot build must be signed by. This is the same value
+    /// the build script pins into the designated requirement
+    /// (`Scripts/signing-requirement.sh`); `SigningRequirementTests` asserts the
+    /// two never drift apart, because an update signed by another team must be
+    /// rejected while our own development and release builds must stay
+    /// interchangeable.
+    static let developerTeamIdentifier = "U8U443D7ZL"
 
     static func prepare(downloadURL: URL, release: SoftwareRelease) throws -> VerifiedUpdatePackage {
         let digest = try sha256(of: downloadURL)

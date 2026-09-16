@@ -59,6 +59,9 @@ jobs:
       - name: Verify app signature
         run: codesign --verify --deep --strict MacPilot.app
 
+      - name: Verify the designated requirement
+        run: ./Scripts/verify-signing-requirement.sh MacPilot.app com.misswell.macpilot
+
       - name: Upload app artifact
         uses: actions/upload-artifact@v4
         with:
@@ -180,9 +183,11 @@ jobs:
           if [[ "${GITHUB_REF_NAME}" == "v1.1.20" ]]; then
             echo "bridge=1" >> "$GITHUB_OUTPUT"
             echo "archive_prefix=OctoPilot" >> "$GITHUB_OUTPUT"
+            echo "bundle_identifier=com.misswell.octopilot" >> "$GITHUB_OUTPUT"
           else
             echo "bridge=0" >> "$GITHUB_OUTPUT"
             echo "archive_prefix=MacPilot" >> "$GITHUB_OUTPUT"
+            echo "bundle_identifier=com.misswell.macpilot" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Sign, notarize, staple, and package both architectures
@@ -197,6 +202,15 @@ jobs:
           for architecture in arm64 x86_64; do
             echo "==> Creating $architecture distributable"
             MACPILOT_ARCHS="$architecture" ./Scripts/distribute-app.sh
+          done
+
+      - name: Verify the published designated requirement
+        run: |
+          set -euo pipefail
+          for architecture in arm64 x86_64; do
+            ./Scripts/verify-signing-requirement.sh \
+              "${{ steps.version.outputs.archive_prefix }}-${{ steps.version.outputs.version }}-${architecture}-macos.zip" \
+              "${{ steps.version.outputs.bundle_identifier }}"
           done
 
       - name: Publish GitHub release

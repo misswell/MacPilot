@@ -31,28 +31,6 @@ struct SoftwareUpdateTests {
         #expect(!UpdatePackageValidator.satisfies("", at: appleBinary))
     }
 
-    @Test func packagingScriptPinsTheCanonicalDeveloperIDRequirement() throws {
-        // A release signed with the weaker generic requirement cannot be
-        // matched by a MacPilot signed on a host that does have Apple's
-        // Developer ID intermediate, which silently broke in-app updates.
-        let scriptURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Scripts/build-app.sh")
-        let script = try String(contentsOf: scriptURL, encoding: .utf8)
-        let assignment = try #require(
-            script.split(separator: "\n").first { $0.contains("SHARED_REQUIREMENT=\"designated") }
-        )
-
-        #expect(assignment.contains("certificate 1[field.1.2.840.113635.100.6.2.6]"))
-        #expect(assignment.contains("certificate leaf[field.1.2.840.113635.100.6.1.13]"))
-        #expect(assignment.contains("certificate leaf[subject.OU] = $DEVELOPER_TEAM_IDENTIFIER"))
-        #expect(!script.contains(
-            #"SHARED_REQUIREMENT="designated => identifier \"$BUNDLE_IDENTIFIER\" and anchor apple generic""#
-        ))
-    }
-
     @Test func comparesSemanticVersionsNumerically() throws {
         let current = try #require(SoftwareVersion("1.9.9"))
         let available = try #require(SoftwareVersion("v1.10.0"))

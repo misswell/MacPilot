@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT="${0:A:h:h}"
 cd "$ROOT"
+# 唯一的 designated requirement 定义（含团队 ID）。所有签名路径都必须用它，
+# 绝不让 codesign 自行推导——详见 Scripts/signing-requirement.sh 顶部说明。
+source "$ROOT/Scripts/signing-requirement.sh"
 
 # Architectures to build for. Default is a universal binary (arm64 + x86_64) so
 # the packaged app runs on both Apple Silicon and Intel Macs. Override with
@@ -107,9 +110,10 @@ REXT_APPEX="$APP/Contents/PlugIns/FinderSync.appex"
 ENTITLEMENTS="$ROOT/Resources/MacPilot.entitlements"
 DEVELOPER_ID="${MACPILOT_DEVELOPER_ID:-${OCTOPILOT_DEVELOPER_ID:-}}"
 EXPECTED_DEVELOPER_ID="Developer ID Application: Guofeng Liu (U8U443D7ZL)"
-# Apple's canonical Developer ID requirement pins the signing team; a build
-# whose requirement can be satisfied by another team must never ship.
-DEVELOPER_TEAM_IDENTIFIER="U8U443D7ZL"
+# The team is defined once, in Scripts/signing-requirement.sh, and shared with
+# the updater's own team check. A build whose requirement can be satisfied by
+# another team must never ship; Scripts/verify-signing-requirement.sh asserts
+# the team on every signature this script produces.
 SIGNING_IDENTITY="$DEVELOPER_ID"
 if [[ -n "$DEVELOPER_ID" ]]; then
     if [[ "$DEVELOPER_ID" != "$EXPECTED_DEVELOPER_ID" ]]; then
@@ -146,32 +150,34 @@ else
     elif [[ "${MACPILOT_ALLOW_UNSTABLE_SIGNING:-0}" == "1" && -n "$LOCAL_DEVELOPMENT_ID" ]]; then
         SIGNING_IDENTITY="$LOCAL_DEVELOPMENT_ID"
         echo "WARNING: Developer ID identity unavailable; using local development identity: $LOCAL_DEVELOPMENT_ID"
-        echo "macOS may treat this build as a different app for privacy permissions."
+        echo "This build shares the production designated requirement (same team), so TCC"
+        echo "grants and in-app updates remain interchangeable with the release build."
+        echo "It is still not notarized, so it cannot be published or installed as an update."
     elif [[ "${MACPILOT_ALLOW_UNSTABLE_SIGNING:-0}" == "1" ]]; then
         SIGNING_IDENTITY="-"
         echo "WARNING: Signed ad-hoc because no stable signing identity was found."
-        echo "Screen Recording and Accessibility permissions may need to be granted again after every rebuild."
+        echo "The production requirement is embedded, but an ad-hoc signature cannot satisfy"
+        echo "it: TCC grants will not stick and this build must never be published."
     else
-        echo "ERROR: A Developer ID Application identity is required so development and production share privacy permissions." >&2
-        echo "Set MACPILOT_DEVELOPER_ID, or explicitly set MACPILOT_ALLOW_UNSTABLE_SIGNING=1 to permit a TCC-unstable fallback." >&2
+        echo "ERROR: No signing identity is available. Set MACPILOT_DEVELOPER_ID to a" >&2
+        echo "'Developer ID Application' identity for a distributable build, or set" >&2
+        echo "MACPILOT_ALLOW_UNSTABLE_SIGNING=1 to permit a local Apple Development /" >&2
+        echo "ad-hoc build (same requirement, but not distributable)." >&2
         exit 1
     fi
 fi
 
 if [[ -n "$SIGNING_IDENTITY" ]]; then
-    # TCC records a requirement derived from the designated requirement when
-    # Screen Recording or Accessibility is granted, and the in-app updater
-    # refuses a package that the running app's requirement rejects. Apple
-    # derives the canonical Developer ID requirement below from the certificate
-    # chain, but only while the signing keychain can see Apple's Developer ID
-    # intermediate: a CI keychain without it silently bakes in the weaker
-    # "identifier X and anchor apple generic" form instead, which no build
-    # signed elsewhere can match. Pass the requirement explicitly so every
-    # signing host produces the same bytes.
-    SHARED_REQUIREMENT=""
-    if [[ "$SIGNING_IDENTITY" == "Developer ID Application:"* ]]; then
-        SHARED_REQUIREMENT="designated => identifier \"$BUNDLE_IDENTIFIER\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = $DEVELOPER_TEAM_IDENTIFIER"
-    fi
+    # One requirement, one set of bytes, for every signing path (Developer ID,
+    # Apple Distribution, Apple Development, ad-hoc). The team OU is the only
+    # pin beyond the bundle identifier and Apple's anchor, and it is the reason a
+    # locally built app and a CI release are the same app to macOS: TCC grants
+    # carry over and the in-app updater always recognises the other's package.
+    # Do not add Developer ID only OID clauses or CN clauses here -- an Apple
+    # Development certificate satisfies neither, and splitting the bytes by
+    # signing identity is exactly what made updates impossible in the past.
+    REQUIREMENT_BODY="$(macpilot_designated_requirement_body "$BUNDLE_IDENTIFIER")"
+    REQUIREMENT="designated => $REQUIREMENT_BODY"
 
     # Sign nested code independently. Passing the main app's custom
     # requirement through --deep would incorrectly give MacPilotUpdater the
@@ -193,7 +199,7 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
         codesign --force --sign - \
             "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
         codesign --force --entitlements "$ENTITLEMENTS" \
-            --sign - "$APP"
+            --requirements "=$REQUIREMENT" --sign - "$APP"
     else
         codesign --force --options runtime --entitlements "$HELPER_ENTITLEMENTS" \
             --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/MacPilotPowerHelper"
@@ -205,29 +211,15 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
             --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/MacPilotDockHelper"
         codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
             "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
-        if [[ -n "$SHARED_REQUIREMENT" ]]; then
-            codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
-                --requirements "=$SHARED_REQUIREMENT" --sign "$SIGNING_IDENTITY" "$APP"
-        else
-            # An Apple Development signature cannot satisfy the canonical
-            # Developer ID requirement, so let codesign derive its own.
-            codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
-                --sign "$SIGNING_IDENTITY" "$APP"
-        fi
+        codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
+            --requirements "=$REQUIREMENT" --sign "$SIGNING_IDENTITY" "$APP"
     fi
-    if [[ -n "$SHARED_REQUIREMENT" ]]; then
-        # A release whose designated requirement lost the Developer ID
-        # pinning cannot be installed by an app signed on another host.
-        # Catch that here instead of shipping an unusable update.
-        SIGNED_REQUIREMENT="$(codesign --display -r- "$APP" 2>&1 \
-            | sed -n 's/^designated => //p')"
-        if [[ "$SIGNED_REQUIREMENT" != *"certificate leaf[subject.OU] = $DEVELOPER_TEAM_IDENTIFIER"* ]]; then
-            echo "ERROR: $APP was signed with a non-canonical designated requirement:" >&2
-            echo "  ${SIGNED_REQUIREMENT:-<none>}" >&2
-            echo "The in-app updater cannot match such a build, so packaging stops here." >&2
-            exit 1
-        fi
-        echo "Designated requirement: $SIGNED_REQUIREMENT"
-    fi
+
+    # A build whose designated requirement is not exactly this string cannot be
+    # installed by an app signed anywhere else, so stop here instead of shipping
+    # an unusable update. The verifier is also the gate in distribute-app.sh and
+    # in the release workflow.
+    echo "Designated requirement: $REQUIREMENT_BODY"
+    "$ROOT/Scripts/verify-signing-requirement.sh" "$APP" "$BUNDLE_IDENTIFIER"
 fi
 echo "Built $APP (version $VERSION, build $BUILD_NUMBER, bundle id $BUNDLE_IDENTIFIER)"

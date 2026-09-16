@@ -114,6 +114,10 @@ echo "==> Verifying"
 codesign --verify --deep --strict "$APP"
 spctl --assess --type execute --verbose "$APP"
 
+echo "==> Verifying the packaged designated requirement"
+APP_IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
+"$ROOT/Scripts/verify-signing-requirement.sh" "$ZIP" "$APP_IDENTIFIER"
+
 echo "==> Cleaning historical archives"
 cleanup_historical_archives
 
