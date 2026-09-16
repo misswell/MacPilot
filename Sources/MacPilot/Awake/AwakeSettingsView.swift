@@ -28,6 +28,8 @@ struct AwakeSettingsView: View {
     @ObservedObject var awake: AwakeSessionManager
     @ObservedObject var triggerEngine: AwakeTriggerEngine
 
+    @State private var isSessionProtectionSheetPresented = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -47,6 +49,10 @@ struct AwakeSettingsView: View {
             // The closed-lid service status is a snapshot; System Settings can
             // change it while this page is closed, so re-read it on entry.
             awake.refreshClosedLidServiceState()
+        }
+        .sheet(isPresented: $isSessionProtectionSheetPresented) {
+            AwakeSessionProtectionSheet(awake: awake)
+                .environmentObject(model)
         }
     }
 
@@ -86,14 +92,6 @@ struct AwakeSettingsView: View {
                 )
             }
 
-            HStack {
-                Button(model.t("awakeStartSession")) { _ = awake.startDefaultSession() }
-                    .macPilotProminentButtonStyle()
-                if awake.hasManualSession {
-                    Button(model.t("awakeStop"), action: awake.endAllManualSessions)
-                }
-            }
-
             Picker(model.t("awakeEndCalculation"), selection: endCalculationBinding) {
                 Text(model.t("awakeEndCalculationTimer")).tag(SessionEndCalculation.timer)
                 Text(model.t("awakeEndCalculationAwakeTime")).tag(SessionEndCalculation.pausesDuringSleep)
@@ -128,7 +126,13 @@ struct AwakeSettingsView: View {
             Toggle(model.t("awakeBlockScreenSaver"), isOn: blockScreenSaverBinding)
                 .toggleStyle(.switch)
             if awake.settings.defaultPolicy.blockScreenSaver {
-                Slider(value: screenSaverIdleBinding, in: 5...180, step: 5)
+                SettingsSlider(
+                    value: screenSaverIdleBinding,
+                    in: 5...180,
+                    step: 5,
+                    label: model.t("awakeScreenSaverAllowsAfter", awake.settings.defaultPolicy.screenSaverIdleMinutes),
+                    format: { model.t("awakeScreenSaverAllowsAfter", Int($0.rounded())) }
+                )
                 Text(model.t("awakeScreenSaverAllowsAfter", awake.settings.defaultPolicy.screenSaverIdleMinutes))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -137,48 +141,40 @@ struct AwakeSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            sectionLabel(model.t("awakeBatteryProtection"))
-            Toggle(
-                model.t("awakeEndSessionBelowBattery", awake.settings.safetyPolicy.minimumBatteryLevel),
-                isOn: batteryProtectionBinding
-            )
-            .toggleStyle(.switch)
-            if awake.settings.safetyPolicy.lowBatteryProtectionEnabled {
-                HStack(spacing: 12) {
-                    Slider(value: batteryThresholdBinding, in: 10...50, step: 1)
-                    Text("\(awake.settings.safetyPolicy.minimumBatteryLevel)%")
-                        .monospacedDigit()
-                        .frame(width: 44, alignment: .trailing)
+            HStack {
+                Button(model.t("awakeStartSession")) {
+                    isSessionProtectionSheetPresented = true
                 }
-                Toggle(model.t("awakeWarnBeforeBatteryEnd"), isOn: warnBeforeBatteryEndBinding)
-                    .toggleStyle(.switch)
-                Text(model.t("awakeBatteryProtectionHint"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .macPilotProminentButtonStyle()
+                if awake.hasManualSession {
+                    Button(model.t("awakeStop"), action: awake.endAllManualSessions)
+                }
             }
-
-            sectionLabel(model.t("awakePowerAdapterSection"))
-            Toggle(model.t("awakeIgnoreBatteryOnPower"), isOn: ignoreBatteryOnPowerBinding)
-                .toggleStyle(.switch)
-            Toggle(model.t("awakeRestartOnPowerReconnect"), isOn: restartOnPowerReconnectBinding)
-                .toggleStyle(.switch)
-            if awake.settings.defaultSession.restartOnPowerReconnect {
-                Text(model.t("awakeRestartUsesDefaultDuration"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            sectionLabel(model.t("awakeAutoStart"))
-            Toggle(model.t("awakeAutoStartOnLaunch"), isOn: autoStartOnLaunchBinding)
-                .toggleStyle(.switch)
-            Toggle(model.t("awakeAutoStartOnWake"), isOn: autoStartOnWakeBinding)
-                .toggleStyle(.switch)
         }
     }
 
     private var sessionDetailsCard: some View {
         SettingsCard {
             Text(model.t("awakeSessionDetails")).font(.headline)
+
+            if awake.settings.defaultSession.autoStartOnLaunch || awake.settings.defaultSession.autoStartOnWake {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(model.t("awakeAutoStart"))
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    if awake.settings.defaultSession.autoStartOnLaunch {
+                        Label(model.t("awakeAutoStartOnLaunch"), systemImage: "checkmark.circle.fill")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    if awake.settings.defaultSession.autoStartOnWake {
+                        Label(model.t("awakeAutoStartOnWake"), systemImage: "checkmark.circle.fill")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             if awake.activeSessions.isEmpty {
                 Label(model.t("awakeNoActiveSession"), systemImage: "moon.zzz")
                     .foregroundStyle(.secondary)
@@ -303,24 +299,6 @@ struct AwakeSettingsView: View {
         )
     }
 
-    private var autoStartOnLaunchBinding: Binding<Bool> {
-        Binding(
-            get: { awake.settings.defaultSession.autoStartOnLaunch },
-            set: { value in
-                awake.updateSettings { $0.defaultSession.autoStartOnLaunch = value }
-            }
-        )
-    }
-
-    private var autoStartOnWakeBinding: Binding<Bool> {
-        Binding(
-            get: { awake.settings.defaultSession.autoStartOnWake },
-            set: { value in
-                awake.updateSettings { $0.defaultSession.autoStartOnWake = value }
-            }
-        )
-    }
-
     private var endCalculationBinding: Binding<SessionEndCalculation> {
         Binding(
             get: { awake.settings.defaultPolicy.endCalculation },
@@ -421,60 +399,9 @@ struct AwakeSettingsView: View {
         )
     }
 
-    private var batteryProtectionBinding: Binding<Bool> {
-        Binding(
-            get: { awake.settings.safetyPolicy.lowBatteryProtectionEnabled },
-            set: { value in
-                awake.updateSettings { $0.safetyPolicy.lowBatteryProtectionEnabled = value }
-            }
-        )
-    }
-
-    private var batteryThresholdBinding: Binding<Double> {
-        Binding(
-            get: { Double(awake.settings.safetyPolicy.minimumBatteryLevel) },
-            set: { value in
-                awake.updateSettings { $0.safetyPolicy.minimumBatteryLevel = Int(value.rounded()) }
-            }
-        )
-    }
-
-    private var warnBeforeBatteryEndBinding: Binding<Bool> {
-        Binding(
-            get: { awake.settings.defaultSession.warnBeforeBatteryTermination },
-            set: { value in
-                if value { AwakeNotifications.requestAuthorization() }
-                awake.updateSettings { $0.defaultSession.warnBeforeBatteryTermination = value }
-            }
-        )
-    }
-
-    private var ignoreBatteryOnPowerBinding: Binding<Bool> {
-        Binding(
-            get: { awake.settings.defaultSession.ignoreBatteryLevelOnExternalPower },
-            set: { value in
-                awake.updateSettings { $0.defaultSession.ignoreBatteryLevelOnExternalPower = value }
-            }
-        )
-    }
-
-    private var restartOnPowerReconnectBinding: Binding<Bool> {
-        Binding(
-            get: { awake.settings.defaultSession.restartOnPowerReconnect },
-            set: { value in
-                awake.updateSettings { $0.defaultSession.restartOnPowerReconnect = value }
-            }
-        )
-    }
-
     private var batteryDescription: String {
         guard let level = awake.powerState.batteryLevelPercentage else { return model.t("awakeUnknown") }
         return model.t("awakeBatteryValue", level)
-    }
-
-    private func triggerName(for source: SessionSource) -> String? {
-        guard case .trigger(let id) = source else { return nil }
-        return triggerEngine.trigger(for: id)?.name
     }
 
     private func warningBanner<Content: View>(_ content: Content) -> some View {
@@ -488,6 +415,213 @@ struct AwakeSettingsView: View {
             )
     }
 
+}
+
+private struct AwakeSessionProtectionDraft {
+    var safetyPolicy: AwakeSafetyPolicy
+    var warnBeforeBatteryTermination: Bool
+    var ignoreBatteryLevelOnExternalPower: Bool
+    var restartOnPowerReconnect: Bool
+    var autoStartOnLaunch: Bool
+    var autoStartOnWake: Bool
+
+    init(settings: AwakeSettings) {
+        safetyPolicy = settings.safetyPolicy
+        warnBeforeBatteryTermination = settings.defaultSession.warnBeforeBatteryTermination
+        ignoreBatteryLevelOnExternalPower = settings.defaultSession.ignoreBatteryLevelOnExternalPower
+        restartOnPowerReconnect = settings.defaultSession.restartOnPowerReconnect
+        autoStartOnLaunch = settings.defaultSession.autoStartOnLaunch
+        autoStartOnWake = settings.defaultSession.autoStartOnWake
+    }
+}
+
+private struct AwakeSessionProtectionSheet: View {
+    @EnvironmentObject private var model: MacPilotModel
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var awake: AwakeSessionManager
+
+    @State private var draft: AwakeSessionProtectionDraft
+
+    init(awake: AwakeSessionManager) {
+        self.awake = awake
+        _draft = State(initialValue: AwakeSessionProtectionDraft(settings: awake.settings))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(model.t("awakeSessionProtectionTitle"))
+                            .font(.system(size: 24, weight: .bold))
+                        Text(model.t("awakeSessionProtectionHint"))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    batteryProtectionSection
+                    Divider()
+                    powerAdapterSection
+                    Divider()
+                    autoStartSection
+                }
+                .padding(24)
+            }
+
+            Divider()
+
+            HStack(spacing: 12) {
+                Spacer()
+                Button(model.t("cancel")) {
+                    dismiss()
+                }
+                Button(model.t("awakeSessionProtectionConfirm")) {
+                    confirm()
+                }
+                .macPilotProminentButtonStyle()
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+        }
+        .frame(minWidth: 520, idealWidth: 560, minHeight: 580, idealHeight: 660)
+        .onAppear {
+            draft = AwakeSessionProtectionDraft(settings: awake.settings)
+        }
+    }
+
+    private var batteryProtectionSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel(model.t("awakeBatteryProtection"))
+            Toggle(
+                model.t("awakeEndSessionBelowBattery", draft.safetyPolicy.minimumBatteryLevel),
+                isOn: batteryProtectionBinding
+            )
+            .toggleStyle(.switch)
+
+            if draft.safetyPolicy.lowBatteryProtectionEnabled {
+                HStack(spacing: 12) {
+                    SettingsSlider(
+                        value: batteryThresholdBinding,
+                        in: 10...50,
+                        step: 1,
+                        label: model.t("awakeEndSessionBelowBattery", draft.safetyPolicy.minimumBatteryLevel),
+                        format: { model.t("awakeBatteryValue", Int($0.rounded())) }
+                    )
+                    Text("\(draft.safetyPolicy.minimumBatteryLevel)%")
+                        .monospacedDigit()
+                        .frame(width: 44, alignment: .trailing)
+                }
+                Toggle(model.t("awakeWarnBeforeBatteryEnd"), isOn: warnBeforeBatteryEndBinding)
+                    .toggleStyle(.switch)
+                Text(model.t("awakeBatteryProtectionHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var powerAdapterSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel(model.t("awakePowerAdapterSection"))
+            Toggle(model.t("awakeIgnoreBatteryOnPower"), isOn: ignoreBatteryOnPowerBinding)
+                .toggleStyle(.switch)
+            Toggle(model.t("awakeRestartOnPowerReconnect"), isOn: restartOnPowerReconnectBinding)
+                .toggleStyle(.switch)
+            if draft.restartOnPowerReconnect {
+                Text(model.t("awakeRestartUsesDefaultDuration"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var autoStartSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel(model.t("awakeAutoStart"))
+            Toggle(model.t("awakeAutoStartOnLaunch"), isOn: autoStartOnLaunchBinding)
+                .toggleStyle(.switch)
+            Toggle(model.t("awakeAutoStartOnWake"), isOn: autoStartOnWakeBinding)
+                .toggleStyle(.switch)
+        }
+    }
+
+    private func sectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.subheadline)
+            .fontWeight(.semibold)
+            .padding(.top, 2)
+    }
+
+    private var batteryProtectionBinding: Binding<Bool> {
+        Binding(
+            get: { draft.safetyPolicy.lowBatteryProtectionEnabled },
+            set: { draft.safetyPolicy.lowBatteryProtectionEnabled = $0 }
+        )
+    }
+
+    private var batteryThresholdBinding: Binding<Double> {
+        Binding(
+            get: { Double(draft.safetyPolicy.minimumBatteryLevel) },
+            set: { draft.safetyPolicy.minimumBatteryLevel = Int($0.rounded()) }
+        )
+    }
+
+    private var warnBeforeBatteryEndBinding: Binding<Bool> {
+        Binding(
+            get: { draft.warnBeforeBatteryTermination },
+            set: { draft.warnBeforeBatteryTermination = $0 }
+        )
+    }
+
+    private var ignoreBatteryOnPowerBinding: Binding<Bool> {
+        Binding(
+            get: { draft.ignoreBatteryLevelOnExternalPower },
+            set: { draft.ignoreBatteryLevelOnExternalPower = $0 }
+        )
+    }
+
+    private var restartOnPowerReconnectBinding: Binding<Bool> {
+        Binding(
+            get: { draft.restartOnPowerReconnect },
+            set: { draft.restartOnPowerReconnect = $0 }
+        )
+    }
+
+    private var autoStartOnLaunchBinding: Binding<Bool> {
+        Binding(
+            get: { draft.autoStartOnLaunch },
+            set: { draft.autoStartOnLaunch = $0 }
+        )
+    }
+
+    private var autoStartOnWakeBinding: Binding<Bool> {
+        Binding(
+            get: { draft.autoStartOnWake },
+            set: { draft.autoStartOnWake = $0 }
+        )
+    }
+
+    private func confirm() {
+        let selected = draft
+        let shouldRequestBatteryNotification =
+            !awake.settings.defaultSession.warnBeforeBatteryTermination
+            && selected.warnBeforeBatteryTermination
+
+        if shouldRequestBatteryNotification {
+            AwakeNotifications.requestAuthorization()
+        }
+
+        awake.updateSettings { settings in
+            settings.safetyPolicy = selected.safetyPolicy
+            settings.defaultSession.warnBeforeBatteryTermination = selected.warnBeforeBatteryTermination
+            settings.defaultSession.ignoreBatteryLevelOnExternalPower = selected.ignoreBatteryLevelOnExternalPower
+            settings.defaultSession.restartOnPowerReconnect = selected.restartOnPowerReconnect
+            settings.defaultSession.autoStartOnLaunch = selected.autoStartOnLaunch
+            settings.defaultSession.autoStartOnWake = selected.autoStartOnWake
+        }
+        _ = awake.startDefaultSession()
+        dismiss()
+    }
 }
 
 private struct AwakeSessionDetailRow: View {
