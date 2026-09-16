@@ -430,7 +430,7 @@ enum AppText {
         "startAtLoginHint": "登录 Mac 后自动在后台启动 MacPilot。",
         "showApp": "显示 MacPilot", "quitApp": "退出 MacPilot", "enabledStatus": "MacPilot：已启用",
         "disabledStatus": "MacPilot：已停用", "disableApp": "停用 MacPilot", "enableApp": "启用 MacPilot",
-        "loginError": "无法更新登录启动项：%@", "aboutAutomation": "自动化", "manageRules": "管理应用规则和界面偏好。", "githubProject": "GitHub 项目", "githubProjectDescription": "在 GitHub 查看 MacPilot 的源代码、版本发布和问题反馈。", "githubProjectLink": "github.com/%@",
+        "loginError": "无法更新登录启动项：%@", "loginItemNeedsApproval": "macOS 正在等待你允许 MacPilot 登录时启动，请在“系统设置 → 通用 → 登录项与扩展”里打开它。", "aboutAutomation": "自动化", "manageRules": "管理应用规则和界面偏好。", "githubProject": "GitHub 项目", "githubProjectDescription": "在 GitHub 查看 MacPilot 的源代码、版本发布和问题反馈。", "githubProjectLink": "github.com/%@",
         "quitsIn": "将在 %d 分钟后退出",
         "awake": "保持唤醒", "awakeSubtitle": "控制 Mac 的睡眠行为，并根据需要保持系统运行。",
         "awakeKeepAwake": "保持唤醒", "awakeStop": "停止保持唤醒", "awakeActive": "保持唤醒中",
@@ -1133,7 +1133,7 @@ enum AppText {
             "systemLanguage": "System Language", "english": "English", "simplifiedChinese": "Simplified Chinese", "checkNow": "Check now",
             "startAtLogin": "Start at Login", "startAtLoginHint": "Launch MacPilot automatically in the background when you log in.", "showApp": "Show MacPilot", "quitApp": "Quit MacPilot", "enabledStatus": "MacPilot: Enabled",
             "disabledStatus": "MacPilot: Disabled", "disableApp": "Disable MacPilot", "enableApp": "Enable MacPilot",
-            "loginError": "Couldn’t update the login item: %@", "aboutAutomation": "AUTOMATION", "manageRules": "Manage app rules and interface preferences.", "githubProject": "GitHub Project", "githubProjectDescription": "View MacPilot’s source code, releases, and issue tracker on GitHub.", "githubProjectLink": "github.com/%@",
+            "loginError": "Couldn’t update the login item: %@", "loginItemNeedsApproval": "macOS is waiting for you to allow MacPilot to start at login. Turn it on in System Settings → General → Login Items & Extensions.", "aboutAutomation": "AUTOMATION", "manageRules": "Manage app rules and interface preferences.", "githubProject": "GitHub Project", "githubProjectDescription": "View MacPilot’s source code, releases, and issue tracker on GitHub.", "githubProjectLink": "github.com/%@",
             "quitsIn": "Quits in %d min",
             "awake": "Awake", "awakeSubtitle": "Control Mac sleep behavior and keep the system running when needed.",
             "awakeKeepAwake": "Keep Awake", "awakeStop": "Stop Keeping Awake", "awakeActive": "Keeping Awake",
@@ -1500,6 +1500,18 @@ final class MacPilotModel: ObservableObject {
         var language: AppLanguage
         var launchRules: [LaunchRule]
         var isLaunchSchedulingEnabled: Bool
+        /// Whether the *user* wants MacPilot to start at login.
+        ///
+        /// This is deliberately separate from the login item's live system
+        /// status: replacing the app bundle during an update, or re-signing it,
+        /// can make macOS drop the registration, and nothing in the system
+        /// remembers what the user asked for. Persisting the intent is what
+        /// lets the app re-register it instead of silently never starting again.
+        var launchesAtLogin: Bool
+        /// Not encoded: whether the file actually carried `launchesAtLogin`.
+        /// Only the migration in `apply(_:)` cares, to tell "never opted in"
+        /// apart from "opted in before this key existed".
+        var launchesAtLoginWasStored = false
         var lastScheduledBootSession: String?
         /// Automatic update checks. Off means no request is issued at launch and
         /// the manual "Check for Updates" button is the only path.
@@ -1519,7 +1531,21 @@ final class MacPilotModel: ObservableObject {
         var remoteControl: RemoteControlSettings
         var dockGroups: DockGroupsSettings
 
-        init(enabledFeatures: Set<MainSection>, rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings) {
+        /// Spelled out because the custom `init(from:)` suppresses the
+        /// synthesized conformance, and `launchesAtLoginWasStored` must stay a
+        /// decode-only companion to `launchesAtLogin` rather than a second key
+        /// in the file.
+        private enum CodingKeys: String, CodingKey {
+            case version, enabledFeatures, rules, isEnforcing, language
+            case launchRules, isLaunchSchedulingEnabled, launchesAtLogin
+            case lastScheduledBootSession, automaticUpdateChecks
+            case bleUnlock, fileCompression
+            case screenCapture, screenRecording, pictureInPicture
+            case inputSources, windowSwitcher, smoothScrolling, clipboard
+            case awake, awakeTriggers, remoteControl, dockGroups
+        }
+
+        init(enabledFeatures: Set<MainSection>, rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, launchesAtLogin: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings) {
             version = 25
             self.enabledFeatures = enabledFeatures.map(\.rawValue).sorted()
             self.rules = rules
@@ -1527,6 +1553,7 @@ final class MacPilotModel: ObservableObject {
             self.language = language
             self.launchRules = launchRules
             self.isLaunchSchedulingEnabled = isLaunchSchedulingEnabled
+            self.launchesAtLogin = launchesAtLogin
             self.lastScheduledBootSession = lastScheduledBootSession
             self.automaticUpdateChecks = automaticUpdateChecks
             self.bleUnlock = bleUnlock
@@ -1557,6 +1584,8 @@ final class MacPilotModel: ObservableObject {
             language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .system
             launchRules = try container.decodeIfPresent([LaunchRule].self, forKey: .launchRules) ?? []
             isLaunchSchedulingEnabled = try container.decodeIfPresent(Bool.self, forKey: .isLaunchSchedulingEnabled) ?? true
+            launchesAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchesAtLogin) ?? false
+            launchesAtLoginWasStored = container.contains(.launchesAtLogin)
             lastScheduledBootSession = try container.decodeIfPresent(String.self, forKey: .lastScheduledBootSession)
             automaticUpdateChecks = try container.decodeIfPresent(Bool.self, forKey: .automaticUpdateChecks) ?? true
             bleUnlock = try container.decodeIfPresent(BLEUnlockSettings.self, forKey: .bleUnlock) ?? BLEUnlockSettings()
@@ -1572,6 +1601,35 @@ final class MacPilotModel: ObservableObject {
             awakeTriggers = try container.decodeIfPresent([AwakeTrigger].self, forKey: .awakeTriggers) ?? []
             remoteControl = try container.decodeIfPresent(RemoteControlSettings.self, forKey: .remoteControl) ?? RemoteControlSettings()
             dockGroups = try container.decodeIfPresent(DockGroupsSettings.self, forKey: .dockGroups) ?? DockGroupsSettings()
+        }
+
+        // Written out for the same reason as `CodingKeys`: `launchesAtLoginWasStored`
+        // must not become a second persisted key.
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(version, forKey: .version)
+            try container.encode(enabledFeatures, forKey: .enabledFeatures)
+            try container.encode(rules, forKey: .rules)
+            try container.encode(isEnforcing, forKey: .isEnforcing)
+            try container.encode(language, forKey: .language)
+            try container.encode(launchRules, forKey: .launchRules)
+            try container.encode(isLaunchSchedulingEnabled, forKey: .isLaunchSchedulingEnabled)
+            try container.encode(launchesAtLogin, forKey: .launchesAtLogin)
+            try container.encodeIfPresent(lastScheduledBootSession, forKey: .lastScheduledBootSession)
+            try container.encode(automaticUpdateChecks, forKey: .automaticUpdateChecks)
+            try container.encode(bleUnlock, forKey: .bleUnlock)
+            try container.encode(fileCompression, forKey: .fileCompression)
+            try container.encode(screenCapture, forKey: .screenCapture)
+            try container.encode(screenRecording, forKey: .screenRecording)
+            try container.encode(pictureInPicture, forKey: .pictureInPicture)
+            try container.encode(inputSources, forKey: .inputSources)
+            try container.encode(windowSwitcher, forKey: .windowSwitcher)
+            try container.encode(smoothScrolling, forKey: .smoothScrolling)
+            try container.encode(clipboard, forKey: .clipboard)
+            try container.encode(awake, forKey: .awake)
+            try container.encode(awakeTriggers, forKey: .awakeTriggers)
+            try container.encode(remoteControl, forKey: .remoteControl)
+            try container.encode(dockGroups, forKey: .dockGroups)
         }
 
         /// 首页开关是功能唯一的开关，详情页不再保留自己的总开关（`docs/UI_DESIGN.md`）。
@@ -1615,7 +1673,16 @@ final class MacPilotModel: ObservableObject {
     @Published private(set) var alertOffersAccessibilityReset = false
     @Published private(set) var isResettingAccessibility = false
     @Published private(set) var isResettingScreenCapture = false
-    @Published private(set) var launchesAtLogin = false
+    /// Whether the user wants MacPilot to start at login (persisted), not the
+    /// live system status. Keeping the two apart is what allows the app to
+    /// re-register the login item after an update replaces the bundle: the
+    /// registration is a system-side decision that can vanish without the user
+    /// ever touching the toggle. `loginItemNeedsApproval` carries the one system
+    /// state the user has to resolve by hand.
+    @Published private(set) var launchesAtLogin = false { didSet { saveIfReady() } }
+    /// True when macOS holds the registration but is waiting for the user to
+    /// allow it in System Settings → General → Login Items & Extensions.
+    @Published private(set) var loginItemNeedsApproval = false
     @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; screenRecording.language = language; windowSwitcher.language = language; clipboard.language = language; saveIfReady() } }
     let ble = BLEUnlockModel()
     let updater = SoftwareUpdater()
@@ -1686,7 +1753,8 @@ final class MacPilotModel: ObservableObject {
         load()
         isLoading = false
         save()
-        refreshLoginItemState()
+        refreshLoginItemApprovalState()
+        restoreLoginItemIfNeeded()
         remoteControl.onPairingCodePresented = { [weak self] code, clientName in
             self?.presentRemotePairingCode(code: code, clientName: clientName)
         }
@@ -2105,18 +2173,48 @@ final class MacPilotModel: ObservableObject {
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
+        launchesAtLogin = enabled
         do {
             if enabled { try SMAppService.mainApp.register() }
             else { try SMAppService.mainApp.unregister() }
-            refreshLoginItemState()
         } catch {
             showAlert(t("loginError", error.localizedDescription))
-            refreshLoginItemState()
         }
+        refreshLoginItemApprovalState()
     }
 
-    func refreshLoginItemState() {
-        launchesAtLogin = SMAppService.mainApp.status == .enabled
+    /// Read the one system state the user has to resolve by hand. The intent
+    /// itself is ours (persisted); only "macOS is waiting for approval" can
+    /// change behind our back.
+    func refreshLoginItemApprovalState() {
+        loginItemNeedsApproval = SMAppService.mainApp.status == .requiresApproval
+    }
+
+    /// Re-register the login item when the app bundle changed underneath it.
+    ///
+    /// macOS ties an `SMAppService.mainApp` registration to the signed bundle.
+    /// Replacing the app during an update — or re-signing it in place — can drop
+    /// it, and because the registration lives in the system rather than in our
+    /// configuration, the app used to come back with the toggle off and simply
+    /// never start at login again. The user already expressed the intent once,
+    /// so honour it here instead of waiting for them to notice.
+    func restoreLoginItemIfNeeded() {
+        switch LoginItemPolicy.recovery(wanted: launchesAtLogin, status: SMAppService.mainApp.status) {
+        case .none:
+            break
+        case .needsApproval:
+            loginItemNeedsApproval = true
+        case .register:
+            do {
+                try SMAppService.mainApp.register()
+            } catch {
+                // Surfaced in Settings rather than as a launch-time alert: a
+                // system that declines the registration is not something the
+                // user can fix from a dialog here.
+                showAlert(t("loginError", error.localizedDescription))
+            }
+            refreshLoginItemApprovalState()
+        }
     }
 
     func revealConfigurationFile() {
@@ -2554,6 +2652,13 @@ final class MacPilotModel: ObservableObject {
         rules = configuration.rules
         launchRules = configuration.launchRules
         isLaunchSchedulingEnabled = configuration.isLaunchSchedulingEnabled
+        // Existing installs enabled the login item before we persisted the
+        // intent at all; adopt whatever the system reports on the first launch
+        // that sees no such key, so their auto-start keeps being repaired from
+        // now on instead of needing a manual off/on toggle.
+        launchesAtLogin = configuration.launchesAtLoginWasStored
+            ? configuration.launchesAtLogin
+            : SMAppService.mainApp.status == .enabled
         automaticUpdateChecks = configuration.automaticUpdateChecks
         lastScheduledBootSession = configuration.lastScheduledBootSession
         ble.applyLoadedSettings(configuration.bleUnlock)
@@ -2594,6 +2699,7 @@ final class MacPilotModel: ObservableObject {
             language: language,
             launchRules: launchRules,
             isLaunchSchedulingEnabled: isLaunchSchedulingEnabled,
+            launchesAtLogin: launchesAtLogin,
             lastScheduledBootSession: lastScheduledBootSession,
             automaticUpdateChecks: automaticUpdateChecks,
             bleUnlock: ble.settings,
@@ -3771,6 +3877,11 @@ struct LaunchRulesView: View {
                     Text(model.launchesAtLogin ? launchPlanMessage : model.t("loginRequired"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if model.loginItemNeedsApproval {
+                        Text(model.t("loginItemNeedsApproval"))
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 }
                 Spacer()
                 Toggle("", isOn: $model.isLaunchSchedulingEnabled)
@@ -4928,6 +5039,11 @@ struct SettingsView: View {
                     ))
                     .toggleStyle(.switch)
                     Text(model.t("startAtLoginHint")).font(.subheadline).foregroundStyle(.secondary)
+                    if model.loginItemNeedsApproval {
+                        Text(model.t("loginItemNeedsApproval"))
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 }
                 SettingsCard {
                     SoftwareUpdateSettingsView(updater: model.updater, language: model.language)

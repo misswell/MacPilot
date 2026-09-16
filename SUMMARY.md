@@ -1187,3 +1187,48 @@ Command Line Tools 的 SDK 比 Xcode 自带的新，`xcrun clang` 解析 `MacOSX
 - 真机：在**已签名**的 `MacPilot.app` 里塞探针实测 `SMAppService.daemon(plistName:)`，两种入参的 108 / Operation not permitted 差异如上表；`sfltool dumpbtm` 中该 daemon 记录从 `[enabled, disallowed, not notified]` 变为 `[enabled, allowed, notified]`，`status` 读出 `enabled`、`register()` 返回 OK。
 - `./Scripts/build-app.sh` 全流程走通（universal arm64 + x86_64、Developer ID 签名、`codesign --verify --deep --strict` 通过）。
 - 全量 `swift test` 出现的 `ScreenCaptureTests` 两条 ~39s 超时属并行负载下偶发，单独 `--filter ScreenCaptureTests` 复跑 74 条全绿，与本次改动无关。
+
+## 四十五、更新之后不再自动启动：登录项的用户意图从来没被存下来（v1.1.354）
+
+用户报「更新后软件不会自动启动了」。这次不是 UI 状态快照的问题，而是**只有系统侧记录、应用侧没有记录**的结构性缺陷。
+
+### 一、`launchesAtLogin` 一直是个派生值
+
+```swift
+@Published private(set) var launchesAtLogin = false
+func refreshLoginItemState() { launchesAtLogin = SMAppService.mainApp.status == .enabled }
+```
+
+`SMAppService.mainApp(register:)` 的注册记录只存在于系统里（BTM / LaunchServices），配置文件中**没有对应的字段**——`config.json` 的键里确实找不到任何 login/launch-at-login 相关项。于是：
+
+- 用户那次「开启登录时启动」只写进了系统，应用不记得。
+- 更新时替换/重签 `MacPilot.app`，macOS 会重新评估这条绑定在签名 bundle 上的注册（真机上也确实看到过 `Code Signature Invalid` 这种签名失效的表现），注册可能被丢掉。
+- 应用下次启动读到的就是「没注册」，而它**没有任何依据知道用户本来是想要的**，于是不回补、也不提示，登录项就这么静悄悄地没了。
+
+关键点：`launchSchedulingEnabled`（启动规则排程）是持久化的，唯独「是否随登录启动」没有——一个持久化、一个不持久化，正好把「用户意图」丢在了唯一没有存的地方。
+
+### 二、修法：把意图和系统状态分开存
+
+- 配置里新增 `launchesAtLogin`（用户意图，持久化）。`StoredConfiguration` 原本靠自动合成的 `Codable`，而它已有自定义 `init(from:)`；为了让「迁移标记」不被写进文件，这里显式写出 `CodingKeys` 与 `encode(to:)`，只输出 `launchesAtLogin`、不输出 `launchesAtLoginWasStored`。
+- **迁移**：为了不让老用户再手动开关一次，`apply(_:)` 在**文件里没有这个键**时（`launchesAtLoginWasStored == false`）沿用当前系统状态作为初始意图；一旦写过一次就只认文件。这样 v1.1.354 之后 intent 一直有据可查。
+- `restoreLoginItemIfNeeded()`：启动时若「意图 = 开」而系统状态是 `.notRegistered` / `.notFound`，就重新 `register()` 一次。判定逻辑抽成 `LoginItemPolicy.recovery(wanted:status:)` 纯函数，四种状态的取舍都有用例：
+  - `wanted=false` → `.none`（用户没要，别自作主张）
+  - `.enabled` → `.none`（已经好了）
+  - `.requiresApproval` → `.needsApproval`（**注册还在，只有用户能批准，再调 `register()` 毫无意义**）
+  - `.notRegistered` / `.notFound` → `.register`（这就是更新后掉注册的情形）
+- 系统侧还有一种是它自己在等用户批准。新增 `loginItemNeedsApproval` 与 `loginItemNeedsApproval` 文案，在「设置 → 登录时启动」和「启动规则」两处给出橙色提示，不再让用户面对一个「开关关着但不知道为什么」的界面。
+
+### 三、顺带说明：`launchesAtLogin` 现在表示「意图」而不是「系统状态」
+
+启动排程的守卫（`scheduleLaunchPlanForCurrentBootIfNeeded`）与 UI 都读它；用户意图与系统实际一致时行为完全不变，不一致时（等批准 / 刚被自动回补）以意图为准才是用户期望的语义。系统状态单独由 `loginItemNeedsApproval` 表达。
+
+### 四、真机上顺带确认的一件事
+
+期间用户的 MacPilot 进程被杀，崩溃报告写明 `termination: namespace=CODESIGNING, indicator=Invalid Page`、`SIGKILL (Code Signature Invalid)`——这是**我**在诊断时反复重签 `/Applications/MacPilot.app` 导致运行中进程的代码页失效，属于诊断副作用，不是产品缺陷；但它恰好演示了「签名变化会波及登录项/运行中的 App」这条机制。
+
+### 验证
+
+- `swift test --filter LoginItem`：7 条全绿。除上述四种状态取舍外，还包含配置往返用例（`launchesAtLogin` 编解码往返、缺键时 `launchesAtLoginWasStored == false`、以及**迁移标记绝不写回文件**）。最后这条最初是失败的——第一版把迁移标记放在存储属性上，被合成 `encode` 一起写进了 `config.json`，测试当场抓出来，才改成显式 `CodingKeys` + `encode`。
+- 全量 `swift test`：721 条通过；仍旧只有 `ScreenCaptureTests` 那两条并行负载下的偶发超时（单独复跑 74 条全绿，与本次无关）。
+- `./Scripts/build-app.sh`：universal arm64 + x86_64、Developer ID 签名、`codesign --verify --deep --strict` 通过。
+- 真机登录项状态实测：`SMAppService.mainApp.status = enabled`，`register()` 返回 OK；`sfltool dumpbtm` 中该 App 记录 `Disposition: [enabled, allowed, notified]`。
