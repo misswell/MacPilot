@@ -42,8 +42,14 @@ HELPER_BIN="$BIN_DIR/MacPilotPowerHelper"
 # ~/Library/Application Support/MacPilot/DockGroups/<Group>.app 后复用。
 DOCK_HELPER_BIN="$BIN_DIR/MacPilotDockHelper"
 OCCLUSION_PATCH_BIN="$BIN_DIR/libMacPilotOcclusionPatch.dylib"
+# Bind the plain `clang` invocation to the SDK SwiftPM already uses. Without
+# this, clang resolves `MacOSX.sdk` to the Command Line Tools copy, which can
+# contain a `.tbd` newer than this Xcode's linker understands
+# ("tapi error: malformed file ... unknown architecture arm64e.x1-macos") and
+# fails the whole packaging step after the Swift build has already succeeded.
+OCCLUSION_SDKROOT="$(xcrun -sdk macosx --show-sdk-path)"
 xcrun clang -dynamiclib -O2 "${PATCH_ARCH_ARGS[@]}" \
-    -mmacosx-version-min=14.0 -framework AppKit \
+    -mmacosx-version-min=14.0 -isysroot "$OCCLUSION_SDKROOT" -framework AppKit \
     -install_name @loader_path/libMacPilotOcclusionPatch.dylib \
     Sources/MacPilotOcclusionPatch/MacPilotOcclusionPatch.m \
     -o "$OCCLUSION_PATCH_BIN"

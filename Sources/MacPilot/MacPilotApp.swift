@@ -3160,6 +3160,12 @@ struct ContentView: View {
             openWindow(id: "main")
             DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Approving the background power service happens in System Settings,
+            // so the answer arrives while MacPilot is in the background. Re-read
+            // it on the way back instead of showing the state captured at launch.
+            model.awake.refreshClosedLidServiceState()
+        }
         .overlay {
             if isDropTarget {
                 RoundedRectangle(cornerRadius: 14)

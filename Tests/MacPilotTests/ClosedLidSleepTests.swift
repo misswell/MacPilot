@@ -119,6 +119,42 @@ struct ClosedLidSleepTests {
         #expect(decoded.preventSystemSleep)
     }
 
+    /// The Awake card used to keep rendering whatever the service status was
+    /// when the app launched. Approving the service in System Settings — or
+    /// macOS finishing a registration that was pending at launch — happens
+    /// outside the app, so the card stayed on the banner it captured then, no
+    /// matter how the user resolved it. Refreshing must publish the live state.
+    @Test func refreshingPublishesTheLiveServiceStateInsteadOfTheLaunchSnapshot() {
+        let controller = ClosedLidTestController()
+        let manager = makeManager(controller: controller)
+        defer { manager.shutdown() }
+
+        #expect(manager.closedLidServiceState == .ready)
+
+        // What the card showed before the daemon was approved.
+        controller.serviceState = .unavailable
+        manager.refreshClosedLidServiceState()
+        #expect(manager.closedLidServiceState == .unavailable)
+
+        // The user approves it in System Settings, then comes back.
+        controller.serviceState = .ready
+        manager.refreshClosedLidServiceState()
+        #expect(manager.closedLidServiceState == .ready)
+    }
+
+    @Test func refreshingTracksThePendingApprovalTransition() {
+        let controller = ClosedLidTestController()
+        controller.serviceState = .unavailable
+        let manager = makeManager(controller: controller)
+        defer { manager.shutdown() }
+
+        #expect(manager.closedLidServiceState == .unavailable)
+
+        controller.serviceState = .requiresApproval
+        manager.refreshClosedLidServiceState()
+        #expect(manager.closedLidServiceState == .requiresApproval)
+    }
+
     @Test func closedLidSessionDrivesThePrivilegedController() {
         let controller = ClosedLidTestController()
         let manager = makeManager(controller: controller)
@@ -454,6 +490,40 @@ struct ClosedLidSleepControllerTests {
 
         #expect(helper.releaseSynchronouslyCallCount == 1)
         #expect(!controller.isActive)
+    }
+}
+
+// MARK: - Service identity
+
+/// Guards the privileged-service identity contract. `SMAppService.daemon` wants
+/// the plist **file name** with its extension, so a rename of either the file or
+/// the Mach service must not silently desynchronize the two.
+struct PowerServiceIdentityTests {
+    @Test func daemonPlistNameCarriesThePlistExtensionTheServiceExpects() {
+        let name = MacPilotPowerService.daemonPlistName
+        #expect(name.hasSuffix(".plist"))
+        #expect(name == MacPilotPowerService.machServiceName + ".plist")
+    }
+
+    @Test func bundledLaunchDaemonPlistMatchesTheConstant() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let bundled = repositoryRoot
+            .appendingPathComponent("Resources")
+            .appendingPathComponent(MacPilotPowerService.daemonPlistName)
+        #expect(FileManager.default.fileExists(atPath: bundled.path))
+
+        let plist = try #require(
+            try PropertyListSerialization.propertyList(
+                from: Data(contentsOf: bundled),
+                format: nil
+            ) as? [String: Any]
+        )
+        #expect(plist["Label"] as? String == MacPilotPowerService.machServiceName)
+        let machServices = try #require(plist["MachServices"] as? [String: Any])
+        #expect(machServices[MacPilotPowerService.machServiceName] as? Bool == true)
     }
 }
 

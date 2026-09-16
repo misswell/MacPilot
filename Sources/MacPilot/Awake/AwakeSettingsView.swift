@@ -43,6 +43,11 @@ struct AwakeSettingsView: View {
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
         }
+        .onAppear {
+            // The closed-lid service status is a snapshot; System Settings can
+            // change it while this page is closed, so re-read it on entry.
+            awake.refreshClosedLidServiceState()
+        }
     }
 
     /// 统一的 Session 卡片：这里的全部配置就是「默认会话」——手动开始与

@@ -1125,3 +1125,65 @@ Helper 依然只读 `groups.json`，一个字节都不写。
 - 真机（未锁屏时）：把新 Helper 二进制临时装进已固定的分组，手写一份 `dockTile` 到 `groups.json`（取真机 AX 读到的矩形，49–52 点宽、37–40 点高），分别在图标上沿与下沿合成鼠标点击 —— **两次浮层落点完全一致**（cocoa `(67, 25)`，正对图标中心 185.5 − 160）；抽掉 `dockTile` 再点同样的两处，落点分别回到 `(67, 38)` 与 `(67, 12)`，差出 26 点，正是用户说的「跟着鼠标上下移动」。
 - 真机跑发布版：装上 1.1.352 后 MacPilot 自动做了三件事 —— 重建 Helper（旧 Helper 没有 `MacPilotDockGroupIconAppearance` 键，判定过期）、把 `iconStyle: system` 与 `dockTile: {x: 5, y: 132.52, w: 52.15, h: 40.15}` 写进 `groups.json`、日志里留下 `trusted=true groups=1 found=1` + `Published Dock tile anchors for 1 group(s)`。Helper 的 `.icns` 中心像素从 0.94（浅色底）变成 0.29（深色底），与「跟随系统 + 深色外观」一致。
 - 锁屏状态下合成点击不会送到 Dock（点击被锁屏吃掉），真机交互验证必须在解锁状态做；期间那次「点了没反应」是锁屏，不是回归。
+
+## 四十四、合盖不休眠提示「请使用已签名的正式版本」：状态快照启动了就不再更新（v1.1.353）
+
+用户报：当前就是已签名的正式版，Awake 页却提示「当前版本无法使用后台电源服务，请使用已签名的正式版本」。**签名完全是无辜的**——这次真正的缺陷是「一次读取、永不复查」，而那句文案把责任推给了构建。
+
+### 一、先排除掉的假设：plist 名称
+
+第一反应是 `SMAppService.daemon(plistName:)` 的入参。用一份已签名的 bundle 做对照，结论是**必须带 `.plist` 后缀**：
+
+| `daemon(plistName:)` | `status` | `register()` |
+| --- | --- | --- |
+| `com.misswell.macpilot.powerhelper` | `.notFound` | `SMAppServiceErrorDomain 108`：Unable to read plist |
+| `com.misswell.macpilot.powerhelper.plist` | `.notFound`（= 未注册的正常初始态） | `1`：Operation not permitted → 状态转 `.requiresApproval` |
+
+但 v1.1.352 的 `MacPilotPowerService.daemonPlistName` **本来就是带后缀的**（`git show v1.1.352` 可查），`PrivilegedPowerHelper` 也照传。所以「少写 `.plist`」不是本次根因——只是顺手把这个易踩的约定写进常量注释，并用 `PowerServiceIdentityTests` 钉住「常量 = `machServiceName + ".plist"`，且 `Resources/` 下确有同名 plist、`Label`/`MachServices` 对得上」。
+
+### 二、根因：`closedLidServiceState` 只在启动那一刻读过一次
+
+时间线来自 `backgroundtaskmanagementd` / `smd` 的系统日志（不是推测）：
+
+| 时间 | 事件 |
+| --- | --- |
+| 08:24:21 | MacPilot 启动 |
+| 08:24:22 | `effectiveItemDisposition: record not found: appURL=/Applications/MacPilot.app … type=daemon` —— 此刻 daemon 记录**确实不存在** |
+| 09:17:29 | `smd: copyJobWithLabel … failed with error 113` → `launchd: Setting service com.misswell.macpilot.powerhelper to enabled` —— 才第一次注册成功 |
+
+也就是说用户看到提示时，daemon 是真的没注册，`SMAppService.daemon(...).status` 返回 `.notFound`，`registrationState` 把它映射成 `.unavailable`，UI 就渲染了那句「请使用已签名的正式版本」。**问题在于：查完一次就再没查过。**
+
+- `ClosedLidSleepController.serviceState` 是 `init` 时从 `helper.registrationState` 取的快照，`AwakeSessionManager` 在初始化时把它抄进 `@Published var closedLidServiceState`。
+- 之后只有 `syncClosedLidServiceState()` 会重新读，而它的调用点只有：`applyAssertions()`（有会话时才跑）、关合盖开关时的 `applyClosedLidPolicy`、`prepareClosedLidService()`（用户点按钮）、`shutdown()`。
+- `AwakeSettingsView` 是 `.onAppear` 都没有的纯 `ScrollView`，`closedLidServiceStatus` 只在 `preventClosedLidSleep` 打开时渲染。
+
+于是：**没有任何路径会在「用户去系统设置批准了这个服务、回到 App」之后重新读一次状态**。系统侧 09:17 已经 `enabled` 了，界面上那句警告依旧挂着，直到用户重启 App。这正是「明明签名了却说我用的不是正式版」的由来。
+
+### 三、修法
+
+- `AwakeSessionManager.refreshClosedLidServiceState()`：对外暴露一次「重读系统状态并同步到 `closedLidServiceState`」。底层复用已有的 `syncClosedLidServiceState()`，它本来就只在值真的变了才写 `@Published`，不会白刷。
+- `AwakeSettingsView` 加 `.onAppear`：每次进入 Awake 页都重读。用户去系统设置批准、回来切页即可自愈。
+- 主窗口根视图监听 `NSApplication.didBecomeActiveNotification`：批准动作发生在 App 处于后台时，回前台是**唯一必然发生的时机**，比等用户手动切页更可靠（仓库里已有两处同样用法的先例）。
+- 单位测试：`refreshingPublishesTheLiveServiceStateInsteadOfTheLaunchSnapshot`（`.ready` → `.unavailable` → `.ready` 必须跟着变）与 `refreshingTracksThePendingApprovalTransition`（`.unavailable` → `.requiresApproval`）。
+
+### 四、顺带修掉的构建坑：`clang` 默认去了 Command Line Tools 的 SDK
+
+改完重打包时构建在最后一步挂了：
+
+```
+tapi error: malformed file .../MacOSX27.0.sdk/usr/lib/libSystem.B.tbd:4:20:
+  error: unknown architecture  arm64e.x1-macos, arm64e.x1-maccatalyst
+```
+
+Command Line Tools 的 SDK 比 Xcode 自带的新，`xcrun clang` 解析 `MacOSX.sdk` 时选到了它，而本机 Xcode 的 `ld` 不认识新 tbd 里的 `arm64e.x1-macos`。SwiftPM 不受影响（它走 `-sdk macosx` 拿 Xcode SDK），所以现象是「Swift 全绿、最后链接 dylib 才炸」。`build-app.sh` 里给那条 `xcrun clang` 加上 `-isysroot "$(xcrun -sdk macosx --show-sdk-path)"`，让汇编那条命令与 SwiftPM 用同一个 SDK，构建不再依赖 `MacOSX.sdk` 这个软链当前指向谁。
+
+### 五、这次的教训
+
+「已签名」那句文案把一个**状态刷新问题**说成了**构建合法性问题**，于是用户第一反应是去质疑自己的版本，我们也差点顺着文案去改签名。**报错文案描述的是现象，不是原因**：拿到「版本不合法」这种断言时，先去系统日志（`backgroundtaskmanagementd` / `smd`）把「那一刻系统里到底有没有这条记录」查清楚，再决定往哪改。
+
+### 验证
+
+- `swift test --filter "ClosedLidSleepTests|PowerServiceIdentityTests"`：29 条全绿，含两条新增的刷新用例与两条服务身份用例。
+- 真机：在**已签名**的 `MacPilot.app` 里塞探针实测 `SMAppService.daemon(plistName:)`，两种入参的 108 / Operation not permitted 差异如上表；`sfltool dumpbtm` 中该 daemon 记录从 `[enabled, disallowed, not notified]` 变为 `[enabled, allowed, notified]`，`status` 读出 `enabled`、`register()` 返回 OK。
+- `./Scripts/build-app.sh` 全流程走通（universal arm64 + x86_64、Developer ID 签名、`codesign --verify --deep --strict` 通过）。
+- 全量 `swift test` 出现的 `ScreenCaptureTests` 两条 ~39s 超时属并行负载下偶发，单独 `--filter ScreenCaptureTests` 复跑 74 条全绿，与本次改动无关。

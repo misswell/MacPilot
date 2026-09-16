@@ -112,6 +112,20 @@ final class AwakeSessionManager: ObservableObject {
         closedLidSleepController?.openSystemSettings()
     }
 
+    /// Re-read the privileged service status from the system.
+    ///
+    /// `ClosedLidSleepController.serviceState` is a snapshot taken when its
+    /// helper was constructed, and registration is a system-level decision the
+    /// user settles outside the app: enabling the daemon in System Settings →
+    /// Login Items, or macOS finishing a registration that was still pending at
+    /// launch. Without this refresh the Awake card keeps rendering the status it
+    /// read once at startup — a stale "the background power service is
+    /// unavailable in this build" banner that never clears, even though the
+    /// service is registered and running.
+    func refreshClosedLidServiceState() {
+        syncClosedLidServiceState()
+    }
+
     func startSession(
         source: SessionSource,
         endCondition: SessionEndCondition,

@@ -8,7 +8,12 @@ import Foundation
 public enum MacPilotPowerService {
     /// Mach service name, also used as the LaunchDaemon `Label`.
     public static let machServiceName = "com.misswell.macpilot.powerhelper"
-    /// Plist name inside `Contents/Library/LaunchDaemons`.
+    /// Plist file name inside `Contents/Library/LaunchDaemons`, `.plist`
+    /// extension included, exactly as `SMAppService.daemon(plistName:)` expects.
+    ///
+    /// Measured on a signed bundle: a bare `Label` here makes the service look
+    /// for a file named after the label and fail with `Unable to read plist`
+    /// (error 108), while the file name reaches the real registration path.
     public static let daemonPlistName = "com.misswell.macpilot.powerhelper.plist"
     /// Only clients signed by this team are allowed to talk to the helper.
     public static let teamIdentifier = "U8U443D7ZL"
