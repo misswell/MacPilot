@@ -1253,3 +1253,11 @@ func refreshLoginItemState() { launchesAtLogin = SMAppService.mainApp.status == 
 - `swift test --filter QuickAccessTests`：5 条全绿，其中新增的 `ocrToastPreviewCollapsesAndTruncatesRecognizedText` 覆盖折叠空白、全空白输入与截断长度。
 - 全量 `swift test`：723 条；失败的仍只有那几条并行负载下的偶发超时（`quickCopyAutoSaveWritesFileAndRecordsStats`、`startupShortcutRegistrationRetriesTransientFailure`、`heartbeatFailureTriggersABoundedReconnect`），单独复跑全绿，与本次改动无关。
 - `swift build`（含 `-warnings-as-errors` 的 release 打包路径）通过。
+
+## 四十七、更新替换后直接启动新 bundle（v1.1.362）
+
+更新安装成功但 MacPilot 没有自行回来时，updater 日志会记录 `Update installed`，而新进程并不存在。最小复现证明：替换后的 app 通过 `/usr/bin/open -n -g` 请求启动时可能只返回成功状态、不产生目标进程；对同一个 bundle 直接执行 `Contents/MacOS/MacPilot` 则可以稳定运行。问题落在 LaunchServices 对刚替换 bundle 的启动记录，而不是 app bundle 替换本身。
+
+修复后，updater 从新 bundle 的 `CFBundleExecutable` 读取主程序名，直接启动 `Contents/MacOS/<executable>`，并把启动请求写进 `~/Library/Logs/MacPilot/update.log`。这样 MacPilot 与旧版 `OctoPilot` bridge 都不依赖旧的 LaunchServices 实例记录；启动失败时仍保留原有回滚与重新启动旧 bundle 的路径。
+
+验证：最小 updater 替换回路从“安装成功、目标进程不存在”转为“Relaunch request accepted、目标进程实际存在”；`swift test --no-parallel` 725 条全绿，`swift build -c release -Xswiftc -warnings-as-errors` 通过。

@@ -3,11 +3,19 @@ import Testing
 @testable import MacPilotUpdaterSupport
 
 struct UpdaterLaunchPlanTests {
-    @Test func relaunchPlanRequestsANewApplicationInstance() {
+    @Test func relaunchPlanRunsTheReplacedBundleExecutable() {
         let application = URL(fileURLWithPath: "/Applications/MacPilot.app")
 
-        #expect(UpdaterLaunchPlan.executablePath == "/usr/bin/open")
-        #expect(UpdaterLaunchPlan.arguments(for: application) == ["-n", "-g", application.path])
+        #expect(
+            UpdaterLaunchPlan.directExecutableURL(for: application).path
+                == "/Applications/MacPilot.app/Contents/MacOS/MacPilot"
+        )
+        #expect(
+            UpdaterLaunchPlan.directExecutableURL(
+                for: URL(fileURLWithPath: "/Applications/OctoPilot.app"),
+                executableName: "OctoPilot"
+            ).path == "/Applications/OctoPilot.app/Contents/MacOS/OctoPilot"
+        )
     }
 }
 

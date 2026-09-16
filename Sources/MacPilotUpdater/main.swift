@@ -5,13 +5,15 @@ import MacPilotUpdaterSupport
 private enum UpdaterError: LocalizedError {
     case invalidArguments
     case parentDidNotExit
-    case launchFailed(Int32)
+    case executableMissing(URL)
+    case launchFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidArguments: "Invalid updater arguments."
         case .parentDidNotExit: "MacPilot did not exit before the update timeout."
-        case .launchFailed(let status): "Could not relaunch MacPilot (open exited with status \(status))."
+        case .executableMissing(let url): "MacPilot executable is missing or not executable at \(url.path)."
+        case .launchFailed(let detail): "Could not relaunch MacPilot (\(detail))."
         }
     }
 }
@@ -59,15 +61,34 @@ private func waitForParent(_ pid: pid_t) throws {
     throw UpdaterError.parentDidNotExit
 }
 
-private func launch(_ application: URL) throws {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: UpdaterLaunchPlan.executablePath)
-    process.arguments = UpdaterLaunchPlan.arguments(for: application)
-    try process.run()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-        throw UpdaterError.launchFailed(process.terminationStatus)
+private func launch(_ application: URL, logURL: URL) throws {
+    guard let bundle = Bundle(url: application),
+          let executableName = bundle.object(forInfoDictionaryKey: "CFBundleExecutable") as? String,
+          !executableName.isEmpty else {
+        let executableURL = UpdaterLaunchPlan.directExecutableURL(for: application)
+        throw UpdaterError.executableMissing(executableURL)
     }
+
+    let executableURL = UpdaterLaunchPlan.directExecutableURL(
+        for: application,
+        executableName: executableName
+    )
+    guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+        throw UpdaterError.executableMissing(executableURL)
+    }
+
+    let process = Process()
+    process.executableURL = executableURL
+    process.currentDirectoryURL = application.deletingLastPathComponent()
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+    } catch {
+        throw UpdaterError.launchFailed(error.localizedDescription)
+    }
+    appendLog("Relaunch request accepted for \(executableURL.path)", to: logURL)
 }
 
 private func runPlugInKit(arguments: [String]) throws -> String {
@@ -165,7 +186,7 @@ private func install(_ arguments: UpdaterArguments) throws {
             logURL: arguments.logURL
         )
         do {
-            try launch(arguments.destinationApplication)
+            try launch(arguments.destinationApplication, logURL: arguments.logURL)
         } catch {
             if fileManager.fileExists(atPath: backup.path) {
                 _ = try? fileManager.replaceItemAt(arguments.destinationApplication, withItemAt: backup)
@@ -174,7 +195,7 @@ private func install(_ arguments: UpdaterArguments) throws {
                     restoreEnabledElection: finderSyncWasEnabled,
                     logURL: arguments.logURL
                 )
-                try? launch(arguments.destinationApplication)
+                try? launch(arguments.destinationApplication, logURL: arguments.logURL)
             }
             throw error
         }
@@ -188,7 +209,7 @@ private func install(_ arguments: UpdaterArguments) throws {
         }
         appendLog("Update failed: \(error.localizedDescription)", to: arguments.logURL)
         if fileManager.fileExists(atPath: arguments.destinationApplication.path) {
-            try? launch(arguments.destinationApplication)
+            try? launch(arguments.destinationApplication, logURL: arguments.logURL)
         }
         throw error
     }
