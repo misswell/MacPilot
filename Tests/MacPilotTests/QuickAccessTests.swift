@@ -97,4 +97,10 @@ struct QuickAccessTests {
         #expect(preview == String(repeating: "识", count: 20) + "…")
         #expect(SmartCaptureToast.preview(of: long).count == 81)
     }
+
+    @Test func zoomPickerKeepsPinChromeVisibleOutsidePinFrame() {
+        #expect(QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: false, zoomPickerPresented: true))
+        #expect(QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: true, zoomPickerPresented: false))
+        #expect(!QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: false, zoomPickerPresented: false))
+    }
 }

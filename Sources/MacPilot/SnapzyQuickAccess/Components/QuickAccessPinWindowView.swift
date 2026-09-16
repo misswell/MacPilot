@@ -109,9 +109,16 @@ struct QuickAccessPinWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(controlInset)
     }
-    .opacity(state.isMouseInside ? 1 : 0)
-    .allowsHitTesting(state.isMouseInside)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: state.isMouseInside)
+    .opacity(isChromeVisible ? 1 : 0)
+    .allowsHitTesting(isChromeVisible)
+    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isChromeVisible)
+  }
+
+  private var isChromeVisible: Bool {
+    QuickAccessPinWindowChromeVisibility.isVisible(
+      mouseInside: state.isMouseInside,
+      zoomPickerPresented: isZoomPickerPresented
+    )
   }
 
   private var unlockedControls: some View {
@@ -289,6 +296,12 @@ struct QuickAccessPinWindowView: View {
   private func dragHandleStroke(isActive: Bool) -> some View {
     RoundedRectangle(cornerRadius: dragHandleCornerRadius, style: .continuous)
       .strokeBorder(Color.primary.opacity(isActive ? 0.16 : 0.08), lineWidth: 1)
+  }
+}
+
+enum QuickAccessPinWindowChromeVisibility {
+  static func isVisible(mouseInside: Bool, zoomPickerPresented: Bool) -> Bool {
+    mouseInside || zoomPickerPresented
   }
 }
 
