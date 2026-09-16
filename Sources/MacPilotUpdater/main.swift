@@ -61,8 +61,8 @@ private func waitForParent(_ pid: pid_t) throws {
 
 private func launch(_ application: URL) throws {
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    process.arguments = [application.path]
+    process.executableURL = URL(fileURLWithPath: UpdaterLaunchPlan.executablePath)
+    process.arguments = UpdaterLaunchPlan.arguments(for: application)
     try process.run()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else {

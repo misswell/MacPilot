@@ -2,6 +2,15 @@ import Foundation
 import Testing
 @testable import MacPilotUpdaterSupport
 
+struct UpdaterLaunchPlanTests {
+    @Test func relaunchPlanRequestsANewApplicationInstance() {
+        let application = URL(fileURLWithPath: "/Applications/MacPilot.app")
+
+        #expect(UpdaterLaunchPlan.executablePath == "/usr/bin/open")
+        #expect(UpdaterLaunchPlan.arguments(for: application) == ["-n", "-g", application.path])
+    }
+}
+
 struct FinderSyncRegistrationTests {
     @Test func refreshRemovesTheExistingExtensionBeforeAddingTheReplacement() {
         let appURL = URL(fileURLWithPath: "/Applications/MacPilot.app")
