@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>MacPilot Remote</string>
+	<string>PilotMate</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -48,13 +48,13 @@
 	<key>UIUserInterfaceStyle</key>
 	<string>Automatic</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>MacPilot Remote discovers and connects to MacPilot on the same local network to lock, blank, unlock and wake your Mac. Nothing is sent to the internet.</string>
+	<string>PilotMate discovers and connects to MacPilot on the same local network to lock, blank, unlock and wake your Mac. Nothing is sent to the internet.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_macpilot._tcp</string>
 	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>MacPilot Remote uses Bluetooth as a fallback link to your Mac when both devices are not on the same network. It advertises a private channel that only your own Mac connects to; nothing is sent to the internet.</string>
+	<string>PilotMate uses Bluetooth as a fallback link to your Mac when both devices are not on the same network. It advertises a private channel that only your own Mac connects to; nothing is sent to the internet.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-peripheral</string>

@@ -29,7 +29,7 @@ enum RemoteText {
     }
 
     private static let chinese: [String: String] = [
-        "appName": "MacPilot 遥控",
+        "appName": "PilotMate",
         "tabHome": "控制",
         "tabDevices": "设备",
         "tabSettings": "设置",
@@ -123,7 +123,7 @@ enum RemoteText {
         "metricRTT": "往返延迟",
         "metricExecution": "命令耗时",
         "about": "关于",
-        "aboutBody": "MacPilot 遥控通过局域网直连 Mac，不经过任何服务器。Mac 的登录密码始终保存在 Mac 上，不会传输到 iPhone。",
+        "aboutBody": "PilotMate 通过局域网直连 Mac，不经过任何服务器。Mac 的登录密码始终保存在 Mac 上，不会传输到 iPhone。",
 
         "errorUnsupportedProtocol": "MacPilot 与 App 的协议版本不一致，请更新两端。",
         "errorPairingWindowClosed": "Mac 上没有打开配对窗口。请在 MacPilot 的「远程控制」中点击「开始配对」。",
@@ -149,7 +149,7 @@ enum RemoteText {
     ]
 
     private static let english: [String: String] = [
-        "appName": "MacPilot Remote",
+        "appName": "PilotMate",
         "tabHome": "Control",
         "tabDevices": "Devices",
         "tabSettings": "Settings",
@@ -243,7 +243,7 @@ enum RemoteText {
         "metricRTT": "Round trip",
         "metricExecution": "Command",
         "about": "About",
-        "aboutBody": "MacPilot Remote talks to your Mac directly over the local network. Nothing goes through a server, and the Mac login password never leaves the Mac.",
+        "aboutBody": "PilotMate talks to your Mac directly over the local network. Nothing goes through a server, and the Mac login password never leaves the Mac.",
 
         "errorUnsupportedProtocol": "This app and MacPilot speak different protocol versions. Update both.",
         "errorPairingWindowClosed": "The pairing window on the Mac is closed. Click Start pairing in MacPilot → Remote Control.",

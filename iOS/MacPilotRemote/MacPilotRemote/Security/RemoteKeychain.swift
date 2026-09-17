@@ -45,7 +45,7 @@ enum RemoteKeychain {
         SecItemDelete(query as CFDictionary)
         var item = query
         item[kSecValueData as String] = key
-        item[kSecAttrLabel as String] = "MacPilot Remote Pairing"
+        item[kSecAttrLabel as String] = "PilotMate Pairing"
         // This device only: pairing is per iPhone and never syncs.
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
