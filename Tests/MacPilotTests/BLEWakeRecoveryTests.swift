@@ -54,6 +54,78 @@ struct BLEWakeRecoveryTests {
         #expect(progress.nextAction(screenState: .unlocked) == .confirmed)
     }
 
+    /// The regression behind the 17:34 wake that never unlocked: the
+    /// display-wake recovery restarts monitoring and resets presence while the
+    /// phone is already next to the Mac, so an armed attempt must wait for the
+    /// reconnect instead of treating that transient state as a terminal one.
+    @Test func unlockAttemptWaitsForThePresenceThatWakeRecoveryReset() {
+        #expect(BLEUnlockAttemptGate.decide(
+            presence: false,
+            manualLock: false,
+            unlockDisabled: false,
+            wakeWithoutUnlocking: false,
+            systemSleep: false
+        ) == .waitForPresence)
+        #expect(BLEUnlockAttemptGate.decide(
+            presence: true,
+            manualLock: false,
+            unlockDisabled: false,
+            wakeWithoutUnlocking: false,
+            systemSleep: false
+        ) == .proceed)
+    }
+
+    @Test func unlockAttemptStillStopsWhenAutoUnlockWasWithdrawn() {
+        let withdrawn: [(manualLock: Bool, unlockDisabled: Bool, wakeWithoutUnlocking: Bool, systemSleep: Bool)] = [
+            (true, false, false, false),
+            (false, true, false, false),
+            (false, false, true, false),
+            (false, false, false, true),
+        ]
+
+        for state in withdrawn {
+            #expect(BLEUnlockAttemptGate.decide(
+                presence: true,
+                manualLock: state.manualLock,
+                unlockDisabled: state.unlockDisabled,
+                wakeWithoutUnlocking: state.wakeWithoutUnlocking,
+                systemSleep: state.systemSleep
+            ) == .stop)
+        }
+    }
+
+    @Test func stoppedUnlockAttemptReleasesItsSlotForTheNextWake() {
+        var slot = BLEUnlockAttemptSlot()
+
+        let generation = slot.claim()
+        let heldWhileInFlight = slot.claim()
+        #expect(generation != nil)
+        #expect(heldWhileInFlight == nil)
+
+        if let generation {
+            slot.release(generation: generation)
+        }
+        #expect(!slot.isOccupied)
+        let afterRelease = slot.claim()
+        #expect(afterRelease != nil)
+    }
+
+    @Test func cancelledUnlockAttemptCannotReleaseTheSuccessorAttemptSlot() throws {
+        var slot = BLEUnlockAttemptSlot()
+
+        let staleClaim = slot.claim()
+        let staleGeneration = try #require(staleClaim)
+        slot.invalidate()
+        let currentClaim = slot.claim()
+        let currentGeneration = try #require(currentClaim)
+
+        #expect(currentGeneration != staleGeneration)
+        slot.release(generation: staleGeneration)
+        #expect(slot.isOccupied)
+        let blockedClaim = slot.claim()
+        #expect(blockedClaim == nil)
+    }
+
     @Test func unlockConfirmationRequiresAConfirmedUnlockedSession() {
         #expect(!BLEUnlockConfirmation.isConfirmed(screenState: .locked))
         #expect(!BLEUnlockConfirmation.isConfirmed(screenState: .unknown))

@@ -1288,3 +1288,47 @@ func refreshLoginItemState() { launchesAtLogin = SMAppService.mainApp.status == 
 - 既有录屏布局测试（`CaptureEnhancementsTests`）未改动即通过，证明转发后的算术与原来逐字等价。
 - 全量 `swift test`：739 条，失败的仍只有并行负载下那两条偶发超时（`startupShortcutRegistrationRetriesTransientFailure`、`quickCopyAutoSaveWritesFileAndRecordsStats`）；在干净 HEAD 上跑全量同样复现，单独复跑全绿，与本次改动无关。
 - `./Scripts/build-app.sh`：universal arm64 + x86_64、`-Xswiftc -warnings-as-errors`、Developer ID 签名、designated requirement 门禁通过。
+
+## 四十九、唤醒后不自动解锁：显示器唤醒把「重试」当成「结束」，槽位还漏了（v1.1.369）
+
+用户反馈「17:34 没有自动解锁，自动亮屏了但没有自动解锁」，并猜测是「开了 session 的原因」。日志不支持 session 这个方向，但症状和时刻可以逐行对上。
+
+### 日志证据（`~/Library/Logs/MacPilot/Diagnostics.log`）
+
+```
+17:34:16.647 unlock attempt scheduled trigger=presence-close deadlines=[2.0, 5.0, 9.0, 14.0, 20.0]
+17:34:18.346 display wake notification received
+17:34:18.357 restarting monitoring after recovery reason=displayWake   # presence 被归零、central 重建
+17:34:18.363 unlock skipped trigger=screensDidWake reason=notPresent
+17:34:18.834 unlock attempt stopped deadline=2.0 reason=stateChanged ... presence=false
+17:34:20.349 unlock requested trigger=presence-close                    # 手机已经回来了
+17:34:20.350 unlock attempt already scheduled trigger=presence-close    # 但重试再也没起来
+17:34:47.057 screen unlock notification received requestAge=none
+17:34:47.069 screen unlock classified as external or manual             # 最后是手动敲的密码
+```
+
+同一个显示器的唤醒恢复在 09:29 和 11:50 都成功过（旧任务在 2.0 / 14.0 秒的 deadline 上把密码敲出去了），14:02 那次唤醒本来就没有在飞的任务。差别只在**重连快慢**：fresh RSSI 在 2.0 秒那个 deadline 之前回来，旧任务就能自己走完；17:34 这次连接直到 20.34 才建立，deadline 先到。
+
+### 根因：两处叠加，缺一不可
+
+1. `restartMonitoringAfterRecovery(reason: "displayWake")` 为了重建 BLE 链路，直接 `presence = false`，**不经过 `updatePresence(false)`**，因此不会取消在飞的重试。手机明明还在旁边，这只是一次「链路重建期的瞬时无信号」。
+2. 重试任务的状态检查把这个瞬时值当成终止条件，`return` 时**没有把 `unlockAttemptTask` 置回 nil**。于是槽位永久占用：之后每次 `scheduleUnlockAttempt` 都只打一行 `unlock attempt already scheduled` 就返回，整个锁屏会话内自动解锁彻底失效——直到下一次「真的走开」触发 `updatePresence(false)` → `cancelUnlockAttempt` 才顺手清掉，所以它看起来是偶发而不是必现。
+
+对照写法就在同一个文件里：系统睡眠路径的 `prepareMonitoringForWakeRecovery()` 是先 `cancelUnlockAttempt()` 再 `presence = false`，显示器唤醒路径漏了这一步；两条路径语义不同（系统睡眠要放弃重试，显示器唤醒要保住重试），漏的不是同一行代码而是同一个不变量。
+
+### 改了什么
+
+1. **`BLEUnlockAttemptGate`**：把 deadline 上的判定抽成纯策略，`stop` 只留给「用户/远程手动锁定、解锁阈值被禁用、唤醒但不解锁、系统睡眠」这四件真的不想再解锁的事；`presence == false` 变成 `waitForPresence`——跳过当前 deadline、保留后续 deadline，等链路重连回来。真的走开由 `updatePresence(false)` 取消任务（generation 变化），不依赖这个兜底。
+2. **`BLEUnlockAttemptSlot`**：重试槽位的 `claim()` / `release(generation:)` / `invalidate()` 收进一个小状态机，`release` 带 generation 校验，旧任务结束时不会误清掉接替它的新任务的槽位。「结束就必须归还槽位」从此是类型层面的事，不再靠每条 `return` 自觉。
+3. `restartMonitoringAfterRecovery` 里补注释说明这次 `presence = false` 必须让在飞的重试活下来。
+
+### 为什么不是「session」
+
+- `WindowSwitcher: Session began` 是窗口会话记录，17:36:10 才出现，比故障晚两分钟，且与解锁链路无任何耦合。
+- `RemoteControl: BLE attempt stalled; restarting discovery` 每 12 秒一轮的扫描确实在旁边抢射频，也**可能是**这次重连偏慢（2.0 秒 deadline 内没恢复）的助推因素，但它不构成故障：同一时段 BLE 解锁的 RSSI 采样一直正常，且只要槽位不泄漏，重连慢只会让解锁晚几秒，不会一次都不敲。
+
+### 验证
+
+- `swift test --filter BLEWakeRecoveryTests`：17 条全绿。新增 4 条：`unlockAttemptWaitsForThePresenceThatWakeRecoveryReset`（唤醒恢复归零 presence 时判定为 wait）、`unlockAttemptStillStopsWhenAutoUnlockWasWithdrawn`（四类撤回仍然 stop）、`stoppedUnlockAttemptReleasesItsSlotForTheNextWake`、`cancelledUnlockAttemptCannotReleaseTheSuccessorAttemptSlot`。
+- 全量 `swift test`：743 条，失败的仍是并行负载下那三个偶发超时（`ScreenCaptureTests` 两条、`ClosedLidSleepTests` 一条，41 秒量级）；单独复跑两个 suite 全绿（0.41 秒），与本次改动无关。
+- `./Scripts/build-app.sh`：universal、`-Xswiftc -warnings-as-errors`、Developer ID 签名、designated requirement 门禁通过。

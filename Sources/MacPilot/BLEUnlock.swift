@@ -434,6 +434,70 @@ enum BLEUnlockConfirmation {
     }
 }
 
+/// Decides whether a pending unlock attempt may type at its next deadline.
+///
+/// Losing presence for real is handled by `updatePresence(false)`, which
+/// cancels the attempt (and its generation) outright. A false `presence` that
+/// reaches the attempt therefore means the display-wake recovery reset the BLE
+/// state while the link is being rebuilt — a transient condition that must not
+/// end the retry.
+enum BLEUnlockAttemptGate {
+    enum Decision: Equatable {
+        /// Keep the attempt and type at this deadline.
+        case proceed
+        /// Skip this deadline; the device may still come back within the plan.
+        case waitForPresence
+        /// The attempt is no longer wanted: end it and release its slot.
+        case stop
+    }
+
+    static func decide(
+        presence: Bool,
+        manualLock: Bool,
+        unlockDisabled: Bool,
+        wakeWithoutUnlocking: Bool,
+        systemSleep: Bool
+    ) -> Decision {
+        if manualLock || unlockDisabled || wakeWithoutUnlocking || systemSleep {
+            return .stop
+        }
+        return presence ? .proceed : .waitForPresence
+    }
+}
+
+/// Owns the single in-flight unlock attempt.
+///
+/// An attempt that ends without releasing its slot makes every later
+/// `scheduleUnlockAttempt` log "already scheduled" and return, so the proximity
+/// unlock silently stops working for the rest of that lock session. Claiming and
+/// releasing through this type keeps that from happening, and the generation
+/// check keeps a finished old attempt from freeing the slot its successor took.
+struct BLEUnlockAttemptSlot {
+    private(set) var generation = 0
+    private(set) var isOccupied = false
+
+    /// Claims the slot, returning the generation to hand to the attempt, or
+    /// `nil` while another attempt is still in flight.
+    mutating func claim() -> Int? {
+        guard !isOccupied else { return nil }
+        isOccupied = true
+        return generation
+    }
+
+    /// Releases the slot from a finishing attempt. A stale generation is
+    /// ignored so an old attempt cannot free its successor's slot.
+    mutating func release(generation: Int) {
+        guard generation == self.generation else { return }
+        isOccupied = false
+    }
+
+    /// Cancels whatever is in flight by invalidating its generation.
+    mutating func invalidate() {
+        generation &+= 1
+        isOccupied = false
+    }
+}
+
 struct BLEUnlockAttemptProgress {
     enum Action: Equatable {
         case postPassword(deadline: TimeInterval)
@@ -645,7 +709,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var systemWakeRecoveryTask: Task<Void, Never>?
     private var monitoringRecoveryTask: Task<Void, Never>?
     private var unlockAttemptTask: Task<Void, Never>?
-    private var unlockAttemptGeneration = 0
+    private var unlockAttemptSlot = BLEUnlockAttemptSlot()
     private var lastLoggedRSSIAt = Date.distantPast
     private var lastLoggedRSSI: Int?
     private var lastLoggedRSSIErrorAt = Date.distantPast
@@ -1581,12 +1645,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     private func cancelUnlockAttempt(reason: String = "unspecified") {
-        if unlockAttemptTask != nil {
+        if unlockAttemptSlot.isOccupied {
             log("unlock attempt cancelled reason=\(reason)")
         }
-        unlockAttemptGeneration &+= 1
         unlockAttemptTask?.cancel()
         unlockAttemptTask = nil
+        unlockAttemptSlot.invalidate()
         lastUnlockRequestAt = 0
     }
 
@@ -1632,12 +1696,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     }
 
     private func scheduleUnlockAttempt(trigger: String) {
-        guard unlockAttemptTask == nil else {
+        guard let generation = unlockAttemptSlot.claim() else {
             log("unlock attempt already scheduled trigger=\(trigger)")
             return
         }
 
-        let generation = unlockAttemptGeneration
         log("unlock attempt scheduled trigger=\(trigger) deadlines=\(BLEUnlockAttemptPlan.standard.deadlines)")
         unlockAttemptTask = Task { [weak self] in
             var previousDeadline: TimeInterval = 0
@@ -1648,16 +1711,32 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                     try? await Task.sleep(for: .milliseconds(Int64(wait * 1_000)))
                 }
                 guard !Task.isCancelled, let self else { return }
-                guard self.unlockAttemptGeneration == generation else {
+                guard self.unlockAttemptSlot.generation == generation else {
                     self.log("unlock attempt stopped deadline=\(deadline) reason=generationChanged")
                     return
                 }
-                guard !self.manualLock, self.presence,
-                      self.settings.unlockRSSI != Self.unlockDisabled,
-                      !self.settings.wakeWithoutUnlocking,
-                      !self.systemSleep else {
+                switch BLEUnlockAttemptGate.decide(
+                    presence: self.presence,
+                    manualLock: self.manualLock,
+                    unlockDisabled: self.settings.unlockRSSI == Self.unlockDisabled,
+                    wakeWithoutUnlocking: self.settings.wakeWithoutUnlocking,
+                    systemSleep: self.systemSleep
+                ) {
+                case .stop:
                     self.log("unlock attempt stopped deadline=\(deadline) reason=stateChanged manualLock=\(self.manualLock) presence=\(self.presence) systemSleep=\(self.systemSleep)")
+                    self.unlockAttemptSlot.release(generation: generation)
                     return
+                case .waitForPresence:
+                    // The display-wake recovery rebuilds the BLE link and resets
+                    // presence while the phone is already next to this Mac. Skip
+                    // this deadline but keep the rest of the plan armed, so the
+                    // retry survives the reconnect instead of dying with it.
+                    self.log("unlock attempt deferred deadline=\(deadline) reason=presencePending")
+                    progress.skipCurrentDeadline()
+                    previousDeadline = deadline
+                    continue
+                case .proceed:
+                    break
                 }
                 self.log("unlock attempt checking deadline=\(deadline)")
 
@@ -1675,6 +1754,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 switch progress.nextAction(screenState: screenState) {
                 case .confirmed:
                     self.unlockAttemptTask = nil
+                    self.unlockAttemptSlot.release(generation: generation)
                     self.confirmAutomaticUnlock(source: "screenState deadline=\(deadline)")
                     return
                 case .stateUnavailable:
@@ -1684,6 +1764,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 case .postPassword(let attemptDeadline):
                     guard let password = self.fetchPassword(warn: true) else {
                         self.log("unlock attempt stopped deadline=\(attemptDeadline) reason=passwordUnavailable")
+                        self.unlockAttemptSlot.release(generation: generation)
                         return
                     }
                     let requestTimestamp = Date().timeIntervalSince1970
@@ -1696,8 +1777,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
                 previousDeadline = deadline
             }
 
-            guard let self, self.unlockAttemptGeneration == generation else { return }
-            self.unlockAttemptTask = nil
+            guard let self, self.unlockAttemptSlot.generation == generation else { return }
+            self.unlockAttemptSlot.release(generation: generation)
             self.log("unlock attempt exhausted without unlock screenState=\(self.screenLockState().rawValue)")
         }
     }
@@ -1927,6 +2008,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             runtime.latestRSSIs.removeAll(keepingCapacity: true)
             runtime.presence = false
         }
+        // Resetting the published presence here must not cancel an armed
+        // unlock attempt: this restart happens right after a proximity wake,
+        // and the attempt has to survive the reconnect. `BLEUnlockAttemptGate`
+        // treats the transient false presence as "wait", not "stop".
         presence = false
         refreshPublishedMonitoringState()
 
