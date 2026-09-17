@@ -125,6 +125,15 @@ enum RemoteText {
         "about": "关于",
         "aboutBody": "PilotMate 通过局域网直连 Mac，不经过任何服务器。Mac 的登录密码始终保存在 Mac 上，不会传输到 iPhone。",
 
+        "requirements": "使用前需要准备",
+        "requirementsIntro": "PilotMate 只是手机上的遥控端，本身不能控制 Mac。请先在 Mac 上装好 MacPilot 并保持运行：",
+        "requirementsStep1": "在 Mac 上安装 MacPilot（macOS 14 或更高版本）。",
+        "requirementsStep2": "打开 MacPilot，在「远程控制」里启用 iPhone 遥控。",
+        "requirementsStep3": "回到本 App，在「设备」页找到这台 Mac，点「配对」。",
+        "requirementsStep4": "输入 Mac 上显示的 6 位配对码。之后会自动重连，不用再配对。",
+        "requirementsDownload": "下载 MacPilot",
+        "requirementsFooter": "两台设备需要在同一个 Wi-Fi 下，并允许「本地网络」权限。MacPilot 未运行或不在同一网络时，本 App 找不到 Mac。",
+
         "errorUnsupportedProtocol": "MacPilot 与 App 的协议版本不一致，请更新两端。",
         "errorPairingWindowClosed": "Mac 上没有打开配对窗口。请在 MacPilot 的「远程控制」中点击「开始配对」。",
         "errorInvalidPairCode": "配对码不正确，请重新输入。",
@@ -244,6 +253,15 @@ enum RemoteText {
         "metricExecution": "Command",
         "about": "About",
         "aboutBody": "PilotMate talks to your Mac directly over the local network. Nothing goes through a server, and the Mac login password never leaves the Mac.",
+
+        "requirements": "Before you start",
+        "requirementsIntro": "PilotMate is only the remote control on your phone; it cannot control a Mac by itself. Install MacPilot on the Mac and keep it running:",
+        "requirementsStep1": "Install MacPilot on the Mac (macOS 14 or later).",
+        "requirementsStep2": "Open MacPilot and enable iPhone remote control under Remote Control.",
+        "requirementsStep3": "Come back to this app, find the Mac on the Devices tab and tap Pair.",
+        "requirementsStep4": "Type the 6 digit pairing code shown on the Mac. After that it reconnects on its own, with no re-pairing.",
+        "requirementsDownload": "Download MacPilot",
+        "requirementsFooter": "Both devices must be on the same Wi-Fi and allow Local Network access. If MacPilot is not running, or the Mac is on another network, this app cannot find it.",
 
         "errorUnsupportedProtocol": "This app and MacPilot speak different protocol versions. Update both.",
         "errorPairingWindowClosed": "The pairing window on the Mac is closed. Click Start pairing in MacPilot → Remote Control.",

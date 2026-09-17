@@ -9,6 +9,30 @@ struct RemoteSettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(appModel.text("requirementsIntro"))
+                        // Numbered here rather than baked into the strings so the
+                        // list cannot be reordered without the numbers following.
+                        ForEach(Array(Self.setupStepKeys.enumerated()), id: \.offset) { index, key in
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text("\(index + 1).")
+                                    .font(.footnote.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                Text(appModel.text(key))
+                                    .font(.footnote)
+                            }
+                        }
+                        Link(destination: Self.macPilotDownloadURL) {
+                            Label(appModel.text("requirementsDownload"), systemImage: "arrow.down.circle")
+                        }
+                    }
+                } header: {
+                    Text(appModel.text("requirements"))
+                } footer: {
+                    Text(appModel.text("requirementsFooter"))
+                }
+
+                Section {
                     TextField(appModel.text("clientName"), text: Binding(
                         get: { appModel.store.clientName },
                         set: { appModel.store.clientName = $0 }
@@ -112,6 +136,18 @@ struct RemoteSettingsView: View {
             }
         }
     }
+
+    /// Setup steps, in the order the user has to do them.
+    private static let setupStepKeys = [
+        "requirementsStep1",
+        "requirementsStep2",
+        "requirementsStep3",
+        "requirementsStep4",
+    ]
+
+    /// The Mac app is macOS only, so the phone cannot install it; this is the
+    /// closest thing to a setup shortcut we can offer.
+    private static let macPilotDownloadURL = URL(string: "https://github.com/misswell/MacPilot/releases/latest")!
 
     /// Bluetooth is only interesting when it is doing something; otherwise the
     /// row would read the same on every launch.

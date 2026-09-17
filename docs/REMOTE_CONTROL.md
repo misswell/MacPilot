@@ -202,6 +202,12 @@ the only way to tell "it picked the slower link" from "it had no choice".
 
 ## Mac setup
 
+The same steps are shown inside the iPhone app under **Settings → Before you
+start**, so a user who installs only the phone app learns that the Mac app is a
+prerequisite. That section is purely instructional: the phone cannot install or
+launch anything on the Mac, and MacPilot exposes no `macpilot://remote-control`
+deep link to jump to, so it links to the download page instead.
+
 1. Open **Remote Control** in the MacPilot sidebar and enable iPhone remote
    control.
 2. Grant Accessibility permission (needed for the lock shortcut and key events)
