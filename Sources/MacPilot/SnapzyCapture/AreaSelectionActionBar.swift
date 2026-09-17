@@ -13,6 +13,12 @@
 //  and reveals a contextual second row with that tool's options — shape
 //  switch, fill, line style, stroke width, and the colour palette.
 //
+//  The post-selection HUD is a single bar.  iShot's right-hand column
+//  (圆角截图 / 调整选区 / 阴影或边框 / 刷新截图 / 重新选择) is folded into the
+//  「更多」 menu instead of a second floating bar: the two bars had to be kept
+//  apart by a collision solver, and three of the column's commands duplicated
+//  gestures the frame already supports.
+//
 
 import AppKit
 import Combine
@@ -38,6 +44,11 @@ final class AreaSelectionActionBar: NSView {
   private let onAction: (AreaSelectionAction) -> Void
   private var annotationBinding: AnnotationBinding?
   private var modelCancellable: AnyCancellable?
+
+  /// Output-style toggle state mirrored from `SnapzyAreaSelectionController`
+  /// so the 「更多」 menu can tick 圆角截图 / 阴影或边框. The controller owns the
+  /// values; the bar only renders them (see `syncOutputStyleToggles`).
+  var outputStyleState: (roundedCorners: Bool, shadow: Bool) = (false, false)
 
   private let rootStack = NSStackView()
   private var primaryRow: NSStackView?
@@ -99,6 +110,14 @@ final class AreaSelectionActionBar: NSView {
     static let save = 8
     static let close = 9
     static let copy = 10
+    /// 「更多」 menu items. The former right-hand column lives here now.
+    static let moreUpload = 21
+    static let moreCrop = 22
+    static let moreRefresh = 23
+    static let moreAdjust = 24
+    static let moreReselect = 25
+    static let moreRoundedCorners = 26
+    static let moreShadow = 27
   }
 
   init(onAction: @escaping (AreaSelectionAction) -> Void) {
@@ -807,32 +826,103 @@ final class AreaSelectionActionBar: NSView {
   }
 
   @objc private func morePressed(_ sender: NSButton) {
+    makeMoreMenu().popUp(
+      positioning: nil,
+      at: NSPoint(x: 0, y: sender.frame.height + 2),
+      in: sender
+    )
+  }
+
+  /// Builds the 「更多」 menu. The former right-hand side column (圆角截图 /
+  /// 调整选区 / 阴影或边框 / 刷新截图 / 重新选择) lives here so the post-selection
+  /// HUD is one bar.
+  ///
+  /// The frame commands are omitted while an annotation session is live: the
+  /// canvas owns the frame then, so 调整选区 has nothing to enter, 刷新截图 would
+  /// swap the bitmap the annotations are drawn on, and 重新选择 would tear the
+  /// session down from underneath the editor. The style toggles stay: they are
+  /// non-terminal and are applied when the session commits.
+  func makeMoreMenu() -> NSMenu {
     let menu = NSMenu()
-    let upload = NSMenuItem(
-      title: AppText.value("scImageHostingUpload", language: .system),
+    menu.addItem(makeMoreItem(
+      "icloud.and.arrow.up",
+      titleKey: "scImageHostingUpload",
+      tag: BarTag.moreUpload
+    ))
+    if !isAnnotating {
+      menu.addItem(makeMoreItem(
+        "scissors",
+        titleKey: "scAnnotationCrop",
+        tag: BarTag.moreCrop
+      ))
+      menu.addItem(.separator())
+      menu.addItem(makeMoreItem(
+        "arrow.clockwise",
+        titleKey: "scToolRefresh",
+        tag: BarTag.moreRefresh
+      ))
+      menu.addItem(makeMoreItem(
+        "arrow.up.left.and.arrow.down.right",
+        titleKey: "scAdjustSelection",
+        tag: BarTag.moreAdjust
+      ))
+      menu.addItem(makeMoreItem(
+        "rectangle.dashed",
+        titleKey: "scToolReselect",
+        tag: BarTag.moreReselect
+      ))
+    }
+    menu.addItem(.separator())
+    menu.addItem(makeMoreItem(
+      "rectangle.dashed.inset.filled",
+      titleKey: "scToolRoundedCorners",
+      tag: BarTag.moreRoundedCorners,
+      isOn: outputStyleState.roundedCorners
+    ))
+    menu.addItem(makeMoreItem(
+      "circle.lefthalf.filled",
+      titleKey: "scToolShadow",
+      tag: BarTag.moreShadow,
+      isOn: outputStyleState.shadow
+    ))
+    return menu
+  }
+
+  private func makeMoreItem(
+    _ symbolName: String,
+    titleKey: String,
+    tag: Int,
+    isOn: Bool = false
+  ) -> NSMenuItem {
+    let item = NSMenuItem(
+      title: AppText.value(titleKey, language: .system),
       action: #selector(moreItemSelected(_:)),
       keyEquivalent: ""
     )
-    upload.tag = 1
-    upload.target = self
-    upload.image = NSImage(systemSymbolName: "icloud.and.arrow.up", accessibilityDescription: nil)
-    menu.addItem(upload)
-    let crop = NSMenuItem(
-      title: AppText.value("scAnnotationCrop", language: .system),
-      action: #selector(moreItemSelected(_:)),
-      keyEquivalent: ""
-    )
-    crop.tag = 2
-    crop.target = self
-    crop.image = NSImage(systemSymbolName: "scissors", accessibilityDescription: nil)
-    menu.addItem(crop)
-    menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.frame.height + 2), in: sender)
+    item.tag = tag
+    // Explicit target: nil-targeted menu items dispatch through the
+    // responder chain, which the non-activating panel does not guarantee.
+    item.target = self
+    item.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+    item.state = isOn ? .on : .off
+    return item
   }
 
   @objc private func moreItemSelected(_ sender: NSMenuItem) {
-    switch sender.tag {
-    case 1: perform(.upload)
-    case 2: perform(.annotateTool(.crop))
+    handleMoreItem(tag: sender.tag)
+  }
+
+  /// Routes a 「更多」 menu selection. Internal so tests can cover the mapping
+  /// without popping a real menu on the non-activating panel.
+  func handleMoreItem(tag: Int) {
+    switch tag {
+    case BarTag.moreUpload: perform(.upload)
+    case BarTag.moreCrop: perform(.annotateTool(.crop))
+    case BarTag.moreRefresh: perform(.refreshCapture)
+    case BarTag.moreAdjust: perform(.adjustSelection)
+    case BarTag.moreReselect: perform(.newSelection)
+    case BarTag.moreRoundedCorners: perform(.toggleRoundedCorners)
+    case BarTag.moreShadow: perform(.toggleShadow)
     default: break
     }
   }
@@ -887,208 +977,46 @@ final class AreaSelectionActionBar: NSView {
   }
 }
 
-// MARK: - Side Action Bar
-
-@MainActor
-final class AreaSelectionSideActionBar: NSView {
-  private let onAction: (AreaSelectionAction) -> Void
-  private let stackView = NSStackView()
-  private var actionsByTag: [Int: AreaSelectionAction] = [:]
-  private var roundedButton: NSButton?
-  private var shadowButton: NSButton?
-  private var buttonCount = 0
-
-  init(onAction: @escaping (AreaSelectionAction) -> Void) {
-    self.onAction = onAction
-    super.init(frame: .zero)
-    wantsLayer = true
-    layer?.backgroundColor = NSColor.clear.cgColor
-
-    stackView.orientation = .vertical
-    stackView.alignment = .centerX
-    stackView.spacing = 8
-    stackView.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
-    stackView.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(stackView)
-    NSLayoutConstraint.activate([
-      stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
-      stackView.trailingAnchor.constraint(equalTo: trailingAnchor),
-      stackView.topAnchor.constraint(equalTo: topAnchor),
-      stackView.bottomAnchor.constraint(equalTo: bottomAnchor),
-    ])
-
-    // iShot's right-hand column: rounded corners, adjust, shadow, refresh,
-    // reselect. Rounded/shadow are toggles applied to the final output.
-    roundedButton = addButton(
-      "rectangle.dashed.inset.filled",
-      tooltipKey: "scToolRoundedCorners",
-      action: .toggleRoundedCorners,
-      isToggle: true
-    )
-    addButton(
-      "arrow.up.left.and.arrow.down.right",
-      tooltipKey: "scAdjustSelection",
-      action: .adjustSelection
-    )
-    shadowButton = addButton(
-      "circle.lefthalf.filled",
-      tooltipKey: "scToolShadow",
-      action: .toggleShadow,
-      isToggle: true
-    )
-    addButton("arrow.clockwise", tooltipKey: "scToolRefresh", action: .refreshCapture)
-    addButton("rectangle.dashed", tooltipKey: "scToolReselect", action: .newSelection)
-  }
-
-  @available(*, unavailable)
-  required init?(coder: NSCoder) {
-    fatalError("init(coder:) has not been implemented")
-  }
-
-  /// Mirrors the output-style toggle state into the two toggle buttons.
-  func setToggleStates(roundedCorners: Bool, shadow: Bool) {
-    setToggled(roundedButton, on: roundedCorners)
-    setToggled(shadowButton, on: shadow)
-  }
-
-  override var intrinsicContentSize: NSSize {
-    NSSize(width: 44, height: CGFloat(buttonCount) * 40 + CGFloat(max(0, buttonCount - 1)) * 8)
-  }
-
-  @discardableResult
-  private func addButton(
-    _ name: String,
-    tooltipKey: String,
-    action: AreaSelectionAction,
-    isToggle: Bool = false
-  ) -> NSButton {
-    let tooltip = AppText.value(tooltipKey, language: .system)
-    let symbol = NSImage(systemSymbolName: name, accessibilityDescription: tooltip)?
-      .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 17, weight: .regular))
-    let image = symbol ?? NSImage(named: NSImage.actionTemplateName)!
-    let button = NSButton(image: image, target: self, action: #selector(buttonPressed(_:)))
-    buttonCount += 1
-    let tag = buttonCount
-    actionsByTag[tag] = action
-    button.tag = tag
-    button.isBordered = false
-    button.bezelStyle = .recessed
-    button.imagePosition = .imageOnly
-    button.imageScaling = .scaleProportionallyDown
-    button.contentTintColor = .white
-    button.toolTip = tooltip
-    button.setAccessibilityLabel(tooltip)
-    button.wantsLayer = true
-    button.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.84).cgColor
-    button.layer?.cornerRadius = 20
-    button.layer?.borderWidth = 0
-    button.layer?.shadowColor = NSColor.black.cgColor
-    button.layer?.shadowOpacity = 0.35
-    button.layer?.shadowRadius = 8
-    button.layer?.shadowOffset = .zero
-    button.translatesAutoresizingMaskIntoConstraints = false
-    button.widthAnchor.constraint(equalToConstant: 40).isActive = true
-    button.heightAnchor.constraint(equalToConstant: 40).isActive = true
-    _ = isToggle
-    stackView.addArrangedSubview(button)
-    return button
-  }
-
-  private func setToggled(_ button: NSButton?, on: Bool) {
-    guard let button else { return }
-    button.layer?.backgroundColor = on
-      ? NSColor.controlAccentColor.cgColor
-      : NSColor.black.withAlphaComponent(0.84).cgColor
-    button.layer?.borderWidth = on ? 2 : 0
-    button.layer?.borderColor = NSColor.white.withAlphaComponent(0.8).cgColor
-  }
-
-  @objc private func buttonPressed(_ sender: NSButton) {
-    onAction(actionsByTag[sender.tag] ?? .capture)
-  }
-}
-
 // MARK: - Post-selection HUD Layout
 
-/// 纯函数布局：解析底部横栏与右侧竖栏围绕选区的位置，保证
-/// ① 两者永不相交（小选区防打架）；② 两者都完整落在屏幕内。
-/// 侧栏优先放选区右侧，放不下换左侧，再不行贴屏幕右缘；
-/// 横栏优先放选区下方，放不下换上方；与侧栏相交时先横向避让，
-/// 再换垂直侧，最后取第一个不相交的候选位。
+/// 纯函数布局：把唯一的截图操作栏放在选区附近并保证完整落在屏幕内。
+/// 优先放选区下方，下方放不下时改放上方（取空间更大的一侧）；
+/// 水平以选区为中心并夹回屏幕。近全屏选区上下都没有空间时，操作栏
+/// 收进选区内侧底部，避免夹回屏幕后骑跨选区边框。
+///
+/// 录屏选区操作栏共用同一套算术（`RecordingSelectionBarLayout` 转发到这里），
+/// 两个入口的 HUD 位置因此始终一致。
 nonisolated enum AreaSelectionBarLayout {
-  struct Result: Equatable {
-    var barFrame: CGRect
-    var sideFrame: CGRect
-  }
-
   static let gap: CGFloat = 16
   static let edgeMargin: CGFloat = 8
+  /// 全屏/近全屏时操作栏收进选区内侧的底边距。
+  static let insideInset: CGFloat = 20
 
   static func resolve(
     selectionRect: CGRect,
     barSize: CGSize,
-    sideSize: CGSize,
     bounds: CGSize
-  ) -> Result {
-    let maxBarX = max(edgeMargin, bounds.width - barSize.width - edgeMargin)
-    let maxSideX = max(edgeMargin, bounds.width - sideSize.width - edgeMargin)
-    let maxSideY = max(edgeMargin, bounds.height - sideSize.height - edgeMargin)
-    let maxBarY = max(edgeMargin, bounds.height - barSize.height - edgeMargin)
-
-    // --- 侧栏：右 → 左 → 贴屏幕右缘；垂直居中并夹回屏幕。
-    var sideFrame = CGRect(
-      x: min(maxSideX, selectionRect.maxX + gap),
-      y: min(maxSideY, max(edgeMargin, selectionRect.midY - sideSize.height / 2)),
-      width: sideSize.width,
-      height: sideSize.height
-    )
-    if sideFrame.minX < edgeMargin {
-      sideFrame.origin.x = max(
-        edgeMargin,
-        min(maxSideX, selectionRect.minX - gap - sideSize.width)
-      )
-    }
-    if sideFrame.minX < edgeMargin, maxSideX > edgeMargin {
-      sideFrame.origin.x = maxSideX
-    }
-
-    // --- 横栏：下 → 上 → 空间更大的一侧；水平以选区为中心并夹回屏幕。
+  ) -> CGRect {
+    let maxX = max(edgeMargin, bounds.width - barSize.width - edgeMargin)
+    let maxY = max(edgeMargin, bounds.height - barSize.height - edgeMargin)
     let spaceBelow = selectionRect.minY - edgeMargin
     let spaceAbove = bounds.height - edgeMargin - selectionRect.maxY
     let preferBelow = spaceBelow >= barSize.height || spaceBelow >= spaceAbove
-    var barY: CGFloat = preferBelow
+    let proposedY = preferBelow
       ? selectionRect.minY - gap - barSize.height
       : selectionRect.maxY + gap
-    barY = min(maxBarY, max(edgeMargin, barY))
-    var barFrame = CGRect(
-      x: min(maxBarX, max(edgeMargin, selectionRect.midX - barSize.width / 2)),
-      y: barY,
+    let frame = CGRect(
+      x: min(maxX, max(edgeMargin, selectionRect.midX - barSize.width / 2)),
+      y: min(maxY, max(edgeMargin, proposedY)),
       width: barSize.width,
       height: barSize.height
     )
-
-    // --- 防打架：与侧栏相交时依次尝试横向避让与换垂直侧。
-    if barFrame.intersects(sideFrame) {
-      let clampedLeftX = min(maxBarX, max(edgeMargin, sideFrame.minX - gap - barSize.width))
-      let clampedRightX = min(maxBarX, max(edgeMargin, sideFrame.maxX + gap))
-      let flippedY = preferBelow
-        ? selectionRect.maxY + gap
-        : selectionRect.minY - gap - barSize.height
-      let flippedYClamped = min(maxBarY, max(edgeMargin, flippedY))
-      let candidates: [CGRect] = [
-        CGRect(x: clampedLeftX, y: barFrame.minY, width: barSize.width, height: barSize.height),
-        CGRect(x: clampedRightX, y: barFrame.minY, width: barSize.width, height: barSize.height),
-        CGRect(x: barFrame.minX, y: flippedYClamped, width: barSize.width, height: barSize.height),
-        CGRect(x: clampedLeftX, y: flippedYClamped, width: barSize.width, height: barSize.height),
-        CGRect(x: clampedRightX, y: flippedYClamped, width: barSize.width, height: barSize.height),
-      ]
-      // 仍不相交的候选里优先保持初始垂直侧（离选区更近的一侧）。
-      if let resolved = candidates.first(where: { !$0.intersects(sideFrame) }) {
-        barFrame = resolved
-      }
-      // 所有候选都被侧栏挡住（极端小屏）时，保持居中夹边的结果。
-    }
-
-    return Result(barFrame: barFrame, sideFrame: sideFrame)
+    guard frame.intersects(selectionRect) else { return frame }
+    return CGRect(
+      x: min(maxX, max(edgeMargin, selectionRect.midX - barSize.width / 2)),
+      y: min(maxY, max(edgeMargin, selectionRect.minY + insideInset)),
+      width: barSize.width,
+      height: barSize.height
+    )
   }
 }

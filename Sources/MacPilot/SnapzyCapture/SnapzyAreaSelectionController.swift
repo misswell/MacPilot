@@ -321,6 +321,9 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             }
         }
         selectionPreview(result)
+        // The HUD's 「更多」 menu renders the style toggles, so mirror the
+        // session-scoped state into the freshly installed bar.
+        syncOutputStyleToggles()
     }
 
     // MARK: - AreaSelectionWindowDelegate
@@ -354,6 +357,13 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             // PixPin keeps the same frozen-display session alive while the
             // user starts another drag. Do not send this through the capture
             // pipeline or dismiss the overlay.
+            //
+            // Drop a live annotation session here. `hideSelectionResult()`
+            // only tears down the editor view; leaving `inlineAnnotationModel`
+            // set would make the next commit render and deliver the abandoned
+            // annotation image. The HUD no longer offers 重新选择 while a
+            // session is live, but the state machine must not rely on that.
+            clearInlineAnnotationSession()
             self.selectedResult = nil
             self.selectedWindow = nil
             for candidate in windows {
@@ -386,14 +396,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
                 break
             }
         }
-        if action == .toggleRoundedCorners {
-            isRoundedCornersEnabled.toggle()
-            syncOutputStyleToggles()
-            return
-        }
-        if action == .toggleShadow {
-            isShadowEnabled.toggle()
-            syncOutputStyleToggles()
+        if action == .toggleRoundedCorners || action == .toggleShadow {
+            setOutputStyleToggle(action)
             return
         }
         guard let actionHandler else {
@@ -401,6 +405,16 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             return
         }
         actionHandler(selectedResult, action)
+    }
+
+    /// Single source of truth for the output-style toggles (圆角截图 / 阴影或边框).
+    /// The HUD's 「更多」 menu ticks them from this state, and both the
+    /// post-selection pipeline and a live inline annotation session commit
+    /// through `outputStyle`.
+    private func setOutputStyleToggle(_ action: AreaSelectionAction) {
+        if action == .toggleRoundedCorners { isRoundedCornersEnabled.toggle() }
+        if action == .toggleShadow { isShadowEnabled.toggle() }
+        syncOutputStyleToggles()
     }
 
     private func reframeRecordingSelection(to aspect: CGFloat) {
@@ -512,8 +526,14 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             dismissSelection()
             onCancel?()
             return
-        case .toggleRoundedCorners, .toggleShadow, .refreshCapture,
-             .newSelection, .adjustSelection, .more, .annotate, .annotateTool:
+        case .toggleRoundedCorners, .toggleShadow:
+            // The style toggles are non-terminal and shared with the
+            // post-selection HUD. Before, they were swallowed here, so the
+            // 「更多」 menu's 圆角截图 / 阴影或边框 did nothing during a live
+            // session even though the commit path honours `outputStyle`.
+            setOutputStyleToggle(action)
+            return
+        case .refreshCapture, .newSelection, .adjustSelection, .more, .annotate, .annotateTool:
             return
         default:
             break

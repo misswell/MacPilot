@@ -215,34 +215,18 @@ struct RecordingSelectionActionBarView: View {
 /// bottom edge — centered, with a comfortable inset — instead of being
 /// clamped across the selection border and resize handles.
 nonisolated enum RecordingSelectionBarLayout {
-    static let gap: CGFloat = 16
-    static let edgeMargin: CGFloat = 8
+    /// 与截图选区操作栏共用同一套算术：单栏、优先贴选区下/上方、夹回屏幕，
+    /// 近全屏时收进选区内侧。两个入口的 HUD 位置因此保持一致。
+    static let gap: CGFloat = AreaSelectionBarLayout.gap
+    static let edgeMargin: CGFloat = AreaSelectionBarLayout.edgeMargin
     /// 全屏/近全屏时操作栏收进选区内侧的底边距。
-    static let insideInset: CGFloat = 20
+    static let insideInset: CGFloat = AreaSelectionBarLayout.insideInset
 
     static func resolve(selectionRect: CGRect, barSize: CGSize, bounds: CGSize) -> CGRect {
-        let maxX = max(edgeMargin, bounds.width - barSize.width - edgeMargin)
-        let maxY = max(edgeMargin, bounds.height - barSize.height - edgeMargin)
-        let spaceBelow = selectionRect.minY - edgeMargin
-        let spaceAbove = bounds.height - edgeMargin - selectionRect.maxY
-        let preferBelow = spaceBelow >= barSize.height || spaceBelow >= spaceAbove
-        let proposedY = preferBelow
-            ? selectionRect.minY - gap - barSize.height
-            : selectionRect.maxY + gap
-        let frame = CGRect(
-            x: min(maxX, max(edgeMargin, selectionRect.midX - barSize.width / 2)),
-            y: min(maxY, max(edgeMargin, proposedY)),
-            width: barSize.width,
-            height: barSize.height
-        )
-        // 上下都放不下时，夹回屏幕会让操作栏压进选区甚至骑跨边框；
-        // 此时改为收进选区内侧底部：水平居中并留出舒适边距。
-        guard frame.intersects(selectionRect) else { return frame }
-        return CGRect(
-            x: min(maxX, max(edgeMargin, selectionRect.midX - barSize.width / 2)),
-            y: min(maxY, max(edgeMargin, selectionRect.minY + insideInset)),
-            width: barSize.width,
-            height: barSize.height
+        AreaSelectionBarLayout.resolve(
+            selectionRect: selectionRect,
+            barSize: barSize,
+            bounds: bounds
         )
     }
 }

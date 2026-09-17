@@ -400,7 +400,6 @@ final class AreaSelectionOverlayView: NSView {
   private var selectionDimensionBackgroundLayer: CALayer!
   private var selectionDimensionTextLayer: CATextLayer!
   private var selectionActionBar: AreaSelectionActionBar?
-  private var selectionSideActionBar: AreaSelectionSideActionBar?
   private var recordingSelectionActionBar: NSView?
 
   private enum SelectionHandle: CaseIterable {
@@ -889,16 +888,12 @@ final class AreaSelectionOverlayView: NSView {
 
     if showsActions {
       let actionBar = AreaSelectionActionBar(onAction: actionHandler)
-      let sideBar = AreaSelectionSideActionBar(onAction: actionHandler)
       actionBar.layoutDidChange = { [weak self] in
         self?.positionSelectionActionBars()
       }
       actionBar.layer?.zPosition = 100
-      sideBar.layer?.zPosition = 100
       selectionActionBar = actionBar
-      selectionSideActionBar = sideBar
       addSubview(actionBar)
-      addSubview(sideBar)
       positionSelectionActionBars()
     } else {
       removeSelectionActionBars()
@@ -1081,10 +1076,10 @@ final class AreaSelectionOverlayView: NSView {
     positionSelectionActionBars()
   }
 
-  /// Mirrors the output-style toggle states into the side bar's round
-  /// buttons (圆角截图 / 阴影或边框).
+  /// Mirrors the output-style toggle state into the HUD's 「更多」 menu
+  /// (圆角截图 / 阴影或边框), which now hosts the former side-bar toggles.
   func syncOutputStyleToggles(roundedCorners: Bool, shadow: Bool) {
-    selectionSideActionBar?.setToggleStates(roundedCorners: roundedCorners, shadow: shadow)
+    selectionActionBar?.outputStyleState = (roundedCorners, shadow)
   }
 
   func hideSelectionResult() {
@@ -1127,10 +1122,8 @@ final class AreaSelectionOverlayView: NSView {
   private func removeSelectionActionBars() {
     selectionActionBar?.bindAnnotationSession(nil)
     selectionActionBar?.removeFromSuperview()
-    selectionSideActionBar?.removeFromSuperview()
     recordingSelectionActionBar?.removeFromSuperview()
     selectionActionBar = nil
-    selectionSideActionBar = nil
     recordingSelectionActionBar = nil
   }
 
@@ -1250,16 +1243,12 @@ final class AreaSelectionOverlayView: NSView {
       )
       return
     }
-    // 统一走纯布局求解器：横栏与侧栏永不相交，且都完整落在屏幕内
-    // （小选区时两者不再打架）。
-    let result = AreaSelectionBarLayout.resolve(
+    // 单栏布局：横栏贴在选区下方（放不下换上方）并夹回屏幕内。
+    selectionActionBar?.frame = AreaSelectionBarLayout.resolve(
       selectionRect: rect,
       barSize: selectionActionBar?.intrinsicContentSize ?? .zero,
-      sideSize: selectionSideActionBar?.intrinsicContentSize ?? .zero,
       bounds: bounds.size
     )
-    selectionActionBar?.frame = result.barFrame
-    selectionSideActionBar?.frame = result.sideFrame
   }
 
   func activatePendingSelectionIfNeeded() {

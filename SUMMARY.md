@@ -1265,3 +1265,26 @@ func refreshLoginItemState() { launchesAtLogin = SMAppService.mainApp.status == 
 修复后，updater 从新 bundle 的 `CFBundleExecutable` 读取主程序名，直接启动 `Contents/MacOS/<executable>`，并把启动请求写进 `~/Library/Logs/MacPilot/update.log`。这样 MacPilot 与旧版 `OctoPilot` bridge 都不依赖旧的 LaunchServices 实例记录；启动失败时仍保留原有回滚与重新启动旧 bundle 的路径。
 
 验证：最小 updater 替换回路从“安装成功、目标进程不存在”转为“Relaunch request accepted、目标进程实际存在”；`swift test --no-parallel` 725 条全绿，`swift build -c release -Xswiftc -warnings-as-errors` 通过。
+
+## 四十八、截图后取消右侧竖栏：命令并入「更多」菜单（v1.1.368）
+
+用户反馈「截图框选后，右侧的菜单栏貌似没什么用」。逐条追代码后确认这个观感是准确的：右侧竖栏（`AreaSelectionSideActionBar`，iShot 式 5 个圆钮）里，**调整选区**是空按钮（8 个手柄在结果态一直可见，`handlePrimaryMouseDown` 在 `guard selectionEnabled` 之前就处理手柄/框内拖动，方向键也能微调；按钮实际只把边框由蓝改橙、光标改十字，且橙色在本会话不再复原），**圆角截图 / 阴影或边框**只在最终输出图上生效、冻结背景与标注画布都不动，点下去唯一的反馈是按钮自己的高亮，而且 `startSelection()` 每次把它们重置为 false、圆角半径写死 12pt，等于每次截图都要重按一遍，**刷新截图**恰好在标注会话里静默失效（`performSnapzyRefreshCapture` 第一行就是 `guard !hasInlineAnnotationSession`，而 chrome-less 标注会话中竖栏仍然可见可点），**重新选择**与「框外拖动即重新框选」重复，并且带一条会投递旧图的 bug 路径。
+
+### 改了什么
+
+1. **删除竖栏，命令并入底部栏「更多」菜单**。`AreaSelectionSideActionBar` 整个删除，`AreaSelectionActionBar.makeMoreMenu()` 统一出菜单：上传图片 / 裁剪 / 刷新截图 / 调整选区 / 重新选择 / 圆角截图 / 阴影或边框。菜单构建与路由拆成 `makeMoreMenu()` + `handleMoreItem(tag:)`（均为 internal），测试可以在不弹出真实 `NSMenu` 的前提下覆盖映射——`nonactivatingPanel` 里弹菜单本来就不适合当测试路径。
+2. **两栏互避的布局逻辑随之消失**。`AreaSelectionBarLayout` 从「横栏 + 侧栏 + 防打架候选位」的 ~70 行求解器收成单栏求解器（下 → 上 → 夹回屏幕 → 近全屏收进选区内侧）。录屏侧的 `RecordingSelectionBarLayout` 不再自带第二份算术，改为转发到同一个实现，两个入口的 HUD 位置从此不会各走各的（`gap` / `edgeMargin` / `insideInset` 保留为别名常量，既有录屏布局测试原样通过即为等价性证据）。
+3. **标注会话中不再展示无意义的命令**。画布接管选区时，裁剪 / 刷新截图 / 调整选区 / 重新选择本来就是空操作（`commitInlineAnnotation` 忽略它们，刷新截图还会被 `hasInlineAnnotationSession` 拦掉），现在直接从菜单里去掉；保留圆角截图 / 阴影或边框，因为它们是**非终止**动作、提交时会被 `outputStyle` 应用。
+4. **样式开关在标注会话里真正生效**。此前这两个动作在 `commitInlineAnnotation` 里被 `case ...: return` 吞掉——竖栏时代它们走 controller 的 `didRequestAction` 分支所以看不出来，一旦搬进底部栏就会改走会话提交；现在统一路由到唯一的 `setOutputStyleToggle(_:)`。菜单项的勾选态由 `outputStyle` 单向镜像（`syncOutputStyleToggles`，安装操作栏与 `presentSelection` 时都会同步）。
+5. **顺手补上重新选择的陈旧会话漏洞**。`newSelection` 分支只清了 `selectedResult` / `selectedWindow`，没有清 `inlineAnnotationModel`；视图侧的 `removeEmbeddedAnnotationEditor()` 只恢复自己的 `isAnnotationSessionActive`，于是 controller 仍认为会话存活，下一次 ⌘C / ⌘S / Enter / Esc 会用**旧的** `inlineAnnotationImage` + 旧模型渲染并投递用户已经放弃的标注图。现在该分支显式 `clearInlineAnnotationSession()`——HUD 在会话中已不提供重新选择，但状态机不该依赖「调用方不会这么调」。
+
+### 为什么不是「让竖栏更有用」
+
+竖栏 5 个命令里只有刷新截图是独有且立即有效的，其余要么是空按钮、要么与已有手势重复、要么需要实时预览与跨会话记忆才成立（那是另一档改动）。一个只有 1/5 命令站得住的浮层，还要额外养一套两栏互避布局，合并进「更多」菜单是收益最高、改动最确定的一档。
+
+### 验证
+
+- `swift test --filter SnapzyCaptureTests`：40 条全绿。本次新增/改写 5 条：`moreMenuCarriesTheFormerSideBarCommands`（5 个命令逐个路由）、`moreMenuTicksTheOutputStyleStateItMirrors`（勾选态镜像）、`moreMenuKeepsOnlyStyleTogglesDuringALiveAnnotationSession`（会话中隐藏画布命令、样式开关走会话提交）、`postSelectionHudInstallsTheOnlyActionBar`（浮层里只剩一条操作栏）、`barLayoutPlacesTheSingleHudBarAroundTheSelection`（单栏布局，含近全屏收进选区内侧）。
+- 既有录屏布局测试（`CaptureEnhancementsTests`）未改动即通过，证明转发后的算术与原来逐字等价。
+- 全量 `swift test`：739 条，失败的仍只有并行负载下那两条偶发超时（`startupShortcutRegistrationRetriesTransientFailure`、`quickCopyAutoSaveWritesFileAndRecordsStats`）；在干净 HEAD 上跑全量同样复现，单独复跑全绿，与本次改动无关。
+- `./Scripts/build-app.sh`：universal arm64 + x86_64、`-Xswiftc -warnings-as-errors`、Developer ID 签名、designated requirement 门禁通过。

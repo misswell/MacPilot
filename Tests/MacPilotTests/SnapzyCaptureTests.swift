@@ -345,6 +345,81 @@ struct SnapzyCaptureTests {
         #expect(requestedAction == .annotateTool(.rectangle))
     }
 
+    @Test @MainActor func moreMenuCarriesTheFormerSideBarCommands() throws {
+        _ = NSApplication.shared
+        var requestedActions: [AreaSelectionAction] = []
+        let bar = AreaSelectionActionBar { requestedActions.append($0) }
+
+        func item(_ titleKey: String) throws -> NSMenuItem {
+            let title = AppText.value(titleKey, language: .system)
+            return try #require(bar.makeMoreMenu().items.first { $0.title == title })
+        }
+
+        // 原右侧竖栏的命令现在都在「更多」菜单里，逐条路由到同一个动作回调。
+        bar.handleMoreItem(tag: try item("scAdjustSelection").tag)
+        bar.handleMoreItem(tag: try item("scToolRefresh").tag)
+        bar.handleMoreItem(tag: try item("scToolReselect").tag)
+        bar.handleMoreItem(tag: try item("scToolRoundedCorners").tag)
+        bar.handleMoreItem(tag: try item("scToolShadow").tag)
+
+        #expect(requestedActions == [
+            .adjustSelection,
+            .refreshCapture,
+            .newSelection,
+            .toggleRoundedCorners,
+            .toggleShadow,
+        ])
+    }
+
+    @Test @MainActor func moreMenuTicksTheOutputStyleStateItMirrors() throws {
+        _ = NSApplication.shared
+        let bar = AreaSelectionActionBar { _ in }
+
+        func state(_ titleKey: String) throws -> NSControl.StateValue {
+            let title = AppText.value(titleKey, language: .system)
+            return try #require(bar.makeMoreMenu().items.first { $0.title == title }).state
+        }
+
+        #expect(try state("scToolRoundedCorners") == .off)
+        #expect(try state("scToolShadow") == .off)
+
+        bar.outputStyleState = (roundedCorners: true, shadow: false)
+        #expect(try state("scToolRoundedCorners") == .on)
+        #expect(try state("scToolShadow") == .off)
+    }
+
+    @Test @MainActor func moreMenuKeepsOnlyStyleTogglesDuringALiveAnnotationSession() throws {
+        _ = NSApplication.shared
+        var committedActions: [AreaSelectionAction] = []
+        let bar = AreaSelectionActionBar { _ in }
+        // The binding holds the model weakly, so the session only counts as
+        // live while the test keeps the model alive.
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        bar.bindAnnotationSession(.init(model: model) { action in
+            committedActions.append(action)
+        })
+
+        let titles = bar.makeMoreMenu().items.map(\.title)
+        let styleTitles = ["scToolRoundedCorners", "scToolShadow"].map {
+            AppText.value($0, language: .system)
+        }
+        // 样式开关是非终止动作，标注会话中保留并走会话提交。
+        for title in styleTitles {
+            #expect(titles.contains(title))
+        }
+        // 画布接管了选区：改框/刷新/重选/裁剪在会话中没有意义，不再展示
+        // （此前它们留在界面上但点了没反应）。
+        for titleKey in ["scAdjustSelection", "scToolRefresh", "scToolReselect", "scAnnotationCrop"] {
+            #expect(!titles.contains(AppText.value(titleKey, language: .system)))
+        }
+
+        let rounded = try #require(
+            bar.makeMoreMenu().items.first { $0.title == AppText.value("scToolRoundedCorners", language: .system) }
+        )
+        bar.handleMoreItem(tag: rounded.tag)
+        #expect(committedActions == [.toggleRoundedCorners])
+    }
+
     @Test @MainActor func adjustSelectionButtonEntersFrameEditingState() throws {
         _ = NSApplication.shared
         guard let screen = NSScreen.main else { return }
@@ -357,31 +432,37 @@ struct SnapzyCaptureTests {
             width: 320,
             height: 220
         )
-        var requestedAction: AreaSelectionAction?
         window.overlayView.showSelectionResult(
             screenRect: selectionRect,
             showsActions: true,
-            actionHandler: { action in
-                requestedAction = action
-                if action == .adjustSelection {
-                    window.overlayView.beginSelectionAdjustment()
-                }
-            }
+            actionHandler: { _ in }
         )
 
-        func buttons(in view: NSView) -> [NSButton] {
-            view.subviews.flatMap { subview in
-                (subview as? NSButton).map { [$0] } ?? buttons(in: subview)
-            }
-        }
-        let adjustButton = try #require(
-            buttons(in: window.overlayView)
-                .first(where: { $0.toolTip == "调整选区" })
-        )
-        adjustButton.performClick(nil)
-
-        #expect(requestedAction == .adjustSelection)
+        #expect(!window.overlayView.isSelectionAdjustmentActive)
+        window.overlayView.beginSelectionAdjustment()
         #expect(window.overlayView.isSelectionAdjustmentActive)
+    }
+
+    @Test @MainActor func postSelectionHudInstallsTheOnlyActionBar() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+        window.overlayView.showSelectionResult(
+            screenRect: CGRect(
+                x: screen.frame.minX + 160,
+                y: screen.frame.minY + 200,
+                width: 320,
+                height: 220
+            ),
+            showsActions: true,
+            actionHandler: { _ in }
+        )
+
+        // 右侧竖栏已并入「更多」菜单：浮层里只有一条操作栏。
+        let bars = window.overlayView.subviews.filter { $0 is AreaSelectionActionBar }
+        #expect(bars.count == 1)
     }
 
     @Test @MainActor func annotationEditorToolbarIsMountedOutsideTheSelectedFrame() throws {
@@ -1096,10 +1177,9 @@ struct SnapzyCaptureTests {
         #expect(state.applyZoomStep(0.5) == short)
     }
 
-    @Test func barLayoutKeepsHorizontalAndVerticalBarsApartForSmallSelections() {
+    @Test func barLayoutPlacesTheSingleHudBarAroundTheSelection() {
         let bounds = CGSize(width: 1_440, height: 900)
         let barSize = CGSize(width: 460, height: 38)
-        let sideSize = CGSize(width: 44, height: 232)
 
         func assertInsideScreen(_ frame: CGRect, name: String) {
             #expect(frame.minX >= AreaSelectionBarLayout.edgeMargin - 0.5, "\(name) minX")
@@ -1108,40 +1188,38 @@ struct SnapzyCaptureTests {
             #expect(frame.maxY <= bounds.height - AreaSelectionBarLayout.edgeMargin + 0.5, "\(name) maxY")
         }
 
-        // 屏幕中部的小选区：侧栏在右、横栏在下，两者不相交且都在屏幕内。
+        // 屏幕中部的小选区：横栏贴在选区下方，水平居中。
         let centered = CGRect(x: 700, y: 430, width: 60, height: 40)
-        let centeredResult = AreaSelectionBarLayout.resolve(
-            selectionRect: centered, barSize: barSize, sideSize: sideSize, bounds: bounds
+        let centeredBar = AreaSelectionBarLayout.resolve(
+            selectionRect: centered, barSize: barSize, bounds: bounds
         )
-        #expect(!centeredResult.barFrame.intersects(centeredResult.sideFrame))
-        assertInsideScreen(centeredResult.barFrame, name: "centered bar")
-        assertInsideScreen(centeredResult.sideFrame, name: "centered side")
+        #expect(centeredBar.midX == centered.midX)
+        #expect(centeredBar.maxY <= centered.minY)
+        assertInsideScreen(centeredBar, name: "centered")
 
-        // 贴右下角的小选区：横栏横向避让侧栏，仍不相交。
-        let corner = CGRect(x: 1_300, y: 60, width: 80, height: 36)
-        let cornerResult = AreaSelectionBarLayout.resolve(
-            selectionRect: corner, barSize: barSize, sideSize: sideSize, bounds: bounds
+        // 贴屏幕底部：下方放不下，翻到选区上方。
+        let nearBottom = CGRect(x: 700, y: 8, width: 60, height: 40)
+        let above = AreaSelectionBarLayout.resolve(
+            selectionRect: nearBottom, barSize: barSize, bounds: bounds
         )
-        #expect(!cornerResult.barFrame.intersects(cornerResult.sideFrame))
-        assertInsideScreen(cornerResult.barFrame, name: "corner bar")
-        assertInsideScreen(cornerResult.sideFrame, name: "corner side")
+        #expect(above.minY >= nearBottom.maxY)
+        assertInsideScreen(above, name: "near bottom")
 
-        // 几乎占满屏幕的选区：所有候选都可能相交，仍须夹回屏幕内。
+        // 贴屏幕右缘的小选区：水平方向夹回屏幕内。
+        let rightEdge = CGRect(x: 1_380, y: 430, width: 50, height: 40)
+        let clamped = AreaSelectionBarLayout.resolve(
+            selectionRect: rightEdge, barSize: barSize, bounds: bounds
+        )
+        assertInsideScreen(clamped, name: "right edge")
+
+        // 近全屏选区：上下都没有空间，操作栏收进选区内侧而非骑跨边框。
         let huge = CGRect(x: 8, y: 8, width: 1_424, height: 884)
-        let hugeResult = AreaSelectionBarLayout.resolve(
-            selectionRect: huge, barSize: barSize, sideSize: sideSize, bounds: bounds
+        let inside = AreaSelectionBarLayout.resolve(
+            selectionRect: huge, barSize: barSize, bounds: bounds
         )
-        assertInsideScreen(hugeResult.barFrame, name: "huge bar")
-        assertInsideScreen(hugeResult.sideFrame, name: "huge side")
-
-        // 侧栏放不下右侧时翻到左侧，依旧不与横栏相交。
-        let leftEdge = CGRect(x: 8, y: 430, width: 60, height: 40)
-        let leftResult = AreaSelectionBarLayout.resolve(
-            selectionRect: leftEdge, barSize: barSize, sideSize: sideSize, bounds: bounds
-        )
-        #expect(!leftResult.barFrame.intersects(leftResult.sideFrame))
-        #expect(leftResult.sideFrame.minX > leftEdge.maxX)
-        assertInsideScreen(leftResult.barFrame, name: "left-edge bar")
+        #expect(inside.minY >= huge.minY + AreaSelectionBarLayout.insideInset)
+        #expect(inside.maxY <= huge.maxY)
+        assertInsideScreen(inside, name: "huge")
     }
 
     @Test func roundedCornerOutputKeepsTheCanvasSizeWhileShadowExpandsIt() throws {
