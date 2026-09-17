@@ -8,12 +8,43 @@ struct UpdateArchiveDownloaderTests {
     @Test func mirrorPreservesEscapingAndDirectIsLast() {
         let url = URL(string: original.absoluteString + "?name=a%20b")!
         let sources = UpdateArchiveDownloader.sources(for: url)
-        #expect(sources.map(\.host) == ["xget.xi-xu.me", "github.com"])
+        #expect(sources.map(\.host) == ["xget.xi-xu.me", "ghfast.top", "gh-proxy.org", "github.com"])
         #expect(sources[0].absoluteString.contains("/gh/\(AppIdentity.githubRepository)/releases/download/"))
         #expect(sources[0].absoluteString.hasSuffix("?name=a%20b"))
         #expect(sources.last == url)
         let unrelated = URL(string: "https://example.com/update.zip")!
         #expect(UpdateArchiveDownloader.sources(for: unrelated) == [unrelated])
+    }
+
+    @Test func remembersOnlyAllowlistedMirrorsAndKeepsDirectLast() {
+        let preferred = UpdateArchiveDownloader.sources(for: original, preferredHost: "gh-proxy.org")
+        #expect(preferred.first?.host == "gh-proxy.org")
+        #expect(preferred.last == original)
+        #expect(Set(preferred).count == 4)
+        for host in ["github.com", "untrusted.example"] {
+            #expect(UpdateArchiveDownloader.sources(for: original, preferredHost: host)
+                    == UpdateArchiveDownloader.sources(for: original))
+        }
+    }
+
+    @Test func secondMirrorCanSucceedWithoutContactingDirect() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("verified".utf8).write(to: file)
+        let release = SoftwareRelease(version: SoftwareVersion("1.2.3")!, releaseNotes: "", archiveURL: original,
+                                      sha256: try UpdatePackageValidator.sha256(of: file))
+        var attempts: [String] = []
+        var verified: [String] = []
+        _ = try await UpdateArchiveDownloader.download(release: release, didVerifySource: {
+            verified.append($0.host!)
+        }) { request in
+            let url = try #require(request.url)
+            attempts.append(url.host!)
+            if url.host == "xget.xi-xu.me" { throw URLError(.timedOut) }
+            return (file, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        #expect(attempts == ["xget.xi-xu.me", "ghfast.top"])
+        #expect(verified == ["ghfast.top"])
     }
 
     @Test(arguments: ["timeout", "http", "digest", "success", "cancel"])
@@ -37,12 +68,15 @@ struct UpdateArchiveDownloaderTests {
                 if mirror && mode == "timeout" { throw URLError(.timedOut) }
                 if mirror && mode == "cancel" { throw URLError(.cancelled) }
                 let status = mirror && mode == "http" ? 503 : 200
+                if mirror && (mode == "digest" || mode == "http") {
+                    try Data("corrupt archive".utf8).write(to: bad)
+                }
                 let file = mirror && (mode == "digest" || mode == "http") ? bad : good
                 return (file, HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
             }
             #expect(mode != "cancel")
             #expect(result == good)
-            #expect(attempts.count == (mode == "success" ? 1 : 2))
+            #expect(attempts.count == (mode == "success" ? 1 : 4))
             if mode == "http" || mode == "digest" {
                 #expect(!FileManager.default.fileExists(atPath: bad.path))
             }

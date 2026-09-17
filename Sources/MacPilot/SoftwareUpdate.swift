@@ -292,7 +292,17 @@ final class SoftwareUpdater: ObservableObject {
         guard case .available(let release) = state else { return }
         state = .downloading(release)
         do {
-            let downloadURL = try await UpdateArchiveDownloader.download(release: release) { request in
+            let downloadURL = try await UpdateArchiveDownloader.download(
+                release: release,
+                preferredHost: UserDefaults.standard.string(forKey: "updateDownloadMirrorHost"),
+                didVerifySource: { source in
+                    if source.host != release.archiveURL.host {
+                        UserDefaults.standard.set(source.host, forKey: "updateDownloadMirrorHost")
+                    } else {
+                        UserDefaults.standard.removeObject(forKey: "updateDownloadMirrorHost")
+                    }
+                }
+            ) { request in
                 try await self.session.download(for: request)
             }
             defer { try? FileManager.default.removeItem(at: downloadURL) }
@@ -395,7 +405,7 @@ final class SoftwareUpdater: ObservableObject {
 enum UpdateArchiveDownloader {
     /// Only rewrite this application's public GitHub release assets. Metadata
     /// and its expected digest continue to come directly from GitHub.
-    static func sources(for original: URL) -> [URL] {
+    static func sources(for original: URL, preferredHost: String? = nil) -> [URL] {
         guard original.scheme == "https", original.host == "github.com",
               original.user == nil, original.password == nil, original.port == nil,
               original.path.hasPrefix("/\(AppIdentity.githubRepository)/releases/download/"),
@@ -405,16 +415,24 @@ enum UpdateArchiveDownloader {
         mirror.host = "xget.xi-xu.me"
         mirror.percentEncodedPath = "/gh" + mirror.percentEncodedPath
         guard let mirrorURL = mirror.url else { return [original] }
-        return [mirrorURL, original]
+        var mirrors = [mirrorURL] + ["ghfast.top", "gh-proxy.org"].compactMap {
+            URL(string: "https://\($0)/\(original.absoluteString)")
+        }
+        if let index = mirrors.firstIndex(where: { $0.host == preferredHost }) {
+            mirrors.insert(mirrors.remove(at: index), at: 0)
+        }
+        return mirrors + [original]
     }
 
     static func download(
         release: SoftwareRelease,
+        preferredHost: String? = nil,
         isolation: isolated (any Actor)? = #isolation,
+        didVerifySource: (URL) -> Void = { _ in },
         fetch: (URLRequest) async throws -> (URL, URLResponse)
     ) async throws -> URL {
         var lastError: any Error = SoftwareUpdateError.invalidResponse
-        for source in sources(for: release.archiveURL) {
+        for source in sources(for: release.archiveURL, preferredHost: preferredHost) {
             try Task.checkCancellation()
             var request = URLRequest(url: source)
             // Bound a stalled source so an unreachable mirror cannot prevent
@@ -433,6 +451,7 @@ enum UpdateArchiveDownloader {
                     }.value
                     guard digest == release.sha256 else { throw SoftwareUpdateError.digestMismatch }
                     try Task.checkCancellation()
+                    didVerifySource(source)
                     return file
                 } catch {
                     try? FileManager.default.removeItem(at: file)
