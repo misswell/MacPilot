@@ -292,10 +292,10 @@ final class SoftwareUpdater: ObservableObject {
         guard case .available(let release) = state else { return }
         state = .downloading(release)
         do {
-            let (downloadURL, response) = try await session.download(from: release.archiveURL)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                throw SoftwareUpdateError.invalidResponse
+            let downloadURL = try await UpdateArchiveDownloader.download(release: release) { request in
+                try await self.session.download(for: request)
             }
+            defer { try? FileManager.default.removeItem(at: downloadURL) }
             state = .installing(release)
             let package = try await Task.detached(priority: .userInitiated) {
                 try UpdatePackageValidator.prepare(downloadURL: downloadURL, release: release)
@@ -389,6 +389,65 @@ final class SoftwareUpdater: ObservableObject {
             logURL.path
         ]
         try process.run()
+    }
+}
+
+enum UpdateArchiveDownloader {
+    /// Only rewrite this application's public GitHub release assets. Metadata
+    /// and its expected digest continue to come directly from GitHub.
+    static func sources(for original: URL) -> [URL] {
+        guard original.scheme == "https", original.host == "github.com",
+              original.user == nil, original.password == nil, original.port == nil,
+              original.path.hasPrefix("/\(AppIdentity.githubRepository)/releases/download/"),
+              var mirror = URLComponents(url: original, resolvingAgainstBaseURL: false) else {
+            return [original]
+        }
+        mirror.host = "xget.xi-xu.me"
+        mirror.percentEncodedPath = "/gh" + mirror.percentEncodedPath
+        guard let mirrorURL = mirror.url else { return [original] }
+        return [mirrorURL, original]
+    }
+
+    static func download(
+        release: SoftwareRelease,
+        isolation: isolated (any Actor)? = #isolation,
+        fetch: (URLRequest) async throws -> (URL, URLResponse)
+    ) async throws -> URL {
+        var lastError: any Error = SoftwareUpdateError.invalidResponse
+        for source in sources(for: release.archiveURL) {
+            try Task.checkCancellation()
+            var request = URLRequest(url: source)
+            // Bound a stalled source so an unreachable mirror cannot prevent
+            // the final direct attempt. Active transfers can keep receiving.
+            request.timeoutInterval = 15
+            request.setValue("MacPilot", forHTTPHeaderField: "User-Agent")
+            do {
+                let (file, response) = try await fetch(request)
+                do {
+                    try Task.checkCancellation()
+                    guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                        throw SoftwareUpdateError.invalidResponse
+                    }
+                    let digest = try await Task.detached(priority: .utility) {
+                        try UpdatePackageValidator.sha256(of: file)
+                    }.value
+                    guard digest == release.sha256 else { throw SoftwareUpdateError.digestMismatch }
+                    try Task.checkCancellation()
+                    return file
+                } catch {
+                    try? FileManager.default.removeItem(at: file)
+                    throw error
+                }
+            } catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                    throw error
+                }
+                try Task.checkCancellation()
+                lastError = error
+                DiagnosticLog.write("SoftwareUpdate", "Download source \(source.host ?? "unknown") failed: \(error)")
+            }
+        }
+        throw lastError
     }
 }
 
