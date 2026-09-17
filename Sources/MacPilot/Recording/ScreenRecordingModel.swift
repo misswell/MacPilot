@@ -508,6 +508,16 @@ final class ScreenRecordingModel: ObservableObject {
         start(captureRect: nil)
     }
 
+    /// Starts a recording for a capture range picked explicitly (menu bar
+    /// submenu). The choice also becomes the remembered default, so the
+    /// primary hot key and the settings page follow the last explicit pick.
+    func start(captureMode: ScreenRecordingCaptureMode) {
+        if settings.captureMode != captureMode {
+            setCaptureMode(captureMode)
+        }
+        start()
+    }
+
     /// Starts a recording immediately when a selection has already been made.
     /// Passing `nil` from the public `start()` path requests the pre-record
     /// area selector for the configured area/application modes.

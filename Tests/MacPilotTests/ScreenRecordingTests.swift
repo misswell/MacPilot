@@ -48,6 +48,19 @@ struct ScreenRecordingTests {
         #expect(model.state == .idle)
     }
 
+    @Test @MainActor func explicitCaptureModeStartBecomesTheDefaultAndRequestsThatRange() {
+        let model = ScreenRecordingModel()
+        model.setCaptureMode(.area)
+        var requestedMode: ScreenRecordingCaptureMode?
+        model.onRequestSelection = { requestedMode = $0 }
+
+        model.start(captureMode: .application)
+
+        #expect(model.settings.captureMode == .application)
+        #expect(requestedMode == .application)
+        #expect(model.state == .idle)
+    }
+
     @Test func recordingSettingsClampFrameRateAndRoundTrip() throws {
         let settings = ScreenRecordingSettings(
             outputFolder: "/tmp/recordings",

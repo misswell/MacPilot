@@ -4945,8 +4945,20 @@ struct MenuBarView: View {
                 }
                 Button(model.t("scRecordingStop")) { screenRecording.stop() }
             } else {
-                Button(model.t("scRecordingStart")) {
-                    deferCaptureAction { model.screenRecording.start() }
+                Menu(model.t("scRecordingStart")) {
+                    ForEach(ScreenRecordingCaptureMode.allCases) { mode in
+                        Button {
+                            deferCaptureAction {
+                                model.screenRecording.start(captureMode: mode)
+                            }
+                        } label: {
+                            if mode == screenRecording.settings.captureMode {
+                                Label(model.t(mode.titleKey), systemImage: "checkmark")
+                            } else {
+                                Text(model.t(mode.titleKey))
+                            }
+                        }
+                    }
                 }
                 .disabled(screenRecording.state != .idle || screenRecording.isDeviceRecording)
             }
