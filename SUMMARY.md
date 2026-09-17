@@ -1332,3 +1332,37 @@ func refreshLoginItemState() { launchesAtLogin = SMAppService.mainApp.status == 
 - `swift test --filter BLEWakeRecoveryTests`：17 条全绿。新增 4 条：`unlockAttemptWaitsForThePresenceThatWakeRecoveryReset`（唤醒恢复归零 presence 时判定为 wait）、`unlockAttemptStillStopsWhenAutoUnlockWasWithdrawn`（四类撤回仍然 stop）、`stoppedUnlockAttemptReleasesItsSlotForTheNextWake`、`cancelledUnlockAttemptCannotReleaseTheSuccessorAttemptSlot`。
 - 全量 `swift test`：743 条，失败的仍是并行负载下那三个偶发超时（`ScreenCaptureTests` 两条、`ClosedLidSleepTests` 一条，41 秒量级）；单独复跑两个 suite 全绿（0.41 秒），与本次改动无关。
 - `./Scripts/build-app.sh`：universal、`-Xswiftc -warnings-as-errors`、Developer ID 签名、designated requirement 门禁通过。
+
+## 五十、手机端三条链路并发竞速：谁先握手成功用谁
+
+原来的连接顺序是**严格优先级**：Bonjour 端点 → 记忆地址直连 → 蓝牙保底（网络连续失败两次之后才开始广播）。这一步把它改成**并列竞速**：三条路同时拨，谁先完成握手谁就是本次会话。
+
+### 为什么原来的顺序会伤人
+
+记忆地址是「上次连上的 host:port」。Mac 换了网段或换了 Wi-Fi 之后它依然会被拨出去，而链路本地的邻居解析冷启动可以轻松超过 4 秒的超时窗口——这段时间里 Bonjour 早就把正确的端点交出来了，却因为没有更高优先级的候选而只能干等。优先级的意思是「最快的路要先证明自己失败」，竞速的意思是「最快的路直接说话」。
+
+### 实现：每个候选是一个完整的连接
+
+`RemoteConnectionManager` 本来就是「一条 transport + 一次握手 + 一个会话密钥」，所以竞速没有引入任何新的握手代码：每个候选各拿一个 manager，各自跑 framing、ECDH/证明和 ping。`RemoteAppModel.wire(_:path:)` 给每个 manager 装回调，回调第一件事是判断 `connection === manager`——不是当前会话的，它的失败、断开、丢包一律不上屏，只是从候选表里摘掉。
+
+- 第一个走到 `onDeviceResolved` 的候选被 `promote()`：先 `cancelCandidates(except:)` 把其余候选拆掉，再把 `connection` 换成它。
+- 配对提示（`onPairingPrompt`）也是晋升点：Mac 上只显示一个码，所以谁先要到配对码谁就是承载配对的那条链路，其余立刻拆掉。
+- 监管循环不再决定「拨哪条」，只负责「保证有候选在飞」：没有候选就开一轮竞速；一轮里没有任何候选把 transport 拉起来（4 秒）就整轮重拨，退避 0.25 / 0.5 / 1 / 1.5 / 2 / 3 / 5 秒。已经有 transport 的候选**永不**在此处被砍——那是在飞握手，砍掉等于白拨。
+
+### 蓝牙从「保底」变成「并列」
+
+原来 `startBLEFallback()` 要等 `connectAttempt >= 2`，无网场景下蓝牙晚两轮才广播，而蓝牙本身建立就是数秒级——晚开始就是晚到达。现在只要前台且未连接就广播，任一条链路成交后立刻停。代价是断连期间一直在广播/扫描，这正是第二十三节当初拒绝竞速的理由，这次明确接受了。
+
+### 首次配对仍然单路
+
+Mac 上显示的是**一个**配对码，而两个并发 `pairRequest` 会各自 ECDH 出一个码，`RemotePairingManager.displayedCode` 只保留最新那个——如果另一个候选的请求晚到，用户读到的就是**即将被丢弃那条链路**的码，输进去必然 `codeMismatch`。因此 `isRacingFirstPairing`（Keychain 里还没有这台 Mac 的长期密钥）为真时只拨一条；有了密钥之后证明是按连接各算各的，竞速才安全。首次配对进行中若 Mac 又通过 BLE 递来一条 L2CAP 通道，直接关闭并记一行诊断。
+
+### 设置页看得见
+
+「连接方式」新增「并发拨号」一行，显示当前正在拨的路径（Bonjour / 地址直连 / 蓝牙）；原来的「蓝牙诊断记录」升级成「连接诊断记录」。竞速里输的那条路必须留下痕迹，否则「选了慢的」和「没得选」在界面上长得一模一样。
+
+### 验证
+
+- `xcodebuild -scheme MacPilotRemote -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build`：通过，无新增警告。
+- `swift test`：743 条，失败的仍是并行负载下已知的偶发超时（`ClosedLidSleepControllerTests`，43 秒量级），单独复跑该 suite 5 条全绿（0.025 秒）。本次改动只在 iOS target，SwiftPM 测试不覆盖它。
+- **尚未做真机验证。** 上机时要看三件事：设置页「并发拨号」是否同时列出多条；Mac 与 iPhone 不在同一网络时蓝牙是否在第一轮就成交；首次配对时该行是否只剩一条路径。

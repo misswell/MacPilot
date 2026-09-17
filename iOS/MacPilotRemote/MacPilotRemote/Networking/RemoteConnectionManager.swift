@@ -75,38 +75,16 @@ final class RemoteConnectionManager {
 
     var isReady: Bool { phase == .ready }
     var isPairing: Bool { phase == .pairing }
-    /// True once the link is up, even if the handshake is still running.
+    /// True once the link is up, even if the handshake is still running. The
+    /// race uses it to tell "still dialling" from "mid handshake", which decides
+    /// whether an attempt may still be cut short.
     private(set) var isTransportReady = false
-    /// Device currently being connected to, so discovery does not race itself.
-    private(set) var connectingDeviceID: UUID?
-
-    /// True from the moment a link starts being dialled until it is torn down.
-    ///
-    /// `connectingDeviceID` cannot answer this on its own: a BLE channel has no
-    /// device ID until the Mac identifies itself in the handshake, so anything
-    /// guarding on the ID alone would happily cancel a live BLE attempt.
-    var hasActiveAttempt: Bool { transport != nil }
 
     // MARK: - Connect
 
-    func connect(
-        to endpoint: NWEndpoint,
-        deviceID: UUID?,
-        name: String,
-        clientID: String,
-        clientName: String
-    ) {
-        connect(
-            using: NetworkRemoteTransport(to: endpoint),
-            deviceID: deviceID,
-            name: name,
-            clientID: clientID,
-            clientName: clientName
-        )
-    }
-
     /// Connects over any link. The caller picks the transport; everything from
-    /// the handshake down is identical, which is the whole point of the split.
+    /// the handshake down is identical, which is the whole point of the split —
+    /// and what lets the race run several of these at once, one per path.
     func connect(
         using transport: RemoteTransport,
         deviceID: UUID?,
@@ -118,7 +96,6 @@ final class RemoteConnectionManager {
         self.clientID = clientID
         self.clientName = clientName
         self.targetDeviceID = deviceID
-        self.connectingDeviceID = deviceID
         self.targetName = name
         self.resolvedEndpoint = ResolvedEndpoint()
         self.buffer = Data()
@@ -147,7 +124,6 @@ final class RemoteConnectionManager {
         sessionKey = nil
         pairingExchange = nil
         serverPairingPublicKey = nil
-        connectingDeviceID = nil
         isTransportReady = false
         sentSequence = 0
         buffer = Data()

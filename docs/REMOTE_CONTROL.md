@@ -10,11 +10,12 @@ security model, and how to build the companion iOS app.
 | --- | --- |
 | No IP or port entry | Bonjour (`_macpilot._tcp`) discovery plus a remembered address for the fast path |
 | No re-pairing | A long lived pairing key in the Keychain on both sides; only the very first connection shows a 6 digit code |
-| Fast connect (< 500 ms typical) | A persistent TCP connection, a remembered endpoint tried before mDNS resolution completes, and an authenticated handshake that costs two round trips |
+| Fast connect (< 500 ms typical) | Bonjour, the remembered address and Bluetooth are dialled at the same time; whichever authenticates first wins, so no path waits behind another |
 | No IP scanning, no UDP broadcast, no HTTP | `NWBrowser` + `NWListener` on `NWParameters.tcp` |
 | The Mac login password never leaves the Mac | The protocol has no password field; unlocking happens locally through `MacScreenControlService` |
 
-Version 1 is LAN only. There is no relay server, no account, and no public API.
+Version 1 needs no relay server, no account and no public API: the phone reaches
+the Mac over the local network, peer-to-peer Wi-Fi (AWDL) or Bluetooth.
 
 ## Layers
 
@@ -145,19 +146,55 @@ pairing** and lasts 120 seconds.
 - **Logging.** Logs record the command name, the result and latency. Passwords,
   pairing keys, session keys and message bodies are never logged.
 
+## Connection race
+
+Every way the phone can reach the Mac is dialled at the same time, and the first
+link to finish the authenticated handshake becomes the session:
+
+| Path | Address | Why it is in the race |
+| --- | --- | --- |
+| Bonjour | The `_macpilot._tcp` result advertised right now | Correct immediately, but costs an mDNS resolve |
+| Remembered | The host and port that worked last time | Instant when it is still valid, a dead end when the Mac moved |
+| Bluetooth | An L2CAP channel the Mac opens to the phone | The only path that needs no shared network at all |
+
+Each candidate is a complete connection — its own transport, framing, handshake
+and session key — so a slow path can never hold up a fast one. The first to
+authenticate is promoted; the rest are torn down before the swap, and their
+failures never reach the UI. A race in which no candidate produces a transport
+within 4 seconds is abandoned and redialled, but a candidate that is already
+mid-handshake is never cut.
+
+Bluetooth takes part from the first attempt instead of waiting for the network to
+fail. That is what makes it useful — establishing the link takes seconds, so
+starting it late means arriving late — and the cost is a radio advertisement for
+as long as the app is open and disconnected. It stops the moment any link carries
+a session.
+
+**A first pairing is deliberately not raced.** The Mac displays exactly one
+confirmation code, and two concurrent pair requests would each derive their own,
+so the user could end up reading the code for the link that is about to be
+discarded. Until a long term key exists the phone dials a single path; once the
+key is in the Keychain the proof is computed per connection and racing is safe.
+A Bluetooth channel that arrives while a first pairing is already in flight on
+the network is declined and closed.
+
+**Settings → Connection link** shows the paths being dialled right now, the link
+that won, and the full connection log — including the paths that lost, which is
+the only way to tell "it picked the slower link" from "it had no choice".
+
 ## Performance
 
-- **Fast path.** The iPhone stores the host and port it last reached the Mac on
-  and dials it immediately when the app opens. If the transport is not up within
-  500 ms the attempt is abandoned and the Bonjour result is used instead, so a
-  stale address costs half a second rather than blocking startup.
-- **Persistent connection.** Commands reuse one TCP connection; there is no
+- **Fast path.** The iPhone still stores the host and port it last reached the Mac
+  on, but a stale one no longer blocks startup: it is one candidate among several,
+  so a fresh Bonjour result connects as soon as it resolves rather than waiting for
+  the stale attempt to time out.
+- **Persistent connection.** Commands reuse one link; there is no
   connect-per-action cost.
 - **Keep alive.** A `ping` every 15 seconds confirms the link and reports the
   round trip time.
-- **Reconnect.** After a drop the client retries at 0, 0.5, 1, 2 and then 5
-  second intervals. It disconnects deliberately when the app backgrounds and
-  reconnects when it returns.
+- **Reconnect.** After a drop the client restarts the race at 0.25, 0.5, 1, 1.5,
+  2, 3 and then 5 second intervals. It disconnects deliberately when the app
+  backgrounds and reconnects when it returns.
 - **Instrumentation.** Discovery, transport connect, handshake, round trip and
   command execution latencies are measured on the iPhone and shown under
   **Settings → Connection performance**. The Mac logs

@@ -53,18 +53,27 @@ struct RemoteSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                     HStack {
+                        Text(appModel.text("transportRacing"))
+                        Spacer()
+                        Text(appModel.racingPaths.isEmpty
+                             ? appModel.text("transportRacingIdle")
+                             : appModel.racingPaths.map { appModel.text($0.textKey) }.joined(separator: " · "))
+                            .font(.system(.footnote, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
                         Text(appModel.text("transportBLE"))
                         Spacer()
                         Text(bleStatus)
                             .font(.system(.footnote, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
-                    if !appModel.bleDiagnostics.isEmpty {
-                        ShareLink(item: appModel.bleDiagnostics.joined(separator: "\n")) {
-                            Label(appModel.text("bleShareDiagnostics"), systemImage: "square.and.arrow.up")
+                    if !appModel.linkDiagnostics.isEmpty {
+                        ShareLink(item: appModel.linkDiagnostics.joined(separator: "\n")) {
+                            Label(appModel.text("linkShareDiagnostics"), systemImage: "square.and.arrow.up")
                         }
-                        DisclosureGroup(appModel.text("bleDiagnostics")) {
-                            Text(appModel.bleDiagnostics.joined(separator: "\n"))
+                        DisclosureGroup(appModel.text("linkDiagnostics")) {
+                            Text(appModel.linkDiagnostics.joined(separator: "\n"))
                                 .font(.system(.caption, design: .monospaced))
                                 .textSelection(.enabled)
                         }
