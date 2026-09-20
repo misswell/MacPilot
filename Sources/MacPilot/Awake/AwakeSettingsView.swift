@@ -717,8 +717,6 @@ struct AwakeMenuView: View {
                         }
                     }
                 }
-                Button(model.t("awakeStopAllManual"), action: awake.endAllManualSessions)
-                    .disabled(!awake.hasManualSession)
             }
 
             if !triggerEngine.triggers.isEmpty {
