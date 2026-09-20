@@ -88,5 +88,7 @@ The repo-root `SUMMARY.md` is the project's Chinese development summary (feature
 ## MacPilot release preference
 
 - After MacPilot changes are complete and verified, automatically commit and push `main`, create a new patch Release tag, and verify the GitHub Actions run plus Release assets without waiting for another reminder.
+- This applies to **every** pushed change, including docs-only and dead-code-only commits — do not hold a change back on the grounds that it has no user-visible effect.
+- `git fetch` and confirm `origin/main` has not moved immediately before tagging; other sessions push here concurrently. If it has, rebase, re-run the gates on the merged tree, and re-derive the version.
 - Only GitHub repositories receive GitHub Releases. Never move or overwrite an existing tag; use a new patch version.
 - Formal GitHub releases must use the authenticated Developer ID signing and Apple notarization flow above; do not publish an unsigned or unnotarized ZIP as the release asset.
