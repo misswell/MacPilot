@@ -115,6 +115,8 @@ struct FloatingControllerBarView: View {
             Text(Self.timerText(model.elapsedTime))
                 .foregroundStyle(.white)
                 .font(.system(size: 15).monospaced())
+                .fixedSize()
+                .layoutPriority(1)
 
             if model.settings.capturesMicrophone {
                 MicrophoneLevelMeter(level: model.microphoneLevel)
@@ -151,6 +153,9 @@ struct FloatingControllerBarView: View {
         }
         .padding([.leading, .trailing], 4)
         .frame(height: 24)
+        // The bar lays out at its own width; a narrower panel used to spend
+        // the shortfall on the timer ("00…"), the one compressible item.
+        .fixedSize(horizontal: true, vertical: false)
         .background(Color.purple.cornerRadius(4).shadow(color: .black.opacity(0.3), radius: 4))
     }
 
@@ -264,6 +269,16 @@ struct CaptureDeviceMenuView: View {
 final class ScreenRecordingFloatingController {
     static let shared = ScreenRecordingFloatingController()
 
+    /// Room beyond the bar's own width: the drop shadow needs it, and the mic
+    /// meter or a fourth timer digit can widen the bar after the panel opens.
+    static let widthSlack: CGFloat = 48
+
+    /// Window size for a bar measured at `fitting`. The panel is never exactly
+    /// as wide as the bar was at the moment it opened.
+    static func panelSize(barFitting fitting: NSSize) -> NSSize {
+        NSSize(width: ceil(fitting.width) + widthSlack, height: ceil(fitting.height))
+    }
+
     private var panel: NSPanel?
     private weak var model: ScreenRecordingModel?
 
@@ -283,14 +298,20 @@ final class ScreenRecordingFloatingController {
         panel.backgroundColor = .clear
         panel.isReleasedWhenClosed = false
         panel.isMovableByWindowBackground = true
-        panel.contentView = NSHostingView(rootView: FloatingControllerBarView(model: model))
-        panel.setContentSize(NSSize(width: 262, height: 24))
-        panel.center()
+        let host = NSHostingView(rootView: FloatingControllerBarView(model: model))
+        panel.contentView = host
+        // Width measured off the bar, not the 262 that predated the mic meter.
+        // Keep the default `sizingOptions`: clearing them zeroes `fittingSize`.
+        host.layoutSubtreeIfNeeded()
+        let size = Self.panelSize(barFitting: host.fittingSize)
+        panel.setContentSize(size)
         if let screen = NSScreen.screenWithMouse {
             panel.setFrameOrigin(NSPoint(
-                x: screen.frame.midX - 95,
-                y: screen.visibleFrame.maxY - 24
+                x: screen.frame.midX - size.width / 2,
+                y: screen.visibleFrame.maxY - size.height
             ))
+        } else {
+            panel.center()
         }
         panel.orderFront(nil)
         self.panel = panel

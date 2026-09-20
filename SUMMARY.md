@@ -1530,3 +1530,15 @@ restored twice ok
 - 没有换成包一层 `NSSlider`（`numberOfTickMarks = 0` 也能去掉那条线）：那要把整枚胶囊的滑条改成 `NSViewRepresentable`，为一条线不值得。约束记在 setter 上方那行注释里，防止有人把 `step:` 当成"漏写的精度"加回来。
 - 验证：同一视图 step / continuous 两版离屏渲染对照，刻度行只在 step 版出现；再渲染真实 `QuickAccessPinWindowView` 的 100% 与 62% 两档，确认胶囊里只剩一条轨道、百分比与复位钮不被截断。
 - 测试：无新增——这是控件的渲染属性，单元层断言不到，靠上面的渲染。`swift test` 767 条，失败仍只有第五十五、五十六节记过的那几条（并行计时抖动与需要真实窗口环境的 PiP 用例）；`startupShortcutRegistrationRetriesTransientFailure`、`heartbeatFailureTriggersABoundedReconnect`、`idleDetectionRunsTheConfiguredScriptWithPipiriEnvironment` 单独跑全绿。
+
+## 五十八、录制控制条按内容定宽：计时不再被压成「00…」（v1.1.383）
+
+用户提「录制的按钮显示拥挤不全」，附的截图里计时只剩 `00…`。根因不在按钮，在**窗口宽度是写死的**：`ScreenRecordingFloatingController.show(model:)` 把面板 `setContentSize(262×24)`，而条子真实宽度是 153.5（无麦克风电平表）/ 179.5（有表）——262 这个数字与内容毫无关系，是历史遗留。窗口一旦被 `NSHostingView` 的默认 `sizingOptions`（实测 `rawValue == 7`，含 `.intrinsicContentSize`）拉到比内容窄，HStack 里唯一可压缩的就是那枚计时 `Text`：按钮、相机块、复位钮都带固定 `.frame`，它们绝不让步，于是省下来的 shortfall 全砸在文字上。
+
+- 量出来的证据比猜可靠：对用户的截图做紫色像素列扫描，药丸宽 ≈135pt，而它需要 153.5pt——确实是窗口装不下，不是字体问题。
+- **宽度改为从内容推导**：`ScreenRecordingFloatingController.panelSize(barFitting:)` = `ceil(fitting.width) + widthSlack`，居中用真实宽度。顺带修掉 `screen.frame.midX - 95` 配 262 宽窗口的账目错误——那 36pt 的偏差让条子一直偏右，从没真正居中过。
+- **`widthSlack = 48` 不是随手给的**：阴影要空间（原来 262 宽时药丸两侧各有 54pt 透明边距，阴影反而画得出来），更要装下"面板打开之后条子才变宽"的情况——电平表出现是 +26，计时进第四位（>99 分钟）还要再加。
+- **让挤压在布局层就不可能发生**：整条 `.fixedSize(horizontal: true, vertical: false)`，计时另加 `.fixedSize().layoutPriority(1)`。这样窗口无论多窄，条子都按理想宽度排版，最坏是溢出被裁，绝不会再出现省略号。
+- 一个差点跟着上线的坑：本想 `host.sizingOptions = []` 让面板独占宽度，结果 **`host.fittingSize` 直接变 (0,0)**，面板会开成一扇 48×0 的空窗。测量必须在 `panel.contentView = host` 之后、保持默认 `sizingOptions`、`layoutSubtreeIfNeeded()` 之后再读。这条已经写成断言（`bare > 0`），因为它比原 bug 更隐蔽。
+- 验证：离屏渲染无表/有表两态在各自面板宽度下（202 / 228）计时、电平表、相机、取消全部完整，两侧留白对称；再故意在 140pt 宽的宿主里渲染，计时仍是完整的 `00:00`，证明 `.fixedSize` 这条防线成立。
+- 测试：`CaptureEnhancementsTests.recordingControllerPanelIsNeverNarrowerThanItsBar`——断言两态的 `fittingSize.width` 都为正、有表比无表宽、`widthSlack` 覆盖得住电平表的增量、且按无表宽度开出来的面板仍装得下有表的条子。全程只用离屏 `NSHostingView` + 一个不 `orderFront` 的 `NSPanel`，不会在跑测试的人桌面上闪出 HUD；`capturesMicrophone` 是用户设置，测完在 `defer` 里还原。

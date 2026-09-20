@@ -8,8 +8,10 @@
 //
 
 import AVFoundation
+import AppKit
 import Carbon.HIToolbox
 import Foundation
+import SwiftUI
 import Testing
 @testable import MacPilot
 
@@ -250,6 +252,42 @@ struct CaptureEnhancementsTests {
         #expect(model.settings.showsPrepareBar == false)
         model.setShowsPrepareBar(true)
         #expect(model.settings.showsPrepareBar == true)
+    }
+
+    @Test @MainActor func recordingControllerPanelIsNeverNarrowerThanItsBar() {
+        let model = ScreenRecordingModel()
+        let originalMic = model.settings.capturesMicrophone
+        defer {
+            model.setCapturesMicrophone(originalMic)
+            model.shutdown()
+        }
+
+        // Offscreen hosting view only: ordering the real panel front would put
+        // the bar on the desktop of whoever runs the tests.
+        func fittingWidth(meter: Bool) -> CGFloat {
+            model.setCapturesMicrophone(meter)
+            let host = NSHostingView(rootView: FloatingControllerBarView(model: model))
+            let panel = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 10, height: 10),
+                styleMask: [.fullSizeContentView, .nonactivatingPanel],
+                backing: .buffered,
+                defer: false
+            )
+            panel.contentView = host
+            host.layoutSubtreeIfNeeded()
+            return host.fittingSize.width
+        }
+
+        let bare = fittingWidth(meter: false)
+        let metered = fittingWidth(meter: true)
+        // A cleared `sizingOptions` zeroes this measurement out and the panel
+        // opens 48pt wide with nothing in it.
+        #expect(bare > 0)
+        #expect(metered > bare)
+        // The meter can appear after the panel opened, so the room beyond the
+        // bar has to cover it rather than only the shadow.
+        #expect(ScreenRecordingFloatingController.widthSlack >= metered - bare)
+        #expect(ScreenRecordingFloatingController.panelSize(barFitting: NSSize(width: bare, height: 24)).width >= metered)
     }
 
     @Test @MainActor func recordingSelectionBarStaysInsideTheDisplay() {
