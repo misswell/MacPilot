@@ -1521,3 +1521,12 @@ restored twice ok
 - 新增 3 条测试（`SnapzyCaptureTests`）：`selectionBarChipsAreThePinWindowsChips`（真实布局后逐枚断言 28×28 与圆角，并断言贴图侧 `chromeButtonSide == chipSide`）、`selectionBarCardFollowsTheAppearanceInsteadOfBeingPaintedBlack`（容器底色等于 token 在该外观下解算的值，且浅色/深色解出的值必须不同——写死黑色正是这条要拦的回归）、`onlyTheActiveToolChipIsFilledWithTheAccent`（只有当前工具是强调色，点击换工具后强调色跟着走）。
 - `swift test`：767 条。失败只有 `samplerReportsAFullyBusyCoreAtItsRealShare`、`heartbeatFailureTriggersABoundedReconnect`、`startupShortcutRegistrationRetriesTransientFailure`（并行负载下的计时抖动，单独跑全绿）与 `recapturingAHiddenSourceRestoresItsExistingPipSession`（在 HEAD 的干净 worktree 上同样失败，需要真实窗口环境）。
 - `./Scripts/build-app.sh`：universal + `-Xswiftc -warnings-as-errors` + Developer ID 签名 + designated requirement 门禁。
+
+## 五十七、贴图缩放滑条只剩一条线（v1.1.382）
+
+用户提「贴图的缩放有两个横杠，滑动条应该一条横线就可以了」。第二条不是装饰，是 macOS 26 的 SwiftUI `Slider` 在传了 `step:` 之后**自己画在轨道下方的刻度行**——第五十五节为了"每一档都是整数百分比、能停在 100%"写了 `step: 1`，控件顺手把 40…131 区间打成了几十道点。
+
+- 去掉 `step: 1`，取整挪进 `zoomScrubValue` 的 setter：`state.setZoomPercent(Int(percent.rounded()))`。吸附行为一点没变（`zoomPercent` 本来就是 Int，`zoomScrubRange` 与 `clampedZoomFactor` 都不读 `step`），只是不再由控件画刻度。用 `rounded()` 而不是原来的 `Int()` 截断：没有 `step` 之后写进来的就是连续值，截断会让 62.9% 显示成 62%。
+- 没有换成包一层 `NSSlider`（`numberOfTickMarks = 0` 也能去掉那条线）：那要把整枚胶囊的滑条改成 `NSViewRepresentable`，为一条线不值得。约束记在 setter 上方那行注释里，防止有人把 `step:` 当成"漏写的精度"加回来。
+- 验证：同一视图 step / continuous 两版离屏渲染对照，刻度行只在 step 版出现；再渲染真实 `QuickAccessPinWindowView` 的 100% 与 62% 两档，确认胶囊里只剩一条轨道、百分比与复位钮不被截断。
+- 测试：无新增——这是控件的渲染属性，单元层断言不到，靠上面的渲染。`swift test` 767 条，失败仍只有第五十五、五十六节记过的那几条（并行计时抖动与需要真实窗口环境的 PiP 用例）；`startupShortcutRegistrationRetriesTransientFailure`、`heartbeatFailureTriggersABoundedReconnect`、`idleDetectionRunsTheConfiguredScriptWithPipiriEnvironment` 单独跑全绿。

@@ -162,7 +162,6 @@ struct QuickAccessPinWindowView: View {
       Slider(
         value: zoomScrubValue,
         in: zoomScrubRange,
-        step: 1,
         onEditingChanged: { isScrubbing in
           isZoomScrubbing = isScrubbing
         }
@@ -201,7 +200,9 @@ struct QuickAccessPinWindowView: View {
   private var zoomScrubValue: Binding<Double> {
     Binding(
       get: { Double(state.zoomPercent) },
-      set: { percent in onZoomSizeChange(state.setZoomPercent(Int(percent)), false) }
+      // Whole percent is snapped here, not with Slider's `step:`: a stepped
+      // slider draws a tick-mark row under the track.
+      set: { percent in onZoomSizeChange(state.setZoomPercent(Int(percent.rounded())), false) }
     )
   }
 
