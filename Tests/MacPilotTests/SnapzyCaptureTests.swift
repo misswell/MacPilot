@@ -420,6 +420,87 @@ struct SnapzyCaptureTests {
         #expect(committedActions == [.toggleRoundedCorners])
     }
 
+    /// Flattens a resolved colour to comparable integers. Layer colours are
+    /// concrete `CGColor`s, so both sides have to be resolved under the same
+    /// appearance before they can be compared at all.
+    private func chromeComponents(_ color: CGColor?) -> [Int] {
+        guard let color,
+              let resolved = NSColor(cgColor: color)?.usingColorSpace(.sRGB) else { return [] }
+        return [
+            resolved.redComponent, resolved.greenComponent,
+            resolved.blueComponent, resolved.alphaComponent,
+        ].map { Int(($0 * 1_000).rounded()) }
+    }
+
+    @Test @MainActor func selectionBarChipsAreThePinWindowsChips() throws {
+        _ = NSApplication.shared
+        let bar = AreaSelectionActionBar { _ in }
+        // Two passes: the bar declares its size from the rows' fitting size,
+        // which is only exact once the first pass has laid the rows out.
+        bar.frame = NSRect(origin: .zero, size: bar.intrinsicContentSize)
+        bar.layoutSubtreeIfNeeded()
+        bar.frame = NSRect(origin: .zero, size: bar.intrinsicContentSize)
+        bar.layoutSubtreeIfNeeded()
+
+        // 贴图窗口角上的圆形按钮和这条工具栏共用同一份 token。
+        #expect(QuickAccessPinWindowSizing.chromeButtonSide == CaptureChromeStyle.chipSide)
+        #expect(bar.chipButtons.count >= 10)
+        for chip in bar.chipButtons {
+            #expect(chip.frame.width == CaptureChromeStyle.chipSide)
+            #expect(chip.frame.height == CaptureChromeStyle.chipSide)
+            #expect(chip.layer?.cornerRadius == CaptureChromeStyle.chipCornerRadius)
+        }
+        #expect(bar.layer?.cornerRadius == CaptureChromeStyle.cardCornerRadius)
+    }
+
+    @Test @MainActor func selectionBarCardFollowsTheAppearanceInsteadOfBeingPaintedBlack() throws {
+        _ = NSApplication.shared
+        let bar = AreaSelectionActionBar { _ in }
+        var fills: [[Int]] = []
+        for name in [NSAppearance.Name.aqua, NSAppearance.Name.darkAqua] {
+            guard let appearance = NSAppearance(named: name) else { continue }
+            bar.appearance = appearance
+            var fill: [Int] = []
+            appearance.performAsCurrentDrawingAppearance {
+                fill = chromeComponents(bar.layer?.backgroundColor)
+                #expect(fill == chromeComponents(CaptureChromeStyle.cardFill.cgColor))
+            }
+            fills.append(fill)
+        }
+        // 浅色/深色下底色必须不同：写死黑色正是这次要拦住的回归。
+        #expect(fills.count == 2)
+        #expect(fills[0] != fills[1])
+    }
+
+    @Test @MainActor func onlyTheActiveToolChipIsFilledWithTheAccent() throws {
+        _ = NSApplication.shared
+        let bar = AreaSelectionActionBar { _ in }
+        // The binding holds the model weakly, so the session only counts as
+        // live while the test keeps the model alive.
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        bar.bindAnnotationSession(.init(model: model) { _ in })
+
+        func chip(_ tool: SmartAnnotationTool) throws -> NSButton {
+            let title = AppText.value(tool.titleKey, language: .system)
+            return try #require(bar.chipButtons.first { $0.toolTip == title })
+        }
+        func accentFills(of chips: [NSButton]) -> [Bool] {
+            var result: [Bool] = []
+            bar.effectiveAppearance.performAsCurrentDrawingAppearance {
+                let accent = chromeComponents(NSColor.controlAccentColor.cgColor)
+                result = chips.map { chromeComponents($0.layer?.backgroundColor) == accent }
+            }
+            return result
+        }
+
+        let rectangle = try chip(.rectangle)
+        let pencil = try chip(.pencil)
+        #expect(accentFills(of: [rectangle, pencil]) == [true, false])
+
+        pencil.performClick(nil)
+        #expect(accentFills(of: [rectangle, pencil]) == [false, true])
+    }
+
     @Test @MainActor func adjustSelectionButtonEntersFrameEditingState() throws {
         _ = NSApplication.shared
         guard let screen = NSScreen.main else { return }

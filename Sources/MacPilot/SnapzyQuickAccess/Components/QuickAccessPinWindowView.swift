@@ -24,7 +24,7 @@ struct QuickAccessPinWindowView: View {
   @State private var isDragActive = false
 
   private let cornerRadius = NSWindow.defaultCornerRadius
-  private let dragHandleCornerRadius: CGFloat = 8
+  private let dragHandleCornerRadius = CaptureChromeStyle.cardCornerRadius
   private let controlInset = QuickAccessPinWindowSizing.chromeInset
 
   var body: some View {
@@ -238,7 +238,18 @@ struct QuickAccessPinWindowView: View {
     .background(dragHandleFill(isActive: isDragHovering || isDragActive))
     .overlay(dragHandleStroke(isActive: isDragHovering || isDragActive))
     .scaleEffect(isDragHovering || isDragActive ? 1.015 : 1)
-    .shadow(color: Color.black.opacity(isDragHovering || isDragActive ? 0.18 : 0.12), radius: 7, x: 0, y: 2)
+    .shadow(
+      color: Color(nsColor: .black).opacity(
+        isDragHovering || isDragActive
+          ? CaptureChromeStyle.emphasizedShadowOpacity
+          : CaptureChromeStyle.shadowOpacity
+      ),
+      radius: isDragHovering || isDragActive
+        ? CaptureChromeStyle.emphasizedShadowRadius
+        : CaptureChromeStyle.shadowRadius,
+      x: 0,
+      y: -CaptureChromeStyle.shadowOffset.height
+    )
     .onHover { isDragHovering = $0 }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isDragHovering)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isDragActive)
@@ -249,7 +260,7 @@ struct QuickAccessPinWindowView: View {
     VStack(spacing: 3) {
       ForEach(0..<3, id: \.self) { _ in
         Capsule(style: .continuous)
-          .fill(Color.primary.opacity(0.34))
+          .fill(Color(nsColor: CaptureChromeStyle.glyphFaint))
           .frame(width: 7, height: 1.3)
       }
     }
@@ -260,34 +271,44 @@ struct QuickAccessPinWindowView: View {
     Button(action: action) {
       Image(systemName: systemName)
         .font(.system(size: 12, weight: .bold))
-        .foregroundStyle(.primary)
+        .foregroundStyle(Color(nsColor: CaptureChromeStyle.glyph))
         .frame(width: QuickAccessPinWindowSizing.chromeButtonSide, height: QuickAccessPinWindowSizing.chromeButtonSide)
         .background(
           Circle()
-            .fill(Color(nsColor: .windowBackgroundColor).opacity(0.84))
+            .fill(Color(nsColor: CaptureChromeStyle.chipFill))
         )
         .overlay(
           Circle()
-            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+            .stroke(Color(nsColor: CaptureChromeStyle.chipStroke), lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 2)
+        .shadow(
+          color: Color(nsColor: .black).opacity(CaptureChromeStyle.shadowOpacity),
+          radius: CaptureChromeStyle.shadowRadius,
+          x: 0,
+          y: -CaptureChromeStyle.shadowOffset.height
+        )
     }
     .buttonStyle(.plain)
     .help(help)
   }
 
   private var dragForegroundColor: Color {
-    isDragHovering || isDragActive ? .primary : Color.primary.opacity(0.62)
+    Color(nsColor: isDragHovering || isDragActive
+      ? CaptureChromeStyle.glyph
+      : CaptureChromeStyle.glyphMuted)
   }
 
   private func dragHandleFill(isActive: Bool) -> some View {
     RoundedRectangle(cornerRadius: dragHandleCornerRadius, style: .continuous)
-      .fill(Color(nsColor: .windowBackgroundColor).opacity(isActive ? 0.94 : 0.86))
+      .fill(Color(nsColor: isActive ? CaptureChromeStyle.cardFillEmphasized : CaptureChromeStyle.cardFill))
   }
 
   private func dragHandleStroke(isActive: Bool) -> some View {
     RoundedRectangle(cornerRadius: dragHandleCornerRadius, style: .continuous)
-      .strokeBorder(Color.primary.opacity(isActive ? 0.16 : 0.08), lineWidth: 1)
+      .strokeBorder(
+        Color(nsColor: isActive ? CaptureChromeStyle.cardStrokeEmphasized : CaptureChromeStyle.cardStroke),
+        lineWidth: 1
+      )
   }
 }
 

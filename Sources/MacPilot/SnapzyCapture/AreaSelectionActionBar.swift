@@ -19,6 +19,10 @@
 //  apart by a collision solver, and three of the column's commands duplicated
 //  gestures the frame already supports.
 //
+//  Its chrome is not bespoke: the card and the round tool chips are the same
+//  `CaptureChromeStyle` vocabulary the pinned-screenshot window draws with, so
+//  the two surfaces move together whenever that palette is retuned.
+//
 
 import AppKit
 import Combine
@@ -62,6 +66,10 @@ final class AreaSelectionActionBar: NSView {
   private var colorWell: NSColorWell?
   private var optionsCollapseButton: NSButton?
   private var swatchButtons: [NSButton] = []
+  /// Every circular tool chip the bar has built. Internal so the chrome tests
+  /// can assert they come out of `CaptureChromeStyle` rather than ad-hoc
+  /// numbers that drift from the pinned-window chips.
+  var chipButtons: [NSButton] = []
   private var toolDisplayButtons: [SmartAnnotationTool: NSButton] = [:]
   private var groupMainButtons: [ToolGroup: NSButton] = [:]
   /// The tool the options row was last built for. Selecting an existing
@@ -124,12 +132,13 @@ final class AreaSelectionActionBar: NSView {
     self.onAction = onAction
     super.init(frame: .zero)
     wantsLayer = true
-    layer?.backgroundColor = NSColor.black.withAlphaComponent(0.94).cgColor
-    layer?.cornerRadius = 14
+    layer?.cornerRadius = CaptureChromeStyle.cardCornerRadius
+    layer?.borderWidth = 1
     layer?.shadowColor = NSColor.black.cgColor
-    layer?.shadowOpacity = 0.35
-    layer?.shadowRadius = 10
-    layer?.shadowOffset = CGSize(width: 0, height: -3)
+    layer?.shadowOpacity = Float(CaptureChromeStyle.shadowOpacity)
+    layer?.shadowRadius = CaptureChromeStyle.shadowRadius
+    layer?.shadowOffset = CaptureChromeStyle.shadowOffset
+    resolveChromeColors()
 
     rootStack.orientation = .vertical
     rootStack.alignment = .leading
@@ -177,6 +186,58 @@ final class AreaSelectionActionBar: NSView {
 
   private static let rowSpacing: CGFloat = 8
 
+  // MARK: - Chrome Style
+
+  /// Layer colours are resolved `CGColor`s, so they do not follow the system
+  /// appearance on their own.  Re-resolve them from `CaptureChromeStyle` every
+  /// time the effective appearance changes.
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    resolveChromeColors()
+  }
+
+  private func resolveChromeColors() {
+    // Semantic colours only flatten to concrete RGB when they are resolved, so
+    // resolve them inside this view's appearance rather than the process one.
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      layer?.backgroundColor = CaptureChromeStyle.cardFill.cgColor
+      layer?.borderColor = CaptureChromeStyle.cardStroke.cgColor
+      refreshChips()
+      refreshSwatchRings()
+      lineStyleButton?.layer?.backgroundColor = CaptureChromeStyle.chipFillOnCard.cgColor
+      lineStyleButton?.layer?.borderColor = CaptureChromeStyle.chipStroke.cgColor
+    }
+  }
+
+  /// The one chip that carries the session's current tool is filled with the
+  /// accent colour; every other chip keeps the resting wash.
+  private func refreshChips() {
+    let activeButton = annotationBinding?.model.flatMap { model in
+      toolDisplayButtons[model.tool]
+    }
+    for button in chipButtons {
+      let active = button === activeButton
+      button.layer?.backgroundColor = (active
+        ? CaptureChromeStyle.chipFillActive
+        : CaptureChromeStyle.chipFillOnCard).cgColor
+      button.layer?.borderColor = CaptureChromeStyle.chipStroke.cgColor
+      button.contentTintColor = active
+        ? CaptureChromeStyle.glyphOnAccent
+        : CaptureChromeStyle.glyph
+    }
+  }
+
+  private func refreshSwatchRings() {
+    guard let current = annotationBinding?.model?.currentStyle.color else { return }
+    for button in swatchButtons {
+      let selected = swatchColor(forTag: button.tag) == current
+      button.layer?.borderWidth = selected ? 2 : 1
+      button.layer?.borderColor = (selected
+        ? NSColor.controlAccentColor
+        : CaptureChromeStyle.swatchRing).cgColor
+    }
+  }
+
   // MARK: - Annotation Session Binding
 
   func bindAnnotationSession(_ binding: AnnotationBinding?) {
@@ -222,7 +283,7 @@ final class AreaSelectionActionBar: NSView {
         accessibilityDescription: AppText.value("scToolDragBar", language: .system)
       ) ?? NSImage()
     )
-    grip.contentTintColor = NSColor.white.withAlphaComponent(0.28)
+    grip.contentTintColor = CaptureChromeStyle.glyphFaint
     grip.imageScaling = .scaleProportionallyDown
     grip.toolTip = AppText.value("scToolDragBar", language: .system)
     grip.translatesAutoresizingMaskIntoConstraints = false
@@ -279,12 +340,12 @@ final class AreaSelectionActionBar: NSView {
     let chevron = NSButton(image: Self.chevronImage, target: self, action: #selector(groupChevronPressed(_:)))
     chevron.isBordered = false
     chevron.imagePosition = .imageOnly
-    chevron.contentTintColor = NSColor.white.withAlphaComponent(0.55)
+    chevron.contentTintColor = CaptureChromeStyle.glyphMuted
     chevron.toolTip = AppText.value("scToolPickVariant", language: .system)
     chevron.setAccessibilityLabel(AppText.value("scToolPickVariant", language: .system))
     chevron.translatesAutoresizingMaskIntoConstraints = false
     chevron.widthAnchor.constraint(equalToConstant: 12).isActive = true
-    chevron.heightAnchor.constraint(equalToConstant: 26).isActive = true
+    chevron.heightAnchor.constraint(equalToConstant: CaptureChromeStyle.chipSide).isActive = true
     chevron.tag = group.selectorTag
 
     container.addArrangedSubview(main)
@@ -297,20 +358,11 @@ final class AreaSelectionActionBar: NSView {
   }
 
   private func makeGroupMainButton(_ group: ToolGroup) -> NSButton {
-    let symbol = NSImage(
-      systemSymbolName: group.fallbackTool.systemImage,
-      accessibilityDescription: nil
-    )?.withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
-    let button = NSButton(image: symbol ?? NSImage(), target: self, action: #selector(groupMainPressed(_:)))
-    button.isBordered = false
-    button.imagePosition = .imageOnly
-    button.imageScaling = .scaleProportionallyDown
-    button.contentTintColor = .white
-    button.toolTip = AppText.value(group.fallbackTool.titleKey, language: .system)
-    button.setAccessibilityLabel(AppText.value(group.fallbackTool.titleKey, language: .system))
-    button.translatesAutoresizingMaskIntoConstraints = false
-    button.widthAnchor.constraint(equalToConstant: 26).isActive = true
-    button.heightAnchor.constraint(equalToConstant: 26).isActive = true
+    let button = makeChip(
+      symbolName: group.fallbackTool.systemImage,
+      action: #selector(groupMainPressed(_:)),
+      tooltipKey: group.fallbackTool.titleKey
+    )
     button.tag = group.selectorTag
     return button
   }
@@ -327,12 +379,11 @@ final class AreaSelectionActionBar: NSView {
     tool: SmartAnnotationTool?,
     tag: Int
   ) -> NSButton {
-    let symbol = NSImage(
-      systemSymbolName: symbolName,
-      accessibilityDescription: nil
-    )?.withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
-    let button = NSButton(image: symbol ?? NSImage(), target: self, action: #selector(toolPressed(_:)))
-    configureBarButton(button, tooltipKey: titleKey)
+    let button = makeChip(
+      symbolName: symbolName,
+      action: #selector(toolPressed(_:)),
+      tooltipKey: titleKey
+    )
     button.tag = tag
     if let tool {
       toolDisplayButtons[tool] = button
@@ -341,40 +392,86 @@ final class AreaSelectionActionBar: NSView {
   }
 
   private func makeActionButton(_ symbolName: String, titleKey: String, tag: Int) -> NSButton {
-    let symbol = NSImage(
-      systemSymbolName: symbolName,
-      accessibilityDescription: nil
-    )?.withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
-    let button = NSButton(image: symbol ?? NSImage(), target: self, action: #selector(actionPressed(_:)))
-    configureBarButton(button, tooltipKey: titleKey)
+    let button = makeChip(
+      symbolName: symbolName,
+      action: #selector(actionPressed(_:)),
+      tooltipKey: titleKey
+    )
     button.tag = tag
     return button
   }
 
   private func makeMoreButton() -> NSButton {
-    let symbol = NSImage(
-      systemSymbolName: "ellipsis",
+    makeChip(
+      symbolName: "ellipsis",
+      action: #selector(morePressed(_:)),
+      tooltipKey: "scToolMore"
+    )
+  }
+
+  /// A circular `CaptureChromeStyle` chip — the same shape and palette the pin
+  /// window's corner buttons use.
+  /// A symbol drawn on a chip-sized canvas.
+  ///
+  /// The canvas is not decoration: an `NSButton` adds required content-size
+  /// constraints from its image and its baseline, so a 17×14 glyph fights the
+  /// chip's own 28×28 constraints and the solver settles on a 28×33 box — fine
+  /// while the button is invisible, an oval blob once it carries a fill. Give
+  /// the button an image that already *is* the chip and nothing is left to
+  /// fight. A drawing handler (rather than a bitmap) keeps it crisp at any
+  /// backing scale.
+  private static func chipGlyph(_ symbolName: String) -> NSImage {
+    let side = CaptureChromeStyle.chipSide
+    let canvasSize = NSSize(width: side, height: side)
+    let glyph = NSImage(
+      systemSymbolName: symbolName,
       accessibilityDescription: nil
-    )?.withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
-    let button = NSButton(image: symbol ?? NSImage(), target: self, action: #selector(morePressed(_:)))
-    configureBarButton(button, tooltipKey: "scToolMore")
+    )?.withSymbolConfiguration(.init(pointSize: 12, weight: .bold))
+    let image = NSImage(size: canvasSize, flipped: false) { _ in
+      guard let glyph else { return true }
+      let size = glyph.size
+      glyph.draw(
+        in: NSRect(
+          x: (side - size.width) / 2,
+          y: (side - size.height) / 2,
+          width: size.width,
+          height: size.height
+        ),
+        from: .zero,
+        operation: .sourceOver,
+        fraction: 1
+      )
+      return true
+    }
+    image.isTemplate = true
+    return image
+  }
+
+  private func makeChip(
+    symbolName: String,
+    action: Selector,
+    tooltipKey: String
+  ) -> NSButton {
+    let button = NSButton(image: Self.chipGlyph(symbolName), target: self, action: action)
+    configureChip(button, tooltipKey: tooltipKey)
     return button
   }
 
-  private func configureBarButton(_ button: NSButton, tooltipKey: String) {
+  private func configureChip(_ button: NSButton, tooltipKey: String) {
     button.isBordered = false
-    button.bezelStyle = .recessed
     button.imagePosition = .imageOnly
     button.imageScaling = .scaleProportionallyDown
-    button.contentTintColor = .white
     let tooltip = AppText.value(tooltipKey, language: .system)
     button.toolTip = tooltip
     button.setAccessibilityLabel(tooltip)
     button.wantsLayer = true
-    button.layer?.cornerRadius = 6
+    button.layer?.cornerRadius = CaptureChromeStyle.chipCornerRadius
+    button.layer?.borderWidth = 1
     button.translatesAutoresizingMaskIntoConstraints = false
-    button.widthAnchor.constraint(equalToConstant: 28).isActive = true
-    button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+    button.widthAnchor.constraint(equalToConstant: CaptureChromeStyle.chipSide).isActive = true
+    button.heightAnchor.constraint(equalToConstant: CaptureChromeStyle.chipSide).isActive = true
+    chipButtons.append(button)
+    refreshChips()
   }
 
   // MARK: - Row Two: Contextual Options
@@ -383,6 +480,11 @@ final class AreaSelectionActionBar: NSView {
     if let optionsRow {
       optionsRow.removeFromSuperview()
       self.optionsRow = nil
+    }
+    // The discarded row owned a chip: drop it from the list so it can be
+    // released and a rebuilt row does not re-style a dead button.
+    if let optionsCollapseButton {
+      chipButtons.removeAll { $0 === optionsCollapseButton }
     }
     shapeSegmented = nil
     fillCheckbox = nil
@@ -450,20 +552,11 @@ final class AreaSelectionActionBar: NSView {
   }
 
   private func makeOptionsCollapseButton() -> NSButton {
-    let symbol = NSImage(
-      systemSymbolName: "xmark",
-      accessibilityDescription: AppText.value("scAnnotationHideOptions", language: .system)
-    )?.withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
-    let button = NSButton(
-      image: symbol ?? NSImage(),
-      target: self,
-      action: #selector(hideOptionsPressed(_:))
+    makeChip(
+      symbolName: "xmark",
+      action: #selector(hideOptionsPressed(_:)),
+      tooltipKey: "scAnnotationHideOptions"
     )
-    configureBarButton(button, tooltipKey: "scAnnotationHideOptions")
-    button.contentTintColor = NSColor.white.withAlphaComponent(0.72)
-    button.widthAnchor.constraint(equalToConstant: 24).isActive = true
-    button.heightAnchor.constraint(equalToConstant: 24).isActive = true
-    return button
   }
 
   private func makeShapeSwitch(_ model: SmartAnnotationModel) -> NSView {
@@ -511,10 +604,13 @@ final class AreaSelectionActionBar: NSView {
     )
     button.isBordered = false
     button.wantsLayer = true
-    button.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
-    button.layer?.cornerRadius = 6
+    button.layer?.backgroundColor = CaptureChromeStyle.chipFillOnCard.cgColor
+    button.layer?.cornerRadius = 12
+    button.layer?.borderWidth = 1
+    button.layer?.borderColor = CaptureChromeStyle.chipStroke.cgColor
     button.imagePosition = .imageOnly
     button.imageScaling = .scaleProportionallyDown
+    button.contentTintColor = CaptureChromeStyle.glyph
     button.toolTip = AppText.value("scAnnotationLineStyle", language: .system)
     button.setAccessibilityLabel(AppText.value("scAnnotationLineStyle", language: .system))
     button.translatesAutoresizingMaskIntoConstraints = false
@@ -566,7 +662,7 @@ final class AreaSelectionActionBar: NSView {
         accessibilityDescription: AppText.value(titleKey, language: .system)
       ) ?? NSImage()
     )
-    icon.contentTintColor = NSColor.white.withAlphaComponent(0.7)
+    icon.contentTintColor = CaptureChromeStyle.glyphMuted
     icon.imageScaling = .scaleProportionallyDown
     icon.translatesAutoresizingMaskIntoConstraints = false
     icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
@@ -583,7 +679,7 @@ final class AreaSelectionActionBar: NSView {
 
     let value = NSTextField(labelWithString: "\(Int(model.currentStyle.lineWidth.rounded()))")
     value.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-    value.textColor = .white
+    value.textColor = CaptureChromeStyle.glyph
     value.toolTip = AppText.value(titleKey, language: .system)
     widthValueLabel = value
 
@@ -633,10 +729,12 @@ final class AreaSelectionActionBar: NSView {
     return stack
   }
 
+  /// Template image: only its alpha matters, so the same preview stays legible
+  /// on the chip in the bar and inside a system menu.
   private static func lineStylePreview(_ style: SmartAnnotationLineStyle) -> NSImage {
     let image = NSImage(size: NSSize(width: 34, height: 10))
     image.lockFocus()
-    NSColor.white.setStroke()
+    NSColor.black.setStroke()
     let path = NSBezierPath()
     path.move(to: NSPoint(x: 2, y: 5))
     path.line(to: NSPoint(x: 32, y: 5))
@@ -648,6 +746,7 @@ final class AreaSelectionActionBar: NSView {
     }
     path.stroke()
     image.unlockFocus()
+    image.isTemplate = true
     return image
   }
 
@@ -690,17 +789,9 @@ final class AreaSelectionActionBar: NSView {
       rebuildOptionsRow()
     }
 
-    for (tool, button) in toolDisplayButtons {
-      highlight(button, active: activeTool == tool)
-    }
     for (group, button) in groupMainButtons {
       let current = group.tools.first { $0 == activeTool } ?? group.fallbackTool
-      if let symbol = NSImage(
-        systemSymbolName: current.systemImage,
-        accessibilityDescription: nil
-      )?.withSymbolConfiguration(.init(pointSize: 15, weight: .regular)) {
-        button.image = symbol
-      }
+      button.image = Self.chipGlyph(current.systemImage)
       let tooltip = AppText.value(current.titleKey, language: .system)
       button.toolTip = tooltip
       button.setAccessibilityLabel(tooltip)
@@ -712,20 +803,8 @@ final class AreaSelectionActionBar: NSView {
     shapeSegmented?.selectedSegment = activeTool == .ellipse ? 1 : 0
     fillCheckbox?.state = model.currentStyle.fillEnabled ? .on : .off
     colorWell?.color = model.currentStyle.color.nsColor
-    for button in swatchButtons {
-      guard let color = swatchColor(forTag: button.tag) else { continue }
-      let selected = model.currentStyle.color == color
-      button.layer?.borderWidth = selected ? 2 : 1
-      button.layer?.borderColor = (selected
-        ? NSColor.controlAccentColor
-        : NSColor.white.withAlphaComponent(0.55)).cgColor
-    }
-  }
-
-  private func highlight(_ button: NSButton, active: Bool) {
-    button.layer?.backgroundColor = active
-      ? NSColor.controlAccentColor.cgColor
-      : NSColor.clear.cgColor
+    refreshChips()
+    refreshSwatchRings()
   }
 
   // MARK: - Actions

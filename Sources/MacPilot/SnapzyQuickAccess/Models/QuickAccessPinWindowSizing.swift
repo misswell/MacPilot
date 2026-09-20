@@ -17,7 +17,9 @@ enum QuickAccessPinWindowSizing {
 
   static let zoomScrubIdealWidth: CGFloat = 176
   static let chromeInset: CGFloat = 12
-  static let chromeButtonSide: CGFloat = 28
+  /// The pin's corner buttons are the same chips as the selection toolbar's
+  /// tool buttons; one token defines both.
+  static var chromeButtonSide: CGFloat { CaptureChromeStyle.chipSide }
 
   /// Close and lock buttons plus their insets on both edges of the chrome row.
   static let chromeReservedWidth: CGFloat = 2 * (chromeInset + chromeButtonSide + 4)

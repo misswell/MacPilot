@@ -1484,3 +1484,40 @@ restored twice ok
 - 验证：离屏渲染 240/400/900 三种宽度，确认胶囊不与角按钮重叠、百分比不被截断（「100%」把定宽从 34 顶到 40 就是这么来的）；另用一次性 AppKit 探针在 `.borderless + .nonactivatingPanel + .floating` 面板里以 CGEvent 合成拖动，确认 SwiftUI `Slider` 在非激活面板中能跟踪鼠标（值从 50 拖到上限）。
 - 测试：`QuickAccessTests` 新增 `zoomScrubOnlyOffersReachableScales`（1000×700 于 1440×920 → `40...131`，且舞台收缩后区间仍自洽包含当前值）与 `zoomScrubStaysPutWhileTheWindowScales`，原 chrome 用例改写为 `zoomScrubKeepsPinChromeVisibleWhenTheDragOvershoots`。
 - 无关失败记录：`SnapzyCaptureTests` 的 `smartElementDrag*` 两个用例在 `--filter` 单独运行时失败（它们假设屏幕宽于 2140pt），在 HEAD 的干净 worktree 上复现同样失败，与本次改动无关。
+
+## 五十六、框选工具栏改用贴图的 chip 语言：一条 token、两种浮层（v1.1.381）
+
+用户提「框选截图时工具栏的样式，要和贴图时工具按钮的样式保持风格一致」。方向明确：贴图窗口角上那枚圆形 chip 是基准，框选工具栏去靠它。逐处比对后差异不止"看起来不一样"，而是两套互不相干的画法：
+
+- 工具栏容器写死 `NSColor.black.withAlphaComponent(0.94)`、圆角 14、阴影 0.35/10；贴图 chip 是 `windowBackgroundColor` 0.84 的圆 + `primary` 0.1 描边 + 0.12/6 阴影。
+- 工具栏图标一律 `.white`，字形 15pt regular；贴图是 12pt bold 的自适应前景色。
+- **更要紧的是工具栏里那批系统控件**：`NSSegmentedControl`、复选框、`NSColorWell`、`NSSlider` 都按当前外观自己取色，而容器是写死的黑。浅色模式下整条栏是"浅灰控件浮在黑纸上"，选中段的蓝色、滑条的槽、色板的边框全都按浅色绘制。文件里根本没有 `appearance` 覆盖，所以这不是配置，是漏的。
+- 线型预览 `lineStylePreview` 用 `NSColor.white` 描线，一旦容器换成浅色就彻底看不见。
+
+### 改了什么
+
+1. **新增 `Sources/MacPilot/SnapzyCapture/CaptureChromeStyle.swift`：浮层样式只有一份 token**。同时定死两种家族，边界写进注释：
+   - **card + chip**：承载工具的表面（框选工具栏、贴图角按钮与拖拽把手）——自适应 `windowBackgroundColor` 卡片 + 1pt `labelColor` 描边 + 0.12/6 阴影，里面钉圆形 chip。
+   - **scrim capsule**：直接压在冻结图像上的读数（贴图缩放滑条、尺寸徽标、放大镜）——保持半透明黑 + 白字。它们坐在任意内容上，不能随外观翻转。这个家族**故意不给 token**，避免被误当成"漏改的卡片"。
+2. **工具栏整体搬到 card + chip**：容器换成 `cardFill` / `cardCornerRadius` / `cardStroke` / 阴影 token；所有按钮经 `configureChip` 统一成 28pt 圆 chip（原先 26/28/24 三种尺寸并存），静息底 `quaternaryLabelColor`、当前工具 `controlAccentColor` + 白字、字形 12pt bold；grip / 下拉角标 / 线宽图标 / 数值标签的 `white` 透明度全部换成 `labelColor` 家族；色板未选中描边 `white` 0.55 → `labelColor` 0.3（浅色卡片上原来那条几乎看不见，深色下黑swatch也糊成一团）。线型预览改成 template 图（`isTemplate` + `contentTintColor`），栏内与菜单里各自按所在外观取色。
+3. **补上外观跟随**。`layer.backgroundColor` 存的是**已经算好的 `CGColor`**，系统换外观不会回头改它——这正是"写死黑色"能一路活下来的原因。现在容器/chip/线型/色板的图层色统一由 `resolveChromeColors()` 解析，`viewDidChangeEffectiveAppearance()` 里重跑，并用 `effectiveAppearance.performAsCurrentDrawingAppearance` 包住，保证是在**这个视图**的外观下解算而不是进程外观。
+4. **贴图侧改为消费同一份 token**：`QuickAccessPinWindowSizing.chromeButtonSide` 转发 `CaptureChromeStyle.chipSide`（与第四十八节 `RecordingSelectionBarLayout` 转发 `AreaSelectionBarLayout` 同样的手法），`chromeButton` 的底色/描边/字色/阴影、拖拽把手的圆角（8 → 与卡片一致的 10）与描边全部取自 token。缩放胶囊维持 scrim 家族，只把阴影数值接上。
+
+### 一个只有"填满底色"才暴露出来的 AppKit 坑
+
+`NSButton(image:)` + `isBordered = false` 会自己加**required 优先级**的内容尺寸约束（`width == 图像宽`、`height == 8.5`）和基线约束（`firstBaseline`、`lastBaseline` 各带偏移）。它们与手写的 28×28 直接冲突，求解器折中的结果是 **28×33.5**，而且每个按钮折中得不一样（实测 24.5～37.5 都出现）。
+
+原来这完全无害：按钮静息无底色，框多大都没人看得见，字形靠 `imageScaling` 居中照样对。一旦 chip 要承载圆形填充，它就是一个个竖起来的椭圆。
+
+修法不是调优先级（把 28 降到 999 会让 17×8.5 那组直接赢），而是**让图像本身就是 chip 尺寸**：`chipGlyph(_:)` 把配置好的 SF Symbol 画进 28×28 的 `NSImage(size:flipped:drawingHandler:)` 画布再标 template，内容尺寸约束与手写约束从此一致，实测 `frame == 28×28`、`intrinsicContentSize == 28×28`。用 drawing handler 而不是 `lockFocus`，是为了不在图里烤死 1x 位图——2x 屏上按目标缩放重绘。测过的组合（`bezelStyle` 换 `.recessed` / `.regularSquare` / `.shadowlessSquare`、`font` 调到 1pt）里，只有"图像等于 chip 尺寸"这一条真正解决。
+
+### 为什么不做成毛玻璃
+
+`NSVisualEffectView` 是平台惯例，但贴图 chip 用的是语义色而非 vibrancy；两边要"同一套语言"就先统一语义色。而且图层色可以在测试里逐字节断言，vibrancy 不能。这条线记在 token 文件注释里，将来真要上 vibrancy 也只改一处。
+
+### 验证
+
+- 离屏渲染（`cacheDisplay`，不建窗口、不动用户桌面）浅色/深色 × 空闲/标注四张，另渲染贴图窗口对照：chip 为正圆、字形清晰居中；**标注会话里的分段控件/复选框/滑条/色板终于与容器同外观**（深色模式下深色、浅色模式下浅色）；色板白/黑两枚在两种外观下都看得见描边。
+- 新增 3 条测试（`SnapzyCaptureTests`）：`selectionBarChipsAreThePinWindowsChips`（真实布局后逐枚断言 28×28 与圆角，并断言贴图侧 `chromeButtonSide == chipSide`）、`selectionBarCardFollowsTheAppearanceInsteadOfBeingPaintedBlack`（容器底色等于 token 在该外观下解算的值，且浅色/深色解出的值必须不同——写死黑色正是这条要拦的回归）、`onlyTheActiveToolChipIsFilledWithTheAccent`（只有当前工具是强调色，点击换工具后强调色跟着走）。
+- `swift test`：767 条。失败只有 `samplerReportsAFullyBusyCoreAtItsRealShare`、`heartbeatFailureTriggersABoundedReconnect`、`startupShortcutRegistrationRetriesTransientFailure`（并行负载下的计时抖动，单独跑全绿）与 `recapturingAHiddenSourceRestoresItsExistingPipSession`（在 HEAD 的干净 worktree 上同样失败，需要真实窗口环境）。
+- `./Scripts/build-app.sh`：universal + `-Xswiftc -warnings-as-errors` + Developer ID 签名 + designated requirement 门禁。
