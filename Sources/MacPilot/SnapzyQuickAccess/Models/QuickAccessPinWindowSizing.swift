@@ -15,6 +15,20 @@ enum QuickAccessPinWindowSizing {
   private static let screenMaxRatio: CGFloat = 0.78
   private static let screenMargin: CGFloat = 24
 
+  static let zoomScrubIdealWidth: CGFloat = 176
+  static let chromeInset: CGFloat = 12
+  static let chromeButtonSide: CGFloat = 28
+
+  /// Close and lock buttons plus their insets on both edges of the chrome row.
+  static let chromeReservedWidth: CGFloat = 2 * (chromeInset + chromeButtonSide + 4)
+
+  /// Width of the top-centre zoom scrubber. It only gives up width on the
+  /// narrowest pins so it never slides under the corner buttons, and it stays
+  /// constant while scaling so the thumb does not shift under the cursor.
+  static func zoomScrubWidth(for windowWidth: CGFloat) -> CGFloat {
+    min(zoomScrubIdealWidth, windowWidth - chromeReservedWidth)
+  }
+
   static func sizes(for imageSize: CGSize, on screen: NSScreen) -> (base: CGSize, max: CGSize) {
     sizes(for: imageSize, visibleSize: screen.visibleFrame.size)
   }
