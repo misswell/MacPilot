@@ -14,18 +14,18 @@ struct QuickAccessPinWindowView: View {
   let onClose: () -> Void
   let onDoubleClick: () -> Void
   let onContextMenu: (NSEvent) -> Void
-  let onZoomSizeChange: (CGSize) -> Void
+  let onZoomSizeChange: (CGSize, Bool) -> Void
   let onLockChanged: () -> Void
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var isZoomPickerPresented = false
+  @State private var isZoomScrubbing = false
   @State private var isZoomHovering = false
   @State private var isDragHovering = false
   @State private var isDragActive = false
 
   private let cornerRadius = NSWindow.defaultCornerRadius
   private let dragHandleCornerRadius: CGFloat = 8
-  private let controlInset: CGFloat = 12
+  private let controlInset = QuickAccessPinWindowSizing.chromeInset
 
   var body: some View {
     ZStack {
@@ -117,7 +117,7 @@ struct QuickAccessPinWindowView: View {
   private var isChromeVisible: Bool {
     QuickAccessPinWindowChromeVisibility.isVisible(
       mouseInside: state.isMouseInside,
-      zoomPickerPresented: isZoomPickerPresented
+      zoomScrubbing: isZoomScrubbing
     )
   }
 
@@ -128,7 +128,7 @@ struct QuickAccessPinWindowView: View {
         .padding(controlInset)
 
       if state.supportsZoom {
-        zoomMenu
+        zoomScrub
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
           .padding(.top, controlInset)
       }
@@ -151,75 +151,67 @@ struct QuickAccessPinWindowView: View {
     }
   }
 
-  private var zoomMenu: some View {
-    Button {
-      isZoomPickerPresented.toggle()
-    } label: {
+  private var zoomScrub: some View {
+    HStack(spacing: 7) {
       Text("\(state.zoomPercent)%")
         .font(.system(size: 12, weight: .semibold))
         .monospacedDigit()
         .foregroundStyle(.white)
-        .padding(.horizontal, 10)
-        .frame(height: 28)
-        .background(
-          Capsule(style: .continuous)
-            .fill(Color.black.opacity(isZoomHovering || isZoomPickerPresented ? 0.64 : 0.54))
-        )
-        .overlay(
-          Capsule(style: .continuous)
-            .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.2), radius: 5, x: 0, y: 2)
+        .frame(width: 40, alignment: .trailing)
+
+      Slider(
+        value: zoomScrubValue,
+        in: zoomScrubRange,
+        step: 1,
+        onEditingChanged: { isScrubbing in
+          isZoomScrubbing = isScrubbing
+        }
+      )
+      .controlSize(.mini)
+      .frame(maxWidth: .infinity)
+      .accessibilityLabel(L10n.QuickAccess.zoomPinnedWindow)
+
+      Button(action: resetZoom) {
+        Image(systemName: "arrow.down.right.and.arrow.up.left")
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(.white)
+          .frame(width: 14, height: 20)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help(L10n.QuickAccess.fitPinnedWindow)
     }
-    .buttonStyle(.plain)
-    .fixedSize(horizontal: true, vertical: false)
+    .padding(.horizontal, 11)
+    .frame(width: QuickAccessPinWindowSizing.zoomScrubWidth(for: state.displaySize.width), height: QuickAccessPinWindowSizing.chromeButtonSide)
+    .background(
+      Capsule(style: .continuous)
+        .fill(Color.black.opacity(isZoomHovering || isZoomScrubbing ? 0.64 : 0.54))
+    )
+    .overlay(
+      Capsule(style: .continuous)
+        .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+    )
+    .shadow(color: Color.black.opacity(0.2), radius: 5, x: 0, y: 2)
     .onHover { isZoomHovering = $0 }
-    .popover(isPresented: $isZoomPickerPresented, arrowEdge: .top) {
-      zoomPicker
-    }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isZoomHovering)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isZoomPickerPresented)
+    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isZoomScrubbing)
     .help(L10n.QuickAccess.zoomPinnedWindow)
   }
 
-  private var zoomPicker: some View {
-    VStack(spacing: 4) {
-      ForEach(state.zoomMenuPercents, id: \.self) { percent in
-        PinWindowZoomOptionButton(
-          title: "\(percent)%",
-          isSelected: percent == state.zoomPercent
-        ) {
-          onZoomSizeChange(state.setZoomPercent(percent))
-          isZoomPickerPresented = false
-        }
-      }
-
-      Rectangle()
-        .fill(Color.primary.opacity(0.08))
-        .frame(height: 1)
-        .padding(.vertical, 3)
-
-      PinWindowZoomOptionButton(
-        title: L10n.QuickAccess.fitPinnedWindow,
-        systemImage: "arrow.down.right.and.arrow.up.left",
-        isSelected: state.zoomPercent == 100
-      ) {
-        onZoomSizeChange(state.resetZoom())
-        isZoomPickerPresented = false
-      }
-    }
-    .padding(PinWindowZoomPickerMetrics.contentInset)
-    .frame(width: PinWindowZoomPickerMetrics.width)
-    .background(
-      RoundedRectangle(cornerRadius: PinWindowZoomPickerMetrics.containerCornerRadius, style: .continuous)
-        .fill(.regularMaterial)
+  private var zoomScrubValue: Binding<Double> {
+    Binding(
+      get: { Double(state.zoomPercent) },
+      set: { percent in onZoomSizeChange(state.setZoomPercent(Int(percent)), false) }
     )
-    .overlay(
-      RoundedRectangle(cornerRadius: PinWindowZoomPickerMetrics.containerCornerRadius, style: .continuous)
-        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
-    )
-    .clipShape(RoundedRectangle(cornerRadius: PinWindowZoomPickerMetrics.containerCornerRadius, style: .continuous))
-    .shadow(color: Color.black.opacity(0.18), radius: 14, x: 0, y: 8)
+  }
+
+  private var zoomScrubRange: ClosedRange<Double> {
+    let bounds = state.zoomScrubRange
+    return Double(bounds.lowerBound)...Double(bounds.upperBound)
+  }
+
+  private func resetZoom() {
+    onZoomSizeChange(state.resetZoom(), true)
   }
 
   private func dragHandle(fileURL: URL) -> some View {
@@ -269,7 +261,7 @@ struct QuickAccessPinWindowView: View {
       Image(systemName: systemName)
         .font(.system(size: 12, weight: .bold))
         .foregroundStyle(.primary)
-        .frame(width: 28, height: 28)
+        .frame(width: QuickAccessPinWindowSizing.chromeButtonSide, height: QuickAccessPinWindowSizing.chromeButtonSide)
         .background(
           Circle()
             .fill(Color(nsColor: .windowBackgroundColor).opacity(0.84))
@@ -300,76 +292,9 @@ struct QuickAccessPinWindowView: View {
 }
 
 enum QuickAccessPinWindowChromeVisibility {
-  static func isVisible(mouseInside: Bool, zoomPickerPresented: Bool) -> Bool {
-    mouseInside || zoomPickerPresented
-  }
-}
-
-private enum PinWindowZoomPickerMetrics {
-  static let width: CGFloat = 122
-  static let contentInset: CGFloat = 6
-  static let containerCornerRadius: CGFloat = Size.radiusLg
-  static var optionCornerRadius: CGFloat {
-    max(containerCornerRadius - contentInset, Size.radiusMd)
-  }
-}
-
-private struct PinWindowZoomOptionButton: View {
-  let title: String
-  var systemImage: String?
-  let isSelected: Bool
-  let action: () -> Void
-
-  @State private var isHovering = false
-  private let cornerRadius = PinWindowZoomPickerMetrics.optionCornerRadius
-
-  var body: some View {
-    Button(action: action) {
-      HStack(spacing: 7) {
-        if let systemImage {
-          Image(systemName: systemImage)
-            .font(.system(size: 10, weight: .semibold))
-            .frame(width: 12)
-        }
-
-        Text(title)
-          .font(.system(size: 11, weight: .semibold))
-          .lineLimit(1)
-          .minimumScaleFactor(0.75)
-
-        Spacer(minLength: 4)
-
-        if isSelected {
-          Image(systemName: "checkmark")
-            .font(.system(size: 10, weight: .bold))
-        }
-      }
-      .foregroundStyle(isSelected || isHovering ? .primary : .secondary)
-      .padding(.horizontal, 8)
-      .frame(height: 25)
-      .background(
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-          .fill(rowFill)
-      )
-      .overlay(
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-          .strokeBorder(rowStroke, lineWidth: 1)
-      )
-      .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    }
-    .buttonStyle(.plain)
-    .onHover { isHovering = $0 }
-    .animation(.easeInOut(duration: 0.12), value: isHovering)
-  }
-
-  private var rowFill: Color {
-    if isSelected {
-      return Color.primary.opacity(0.1)
-    }
-    return isHovering ? Color.primary.opacity(0.075) : Color.clear
-  }
-
-  private var rowStroke: Color {
-    isSelected || isHovering ? Color.primary.opacity(0.08) : Color.clear
+  /// The scrubber's drag can overshoot the pin, and chrome that vanishes
+  /// mid-drag would drop the value the user is aiming at.
+  static func isVisible(mouseInside: Bool, zoomScrubbing: Bool) -> Bool {
+    mouseInside || zoomScrubbing
   }
 }

@@ -999,7 +999,7 @@ iPhone 遥控的「控制」页新增一张「亮度与音量」卡片：两个�
 截图链路上长期存在两套贴图窗口，用户点不同入口会得到两种完全不同的贴图：
 
 - **直接贴图**：`SmartScreenshot.swift` 里的 `SmartPinWindowController` / `SmartTextPinWindowController`。入口是框选工具栏的贴图（⌘T）、剪贴板贴图快捷键（F3）和「截图后自动贴图」。行为是贴回框选原位、双击复制、右键菜单（复制 / OCR / 标注 / 上传），还支持剪贴板文字贴图与双击 ESC 关闭全部贴图。
-- **快捷操作卡片贴图**：从 Snapzy 迁移的 `QuickAccessPinWindowManager` / `QuickAccessPinWindow`。入口是快速操作卡片右下角的 pin 按钮，行为是缩放（滚轮 / 捏合 / 百分比菜单）、锁定穿透、拖拽手柄。
+- **快捷操作卡片贴图**：从 Snapzy 迁移的 `QuickAccessPinWindowManager` / `QuickAccessPinWindow`。入口是快速操作卡片右下角的 pin 按钮，行为是缩放（滚轮 / 捏合 / 顶部滑条，见第五十五节）、锁定穿透、拖拽手柄。
 
 同一件事在两条入口长得不一样，用户没法预期点下去得到哪一种。这次统一到后者，并把前者的能力补进去。
 
@@ -1470,3 +1470,17 @@ restored twice ok
 ### 测试
 
 `Tests/MacPilotTests/KeyboardBacklightTests.swift` 全部跑在假背光上（真硬件会把跑测试的人的键盘弄灭），覆盖：0.7/auto-on 完整往返、0.4/auto-off 不去动传感器、原本 0% 恢复后仍 0%、多键盘各记各的、无背光键盘、客户端完全不响应、读不到亮度不压暗、写被拒不丢状态，以及恢复侧的三条判定、v2 快照 decode、失败写留队重试、`needsCrashSnapshot` 的键盘-only 回归。`swift test --filter "KeyboardBacklightTests|DisplayPowerTests|DisplayBlankRecoveryTests"` 全绿。
+## 五十五、贴图缩放：百分比弹层改成常驻滑条
+
+原来悬停贴图顶部是一枚「100%」胶囊，点下去弹 `.popover` 列档位（`[50,75,100,125,150,200]` 里筛掉不可达的），选一档收起。要连续微调就得反复点开、瞄准、再点。现在换成常驻滑条：`[百分比][Slider][复位]`，一次拖动到位。
+
+- `QuickAccessPinWindowView` 删掉 `zoomMenu` / `zoomPicker` 和它们专用的 `PinWindowZoomOptionButton`、`PinWindowZoomPickerMetrics`，换成 `zoomScrub`。滚轮与捏合缩放不动。
+- **复位钮必须保留**：「适合窗口」（回到 100%）原先只有弹层里那一行，贴图右键菜单没有这项，而滑条 `step: 1` 想精确停在 100% 靠手感。所以能力不能随弹层一起删掉，胶囊右端留一枚显式按钮。
+- **定宽是几何不变量，不是审美**：窗口按中心缩放（`resize(to:)` 取 `frame.midX/midY`），胶囊钉在顶部中央，只要它宽度恒定，`minX = midX - 胶囊宽/2` 就与窗口宽度无关，拖动时滑块不会在光标底下横向跑。因此宽度走 `QuickAccessPinWindowSizing.zoomScrubWidth(for:)`：常态 176，仅在最窄贴图（240pt 交互下限）让位给左右上角按钮。角按钮的 12/28 尺寸同时收进 `chromeInset` / `chromeButtonSide`，重叠预算不再散在两个文件里写两遍。
+- 滑条区间来自可达缩放：`zoomScrubRange` 下界向上取整、上界向下取整，保证给出的每个百分比 `clampedZoomFactor` 都真能到位；再与当前值取 `min`/`max`，避免屏幕装不下、上下界交叉时区间反过来。
+- `onZoomSizeChange` 多带一个 `animated`：滑条每 1% 实时改窗口尺寸但不做原生动画（否则每步都起一段 `setFrame` 动画），复位仍走动画。
+- chrome 可见性条件 `zoomPickerPresented` 改成 `zoomScrubbing`（`Slider` 的 `onEditingChanged`）。拖动过冲时指针会离开贴图边界，而 chrome 一旦淡出连带 `allowsHitTesting(false)`，这次拖动就被自己打断——弹层时代靠 `zoomPickerPresented` 顶住的正是这一点，滑条同样需要。
+- 文案零新增：复用 `L10n.QuickAccess.zoomPinnedWindow` 与 `fitPinnedWindow`。
+- 验证：离屏渲染 240/400/900 三种宽度，确认胶囊不与角按钮重叠、百分比不被截断（「100%」把定宽从 34 顶到 40 就是这么来的）；另用一次性 AppKit 探针在 `.borderless + .nonactivatingPanel + .floating` 面板里以 CGEvent 合成拖动，确认 SwiftUI `Slider` 在非激活面板中能跟踪鼠标（值从 50 拖到上限）。
+- 测试：`QuickAccessTests` 新增 `zoomScrubOnlyOffersReachableScales`（1000×700 于 1440×920 → `40...131`，且舞台收缩后区间仍自洽包含当前值）与 `zoomScrubStaysPutWhileTheWindowScales`，原 chrome 用例改写为 `zoomScrubKeepsPinChromeVisibleWhenTheDragOvershoots`。
+- 无关失败记录：`SnapzyCaptureTests` 的 `smartElementDrag*` 两个用例在 `--filter` 单独运行时失败（它们假设屏幕宽于 2140pt），在 HEAD 的干净 worktree 上复现同样失败，与本次改动无关。

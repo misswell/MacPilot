@@ -65,16 +65,13 @@ final class QuickAccessPinWindowState: ObservableObject {
     Int((zoomFactor * 100).rounded())
   }
 
-  var zoomMenuPercents: [Int] {
-    var percents = [50, 75, 100, 125, 150, 200].filter { percent in
-      let factor = CGFloat(percent) / 100
-      return factor >= minimumZoomFactor - 0.001 && factor <= maximumZoomFactor + 0.001
-    }
-    if !percents.contains(zoomPercent) {
-      percents.append(zoomPercent)
-      percents.sort()
-    }
-    return percents
+  /// Scrubber bounds: both ends round inwards so every value it offers is one
+  /// the clamp can actually reach, current scale included.
+  var zoomScrubRange: ClosedRange<Int> {
+    let current = zoomPercent
+    let lower = min(current, Int((minimumZoomFactor * 100).rounded(.up)))
+    let upper = max(current, Int((maximumZoomFactor * 100).rounded(.down)))
+    return lower...upper
   }
 
   var minimumZoomFactor: CGFloat {

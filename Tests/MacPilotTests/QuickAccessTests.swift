@@ -98,10 +98,47 @@ struct QuickAccessTests {
         #expect(SmartCaptureToast.preview(of: long).count == 81)
     }
 
-    @Test func zoomPickerKeepsPinChromeVisibleOutsidePinFrame() {
-        #expect(QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: false, zoomPickerPresented: true))
-        #expect(QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: true, zoomPickerPresented: false))
-        #expect(!QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: false, zoomPickerPresented: false))
+    @Test func zoomScrubKeepsPinChromeVisibleWhenTheDragOvershoots() {
+        #expect(QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: false, zoomScrubbing: true))
+        #expect(QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: true, zoomScrubbing: false))
+        #expect(!QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: false, zoomScrubbing: false))
+    }
+
+    @Test @MainActor func zoomScrubOnlyOffersReachableScales() {
+        // 1000x700 on a 1440x920 stage: the screen fit caps the top at 131%,
+        // the interactive floor leaves the 40% bottom intact.
+        let image = NSImage(size: NSSize(width: 1_000, height: 700))
+        let state = QuickAccessPinWindowState(
+            id: UUID(),
+            url: nil,
+            image: image,
+            thumbnail: image,
+            baseSize: CGSize(width: 1_000, height: 700),
+            maxSize: CGSize(width: 1_440, height: 920)
+        )
+        #expect(state.zoomScrubRange == 40...131)
+
+        for percent in [40, 100, 131] {
+            let size = state.setZoomPercent(percent)
+            #expect(state.zoomPercent == percent)
+            #expect(abs(size.width - 1_000 * CGFloat(percent) / 100) < 0.5)
+        }
+
+        // Shrinking the stage below the current scale pulls the ceiling in but
+        // never drops the value the scrubber is showing.
+        _ = state.updateSizing(baseSize: CGSize(width: 1_000, height: 700), maxSize: CGSize(width: 1_010, height: 707))
+        #expect(state.zoomScrubRange.contains(state.zoomPercent))
+        #expect(state.zoomScrubRange.lowerBound <= state.zoomScrubRange.upperBound)
+    }
+
+    @Test func zoomScrubStaysPutWhileTheWindowScales() {
+        // Only the narrowest pins give up width; past that the capsule keeps a
+        // constant width, which is what holds the thumb under the cursor.
+        #expect(QuickAccessPinWindowSizing.zoomScrubWidth(for: 800) == QuickAccessPinWindowSizing.zoomScrubIdealWidth)
+        #expect(QuickAccessPinWindowSizing.zoomScrubWidth(for: 1_440) == QuickAccessPinWindowSizing.zoomScrubIdealWidth)
+        let narrowest = QuickAccessPinWindowSizing.minimumInteractiveSize.width
+        #expect(QuickAccessPinWindowSizing.zoomScrubWidth(for: narrowest) == narrowest - QuickAccessPinWindowSizing.chromeReservedWidth)
+        #expect(QuickAccessPinWindowSizing.zoomScrubWidth(for: narrowest) < QuickAccessPinWindowSizing.zoomScrubIdealWidth)
     }
 
     @Test func toastPathDetailKeepsTheFileNameAndAbbreviatesHome() {

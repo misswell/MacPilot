@@ -309,8 +309,8 @@ private final class QuickAccessPinWindowController: NSObject {
       onContextMenu: { [weak self] event in
         self?.presentContextMenu(with: event)
       },
-      onZoomSizeChange: { [weak self] _ in
-        self?.resizeForCurrentZoom(animated: true)
+      onZoomSizeChange: { [weak self] _, animated in
+        self?.resizeForCurrentZoom(animated: animated)
       },
       onLockChanged: { [weak self] in
         self?.window.updateMousePassthrough()
