@@ -217,13 +217,13 @@ FinderSync 右键菜单扩展随 `v1.1.126` 首次发布，`v1.1.127` 修复启�
 
 v1.1.236 对录屏功能做整体升级，补齐主流录屏工具的完整能力（UI 样式保留 MacPilot 设计语言）。当前能力：
 
-- **引擎模块**：`Sources/MacPilot/Recording/` 共 15 个文件——引擎本体 `RecordingEngine.swift`（生命周期 makeSession/start/pause/resume/stop/cancel、采样处理、麦克风、存帧、演示者叠加）；纯函数规划 `RecordingOutputPlanning.swift`（码率预算/压缩字典）与 `RecordingCapturePlanning.swift`（窗口选择/Blueprint/滤镜构建/背景填充）；支撑件 `RecordingSampleBuffers.swift`（时间轴平移/PCM 封装）、`RecordingAudioMixer.swift`（混音重封装）、`RecordingDisplaySleep.swift`（防休眠）、`RecordingNotifications.swift`（系统通知）；设备 `RecordingDeviceDiscovery.swift`（发现/采样率/CMIO 标志）、`RecordingCameraOverlay.swift`（浮动摄像头窗）、`RecordingMobileRecorder.swift`（iOS 设备录制）；悬浮件 `RecordingMouseAids.swift`（鼠标高亮/放大镜）、`RecordingPanels.swift`（倒计时/控制条/完成预览）；状态机 `ScreenRecordingSettings.swift`（全部设置类型与安全解码）、`ScreenRecordingModel.swift`（模型 + 错误 + 会话 hooks）、`ScreenRecordingHotKeys.swift`（Carbon 热键管线）；`ScreenRecordingModel` 状态机、快捷键、选区浮层、快速访问面板、config.json 持久化全部复用。
+- **引擎模块**：`Sources/MacPilot/Recording/` 共 15 个文件——引擎本体 `RecordingEngine.swift`（生命周期 makeSession/start/pause/resume/stop/cancel、采样处理、麦克风、存帧、演示者叠加）；纯函数规划 `RecordingOutputPlanning.swift`（码率预算/压缩字典）与 `RecordingCapturePlanning.swift`（窗口选择/Blueprint/滤镜构建/背景填充）；支撑件 `RecordingSampleBuffers.swift`（时间轴平移/PCM 封装）、`RecordingAudioMixer.swift`（混音重封装）、`RecordingDisplaySleep.swift`（防休眠）、`RecordingNotifications.swift`（系统通知）；设备 `RecordingDeviceDiscovery.swift`（发现/采样率/CMIO 标志）、`RecordingCameraOverlay.swift`（浮动摄像头窗）、`RecordingMobileRecorder.swift`（iOS 设备录制）；悬浮件 `RecordingMouseAids.swift`（鼠标高亮/放大镜）、`RecordingPanels.swift`（倒计时/控制条）；状态机 `ScreenRecordingSettings.swift`（全部设置类型与安全解码）、`ScreenRecordingModel.swift`（模型 + 错误 + 会话 hooks）、`ScreenRecordingHotKeys.swift`（Carbon 热键管线）；`ScreenRecordingModel` 状态机、快捷键、选区浮层、快速访问面板、config.json 持久化全部复用。
 - **录制模式**：框选区域 / 全屏 / 应用窗口（桌面无关窗口，跟随移动）/ **纯音频**（系统声音+可选麦克风 → m4a/caf），另支持「录制最前窗口」快捷启动与 iOS 设备录制。
 - **码率公式**：`max(600,宽)×max(600,高)×(fps/8)×编码器系数(H.264 0.9 / HEVC 0.5)×画质系数(低/中/高)×(HDR ×2)`，下限 200 kbps。
 - **编码与画质**：H.264 / HEVC / **HEVC With Alpha**（选 Alpha 自动强制 HEVC+MOV）；**HDR 录制**（macOS 15 使用 `captureHDRStreamLocalDisplay` 预设、BT.2020 PQ 色域、HEVC Main10）；像素格式 6 选（默认/BGRA/YUV 8/10bit 视频与全幅）；Retina 原生分辨率开关；窗口背景填充（保留壁纸/透明/八色/自定义十六进制，透明时同步排除 Dock 壁纸窗口）。
 - **滤镜构造**（对齐 QR）：应用黑名单排除、隐藏控制中心图标、隐藏桌面文件（Finder 全屏无标题窗口）、可选包含菜单栏（macOS 14.2+）、排除自身窗口（摄像头/鼠标/放大镜/iDevice 悬浮窗除外）。
 - **音频**：AAC/ALAC/FLAC 三格式、128–320 kbps 音质档（低采样率自动减半封顶 64k）；麦克风支持设备选择（非默认设备走 AVCaptureSession）+ 回声消除（VoiceProcessing）+ **压低系统音量三档**（`kAUVoiceIOProperty_OtherAudioDuckingConfiguration`）；**remux 混音**——录制完成后把麦克风轨混入主音轨并 passthrough 重封装，关闭则保留双音轨。
-- **录制辅助**（`RecordingOverlays.swift`）：鼠标点击高亮（左键蓝/右键紫/其他橙，按下 0.8 / 移动 0.3 透明度，未捕获光标时补点）、屏幕放大镜（3x、快捷键开关、截图排除本应用窗口）、录制前倒计时（0–99 秒）、悬浮控制条（停止/暂停/计时/摄像头入口）、完成后悬浮预览（打开/Finder/删除/复制，6 秒自动消失）、定时自动停止（分钟）。
+- **录制辅助**（`RecordingOverlays.swift`）：鼠标点击高亮（左键蓝/右键紫/其他橙，按下 0.8 / 移动 0.3 透明度，未捕获光标时补点）、屏幕放大镜（3x、快捷键开关、截图排除本应用窗口）、录制前倒计时（0–99 秒）、悬浮控制条（停止/暂停/计时/摄像头入口）、完成后弹出右下角「录制快捷操作」卡片（复制/打开/编辑/在访达中显示/删除，10 秒倒计时，与截图共用同一堆叠，见第五十一节）、定时自动停止（分钟）。
 - **摄像头与设备**（`RecordingDevices.swift`）：浮动摄像头窗口（可翻转、圆角、可拖动，画面经窗口被录制流捕获）、iPhone/iPad 预览与直接录制（AVCaptureSession + AVCaptureMovieFileOutput，静音连接移除），启动时置 `kCMIOHardwarePropertyAllowScreenCaptureDevices`；**演示者叠加（Presenter Overlay）**支持——帧信息 `presenterOverlayContentRect` 状态机 + delegate 回调 + 保护延迟设置，叠加激活时自动收起摄像头窗口。
 - **快捷键**：主开关外新增 8 个可选热键（停止/暂停继续/录系统声音/录当前屏/录最前窗口/框选/存帧/放大镜），Carbon 注册，默认未绑定（与 QR 一致）。
 - **存帧**：录制中保存当前帧为 PNG（`Capturing at <时间>.png`），HDR 帧走 10-bit PNG + EV+1。
@@ -237,7 +237,7 @@ v1.1.236 对录屏功能做整体升级，补齐主流录屏工具的完整能�
 - **延迟截图**（新增入口，对标“延迟截图”）：新增 `ScreenCaptureShortcutKind.delayedArea`（默认 ⌥⌘7），按下后弹出居中倒计时面板（进度环 + 取消按钮，`SnapzyCapture/DelayedCaptureCountdown.swift`，倒计时算术为可单测的值类型 `DelayedCaptureCountdown`），结束后打开常规区域选区；延迟秒数可在截图页选择（3/5/10 秒，存 `screenCapture.delayedCaptureSeconds`，安全解码默认 5）。菜单栏“延迟截图”、深链 `macpilot://capture/delayed`（兼容 `screenshot/delayed`、`delayed`）同步入口；快捷键走既有 Carbon 管线（新 id 13），支持冲突检测与编辑器改键。
 - **HUD 接入聚光灯标注**：`AreaSelectionAnnotationTool` 新增 `spotlight`，截图后工具栏新增聚光灯按钮（⌀ 圆点虚线图标），经既有桥接映射到 `SmartAnnotationTool.spotlight`——此前该工具只能在独立编辑器中使用，现在框选标注可直接压暗聚焦。
 - **录屏悬浮控制条升级**：新增取消按钮（两段式：第一次点击进入“确认取消”武装态、3 秒未再点自动解除，第二次点击才真正丢弃文件，防误触）；新增实时麦克风电平条（4 段），引擎在 AVAudioEngine 麦克风 tap 里计算 RMS（`ScreenRecordingEngine.microphoneRMS`，≈10Hz 节流经 `microphoneLevelHandler` 回传模型 `@Published microphoneLevel`；命名设备路径不提供电平）；控制条随之加宽。
-- **完成预览与文案本地化**：完成预览右键菜单（显示于访达/删除/拷贝/关闭）此前硬编码英文，现经 `AppText` 按模型语言本地化（`scRecordingRevealInFinder` 等新键，中英同步）。
+- **完成预览与文案本地化**：完成预览右键菜单（显示于访达/删除/拷贝/关闭）此前硬编码英文，现经 `AppText` 按模型语言本地化（`scRecordingRevealInFinder` 等新键，中英同步）。（后续该悬浮预览已并入「录制快捷操作」卡片，这些键随之删除，见第五十一节。）
 - **GIF 导出参数**（对标方无 GIF 能力）：导出帧率（10/15/20/24）与最大宽度（480/720/960/1080 px）可在录屏页“输出”卡片配置，存 `screenRecording.gifFramesPerSecond/gifMaximumWidth`（夹取 5–30、200–2000，解码默认 15/960），`ScreenRecordingGIFConverter` 直接接收参数。
 - **兼容性**：`StoredConfiguration.version` 18 → 19；所有新键走 `decodeIfPresent ?? 默认`，旧 config.json 无需迁移。新增 `Tests/MacPilotTests/CaptureEnhancementsTests.swift`（12 例：快捷键默认/往返、旧配置解码、倒计时算术、聚光灯桥接、RMS、GIF 参数与钳制）。
 
@@ -1366,3 +1366,25 @@ Mac 上显示的是**一个**配对码，而两个并发 `pairRequest` 会各自
 - `xcodebuild -scheme MacPilotRemote -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build`：通过，无新增警告。
 - `swift test`：743 条，失败的仍是并行负载下已知的偶发超时（`ClosedLidSleepControllerTests`，43 秒量级），单独复跑该 suite 5 条全绿（0.025 秒）。本次改动只在 iOS target，SwiftPM 测试不覆盖它。
 - **尚未做真机验证。** 上机时要看三件事：设置页「并发拨号」是否同时列出多条；Mac 与 iPhone 不在同一网络时蓝牙是否在第一轮就成交；首次配对时该行是否只剩一条路径。
+
+## 五十一、录屏结束只剩一个窗口：悬浮预览并入快捷操作卡片
+
+现象：停止录制后右下角同时出现两个窗口——266×156 的完成悬浮预览（`ScreenRecordingCompletionPreview`）和 460×340 的「录制快捷操作」卡片（`SmartMediaQuickAccessWindowController`）。两者都能打开 / 在访达中显示 / 复制 / 删除，只是一个靠悬停播放按钮和右键菜单，一个靠按钮行。
+
+根因：`finishRecording(url:previewImage:)` 有两条互不知情的出口——预览在模型里直接 show，卡片经 `onCompleted` → `ScreenCapture.showRecordingQuickAccess` → `SmartScreenshot.showQuickAccess(mediaURL:)` 弹出，而 `onCompleted` 是无条件触发的。于是设置项 `showPreviewAfterRecord` 只关得掉预览，卡片照旧必出。
+
+处理：
+
+- 删掉 `CompletionPreviewContentView` / `ScreenRecordingCompletionPreview`（`RecordingPanels.swift`），录制过程的倒计时与控制条不动。
+- 留下能力更强的卡片作为唯一出口，并把预览独有的「删除」补进卡片按钮行（`Button(role: .destructive)` + 截图卡片同款 `scDelete`）：`showQuickAccess(mediaURL:onDelete:)` → `ScreenCapture.deleteRecordedMedia(_:)`，删文件的同时从 `captureHistory` 摘掉并刷新磁盘占用。
+- `showPreviewAfterRecord` 现在直接决定卡片弹不弹（`finishRecording` 与 iPhone/iPad 设备录制完成路径同口径），文案改成「录制完成后显示快捷操作卡片」。GIF 导出是用户显式动作，那条路径没有系统通知兜底，卡片照旧无条件出现。
+- 引擎侧只为预览服务的 `initialFrameImage` / `posterImageCache` / `posterThumbnail` 一并删除；缩略图由卡片自己从成品文件读首帧。
+- 删除本地化孤儿键 `scRecordingRevealInFinder` / `scRecordingDeleteFile` / `scRecordingCopyFile` / `scRecordingClosePreview`（中英同步）。
+
+## 五十二、截图轻提示：整屏宽的灰色横幅收回到一枚 HUD
+
+`SmartCaptureToast` 的窗口固定 380 宽，但内容是把两个 `NSTextField` 用 `NSStackView` 钉满四边，副标题还是 `byCharWrapping` 的整条绝对路径——Auto Layout 为了满足约束把窗口撑到接近屏宽，于是「已复制并保存」变成一条横跨屏幕、文字逐字符断行的灰带。
+
+- 内容改用 `NSHostingView` + `SmartCaptureToastView`：图标（成功绿勾 / 失败红叉 / OCR 取景框）+ 标题 13 semibold + 副标题 11 secondary，左对齐，`maxWidth: 380` 封顶，窗口按 `fittingSize` 收缩，圆角 12，出现时 0.15 秒淡入。
+- 副标题不再塞整条路径：家目录折成 `~`，路径走中间省略（`SmartCaptureToast.displayPath`），文件名比目录前缀更值得看见；错误与 OCR 摘要走末尾省略。`scQuickCopySavedDetail` 文案键随之删除。
+- **测试不再往用户屏幕上画提示。** 落盘/OCR 的提示是模型层回调直接弹的窗口，`swift test` 里 `quickCopyAutoSaveWritesFileAndRecordsStats` 一跑，真实提示就闪在桌面上。现在 `SmartCaptureToast.isTestHost`（XCTest 类 / `.xctest` bundle / `--test-bundle-path` 三个信号）为真时直接不弹，`swift run` 调试不受影响；`QuickAccessTests` 里加了断言守住这个判定还生效。

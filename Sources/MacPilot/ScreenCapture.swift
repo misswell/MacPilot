@@ -1194,7 +1194,20 @@ final class ScreenCaptureModel: ObservableObject {
 
     func showRecordingQuickAccess(url: URL) {
         recordMediaHistory(url)
-        ensureSmartCapture().showQuickAccess(mediaURL: url)
+        ensureSmartCapture().showQuickAccess(mediaURL: url) { [weak self] in
+            self?.deleteRecordedMedia(url)
+        }
+    }
+
+    /// Deletes a recorded video/GIF and drops it from the capture history.
+    func deleteRecordedMedia(_ url: URL) {
+        try? FileManager.default.removeItem(at: url)
+        let kept = captureHistory.filter { $0.url != url }
+        if kept.count != captureHistory.count {
+            captureHistory = kept
+            SmartCaptureHistoryStore.save(kept)
+        }
+        Task { await refreshDiskUsage() }
     }
 
     /// Adds a finished video or GIF to the same persistent history used by

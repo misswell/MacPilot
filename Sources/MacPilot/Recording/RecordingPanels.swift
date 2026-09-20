@@ -2,10 +2,10 @@
 //  RecordingPanels.swift
 //  MacPilot
 //
-//  Floating panels for the recording flow: the pre-record countdown, the
-//  always-on-top controller bar (stop / pause / timer / device picker),
-//  and the completion preview that appears in the corner of the screen
-//  when a recording finishes.
+//  Floating panels for the recording flow: the pre-record countdown and the
+//  always-on-top controller bar (stop / pause / timer / device picker).
+//  A finished recording is reported by the media QuickAccess card
+//  (`SmartMediaQuickAccessWindowController` in SmartScreenshot.swift).
 //
 
 import AppKit
@@ -300,144 +300,6 @@ final class ScreenRecordingFloatingController {
         panel?.close()
         panel = nil
         model = nil
-    }
-}
-
-// MARK: - Completion preview
-
-/// Corner preview shown when a recording completes: hover the thumbnail to
-/// reveal the play button, click to open, hover the panel for the close
-/// button, context menu with Finder/copy/delete actions, auto-dismiss
-/// after six idle seconds.
-struct CompletionPreviewContentView: View {
-    let image: NSImage
-    let fileURL: URL
-    var language: AppLanguage = .system
-    var onClose: () -> Void
-    @State private var opacity: Double = 0.0
-    @State private var isHovered = false
-    @State private var showsPlayButton = false
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            ZStack {
-                Color.clear
-                    .background(.ultraThickMaterial)
-                    .cornerRadius(6)
-                ZStack {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .shadow(color: .black.opacity(0.2), radius: 3, y: 1.5)
-                    if showsPlayButton {
-                        Button(action: {
-                            if NSWorkspace.shared.open(fileURL) {
-                                onClose()
-                            }
-                        }, label: {
-                            ZStack {
-                                Image(systemName: "circle.fill")
-                                    .font(.system(size: 49))
-                                    .foregroundStyle(.black)
-                                    .opacity(0.5)
-                                Image(systemName: "play.circle")
-                                    .font(.system(size: 50))
-                                    .foregroundStyle(.white)
-                                    .shadow(radius: 4)
-                            }
-                        })
-                        .buttonStyle(.plain)
-                    }
-                }
-                .onHover { hovering in showsPlayButton = hovering }
-                .padding(8)
-            }
-            if isHovered {
-                Button(action: onClose, label: {
-                    ZStack {
-                        Image(systemName: "circle.fill")
-                            .font(.title)
-                            .foregroundStyle(.white)
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .black))
-                            .foregroundStyle(.black)
-                    }
-                })
-                .buttonStyle(.plain)
-                .padding(4)
-            }
-        }
-        .opacity(opacity)
-        .onHover { hovering in isHovered = hovering }
-        .contextMenu {
-            Button(AppText.value("scRecordingRevealInFinder", language: language)) {
-                NSWorkspace.shared.activateFileViewerSelecting([fileURL])
-                onClose()
-            }
-            Button(AppText.value("scRecordingDeleteFile", language: language)) {
-                try? FileManager.default.removeItem(at: fileURL)
-                onClose()
-            }
-            Divider()
-            Button(AppText.value("scRecordingCopyFile", language: language)) {
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                pasteboard.writeObjects([fileURL as NSURL])
-                onClose()
-            }
-            Divider()
-            Button(AppText.value("scRecordingClosePreview", language: language)) { onClose() }
-        }
-        .onAppear {
-            withAnimation(.easeIn(duration: 0.3)) { opacity = 1.0 }
-            scheduleAutoClose()
-        }
-        .onChange(of: isHovered) { _, newValue in
-            if !newValue { scheduleAutoClose() }
-        }
-    }
-
-    private func scheduleAutoClose() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
-            if !isHovered { onClose() }
-        }
-    }
-}
-
-@MainActor
-final class ScreenRecordingCompletionPreview {
-    static let shared = ScreenRecordingCompletionPreview()
-
-    private var panel: NSWindow?
-
-    func show(image: NSImage, fileURL: URL, language: AppLanguage = .system) {
-        close()
-        let panel = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 266, height: 156),
-            styleMask: [.fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        panel.level = .statusBar
-        panel.titlebarAppearsTransparent = true
-        panel.titleVisibility = .hidden
-        panel.isReleasedWhenClosed = false
-        panel.backgroundColor = .clear
-        panel.contentView = NSHostingView(
-            rootView: CompletionPreviewContentView(image: image, fileURL: fileURL, language: language) { [weak self] in
-                self?.close()
-            }
-        )
-        if let screen = NSScreen.screenWithMouse {
-            panel.setFrameOrigin(NSPoint(x: screen.frame.maxX - 280, y: screen.frame.minY + 20))
-        }
-        panel.orderFront(nil)
-        self.panel = panel
-    }
-
-    func close() {
-        panel?.close()
-        panel = nil
     }
 }
 

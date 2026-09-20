@@ -1313,23 +1313,34 @@ final class ImageHostingUploadHUD {
 final class SmartCaptureToast {
     static let shared = SmartCaptureToast()
 
+    /// 落盘与 OCR 的回调在模型层直接弹这层 UI，测试跑起来会把提示画到用户桌面上。
+    /// 只在能确认是测试宿主时静默，`swift run` 调试不受影响。
+    nonisolated static let isTestHost = NSClassFromString("XCTestCase") != nil
+        || Bundle.main.bundleURL.pathExtension == "xctest"
+        || CommandLine.arguments.contains("--test-bundle-path")
+
     private var panel: NSPanel?
-    private var titleLabel: NSTextField?
-    private var detailLabel: NSTextField?
+    private var hosting: NSHostingView<SmartCaptureToastView>?
     private var dismissTask: Task<Void, Never>?
 
     func showSaved(url: URL, language: AppLanguage) {
         show(
+            symbol: "checkmark.circle.fill",
+            tint: .green,
             title: AppText.value("scQuickCopySavedTitle", language: language),
-            detail: AppText.value("scQuickCopySavedDetail", language: language, url.path),
+            detail: Self.displayPath(for: url),
+            truncation: .middle,
             autoDismissAfter: 4
         )
     }
 
     func showFailure(error: Error, language: AppLanguage) {
         show(
+            symbol: "xmark.octagon.fill",
+            tint: .red,
             title: AppText.value("scQuickCopySaveFailedTitle", language: language),
             detail: error.localizedDescription,
+            truncation: .tail,
             autoDismissAfter: 6
         )
     }
@@ -1337,8 +1348,11 @@ final class SmartCaptureToast {
     /// OCR 文字已写入剪贴板；副标题用识别结果的一行摘要。
     func showOCRCopied(text: String, language: AppLanguage) {
         show(
+            symbol: "text.viewfinder",
+            tint: .secondary,
             title: AppText.value("scOCRCopied", language: language),
             detail: Self.preview(of: text),
+            truncation: .tail,
             autoDismissAfter: 3
         )
     }
@@ -1346,8 +1360,11 @@ final class SmartCaptureToast {
     /// OCR 没有识别到可复制的内容。
     func showOCRNoText(language: AppLanguage) {
         show(
+            symbol: "exclamationmark.circle.fill",
+            tint: .orange,
             title: AppText.value("scOCR", language: language),
             detail: AppText.value("scOCRNoText", language: language),
+            truncation: .tail,
             autoDismissAfter: 3
         )
     }
@@ -1359,20 +1376,49 @@ final class SmartCaptureToast {
         return String(collapsed.prefix(limit)) + "…"
     }
 
-    private func show(title: String, detail: String, autoDismissAfter seconds: Int) {
+    /// 家目录写成 `~`，剩下的交给中间省略号——文件名比目录前缀更值得看见。
+    nonisolated static func displayPath(for url: URL) -> String {
+        let home = NSHomeDirectory()
+        guard url.path.hasPrefix(home + "/") else { return url.path }
+        return "~" + url.path.dropFirst(home.count)
+    }
+
+    private func show(
+        symbol: String,
+        tint: Color,
+        title: String,
+        detail: String,
+        truncation: Text.TruncationMode,
+        autoDismissAfter seconds: Int
+    ) {
+        guard !Self.isTestHost else { return }
         let panel = makePanelIfNeeded()
-        titleLabel?.stringValue = title
-        detailLabel?.stringValue = detail
-        panel.alphaValue = 1
+        hosting?.rootView = SmartCaptureToastView(
+            symbol: symbol,
+            tint: tint,
+            title: title,
+            detail: detail,
+            truncation: truncation
+        )
+        hosting?.invalidateIntrinsicContentSize()
+        panel.layoutIfNeeded()
+        if let size = hosting?.fittingSize {
+            panel.setContentSize(NSSize(width: ceil(size.width), height: ceil(size.height)))
+        }
         position(panel)
+        panel.alphaValue = 0
         panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.15
+            panel.animator().alphaValue = 1
+        }
         scheduleDismiss(after: seconds)
     }
 
     private func makePanelIfNeeded() -> NSPanel {
         if let panel { return panel }
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 92),
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 48),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -1391,40 +1437,28 @@ final class SmartCaptureToast {
         effectView.blendingMode = .withinWindow
         effectView.state = .active
         effectView.wantsLayer = true
-        effectView.layer?.cornerRadius = 14
+        effectView.layer?.cornerRadius = 12
         effectView.layer?.masksToBounds = true
 
-        let titleLabel = NSTextField(labelWithString: "")
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = .labelColor
-        titleLabel.alignment = .center
-
-        let detailLabel = NSTextField(labelWithString: "")
-        detailLabel.font = .systemFont(ofSize: 12)
-        detailLabel.textColor = .secondaryLabelColor
-        detailLabel.alignment = .center
-        detailLabel.lineBreakMode = .byCharWrapping
-        detailLabel.maximumNumberOfLines = 3
-
-        let stack = NSStackView(views: [titleLabel, detailLabel])
-        stack.orientation = .vertical
-        stack.alignment = .width
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 14, left: 18, bottom: 14, right: 18)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        effectView.addSubview(stack)
+        let hosting = NSHostingView(rootView: SmartCaptureToastView(
+            symbol: "checkmark.circle.fill",
+            tint: .green,
+            title: "",
+            detail: "",
+            truncation: .middle
+        ))
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        effectView.addSubview(hosting)
+        NSLayoutConstraint.activate([
+            hosting.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
+            hosting.topAnchor.constraint(equalTo: effectView.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
+        ])
         panel.contentView = effectView
 
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: effectView.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
-        ])
-
         self.panel = panel
-        self.titleLabel = titleLabel
-        self.detailLabel = detailLabel
+        self.hosting = hosting
         return panel
     }
 
@@ -1456,6 +1490,35 @@ final class SmartCaptureToast {
         dismissTask?.cancel()
         dismissTask = nil
         panel?.orderOut(nil)
+    }
+}
+
+private struct SmartCaptureToastView: View {
+    let symbol: String
+    let tint: Color
+    let title: String
+    let detail: String
+    var truncation: Text.TruncationMode = .middle
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(truncation)
+            }
+            .multilineTextAlignment(.leading)
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 380, alignment: .leading)
     }
 }
 
@@ -3135,7 +3198,7 @@ final class SmartScreenshotController {
         layoutQuickAccessStack()
     }
 
-    func showQuickAccess(mediaURL: URL) {
+    func showQuickAccess(mediaURL: URL, onDelete: (() -> Void)? = nil) {
         let id = UUID()
         let controller = SmartMediaQuickAccessWindowController(
             url: mediaURL,
@@ -3146,6 +3209,7 @@ final class SmartScreenshotController {
                     self?.setQuickAccessCountdownPaused(id: id, paused: false)
                 }
             },
+            onDelete: onDelete,
             onClose: { [weak self] in
                 self?.removeQuickAccess(id: id)
             }
@@ -4582,6 +4646,7 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
     private let url: URL
     private let language: AppLanguage
     private let onEdit: () -> Void
+    private let onDelete: (() -> Void)?
     private let onClose: () -> Void
     private var panel: NSPanel?
     private var countdownTimer: Timer?
@@ -4589,10 +4654,17 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
     private var countdownPaused = false
     @Published private(set) var remainingTime = SmartMediaQuickAccessWindowController.autoDismissDelay
 
-    init(url: URL, language: AppLanguage, onEdit: @escaping () -> Void, onClose: @escaping () -> Void) {
+    init(
+        url: URL,
+        language: AppLanguage,
+        onEdit: @escaping () -> Void,
+        onDelete: (() -> Void)?,
+        onClose: @escaping () -> Void
+    ) {
         self.url = url
         self.language = language
         self.onEdit = onEdit
+        self.onDelete = onDelete
         self.onClose = onClose
     }
 
@@ -4616,6 +4688,7 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
             onOpen: { [weak self] in self?.openMedia() },
             onEdit: { [weak self] in self?.editMedia() },
             onReveal: { [weak self] in self?.revealMedia() },
+            onDelete: onDelete.map { action in { [weak self] in self?.deleteMedia(with: action) } },
             onClose: { [weak self] in self?.close() }
         ))
         panel.center()
@@ -4697,6 +4770,11 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
     private func revealMedia() {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
+
+    private func deleteMedia(with action: () -> Void) {
+        close()
+        action()
+    }
 }
 
 private struct SmartMediaQuickAccessView: View {
@@ -4707,6 +4785,7 @@ private struct SmartMediaQuickAccessView: View {
     let onOpen: () -> Void
     let onEdit: () -> Void
     let onReveal: () -> Void
+    let onDelete: (() -> Void)?
     let onClose: () -> Void
     @State private var thumbnail: NSImage?
 
@@ -4738,6 +4817,11 @@ private struct SmartMediaQuickAccessView: View {
                 Button(action: onOpen) { Label(AppText.value("scOpen", language: language), systemImage: "arrow.up.right.square") }
                 Button(action: onEdit) { Label(AppText.value("scEditMedia", language: language), systemImage: "scissors") }
                 Button(action: onReveal) { Label(AppText.value("scReveal", language: language), systemImage: "folder") }
+                if let onDelete {
+                    Button(role: .destructive, action: onDelete) {
+                        Label(AppText.value("scDelete", language: language), systemImage: "trash")
+                    }
+                }
                 Spacer()
                 Button(action: onClose) { Image(systemName: "xmark") }
                     .buttonStyle(.borderless)

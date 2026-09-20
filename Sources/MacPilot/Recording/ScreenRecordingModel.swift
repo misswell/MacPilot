@@ -484,7 +484,7 @@ final class ScreenRecordingModel: ObservableObject {
                 self.isDeviceRecording = false
                 self.selectedDeviceName = ""
                 self.lastRecordingURL = url
-                self.onCompleted?(url)
+                if self.settings.showPreviewAfterRecord { self.onCompleted?(url) }
             }
             if started {
                 self.isDeviceRecording = true
@@ -832,7 +832,6 @@ final class ScreenRecordingModel: ObservableObject {
         }
         state = .stopping
         stopTimer()
-        let previewImage = session.initialFrameImage
         self.session = nil
         ScreenRecordingFloatingController.shared.close()
         ScreenRecordingMouseHighlighter.shared.stopMonitoring()
@@ -841,7 +840,7 @@ final class ScreenRecordingModel: ObservableObject {
             do {
                 let url = try await session.stop()
                 guard let self else { return }
-                self.finishRecording(url: url, previewImage: previewImage)
+                self.finishRecording(url: url)
             } catch {
                 guard let self else { return }
                 self.state = .idle
@@ -857,7 +856,7 @@ final class ScreenRecordingModel: ObservableObject {
         }
     }
 
-    private func finishRecording(url: URL, previewImage: NSImage?) {
+    private func finishRecording(url: URL) {
         lastRecordingURL = url
         elapsedTime = elapsedDuration(at: Date())
         startedAt = nil
@@ -866,26 +865,12 @@ final class ScreenRecordingModel: ObservableObject {
         microphoneLevel = 0
         state = .idle
         errorMessage = nil
-        if settings.showPreviewAfterRecord, let image = previewImage ?? lastFrameThumbnail(for: url) {
-            ScreenRecordingCompletionPreview.shared.show(image: image, fileURL: url, language: language)
-        }
         ScreenRecordingNotifications.show(
             titleKey: "scRecordingCompletedTitle",
             bodyKey: "scRecordingCompletedBody",
             arguments: [url.lastPathComponent]
         )
-        onCompleted?(url)
-    }
-
-    private func lastFrameThumbnail(for url: URL) -> NSImage? {
-        let asset = AVURLAsset(url: url)
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 500, height: 500)
-        guard let cgImage = try? generator.copyCGImage(at: CMTime(value: 1, timescale: 10), actualTime: nil) else {
-            return nil
-        }
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        if settings.showPreviewAfterRecord { onCompleted?(url) }
     }
 
     func cancel() {

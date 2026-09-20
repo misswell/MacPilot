@@ -82,7 +82,6 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
 
     private var frameSaveRequested = false
     private var frameSaveHandler: ((URL?) -> Void)?
-    private var posterImageCache: NSImage?
 
     private init(
         writer: AVAssetWriter,
@@ -463,13 +462,6 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
         lock.unlock()
     }
 
-    /// The first captured frame, kept for the completion preview.
-    var initialFrameImage: NSImage? {
-        lock.lock()
-        defer { lock.unlock() }
-        return posterImageCache
-    }
-
     // MARK: - Microphone
 
     /// Records the microphone onto its own track. The default device uses
@@ -711,9 +703,6 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
                 didStartWritingSession = true
             }
             didCaptureVideo = true
-            if posterImageCache == nil {
-                posterImageCache = Self.posterThumbnail(from: sampleBuffer)
-            }
 
             // While the system presenter overlay transitions between its
             // states, frames are dropped until the overlay is ready.
@@ -853,16 +842,6 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
             Self.logger.error("Could not save frame: \(error.localizedDescription, privacy: .public)")
             return nil
         }
-    }
-
-    private static func posterThumbnail(from sampleBuffer: CMSampleBuffer) -> NSImage? {
-        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
-        CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
-        let ciImage = CIImage(cvPixelBuffer: imageBuffer)
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width / 2, height: cgImage.height / 2))
     }
 
     // MARK: - Finishing

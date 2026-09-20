@@ -103,4 +103,18 @@ struct QuickAccessTests {
         #expect(QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: true, zoomPickerPresented: false))
         #expect(!QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: false, zoomPickerPresented: false))
     }
+
+    @Test func toastPathDetailKeepsTheFileNameAndAbbreviatesHome() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let inside = URL(fileURLWithPath: home + "/Pictures/MacPilot Screenshots/2026-09-20/MacPilot_a.png")
+        let display = SmartCaptureToast.displayPath(for: inside)
+        #expect(display.hasPrefix("~/"))
+        #expect(display.hasSuffix("MacPilot_a.png"))
+        #expect(SmartCaptureToast.displayPath(for: URL(fileURLWithPath: "/tmp/elsewhere.png")) == "/tmp/elsewhere.png")
+    }
+
+    /// 轻提示是模型层回调直接画的窗口：跑测试时它必须闭嘴，否则每个落盘用例都会在用户屏幕上闪一下。
+    @Test func toastDetectsTheTestHost() {
+        #expect(SmartCaptureToast.isTestHost)
+    }
 }
