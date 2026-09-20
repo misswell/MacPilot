@@ -8,11 +8,17 @@
 //  except the brightness keys. The captured levels are therefore persisted
 //  for as long as the blank is held and replayed on the next launch.
 //
+//  The keyboard backlight rides along in the same file, for the same reason and
+//  one of its own: blanking switches the keyboard's automatic control off so the
+//  light sensor cannot raise the level back up, and a session that never came
+//  back would otherwise leave that setting off for good.
+//
 
 import Foundation
 
-/// The captured pre-blank brightness of every display whose backlight
-/// MacPilot was holding at zero, keyed by CoreGraphics display ID.
+/// The captured pre-blank state of everything MacPilot was holding dark when a
+/// session died: displays, keyed by CoreGraphics display ID, and keyboards,
+/// keyed by the private framework's own identifier.
 struct DisplayBlankSnapshot: Codable, Equatable {
     var version: Int = Self.currentVersion
     var capturedAt: Date
@@ -26,11 +32,21 @@ struct DisplayBlankSnapshot: Codable, Equatable {
     /// otherwise. Optional so that a snapshot written before this field existed
     /// still decodes: a default value alone would make the key required.
     var ddcPowerOff: [String]?
+    /// The keyboards whose backlight MacPilot was holding at zero, with the
+    /// automatic control it had switched off. Same reasoning as the displays — and
+    /// the automatic control is the reason this cannot wait for the user to notice:
+    /// a keyboard left with its sensor switched off by MacPilot stays that way
+    /// however many times the brightness keys are pressed. Optional, and so a
+    /// snapshot written before keyboards existed still decodes.
+    var keyboardBacklights: [KeyboardBacklightState]?
 
     /// The displays recorded as switched off.
     var poweredOffDisplays: [String] { ddcPowerOff ?? [] }
 
-    static let currentVersion = 2
+    /// The keyboards recorded as darkened.
+    var keyboardStates: [KeyboardBacklightState] { keyboardBacklights ?? [] }
+
+    static let currentVersion = 3
 }
 
 /// Reads and writes the snapshot file. Every operation is best effort: the
@@ -73,7 +89,7 @@ struct DisplayBlankSnapshotStore {
     }
 }
 
-/// What to do with one recorded display during recovery. Pure, so the
+/// What to do with one recorded backlight during recovery. Pure, so the
 /// decision is testable without hardware.
 enum DisplayBlankRecoveryDecision: Equatable {
     /// The panel is still dark: replay the captured level.
@@ -81,7 +97,7 @@ enum DisplayBlankRecoveryDecision: Equatable {
     /// The backlight is no longer at zero — the user (or a brightness key)
     /// already took care of it. Replaying the old value would clobber that.
     case alreadyRepaired
-    /// The display cannot be read now (disconnected, or no driver answers).
+    /// The device cannot be read now (disconnected, or no driver answers).
     case undrivable
 }
 
@@ -89,8 +105,8 @@ enum DisplayBlankRecoveryDecision: Equatable {
 /// blank. Runs once at launch, before anything else touches the displays.
 enum DisplayBlankRecovery {
     /// The seams recovery drives, injectable so tests can run the whole flow
-    /// without a display attached. Rebuilt per call: the closures are stateless
-    /// views over the two shared drivers.
+    /// without a display or a keyboard attached. Rebuilt per call: the closures
+    /// are stateless views over the shared drivers.
     struct Appliers {
         let readSystem: (UInt32) -> Float?
         let writeSystem: (UInt32, Float) -> Bool
@@ -98,6 +114,37 @@ enum DisplayBlankRecovery {
         let writeDDC: (UInt32, Double) -> Bool
         let readPower: (UInt32) -> UInt16?
         let writePower: (UInt32, UInt16) -> Bool
+        let readKeyboardBrightness: (UInt64) -> Float?
+        let writeKeyboardBrightness: (UInt64, Float) -> Bool
+        let readKeyboardAuto: (UInt64) -> Bool?
+        let writeKeyboardAuto: (UInt64, Bool) -> Bool
+
+        /// The keyboard seams default to "nothing answers", which is what a Mac
+        /// without a controllable keyboard backlight looks like to recovery: every
+        /// keyboard entry is then skipped rather than guessed at.
+        init(
+            readSystem: @escaping (UInt32) -> Float?,
+            writeSystem: @escaping (UInt32, Float) -> Bool,
+            readDDC: @escaping (UInt32) -> Double?,
+            writeDDC: @escaping (UInt32, Double) -> Bool,
+            readPower: @escaping (UInt32) -> UInt16?,
+            writePower: @escaping (UInt32, UInt16) -> Bool,
+            readKeyboardBrightness: @escaping (UInt64) -> Float? = { _ in nil },
+            writeKeyboardBrightness: @escaping (UInt64, Float) -> Bool = { _, _ in false },
+            readKeyboardAuto: @escaping (UInt64) -> Bool? = { _ in nil },
+            writeKeyboardAuto: @escaping (UInt64, Bool) -> Bool = { _, _ in false }
+        ) {
+            self.readSystem = readSystem
+            self.writeSystem = writeSystem
+            self.readDDC = readDDC
+            self.writeDDC = writeDDC
+            self.readPower = readPower
+            self.writePower = writePower
+            self.readKeyboardBrightness = readKeyboardBrightness
+            self.writeKeyboardBrightness = writeKeyboardBrightness
+            self.readKeyboardAuto = readKeyboardAuto
+            self.writeKeyboardAuto = writeKeyboardAuto
+        }
 
         static var live: Appliers {
             Appliers(
@@ -106,7 +153,11 @@ enum DisplayBlankRecovery {
                 readDDC: { DDCBacklight.shared?.level($0) },
                 writeDDC: { id, level in DDCBacklight.shared?.setLevel(level, id) ?? false },
                 readPower: { DDCBacklight.shared?.powerMode($0) },
-                writePower: { id, mode in DDCBacklight.shared?.setPowerMode(mode, id).didConfirm ?? false }
+                writePower: { id, mode in DDCBacklight.shared?.setPowerMode(mode, id).didConfirm ?? false },
+                readKeyboardBrightness: { KeyboardBacklightController.shared?.brightness(for: $0) },
+                writeKeyboardBrightness: { id, level in KeyboardBacklightController.shared?.setBrightness(level, for: id) ?? false },
+                readKeyboardAuto: { KeyboardBacklightController.shared?.isAutoBrightnessEnabled(for: $0) },
+                writeKeyboardAuto: { id, enabled in KeyboardBacklightController.shared?.setAutoBrightnessEnabled(enabled, for: id) ?? false }
             )
         }
     }
@@ -128,10 +179,34 @@ enum DisplayBlankRecovery {
         return DDCPacket.isPoweredDown(current) ? .restore : .alreadyRepaired
     }
 
-    /// Restores every recorded display that is still dark and reports how many
-    /// were touched.
+    /// What to do with one keyboard's automatic brightness during recovery. Pure,
+    /// like the display rules above.
+    enum KeyboardAutoBacklightDecision: Equatable {
+        /// The sensor was on when the blank took it off, and it is still off:
+        /// that interruption is MacPilot's, so undo it.
+        case switchBackOn
+        /// Nothing to undo — it was off to begin with, it is already on, the user
+        /// has since set it themselves, or the keyboard no longer answers.
+        case leaveAsSet
+    }
+
+    /// Only MacPilot's own interruption is undone. A snapshot that says the sensor
+    /// was on and a keyboard that now says it is off can only mean the blank that
+    /// darkened it never came back, so it goes back on. Anything else is left as
+    /// the user set it — including a sensor they switched off in the meantime,
+    /// which recovery has no business re-enabling.
+    static func autoBrightnessDecision(
+        snapshotEnabled: Bool,
+        current: Bool?
+    ) -> KeyboardAutoBacklightDecision {
+        guard snapshotEnabled, current == false else { return .leaveAsSet }
+        return .switchBackOn
+    }
+
+    /// Restores every recorded display and keyboard that is still dark and reports
+    /// how many were touched.
     ///
-    /// Each display is checked before it is written: a backlight that is no
+    /// Each item is checked before it is written: a backlight that is no
     /// longer at zero was already raised by the user, and replaying the old
     /// value would clobber their choice. A write that the display does not
     /// confirm stays in the snapshot — a locked session can refuse it, and the
@@ -148,6 +223,7 @@ enum DisplayBlankRecovery {
         var unresolvedSystem: [String: Float] = [:]
         var unresolvedDDC: [String: Double] = [:]
         var unresolvedPower: [String] = []
+        var unresolvedKeyboard: [KeyboardBacklightState] = []
 
         for (key, original) in snapshot.systemBacklight {
             guard let id = UInt32(key) else { continue }
@@ -174,16 +250,48 @@ enum DisplayBlankRecovery {
             }
         }
 
-        if unresolvedSystem.isEmpty, unresolvedDDC.isEmpty, unresolvedPower.isEmpty {
+        for state in snapshot.keyboardStates {
+            // Level and sensor are decided apart: a user who raised the keyboard
+            // with its brightness keys has not switched the automatic control
+            // back on, and that is still MacPilot's mess to clean up.
+            var touched = false
+            var needsAnotherLaunch = false
+            switch decision(current: appliers.readKeyboardBrightness(state.keyboardID).map(Double.init)) {
+            case .restore:
+                touched = true
+                if !appliers.writeKeyboardBrightness(state.keyboardID, state.brightness) {
+                    needsAnotherLaunch = true
+                }
+            case .alreadyRepaired, .undrivable:
+                break
+            }
+            if autoBrightnessDecision(
+                snapshotEnabled: state.autoBrightnessEnabled,
+                current: appliers.readKeyboardAuto(state.keyboardID)
+            ) == .switchBackOn {
+                touched = true
+                if !appliers.writeKeyboardAuto(state.keyboardID, true) {
+                    needsAnotherLaunch = true
+                }
+            }
+            if needsAnotherLaunch {
+                unresolvedKeyboard.append(state)
+            } else if touched {
+                restored += 1
+            }
+        }
+
+        if unresolvedSystem.isEmpty, unresolvedDDC.isEmpty, unresolvedPower.isEmpty, unresolvedKeyboard.isEmpty {
             store.clear()
         } else {
             snapshot.systemBacklight = unresolvedSystem
             snapshot.ddcBacklight = unresolvedDDC
             snapshot.ddcPowerOff = unresolvedPower
+            snapshot.keyboardBacklights = unresolvedKeyboard
             store.save(snapshot)
         }
         if restored > 0 {
-            DiagnosticLog.write("DisplayPower", "blank snapshot restored displays=\(restored) capturedAt=\(snapshot.capturedAt)")
+            DiagnosticLog.write("DisplayPower", "blank snapshot restored items=\(restored) capturedAt=\(snapshot.capturedAt)")
         }
         return restored
     }

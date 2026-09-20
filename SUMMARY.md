@@ -1399,3 +1399,74 @@ Mac 上显示的是**一个**配对码，而两个并发 `pairRequest` 会各自
 - `endAllManualSessions()` 本身保留，现在只剩一个调用方：设置页「停止」按钮（`AwakeSettingsView.swift:150`）——用户在那里是对全部手动 Session 做明确操作。菜单栏不再复制这条能力，想全停就在子菜单里逐个点掉，多两下点击，换掉一个无差别入口。
 - 顺带删掉 `toggleManualSession()`：它内部调的就是 `endAllManualSessions()`，从 `90f2d15`（简化 Awake 菜单）起已经没有调用方，属于同类残留，留着只会被重新接回菜单栏。
 - 删除本地化孤儿键 `awakeStopAllManual`（中英同步）。
+
+## 五十四、黑屏时键盘背光一起灭，亮屏后回到用户原来那一档（v1.1.377）
+
+真休眠会顺手把键盘背光一起压下去。MacPilot 的「关闭屏幕」刻意**不**休眠（第三十节：一休眠就会被「立即要求密码」策略锁掉会话），于是显示器黑了、键盘还亮着——桌上只关了一半。
+
+### 用私有框架，但依然零外部依赖
+
+新增 `Sources/MacPilot/ScreenControl/KeyboardBacklightController.swift`，走 `CoreBrightness` 的 `KeyboardBrightnessClient`，和 `DisplayServices` 完全同一套路：`dlopen` 打开、`NSClassFromString` 拿类、**五个 selector 逐个 `instancesRespond` 探测**，任一缺失就整体降级返回 `nil`。不引 npm / Node / kbdlight 之类的第三方可执行程序。
+
+用到的签名（键盘 ID 一律 `unsigned long long`）：
+
+```
+copyKeyboardBacklightIDs            -> NSArray<NSNumber *>
+brightnessForKeyboard:              -> float
+setBrightness:forKeyboard:          -> BOOL
+isAutoBrightnessEnabledForKeyboard: -> BOOL
+enableAutoBrightness:forKeyboard:   -> BOOL
+```
+
+`copy...` 按 ObjC 所有权约定是 +1，所以函数指针签名返回 `Unmanaged<CFArray>?` 再 `takeRetainedValue()`，而不是让 ARC 按 unretained 处理。客户端对象常驻进程，所有调用用一把 `NSLock` 串行化——它没有任何线程安全承诺。
+
+### 两条顺序，错一条就是回归
+
+1. **先确认屏幕黑了，再关键盘。** `blankDisplay()` 里键盘排在「至少有一块屏成功压黑」那道 guard 之后。否则屏幕黑不掉却把键盘灯灭了，是最难解释的一种行为。
+2. **先把自动背光关掉，再把亮度写 0。** 只 `setBrightness(0)` 不够：环境光自动调节随时能把键盘重新点亮，黑屏就变成「屏幕全黑、键盘亮着」。恢复时反过来——先写回原亮度，再把自动状态写回**原值**，所以整块逻辑从不永久改动用户的自动背光设置。
+
+恢复的目标永远是捕获值，不是某个常量：70% 回来是 70%，20% 回来是 20%，本来就是 0% 的人**继续 0%**（绝不能因为「亮屏了」就替他点亮）。`restore()` 只写当前值与捕获值不相等的项，所以整个恢复是幂等的——`unblankDisplay()` 可能被走到两次（输入 watcher 和用户自己拖亮度滑杆）。
+
+### Crash recovery 必须一起扩，而且判定要拆成两半
+
+`DisplayBlankSnapshot` 升到 `currentVersion = 3`，新增 **optional** 字段 `keyboardBacklights: [KeyboardBacklightState]?`（旧的 v2 / v1 文件照旧 decode，字段用 `?? []` 读出）。
+
+⚠️ **保存条件也要加键盘这一项**，这是个很容易漏的真 bug：旧代码只在 `systemBacklight` / `ddcBacklight` / `ddcPowerOff` 非空时才落盘。而「内置屏只能用遮罩盖黑 + 键盘背光成功关掉」恰好三者皆空，旧逻辑不会写恢复文件；这时崩溃，用户拿到的是一个永久 `auto = false` 的键盘。现在条件抽成纯函数 `DisplayPower.needsCrashSnapshot(...)`，四个来源任一非空即保存。
+
+启动时的恢复策略刻意保守，而且**亮度与自动背光分开判**：
+
+| 当前状态 | 结论 |
+|---|---|
+| 亮度 == 0 | 还是 MacPilot 留下的黑，写回 snapshot 亮度 |
+| 亮度 > 0 | 用户已经自己按亮，**不再覆盖** |
+| snapshot `auto = true` 且当前 `false` | 这个 false 是 MacPilot 关的，补开 |
+| snapshot `auto = false` | 用户本来就要关，绝不替他打开 |
+
+拆开是关键：用户崩溃后按了一下 F6，只修好了亮度，**没有任何东西会把传感器开关替他打开**——只看亮度的恢复规则会把这条漏掉（已加测试 `recoverySwitchesTheSensorBackOnEvenAfterTheUserRaisedTheLevel`）。写被拒绝的项（锁屏会话会拒写）留在文件里下次再试，全部成功才 `clear()`。
+
+### 不加任何监听，复用既有的 400ms 轮询
+
+`startUnblankWatcher(idleAtBlank:)` 已经在每约 400ms 用 `CGEventSource.secondsSinceLastEventType` 判「用户是否动过」，检测到就 `unblankDisplay()`。键盘恢复挂在同一次 unblank 上，因此**不新增 Accessibility 监听、不新增常驻 event tap**。`isBlanked` 现在把「键盘还压着」也算进来——两者由同一次 unblank 一起解除，watcher 不会因为只剩键盘而提前退出。
+
+`sleepDisplay()` 不参与：那是 `pmset displaysleepnow`，硬件状态归 macOS 管。但它开头照旧 `unblankDisplay()`，所以「MacPilot 黑屏中转休眠」会先把改过的键盘状态交还给系统，这个顺序保留。
+
+### 实测（用仓库里真实的 `KeyboardBacklightController.swift` 编探针跑）
+
+```
+controller available: true
+ids: [95158913]
+captured:      [KeyboardBacklightState(keyboardID: 95158913, brightness: 0.31048724, autoBrightnessEnabled: true)]
+while blanked: [(95158913, Optional(0.0), Optional(false))]
+after restore: [(95158913, Optional(0.31048724), Optional(true))]
+restored twice ok
+```
+
+✅ 键盘灯物理灭掉，恢复回到 0.31048724 这一档（不是 100%，不是默认值），auto 也回到 on，重复恢复无副作用。
+
+### 已知的 API 限制
+
+`brightnessForKeyboard:` 没有状态码，**「读取失败」与「本来就是 0」无法区分**。读不到只能当 0 处理；所以 `captureState()` 对读不出亮度的键盘直接跳过、不下发 0（宁可少关一盏，也不留下一份 nobody 能还原的 0）。
+
+### 测试
+
+`Tests/MacPilotTests/KeyboardBacklightTests.swift` 全部跑在假背光上（真硬件会把跑测试的人的键盘弄灭），覆盖：0.7/auto-on 完整往返、0.4/auto-off 不去动传感器、原本 0% 恢复后仍 0%、多键盘各记各的、无背光键盘、客户端完全不响应、读不到亮度不压暗、写被拒不丢状态，以及恢复侧的三条判定、v2 快照 decode、失败写留队重试、`needsCrashSnapshot` 的键盘-only 回归。`swift test --filter "KeyboardBacklightTests|DisplayPowerTests|DisplayBlankRecoveryTests"` 全绿。

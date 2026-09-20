@@ -16,7 +16,9 @@
 //  * `turnOffScreen()` blacks every display without sleeping any of them, so
 //    that policy never fires and the session stays unlocked. It is what a user
 //    pressing "turn off screen" actually means, since MacPilot has a separate
-//    lock action.
+//    lock action. Nothing is being told to sleep, so the keyboard backlight a
+//    real display sleep would have dimmed has to be driven here as well — see
+//    `KeyboardBacklightController`.
 //
 
 import AppKit
@@ -138,6 +140,11 @@ enum DisplayPower {
     /// External displays MacPilot switched off through DDC power mode. Nothing was
     /// written to their brightness, so bringing one back is a single power-on.
     @MainActor private static var ddcPoweredOffDisplays: Set<CGDirectDisplayID> = []
+    /// What the keyboard backlights looked like before the blank turned them off,
+    /// which is what the unblank puts back. Only ever filled in after a display is
+    /// genuinely dark: a keyboard that went out over a screen that did not would
+    /// leave the user staring at a lit panel with no light on the keys.
+    @MainActor private static var blankedKeyboardBacklights: [KeyboardBacklightState] = []
     /// True while black windows are covering the displays whose backlight could
     /// not be driven.
     @MainActor private static var isOverlayShowing = false
@@ -150,9 +157,12 @@ enum DisplayPower {
     /// Where the held-blank brightness snapshot lives while the screen is black.
     @MainActor private static let snapshotStore = DisplayBlankSnapshotStore.standard
 
-    /// True while MacPilot is holding the screen black.
+    /// True while MacPilot is holding the screen black — including the keyboard
+    /// backlight it turned off with it, because both are released by the same
+    /// unblank and a held keyboard must keep the wake watcher running too.
     @MainActor static var isBlanked: Bool {
-        !blankedDisplays.isEmpty || !ddcBlankedDisplays.isEmpty || !ddcPoweredOffDisplays.isEmpty || isOverlayShowing
+        !blankedDisplays.isEmpty || !ddcBlankedDisplays.isEmpty || !ddcPoweredOffDisplays.isEmpty
+            || !blankedKeyboardBacklights.isEmpty || isOverlayShowing
     }
 
     /// Blacks every online display *without* putting any of them to sleep, so
@@ -227,16 +237,30 @@ enum DisplayPower {
         blankedDisplays = blanked
         ddcBlankedDisplays = ddcBlanked
         ddcPoweredOffDisplays = ddcPoweredOff
+        // The keyboard follows the screens, never leads them: past this point at
+        // least one display is genuinely dark, so a dark keyboard is part of the
+        // same state the user asked for. Its own captures are best effort — a
+        // blank that blacked a screen has already succeeded, whatever CoreBrightness
+        // says about the keys.
+        let keyboards = KeyboardBacklightController.shared?.blank() ?? []
+        blankedKeyboardBacklights = keyboards
         // Persist the state for as long as the blank is held: a force quit or
         // crash would otherwise leave the panels dark with the values needed to
-        // bring them back lost. An overlay-only blank has no display state to
-        // lose, so nothing is written for it.
-        if !blanked.isEmpty || !ddcBlanked.isEmpty || !ddcPoweredOff.isEmpty {
+        // bring them back lost. A cover over a display whose backlight was never
+        // touched, on a Mac with no keyboard to darken, has nothing to lose, so
+        // nothing is written for it.
+        if needsCrashSnapshot(
+            systemBacklights: blanked.count,
+            ddcBacklights: ddcBlanked.count,
+            ddcPoweredOff: ddcPoweredOff.count,
+            keyboardBacklights: keyboards.count
+        ) {
             snapshotStore.save(DisplayBlankSnapshot(
                 capturedAt: Date(),
                 systemBacklight: Dictionary(uniqueKeysWithValues: blanked.map { (String($0.key), $0.value) }),
                 ddcBacklight: Dictionary(uniqueKeysWithValues: ddcBlanked.map { (String($0.key), $0.value) }),
-                ddcPowerOff: ddcPoweredOff.map(String.init)
+                ddcPowerOff: ddcPoweredOff.map(String.init),
+                keyboardBacklights: keyboards
             ))
         }
         if !overlayScreens.isEmpty {
@@ -247,9 +271,25 @@ enum DisplayPower {
         startUnblankWatcher(idleAtBlank: idleAtBlank)
         DiagnosticLog.write(
             "DisplayPower",
-            "display blanked without sleeping backlight=\(blanked.count) ddc=\(ddcBlanked.count) ddcOff=\(ddcPoweredOff.count) overlay=\(overlayScreens.count) displays=\(steps.map(\.displayID))"
+            "display blanked without sleeping backlight=\(blanked.count) ddc=\(ddcBlanked.count) ddcOff=\(ddcPoweredOff.count) overlay=\(overlayScreens.count) keyboard=\(keyboards.count) displays=\(steps.map(\.displayID))"
         )
         return true
+    }
+
+    /// Whether a held blank has anything that a crash would lose.
+    ///
+    /// A pure rule because the case it exists for is the one that is easy to
+    /// miss: a MacBook blacked by the overlay has no display backlight at stake,
+    /// but its keyboard is dark with its automatic control switched off by
+    /// MacPilot. Without a snapshot the next launch has nothing left to put back,
+    /// and a user who keeps the keyboard on its sensor finds it dead for good.
+    static func needsCrashSnapshot(
+        systemBacklights: Int,
+        ddcBacklights: Int,
+        ddcPoweredOff: Int,
+        keyboardBacklights: Int
+    ) -> Bool {
+        systemBacklights > 0 || ddcBacklights > 0 || ddcPoweredOff > 0 || keyboardBacklights > 0
     }
 
     /// Restores the brightness `blankDisplay()` captured and drops any overlay.
@@ -263,6 +303,7 @@ enum DisplayPower {
         guard isBlanked else { return }
 
         let restoredBacklights = blankedDisplays.count
+        let restoredKeyboards = blankedKeyboardBacklights.count
         let hidOverlay = isOverlayShowing
         if let driver = BrightnessDriver.shared {
             for (displayID, original) in blankedDisplays {
@@ -296,6 +337,13 @@ enum DisplayPower {
         }
         ddcPoweredOffDisplays.removeAll()
         ddcBlankedDisplays.removeAll()
+        // The keyboard comes back in the same pass as the displays, from the
+        // values captured when they went dark — the level the user chose, and
+        // their automatic control if they ran it from the light sensor. Restoring
+        // is skipped when nothing was captured, which is every Mac without a
+        // backlit keyboard and every macOS without the private framework.
+        KeyboardBacklightController.shared?.restore(blankedKeyboardBacklights)
+        blankedKeyboardBacklights.removeAll()
         // Cleared only after the restores: a crash between a restore and this
         // line leaves the snapshot in place, and the next launch re-decides per
         // display, skipping the ones already raised. A power-on still waiting
@@ -311,7 +359,7 @@ enum DisplayPower {
         }
         DiagnosticLog.write(
             "DisplayPower",
-            "display unblanked backlight=\(restoredBacklights) ddcOn=\(poweredOn) ddcOnPending=\(stillWaiting.count) overlay=\(hidOverlay ? 1 : 0)"
+            "display unblanked backlight=\(restoredBacklights) ddcOn=\(poweredOn) ddcOnPending=\(stillWaiting.count) overlay=\(hidOverlay ? 1 : 0) keyboard=\(restoredKeyboards)"
         )
     }
 
@@ -325,6 +373,10 @@ enum DisplayPower {
         snapshot.systemBacklight = [:]
         snapshot.ddcBacklight = [:]
         snapshot.ddcPowerOff = displayIDs.map(String.init)
+        // The keyboards were already put back by this point, so replaying their
+        // levels on the next launch would only fight whatever the user chose
+        // meanwhile.
+        snapshot.keyboardBacklights = []
         snapshotStore.save(snapshot)
     }
 

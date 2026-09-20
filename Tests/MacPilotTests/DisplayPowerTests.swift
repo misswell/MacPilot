@@ -165,3 +165,32 @@ extension DisplayPowerTests {
         ]) == nil)
     }
 }
+
+// MARK: - The keyboard backlight that goes dark with the screen
+
+extension DisplayPowerTests {
+    /// A held blank has to be written down whenever *anything* it changed would be
+    /// lost by a crash — not only the display backlights. The case the display-only
+    /// rule missed: a MacBook blacked by the overlay keeps its panel level intact,
+    /// but its keyboard is dark with its light sensor switched off, and without a
+    /// snapshot the next launch has nothing left to put back.
+    @Test func aKeyboardOnlyBlankStillNeedsACrashSnapshot() {
+        #expect(DisplayPower.needsCrashSnapshot(
+            systemBacklights: 0, ddcBacklights: 0, ddcPoweredOff: 0, keyboardBacklights: 1
+        ))
+        // Every display route that records a level still does.
+        #expect(DisplayPower.needsCrashSnapshot(
+            systemBacklights: 1, ddcBacklights: 0, ddcPoweredOff: 0, keyboardBacklights: 0
+        ))
+        #expect(DisplayPower.needsCrashSnapshot(
+            systemBacklights: 0, ddcBacklights: 1, ddcPoweredOff: 0, keyboardBacklights: 0
+        ))
+        #expect(DisplayPower.needsCrashSnapshot(
+            systemBacklights: 0, ddcBacklights: 0, ddcPoweredOff: 1, keyboardBacklights: 0
+        ))
+        // A cover over a display with no keyboard to darken loses nothing.
+        #expect(!DisplayPower.needsCrashSnapshot(
+            systemBacklights: 0, ddcBacklights: 0, ddcPoweredOff: 0, keyboardBacklights: 0
+        ))
+    }
+}
