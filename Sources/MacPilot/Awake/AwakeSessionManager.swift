@@ -237,14 +237,6 @@ final class AwakeSessionManager: ObservableObject {
         }
     }
 
-    func toggleManualSession() {
-        if hasManualSession {
-            endAllManualSessions()
-        } else {
-            _ = startManualSession()
-        }
-    }
-
     func endSession(_ id: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].state == .active else { return }
         sessions[index].state = .ended

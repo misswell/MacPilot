@@ -1388,3 +1388,14 @@ Mac 上显示的是**一个**配对码，而两个并发 `pairRequest` 会各自
 - 内容改用 `NSHostingView` + `SmartCaptureToastView`：图标（成功绿勾 / 失败红叉 / OCR 取景框）+ 标题 13 semibold + 副标题 11 secondary，左对齐，`maxWidth: 380` 封顶，窗口按 `fittingSize` 收缩，圆角 12，出现时 0.15 秒淡入。
 - 副标题不再塞整条路径：家目录折成 `~`，路径走中间省略（`SmartCaptureToast.displayPath`），文件名比目录前缀更值得看见；错误与 OCR 摘要走末尾省略。`scQuickCopySavedDetail` 文案键随之删除。
 - **测试不再往用户屏幕上画提示。** 落盘/OCR 的提示是模型层回调直接弹的窗口，`swift test` 里 `quickCopyAutoSaveWritesFileAndRecordsStats` 一跑，真实提示就闪在桌面上。现在 `SmartCaptureToast.isTestHost`（XCTest 类 / `.xctest` bundle / `--test-bundle-path` 三个信号）为真时直接不弹，`swift run` 调试不受影响；`QuickAccessTests` 里加了断言守住这个判定还生效。
+
+## 五十三、菜单栏去掉「停止手动 Session」：只留逐个停用的入口
+
+反馈：菜单栏右键列表里的「停止手动 Session」该去掉，因为「活动的 Session」子菜单已经能逐个停用。
+
+成立，而且不止是冗余——子菜单是**可选择的**停用（挑哪几个走），菜单栏这一项是**不可撤销的全量**停用：两者并存在等于给一个误触面留了个入口，而它没有提供更强的能力，只是把用户已经逐个管好的东西一次性清掉。所以记录为一次入口收敛，而不是功能删除：
+
+- `AwakeSettingsView.swift` 的菜单栏 Awake 区块删掉 `Button(model.t("awakeStopAllManual"), action: awake.endAllManualSessions)`，结束于「活动的 Session」子菜单。
+- `endAllManualSessions()` 本身保留，现在只剩一个调用方：设置页「停止」按钮（`AwakeSettingsView.swift:150`）——用户在那里是对全部手动 Session 做明确操作。菜单栏不再复制这条能力，想全停就在子菜单里逐个点掉，多两下点击，换掉一个无差别入口。
+- 顺带删掉 `toggleManualSession()`：它内部调的就是 `endAllManualSessions()`，从 `90f2d15`（简化 Awake 菜单）起已经没有调用方，属于同类残留，留着只会被重新接回菜单栏。
+- 删除本地化孤儿键 `awakeStopAllManual`（中英同步）。
