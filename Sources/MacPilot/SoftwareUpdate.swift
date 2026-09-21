@@ -501,9 +501,11 @@ enum UpdatePackageValidator {
             .appendingPathComponent("MacPilotUpdate-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
         do {
-            let archiveURL = workingDirectory.appendingPathComponent("update.zip")
-            try FileManager.default.copyItem(at: downloadURL, to: archiveURL)
-            try run("/usr/bin/ditto", arguments: ["-x", "-k", archiveURL.path, workingDirectory.path])
+            // Unzip straight from the downloaded archive. Copying it into the
+            // staging directory first doubled the footprint of a hundred-odd
+            // megabyte download, and had ditto read from a file sitting inside
+            // the directory it was writing.
+            try run("/usr/bin/ditto", arguments: ["-x", "-k", downloadURL.path, workingDirectory.path])
 
             guard let applicationURL = AppIdentity.applicationURLs(in: workingDirectory).first(where: {
                 guard let bundle = Bundle(url: $0) else { return false }

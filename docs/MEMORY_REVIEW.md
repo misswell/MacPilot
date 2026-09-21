@@ -5,7 +5,7 @@
 本文件是**第二轮评审**，覆盖 `c2639ad`（含闭盖休眠提权 helper、iPhone 亮度/音量控制、iOS 唤醒按钮）。
 第一轮的结论在 §二 被逐条复核，**其中 4 条被推翻或夸大**，已就地更正。
 
-**第三轮（内存方案落地）见 §七**：空闲常驻 −10.2 MB、滚动截图峰值按字节收口、更新链路三处修复，并记录了两条**评估后不做**的项与一条**没能验证**的清单。
+**第三轮（内存方案落地）见 §七**：空闲常驻 −10.2 MB、滚动截图峰值按字节收口、更新链路四处修复，并记录了**三处评估后不做**的项与一份**没能验证**的清单。
 
 关联提交：第一轮 `67f95eb`，第二轮见文末 §六。
 
@@ -148,7 +148,7 @@ swift test --skip shortcutConfigEncodesAndDecodesCarbonModifiers
 
 ## 七、第三轮：空闲常驻与瞬时峰值分开收口
 
-方案来源是一份十节的重构计划（`§10` 的顺序：先量、再主窗口、再切换器、再 Helper、再生命周期、再峰值）。这一轮按那个顺序做到第 7 步，**两处经评估后不做**，**三条交互验收没跑成**。细节叙述在 `SUMMARY.md` 第六十三节，这里只记评审结论。
+方案来源是一份十节的重构计划（`§10` 的顺序：先量、再主窗口、再切换器、再 Helper、再生命周期、再峰值）。这一轮按那个顺序做到第 7 步，**三处经评估后不做**，**三条交互验收没跑成**。细节叙述在 `SUMMARY.md` 第六十三节，这里只记评审结论。
 
 ### 尺子
 
@@ -169,6 +169,7 @@ swift test --skip shortcutConfigEncodesAndDecodesCarbonModifiers
 | `UpdatePackageValidator.sha256(of:)` | `Data(contentsOf: .mappedIfSafe)` 整包 | `FileHandle` 1 MB 分块（与 `FileCompression.swift:977` 已有写法一致） |
 | `UpdatePackageValidator.run` | `waitUntilExit()` 在读管道**之前**，>64 KB 输出会死锁 | 先 `readDataToEndOfFile()` 再 wait |
 | `launchInstaller` | `process.run()` 抛错时两个暂存目录（含上百 MB 解包 app）不删 | catch 内删除后再抛 |
+| `UpdatePackageValidator.prepare` | 先把 zip 复制进暂存目录再 `ditto -x -k`：归档在磁盘上同时存在两份，且源文件就躺在要写入的目录里 | 直接解下载好的那份，删掉复制 |
 | `SmartScrollingCaptureWindowController` | `frames.count < 30`，全屏 Retina 一帧 ~24 MB → 峰值 ~700 MB | `SmartScrollingCaptureBudget`：256 MB 字节预算 **且** 30 帧；触顶时 HUD 换橙色提示（替换而非追加，面板定高） |
 | `ScreenCaptureVerticalStitcher.raster` | 每对帧两份全分辨率 RGBA 栅格 | 横向缩到 256 列、纵向保持精确：28.8 MB → 2.5 MB / 对 |
 | `SmartScrollingCaptureWindowController.finish` | `@MainActor` 上拼接几十帧 → HUD 与全 App 卡死 | `Task.detached` + `autoreleasepool`，`isStitching` 防连点 |
@@ -178,12 +179,11 @@ swift test --skip shortcutConfigEncodesAndDecodesCarbonModifiers
 
 同机、同默认配置、两个 bundle 副本并排闲置两分钟取中位数：main **97.5 → 87.3 MB（−10.2 MB）**，peak 147.4 → 149.4 MB（噪声内）。`--deep` 的 malloc 分区指向同一处：基线 116.2 M allocated / 65.0 M free，本轮 120.6 M / 29.0 M free——**真正被占住的堆少了约 36 MB**，而总分配量没涨。
 
-### 评估后不做（两条）
+### 评估后不做（三处）
 
 1. **缩略图缓存 `totalCostLimit = 6 MB`**：预览最宽 256×160 px，30 张顶天 ≈ 4.8 MB，字节上限不可达。条数上限已经锁住字节，再加一套按像素计费就是 §二 里 `IconCache.cost(of:)` 那种「永远碰不到的上限」。已在 `WindowSwitcherThumbnailCachePolicy.maximumCount` 上写明。
 2. **CPU/内存菜单快照的 TTL 自清理**：`static let menuSampler` + `cachedMenuSample` 存的是每 App 一行的结构体与 pid→计数器字典，量级几十 KB，且采样只在菜单展开时同步发生（没有定时器）。为它加一个 5 秒清理任务是净负担。
-
-`FeatureRuntime` 协议（§6 第 5 阶段）**没有做**：九个子系统里真正持有「可交还且能重建」状态的只有切换器与截图链路，已经各自接上 `MemoryPressure`；其余多数是常驻观察者与热键，deactivate 与 stop 语义重复。协议会先带来九个空实现。
+3. **`FeatureRuntime` 协议（方案第 5 阶段）**：九个子系统里真正持有「可交还且能重建」状态的只有切换器与截图链路，已经各自接上 `MemoryPressure`；其余多数是常驻观察者与热键，deactivate 与 stop 语义重复。协议会先带来九个空实现。
 
 ### 仍未解决（在 §四 基础上追加）
 

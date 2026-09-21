@@ -1763,11 +1763,12 @@ Scripts/measure-memory.sh --diff a.json b.json         # 按角色列 delta
 
 ### 更新与滚动截图：把峰值按下去
 
-更新链路三处：
+更新链路四处：
 
 1. `UpdatePackageValidator.sha256(of:)` 原来是 `Data(contentsOf: url, options: .mappedIfSafe)` 整包哈希——改成 `FileHandle` 1 MB 分块，和 `FileCompression.swift:977` 已有的那个写法对齐（那里早就是流式的，两处不该长得不一样）。
 2. `run()` 里 `waitUntilExit()` 在 `readDataToEndOfFile()` **之前**：管道只有 64 KB，`ditto`/`codesign` 输出写满就永久阻塞子进程，父进程在等它退出。改成先读后等。
 3. `launchInstaller` 里 `process.run()` 抛错时，`MacPilotUpdater-<uuid>`（updater 副本）和 `MacPilotUpdate-<uuid>`（解出来的整份 app，上百 MB）都没人删。现在 catch 里一起删掉再抛。
+4. 解包不再先把 zip 复制进暂存目录：`ditto -x -k` 直接读下载好的那份。原来那份复制让上百 MB 的归档在磁盘上**同时存在两份**，而且 `update.zip` 就躺在它自己要写入的目录里面。
 
 滚动长截图原来是 `frames.count < 30` 的**按帧**上限，而一帧全屏 Retina 约 24 MB —— 30 帧就是 ~700 MB 峰值；反过来窄区域（聊天栏那种）本来花不了多少，却被同一个 30 掐着。改成两个上限同时成立（`SmartScrollingCaptureBudget`）：字节预算 256 MB + 帧数 30。窄区域行为一字不变（仍然给满 30 帧），全屏选择大约 10 帧封顶。
 
