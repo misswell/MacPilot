@@ -4163,7 +4163,9 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
         let images = StitchingFrames(value: frames)
         Task { [weak self] in
             let stitched = await Task.detached(priority: .userInitiated) {
-                ScreenCaptureVerticalStitcher.stitch(images.value)
+                // A cooperative-pool thread has no run loop draining autorelease
+                // objects, and this is the step that touches every frame.
+                autoreleasepool { ScreenCaptureVerticalStitcher.stitch(images.value) }
             }.value
             guard let self else { return }
             self.close()
