@@ -398,7 +398,16 @@ final class SoftwareUpdater: ObservableObject {
             helperDirectory.path,
             logURL.path
         ]
-        try process.run()
+        do {
+            try process.run()
+        } catch {
+            // Nothing else owns these directories until the helper starts: the
+            // extracted app is a hundred-odd megabytes, and a failed launch
+            // would otherwise leave it in the temp folder forever.
+            try? FileManager.default.removeItem(at: helperDirectory)
+            try? FileManager.default.removeItem(at: package.workingDirectory)
+            throw error
+        }
     }
 }
 
@@ -601,9 +610,18 @@ enum UpdatePackageValidator {
     }
 
     static func sha256(of url: URL) throws -> String {
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: Self.hashChunkSize), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
+
+    /// 1 MB — the archive is hundreds of megabytes and is hashed twice per
+    /// install, so the read has to stream. See `sha256(of:)`.
+    private static let hashChunkSize = 1_048_576
 
     @discardableResult
     private static func run(_ executable: String, arguments: [String]) throws -> String {
@@ -614,8 +632,10 @@ enum UpdatePackageValidator {
         process.standardOutput = pipe
         process.standardError = pipe
         try process.run()
-        process.waitUntilExit()
+        // Read before waiting: a pipe holds 64 KB, so a chatty `ditto`/`codesign`
+        // fills it and blocks on write while the parent blocks on exit.
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             if executable == "/usr/bin/codesign" { throw SoftwareUpdateError.invalidSignature }
             throw SoftwareUpdateError.commandFailed(output.trimmingCharacters(in: .whitespacesAndNewlines))

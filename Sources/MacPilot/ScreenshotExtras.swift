@@ -140,7 +140,7 @@ enum ScreenCaptureVerticalStitcher {
         let height: Int
         let bytesPerRow: Int
 
-        func difference(to other: Raster, row: Int, otherRow: Int, sampleStep: Int) -> Double {
+        func difference(to other: Raster, row: Int, otherRow: Int) -> Double {
             guard width == other.width else { return .greatestFiniteMagnitude }
             var total = 0.0
             var count = 0
@@ -152,11 +152,19 @@ enum ScreenCaptureVerticalStitcher {
                     total += abs(Double(data[lhs + channel]) - Double(other.data[rhs + channel]))
                 }
                 count += 3
-                x += sampleStep
+                x += 1
             }
             return count == 0 ? .greatestFiniteMagnitude : total / Double(count)
         }
     }
+
+    /// Columns a frame is reduced to before overlap search.
+    ///
+    /// The search reads five rows per candidate and steps across them, so a
+    /// full-resolution copy of both frames costs ~24 MB per pair on a Retina
+    /// display and contributes nothing to the decision. Vertical resolution is
+    /// kept exact because the overlap is measured in rows.
+    private static let rasterSampledWidth = 256
 
     /// Returns the overlap in pixels between the bottom of `previous` and the
     /// top of `current`.  A zero result means no reliable overlap was found.
@@ -169,7 +177,6 @@ enum ScreenCaptureVerticalStitcher {
         guard let lhs = raster(previous), let rhs = raster(current), lhs.width == rhs.width else { return 0 }
         let maximum = min(lhs.height, rhs.height) - 1
         guard maximum >= minimumOverlap else { return 0 }
-        let step = max(1, lhs.width / 180)
         var best = 0
         var bestScore = Double.greatestFiniteMagnitude
         // Large overlaps are common for slow trackpad scrolling, so search
@@ -183,8 +190,7 @@ enum ScreenCaptureVerticalStitcher {
                 score += lhs.difference(
                     to: rhs,
                     row: lhs.height - overlap + offset,
-                    otherRow: offset,
-                    sampleStep: step
+                    otherRow: offset
                 )
             }
             score /= Double(samples)
@@ -233,8 +239,8 @@ enum ScreenCaptureVerticalStitcher {
     }
 
     private static func raster(_ image: CGImage) -> Raster? {
-        let width = image.width
         let height = image.height
+        let width = min(image.width, rasterSampledWidth)
         guard width > 0, height > 0 else { return nil }
         var data = [UInt8](repeating: 0, count: width * height * 4)
         guard let context = CGContext(
@@ -246,6 +252,7 @@ enum ScreenCaptureVerticalStitcher {
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
+        context.interpolationQuality = .high
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return Raster(data: data, width: width, height: height, bytesPerRow: width * 4)
     }

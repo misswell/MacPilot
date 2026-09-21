@@ -10,9 +10,10 @@
 //
 //  * **面板先上屏**：`show()` 只做「读配置 → 算尺寸 → 建面板 → 显示」，
 //    解析与图标交给 `model.loadContent()` 在显示之后跑。
-//  * **进程留在原地**：浮层关掉只 `orderOut`，不 `terminate`。下一次点 Dock 图标
-//    走 `applicationShouldHandleReopen` / `applicationDidBecomeActive`，实测 5ms 级；
-//    冷启动要重新走 LaunchServices + 进程启动 + 解析，实测 0.25 秒起，机器忙时更久。
+//  * **进程留在原地，面板不留**：浮层关掉只收起面板并交出它占的内存，不 `terminate`。
+//    下一次点 Dock 图标走 `applicationShouldHandleReopen` / `applicationDidBecomeActive`，
+//    重建面板仍是毫秒级；冷启动要重新走 LaunchServices + 进程启动 + 解析，
+//    实测 0.25 秒起，机器忙时更久 —— 这才是「点开后要等」的唯一来源。
 //    空转 `warmLifetime` 后自动退出，配合 `NSSupportsAutomaticTermination`
 //    让系统在内存吃紧时提前回收，所以「不留后台进程」的约束仍在，只是有了时长上限。
 //
@@ -46,9 +47,9 @@ final class DockHelperPanel: NSPanel {
 final class DockHelperPanelController {
     static var shared: DockHelperPanelController?
 
-    /// 浮层关掉之后进程继续待命的时长。
-    /// 这段时间内再次点 Dock 图标是「热展开」——面板已经在内存里，直接显示。
-    static let warmLifetime: TimeInterval = 5 * 60
+    /// 浮层关掉之后进程继续待命的时长。上界由 `DockHelperWarmLifetimePolicy`
+    /// 和单元测试锁住：待命是为了热展开（重建面板只要毫秒级），不是为了常驻。
+    static let warmLifetime = DockHelperWarmLifetimePolicy.seconds
 
     /// 自动终止（TAL, Transparent App Lifecycle）的说明字符串。
     /// 面板可见期间必须禁用：日志显示 macOS 会在浮层已经显示后
@@ -64,6 +65,8 @@ final class DockHelperPanelController {
     private var disabledAutomaticTermination = false
     /// 空转退出的定时器（只在浮层关掉后跑）。
     private var warmExitTimer: Timer?
+    /// 待命期间的内存压力监听，与 `warmExitTimer` 同生同灭。
+    private var pressureSource: DispatchSourceMemoryPressure?
     private let model: DockHelperModel
 
     init(model: DockHelperModel) {
@@ -117,6 +120,9 @@ final class DockHelperPanelController {
         panel.level = .popUpMenu
         panel.isMovable = false
         panel.hidesOnDeactivate = false
+        // `dismiss()` closes it; the default would let AppKit release the panel
+        // out from under the reference Swift still holds.
+        panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.animationBehavior = .utilityWindow
         panel.onCancel = { [weak self] in self?.dismiss() }
@@ -142,16 +148,21 @@ final class DockHelperPanelController {
         dismissalPolicy = DockGroupPanelDismissalPolicy(shownAt: ProcessInfo.processInfo.systemUptime)
     }
 
-    /// 关闭浮层：只把面板收起来，进程留着待命（见 `warmLifetime`）。
+    /// 关闭浮层：收起并**释放**面板，进程留着待命（见 `warmLifetime`）。
     ///
     /// ESC、点外部、启动 App、打开设置都走这里。之所以不 `terminate`：
-    /// 重新拉起一个进程是「点开后要等」的唯一来源，而面板本身在内存里几乎不花钱。
+    /// 重新拉起一个进程才是「点开后要等」的来源；面板本身重建一次只要几毫秒，
+    /// 留着一个看不见的面板却要把 SwiftUI 宿主和图标一直占在待命进程里。
     func dismiss() {
         guard let panel else { return }
         dismissalPolicy = nil
         stopObservingDismissal(for: panel)
         panel.orderOut(nil)
         model.stopRefreshing()
+        self.panel = nil
+        panel.contentView = nil
+        panel.close()
+        model.releaseContent()
         restoreAutomaticTermination()
         scheduleWarmExit()
         // 没有窗口的 accessory App 不该继续占着最前面：让焦点回到用户原来的 App。
@@ -181,11 +192,31 @@ final class DockHelperPanelController {
         warmExitTimer = Timer.scheduledTimer(withTimeInterval: Self.warmLifetime, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.terminate() }
         }
+        startPressureWatch()
     }
 
     private func cancelWarmExit() {
         warmExitTimer?.invalidate()
         warmExitTimer = nil
+        pressureSource?.cancel()
+        pressureSource = nil
+    }
+
+    /// 待命期间内存吃紧：不等 45 秒，立刻退出。
+    ///
+    /// 面板和图标已经在 `dismiss()` 里交还了，进程自身（实测 20 MB 上下）是那时
+    /// 唯一还能给出去的东西；换回来的代价只有一次冷启动。
+    private func startPressureWatch() {
+        pressureSource?.cancel()
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: .main
+        )
+        source.setEventHandler { [weak self] in
+            Task { @MainActor in self?.terminate() }
+        }
+        pressureSource = source
+        source.resume()
     }
 
     private func disableAutomaticTermination() {

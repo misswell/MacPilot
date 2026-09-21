@@ -181,6 +181,22 @@ final class DockHelperModel: ObservableObject {
         refreshTimer = nil
     }
 
+    /// 浮层收起后交出图标与解析结果：这是待命进程里唯一真正值钱的东西。
+    ///
+    /// 配置（`group`）留着，下一次 `show()` 仍然能立刻算出尺寸；自增代号同时
+    /// 作废还在后台跑的那一轮加载，避免它把图标写回已经关掉的面板。
+    func releaseContent() {
+        contentGeneration += 1
+        guard !entries.isEmpty else { return }
+        var updated = entries
+        for index in updated.indices {
+            updated[index].icon = nil
+            updated[index].iconKey = nil
+            updated[index].resolved = nil
+        }
+        entries = updated
+    }
+
     /// 需求第 9 节：按 bundleIdentifier 匹配 NSWorkspace.runningApplications，
     /// 不注入、不读内存、不修改目标进程。
     ///

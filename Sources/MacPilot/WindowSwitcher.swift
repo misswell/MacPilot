@@ -83,6 +83,8 @@ enum WindowSwitcherThumbnailCommitPolicy {
 }
 
 enum WindowSwitcherThumbnailCachePolicy {
+    /// A preview is captured at most 256×160 px, so this count also bounds the
+    /// bytes held (~5 MB of bitmap) without per-entry cost accounting.
     static let maximumCount = 30
 
     static func retainedIDs(
@@ -92,6 +94,23 @@ enum WindowSwitcherThumbnailCachePolicy {
     ) -> Set<String> {
         guard maximumCount > 0 else { return [] }
         return Set(currentIDs.filter(cachedIDs.contains).prefix(maximumCount))
+    }
+}
+
+/// How long the overlay and its previews stay built after the switcher closes.
+///
+/// The shortcut is used in bursts — press, release, press again — and rebuilding
+/// between two presses in a burst is a latency the user would feel. A switcher
+/// nobody has pressed for a minute should not keep holding its panel and
+/// thumbnails for the rest of the session, so the two go at different times:
+/// previews first (the larger holding, and re-capturing one tile on the highlighted
+/// item was already the normal path), the panel last.
+enum WindowSwitcherPanelLifetimePolicy {
+    static let thumbnailReleaseInterval: TimeInterval = 15
+    static let panelReleaseInterval: TimeInterval = 60
+
+    static func canRelease(isShowing: Bool, hasPendingSession: Bool) -> Bool {
+        !isShowing && !hasPendingSession
     }
 }
 
@@ -1284,6 +1303,8 @@ final class WindowSwitcherModel: ObservableObject {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var focusObservers: [pid_t: AXObserver] = [:]
     private var manualDismissTask: Task<Void, Never>?
+    private var panelIdleTask: Task<Void, Never>?
+    private var memoryPressureToken: UUID?
     private var panelController: WindowSwitcherPanelController?
     private var mouseSelectionEnabled = true
     private var mouseSelectionAnchor: CGPoint?
@@ -1302,6 +1323,10 @@ final class WindowSwitcherModel: ObservableObject {
         let usableWidth = preferredWidth - 32 - 4
         return max(1, Int((usableWidth + 10) / (tileWidth + 10)))
     }
+
+    /// Whether the overlay currently holds a built panel. Activation must leave
+    /// this false; only showing the switcher builds one.
+    var panelIsBuilt: Bool { panelController?.panelIsBuilt ?? false }
 
     init() {
         hasAccessibilityPermission = AXIsProcessTrusted()
@@ -1372,11 +1397,57 @@ final class WindowSwitcherModel: ObservableObject {
     private func startRuntime(inventoryPriority: TaskPriority) {
         guard isActive, settings.isEnabled, !isRuntimeActive else { return }
         isRuntimeActive = true
+        // No panel here: the switcher is a hotkey surface, and an overlay that
+        // is built while the feature loads keeps its view graph alive for the
+        // rest of the session whether or not the shortcut is ever pressed.
         panelController = WindowSwitcherPanelController(model: self)
-        panelController?.prepare()
+        memoryPressureToken = MemoryPressure.shared.observe { [weak self] in
+            self?.releaseUnderMemoryPressure()
+        }
         installWorkspaceObserver()
         refreshEventTap()
         requestInventoryRefresh(priority: inventoryPriority)
+    }
+
+    /// The system is short on memory: give back everything the next press can
+    /// rebuild, and keep only what the running feature needs (tap, observers,
+    /// inventory), because losing those would break the hotkey itself.
+    private func releaseUnderMemoryPressure() {
+        guard !isShowing else { return }
+        cancelThumbnailRefresh()
+        clearThumbnailCache()
+        panelIdleTask?.cancel()
+        panelIdleTask = nil
+        panelController?.releasePanel()
+    }
+
+    /// Two-stage reclamation after the switcher closes. The handle stays in
+    /// `panelIdleTask` for the whole sequence: a press must be able to cancel
+    /// the second stage too, and the property is only ever cleared by
+    /// rescheduling or by `stopRuntime()`.
+    private func schedulePanelIdleRelease() {
+        panelIdleTask?.cancel()
+        panelIdleTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(WindowSwitcherPanelLifetimePolicy.thumbnailReleaseInterval))
+            guard let self, !Task.isCancelled else { return }
+            guard WindowSwitcherPanelLifetimePolicy.canRelease(
+                isShowing: self.isShowing,
+                hasPendingSession: self.pendingSession != nil
+            ) else { return }
+            self.cancelThumbnailRefresh()
+            self.clearThumbnailCache()
+
+            try? await Task.sleep(for: .seconds(
+                WindowSwitcherPanelLifetimePolicy.panelReleaseInterval
+                    - WindowSwitcherPanelLifetimePolicy.thumbnailReleaseInterval
+            ))
+            guard !Task.isCancelled else { return }
+            guard WindowSwitcherPanelLifetimePolicy.canRelease(
+                isShowing: self.isShowing,
+                hasPendingSession: self.pendingSession != nil
+            ) else { return }
+            self.panelController?.releasePanel()
+        }
     }
 
     private func stopRuntime() {
@@ -1405,7 +1476,11 @@ final class WindowSwitcherModel: ObservableObject {
         recentWindowIDs.removeAll(keepingCapacity: false)
         inventorySignature = nil
         _ = updatePanelContents([], selectedIndex: nil)
-        panelController?.releaseResources()
+        panelIdleTask?.cancel()
+        panelIdleTask = nil
+        MemoryPressure.shared.cancel(memoryPressureToken)
+        memoryPressureToken = nil
+        panelController?.releasePanel()
         panelController = nil
     }
 
@@ -1664,6 +1739,7 @@ final class WindowSwitcherModel: ObservableObject {
         isShowing = true
         resetMouseSelectionLock()
         panelController = panelController ?? WindowSwitcherPanelController(model: self)
+        panelIdleTask?.cancel()
         panelController?.show()
         reportPresentationLatency(startedAt: startedAt, cacheHit: cacheHit)
         refreshThumbnails(
@@ -1739,6 +1815,7 @@ final class WindowSwitcherModel: ObservableObject {
         // full capture of every unchanged window. Inventory refresh prunes
         // entries for windows that no longer exist.
         pruneThumbnailCache(to: cachedWindows)
+        schedulePanelIdleRelease()
         if commit, let selected {
             scheduleFocus(selected)
         }
@@ -2530,13 +2607,10 @@ private final class WindowSwitcherPanelController {
         return CGWindowID(panel.windowNumber)
     }
 
+    var panelIsBuilt: Bool { panel != nil }
+
     init(model: WindowSwitcherModel) {
         self.model = model
-    }
-
-    func prepare() {
-        guard panel == nil, let model else { return }
-        panel = makePanel(model: model)
     }
 
     func show() {
@@ -2551,7 +2625,9 @@ private final class WindowSwitcherPanelController {
         panel?.orderOut(nil)
     }
 
-    func releaseResources() {
+    /// Drops the overlay and its hosting view. The controller stays, so the
+    /// next shortcut only has to rebuild what releasing this gave back.
+    func releasePanel() {
         let currentPanel = panel
         panel = nil
         currentPanel?.orderOut(nil)

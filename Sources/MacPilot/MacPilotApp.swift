@@ -17,8 +17,7 @@ struct MacPilotApp: App {
 
     var body: some Scene {
         Window("MacPilot", id: "main") {
-            ContentView().environmentObject(model)
-                .frame(minWidth: 900, minHeight: 620)
+            MainWindowRoot().environmentObject(model)
         }
         .windowToolbarStyle(.unified(showsTitle: false))
 
@@ -65,8 +64,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // 尽早判断登录启动：此时 SwiftUI 尚未完成窗口显示，先隐藏已存在的窗口以减少闪现。
         // 手动双击启动时父进程不是 loginwindow，主窗口正常显示。
-        hideWindowDuringLaunch = Self.wasLaunchedAtLogin()
+        hideWindowDuringLaunch = AppLaunchContext.wasLaunchedAtLogin
         if hideWindowDuringLaunch { hideRegularWindows() }
+    }
+
+    /// Reopening a running app (double-click in Finder, `open -b`, a URL) has to
+    /// go through the same path as the menu bar: the window may exist with no
+    /// content, and only this notification rebuilds it.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
+        return true
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -111,25 +118,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hideRegularWindows() {
         for window in NSApp.windows where !window.isKind(of: NSPanel.self) {
             window.orderOut(nil)
-        }
-    }
-
-    /// 判断本次启动是否由登录项触发：登录启动时父进程是 loginwindow。
-    private static func wasLaunchedAtLogin() -> Bool {
-        parentProcessName() == "loginwindow"
-    }
-
-    private static func parentProcessName() -> String? {
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getppid()]
-        var info = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.size
-        let count = UInt32(mib.count)
-        let result = mib.withUnsafeMutableBufferPointer { pointer -> Int32 in
-            sysctl(pointer.baseAddress, count, &info, &size, nil, 0)
-        }
-        guard result == 0 else { return nil }
-        return withUnsafePointer(to: &info.kp_proc.p_comm) { pointer in
-            pointer.withMemoryRebound(to: CChar.self, capacity: Int(MAXCOMLEN)) { String(cString: $0) }
         }
     }
 }
@@ -668,7 +656,7 @@ enum AppText {
         "scOpenKeyboardSettings": "打开系统键盘快捷键设置",
         "scRecordShortcut": "点击后按下快捷键…", "scResetShortcut": "恢复默认（%@）", "scConfirm": "确认", "scPin": "贴图",
         "scSmartCaptureResources": "空闲时仅监听自定义快捷键，不采集屏幕、不轮询；OCR 与标注仅在使用时加载。智能元素识别需要辅助功能权限。",
-        "scPinTitle": "MacPilot 贴图", "scCopy": "复制", "scAnnotate": "标注", "scClose": "关闭", "scReveal": "在访达中显示", "scDelete": "删除", "scOCR": "OCR", "scEditMedia": "编辑", "scMediaEditor": "媒体编辑", "scMediaGIFEditorHint": "GIF 暂不支持裁剪；你可以打开文件或在访达中查看。", "scMediaTrimStart": "开始", "scMediaTrimEnd": "结束", "scMediaExportTrim": "导出裁剪片段", "scMediaExporting": "正在导出…", "scMediaExported": "已导出：%@", "scMediaInvalidTrimRange": "裁剪范围无效，至少保留 0.25 秒。", "scMediaExporterUnavailable": "当前视频格式无法导出。", "scMediaExportFailed": "媒体导出失败。", "scScrollingTitle": "滚动长截图", "scScrollingHint": "在选定区域内滚动页面，MacPilot 会自动采样并拼接；完成后点击“完成”。", "scScrollingFrames": "已采样 %d 帧", "scObjectCutoutFailed": "抠图失败：%@", "scClipboardImageUnavailable": "剪贴板中没有可贴图的图片。",
+        "scPinTitle": "MacPilot 贴图", "scCopy": "复制", "scAnnotate": "标注", "scClose": "关闭", "scReveal": "在访达中显示", "scDelete": "删除", "scOCR": "OCR", "scEditMedia": "编辑", "scMediaEditor": "媒体编辑", "scMediaGIFEditorHint": "GIF 暂不支持裁剪；你可以打开文件或在访达中查看。", "scMediaTrimStart": "开始", "scMediaTrimEnd": "结束", "scMediaExportTrim": "导出裁剪片段", "scMediaExporting": "正在导出…", "scMediaExported": "已导出：%@", "scMediaInvalidTrimRange": "裁剪范围无效，至少保留 0.25 秒。", "scMediaExporterUnavailable": "当前视频格式无法导出。", "scMediaExportFailed": "媒体导出失败。", "scScrollingTitle": "滚动长截图", "scScrollingHint": "在选定区域内滚动页面，MacPilot 会自动采样并拼接；完成后点击“完成”。", "scScrollingFrames": "已采样 %d 帧", "scScrollingLimit": "采样已达内存上限，继续滚动不会再拼接；请点击“完成”。", "scObjectCutoutFailed": "抠图失败：%@", "scClipboardImageUnavailable": "剪贴板中没有可贴图的图片。",
         "scHistory": "截图与媒体历史", "scHistoryEmpty": "还没有截图、视频或 GIF 记录。", "scHistoryScreenshot": "截图", "scHistoryVideo": "视频", "scHistoryGIF": "GIF", "scScrollingStitchFailed": "无法拼接滚动截图。请减少滚动幅度后重试。", "scObjectCutoutNoForeground": "没有检测到前景对象。", "scObjectCutoutMaskFailed": "无法生成前景蒙版。",
         "scOCRNoText": "未识别到文字。", "scOCRFailed": "文字识别失败。", "scOCRCopied": "OCR 文字已复制", "scOK": "好",
         "scAnnotateTitle": "MacPilot 标注", "scAnnotationTool": "工具", "scAnnotationRectangle": "矩形",
@@ -1556,7 +1544,7 @@ enum AppText {
             "scOpenKeyboardSettings": "Open Keyboard Shortcuts settings",
             "scRecordShortcut": "Click, then press a shortcut…", "scResetShortcut": "Restore default (%@)", "scConfirm": "Confirm", "scPin": "Pin",
             "scSmartCaptureResources": "While idle, MacPilot only listens for your shortcut—no screen stream or polling. OCR and annotation load only when used. Smart elements require Accessibility access.",
-            "scPinTitle": "MacPilot Pin", "scCopy": "Copy", "scAnnotate": "Annotate", "scClose": "Close", "scReveal": "Show in Finder", "scDelete": "Delete", "scOCR": "OCR", "scEditMedia": "Edit", "scMediaEditor": "Media Editor", "scMediaGIFEditorHint": "GIF trimming is not supported yet; you can open the file or reveal it in Finder.", "scMediaTrimStart": "Start", "scMediaTrimEnd": "End", "scMediaExportTrim": "Export Trim", "scMediaExporting": "Exporting…", "scMediaExported": "Exported: %@", "scMediaInvalidTrimRange": "Invalid trim range; keep at least 0.25 seconds.", "scMediaExporterUnavailable": "This video format cannot be exported.", "scMediaExportFailed": "Media export failed.", "scScrollingTitle": "Scrolling Screenshot", "scScrollingHint": "Scroll inside the selected area. MacPilot samples and stitches the page; click Done when finished.", "scScrollingFrames": "%d sampled frames", "scObjectCutoutFailed": "Object cutout failed: %@", "scClipboardImageUnavailable": "The clipboard does not contain an image that can be pinned.",
+            "scPinTitle": "MacPilot Pin", "scCopy": "Copy", "scAnnotate": "Annotate", "scClose": "Close", "scReveal": "Show in Finder", "scDelete": "Delete", "scOCR": "OCR", "scEditMedia": "Edit", "scMediaEditor": "Media Editor", "scMediaGIFEditorHint": "GIF trimming is not supported yet; you can open the file or reveal it in Finder.", "scMediaTrimStart": "Start", "scMediaTrimEnd": "End", "scMediaExportTrim": "Export Trim", "scMediaExporting": "Exporting…", "scMediaExported": "Exported: %@", "scMediaInvalidTrimRange": "Invalid trim range; keep at least 0.25 seconds.", "scMediaExporterUnavailable": "This video format cannot be exported.", "scMediaExportFailed": "Media export failed.", "scScrollingTitle": "Scrolling Screenshot", "scScrollingHint": "Scroll inside the selected area. MacPilot samples and stitches the page; click Done when finished.", "scScrollingFrames": "%d sampled frames", "scScrollingLimit": "Sampling limit reached to protect memory; keep scrolling to stitch what was captured, or select a smaller area.", "scObjectCutoutFailed": "Object cutout failed: %@", "scClipboardImageUnavailable": "The clipboard does not contain an image that can be pinned.",
             "scHistory": "Screenshot & Media History", "scHistoryEmpty": "No screenshots, videos, or GIFs yet.", "scHistoryScreenshot": "Screenshot", "scHistoryVideo": "Video", "scHistoryGIF": "GIF", "scScrollingStitchFailed": "The scrolling frames could not be stitched. Try smaller scroll steps.",
             "scOCRNoText": "No text was detected.", "scOCRFailed": "Text recognition failed.", "scOCRCopied": "OCR copied to clipboard", "scOK": "OK",
             "scAnnotateTitle": "MacPilot Annotate", "scAnnotationTool": "Tool", "scAnnotationRectangle": "Rectangle",
@@ -1673,6 +1661,9 @@ enum AppText {
 
 @MainActor
 final class MacPilotModel: ObservableObject {
+    /// The title the main `Window` scene is declared with, and the only thing
+    /// that identifies its NSWindow among the app's many panels.
+    static let mainWindowTitle = "MacPilot"
     private static let safetyCheckInterval: Duration = .seconds(300)
     private static let closeWindowsLaunchGracePeriod: Duration = .seconds(10)
 
@@ -1899,6 +1890,15 @@ final class MacPilotModel: ObservableObject {
     /// Local Ports is deliberately idle until its page becomes visible.
     let localPorts = LocalPortsModel()
     @Published var requestedSection: MainSection?
+    /// Whether the main window holds its settings UI, and which page it opens
+    /// on. False content is the normal state of a menu-bar app: the window
+    /// exists, and nothing else does.
+    @Published private(set) var mainContent = MainWindowContentState(
+        loadedAtLaunch: !AppLaunchContext.wasLaunchedAtLogin
+    )
+    /// Page to show the next time the content is built, so closing the window
+    /// no longer costs the user their place in it.
+    var lastMainSection: MainSection = .home
     /// Set by the menu bar/deep-link shortcut entry so the capture settings
     /// can present the recorder immediately after the main window is opened.
     @Published var requestedCaptureShortcutEditor = false
@@ -1966,6 +1966,30 @@ final class MacPilotModel: ObservableObject {
         ) { [weak self] notification in
             guard let url = notification.object as? URL else { return }
             Task { @MainActor in self?.handleDeepLink(url) }
+        })
+        // Closing is the only signal that nothing is showing the content any
+        // more. Hiding it (`orderOut`) is not: a window the user may raise
+        // again in a second should keep its state, while one they closed
+        // should give its view graph back. `willClose` is the AppKit hook, and
+        // the release waits a turn so the window never blanks mid-animation.
+        lifetimeObservers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let window = notification.object as? NSWindow else { return }
+            MainActor.assumeIsolated {
+                guard let self,
+                      window.title == Self.mainWindowTitle,
+                      window.canBecomeMain else { return }
+                // Deferred one main-actor turn so the window is never blanked
+                // while it is still animating closed. The token makes that turn
+                // safe to lose: a reopen in the meantime owns the content now.
+                let closing = self.mainContent.beginClose()
+                Task { @MainActor [weak self] in
+                    self?.mainContent.completeClose(requestedGeneration: closing)
+                }
+            }
         })
         clearLegacyAccessibilityRecoveryRequest()
         ble.persist = { [weak self] in
@@ -3164,6 +3188,15 @@ extension MacPilotModel {
         requestedSection = isSectionAvailable(section) ? section : .home
     }
 
+    /// The main window, when the scene has one. Panels are never candidates.
+    var mainWindow: NSWindow? {
+        NSApp.windows.first { $0.title == Self.mainWindowTitle && $0.canBecomeMain }
+    }
+
+    func loadMainWindowContent() {
+        mainContent.load()
+    }
+
     func setFeatureEnabled(_ enabled: Bool, for section: MainSection) {
         guard section.isFeature else { return }
         let wasEnabled = isFeatureEnabled(section)
@@ -3409,7 +3442,6 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
 
 struct ContentView: View {
     @EnvironmentObject private var model: MacPilotModel
-    @Environment(\.openWindow) private var openWindow
     @State private var showingAdd = false
     @State private var editingRule: QuitRule?
     @State private var showingLaunchAdd = false
@@ -3464,14 +3496,14 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            section = model.isSectionAvailable(model.lastMainSection) ? model.lastMainSection : .home
             if let s = model.requestedSection {
                 section = model.isSectionAvailable(s) ? s : .home
                 model.requestedSection = nil
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .macPilotShowMainWindow)) { _ in
-            openWindow(id: "main")
-            DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
+        .onChange(of: section) { _, newValue in
+            model.lastMainSection = newValue
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             // Approving the background power service happens in System Settings,
@@ -5203,7 +5235,10 @@ struct MenuBarView: View {
     }
 
     private func showMainWindow() {
-        if let window = mainWindow {
+        // Load before raising: the window may exist holding nothing, and
+        // presenting it empty for a frame looks like a broken settings page.
+        model.loadMainWindowContent()
+        if let window = model.mainWindow {
             present(window)
             return
         }
@@ -5211,12 +5246,8 @@ struct MenuBarView: View {
         openWindow(id: "main")
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
-            if let window = mainWindow { present(window) }
+            if let window = model.mainWindow { present(window) }
         }
-    }
-
-    private var mainWindow: NSWindow? {
-        NSApp.windows.first { $0.title == "MacPilot" && $0.canBecomeMain }
     }
 
     private func present(_ window: NSWindow) {

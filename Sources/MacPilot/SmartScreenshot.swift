@@ -3973,6 +3973,33 @@ private final class SmartCaptureOverlayView: NSView {
     }
 }
 
+/// How many pixels a scrolling capture may hold at once.
+///
+/// A frame count is not a budget: one Retina full-display frame is ~24 MB, so a
+/// cap of 30 of them allows a ~700 MB peak, while a narrow chat column needs
+/// those same 30 frames to do its job and costs well under 100 MB. The byte
+/// budget is what protects the machine; the frame cap only keeps the strip
+/// count sane for small selections.
+enum SmartScrollingCaptureBudget {
+    static let maximumBytes = 256 * 1_024 * 1_024
+    static let maximumFrames = 30
+
+    static func bytes(of image: CGImage) -> Int {
+        image.width * image.height * 4
+    }
+
+    static func accepts(capturedBytes: Int, frameCount: Int, adding bytes: Int) -> Bool {
+        frameCount < maximumFrames && capturedBytes + bytes <= maximumBytes
+    }
+}
+
+/// CGImage is not `Sendable`, so the frames cross into the stitching task
+/// through this wrapper. Only one task ever reads them, and the HUD has stopped
+/// capturing by then.
+private struct StitchingFrames: @unchecked Sendable {
+    let value: [CGImage]
+}
+
 /// Snapzy-style scrolling capture HUD.  The selected region remains owned by
 /// the foreground app while this small floating panel listens for wheel events
 /// and samples the region after every scroll settle.  Completion stitches the
@@ -3981,6 +4008,8 @@ private final class SmartCaptureOverlayView: NSView {
 @MainActor
 private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDelegate {
     private var frames: [CGImage]
+    private var capturedBytes: Int
+    private var reachedLimit = false
     private let rect: CGRect
     private let quartzClickPoint: CGPoint
     private let language: AppLanguage
@@ -3991,6 +4020,7 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
     private var localScrollMonitor: Any?
     private var settleTask: Task<Void, Never>?
     private var isCapturing = false
+    private var isStitching = false
 
     init(
         initialImage: CGImage,
@@ -4001,6 +4031,7 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
         onClose: @escaping () -> Void
     ) {
         self.frames = [initialImage]
+        self.capturedBytes = SmartScrollingCaptureBudget.bytes(of: initialImage)
         self.rect = rect
         self.quartzClickPoint = quartzClickPoint
         self.language = language
@@ -4047,6 +4078,7 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
     private func installContent(in panel: NSPanel) {
         panel.contentView = NSHostingView(rootView: SmartScrollingCaptureView(
             frameCount: frames.count,
+            reachedLimit: reachedLimit,
             language: language,
             onFinish: { [weak self] in self?.finish() },
             onCancel: { [weak self] in self?.close() }
@@ -4090,7 +4122,7 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
     }
 
     private func captureSettledFrame() async {
-        guard panel != nil, !isCapturing, frames.count < 30 else { return }
+        guard panel != nil, !isCapturing else { return }
         isCapturing = true
         defer { isCapturing = false }
         do {
@@ -4098,6 +4130,19 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
                 appKitRect: rect,
                 quartzClickPoint: quartzClickPoint
             )
+            let bytes = SmartScrollingCaptureBudget.bytes(of: image)
+            guard SmartScrollingCaptureBudget.accepts(
+                capturedBytes: capturedBytes,
+                frameCount: frames.count,
+                adding: bytes
+            ) else {
+                // The user keeps scrolling; say so, or the counter just stopping
+                // looks like the capture broke.
+                reachedLimit = true
+                refreshContent()
+                return
+            }
+            capturedBytes += bytes
             frames.append(image)
             refreshContent()
         } catch {
@@ -4110,17 +4155,28 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
     }
 
     private func finish() {
-        guard let image = ScreenCaptureVerticalStitcher.stitch(frames) else {
-            let alert = NSAlert()
-            alert.messageText = AppText.value("scScrollingTitle", language: language)
-            alert.informativeText = AppText.value("scScrollingStitchFailed", language: language)
-            alert.addButton(withTitle: AppText.value("scOK", language: language))
-            alert.runModal()
-            close()
-            return
+        guard !isStitching else { return }
+        isStitching = true
+        // Stitching redraws every frame into one canvas — hundreds of
+        // megabytes of work for a long page. On the main thread that is the
+        // moment the HUD freezes and the whole app stops answering.
+        let images = StitchingFrames(value: frames)
+        Task { [weak self] in
+            let stitched = await Task.detached(priority: .userInitiated) {
+                ScreenCaptureVerticalStitcher.stitch(images.value)
+            }.value
+            guard let self else { return }
+            self.close()
+            guard let stitched else {
+                let alert = NSAlert()
+                alert.messageText = AppText.value("scScrollingTitle", language: self.language)
+                alert.informativeText = AppText.value("scScrollingStitchFailed", language: self.language)
+                alert.addButton(withTitle: AppText.value("scOK", language: self.language))
+                alert.runModal()
+                return
+            }
+            self.onComplete(stitched)
         }
-        close()
-        onComplete(image)
     }
 
     private static func panelOrigin(for selection: CGRect, size: CGSize) -> CGPoint {
@@ -4134,15 +4190,18 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
 
 private struct SmartScrollingCaptureView: View {
     let frameCount: Int
+    let reachedLimit: Bool
     let language: AppLanguage
     let onFinish: () -> Void
     let onCancel: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(AppText.value("scScrollingHint", language: language))
+            // Replacing the hint keeps the HUD the same height; the panel is
+            // sized for one caption block.
+            Text(AppText.value(reachedLimit ? "scScrollingLimit" : "scScrollingHint", language: language))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(reachedLimit ? AnyShapeStyle(Color.orange) : AnyShapeStyle(HierarchicalShapeStyle.secondary))
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Label(AppText.value("scScrollingFrames", language: language, frameCount), systemImage: "square.stack.3d.up")
