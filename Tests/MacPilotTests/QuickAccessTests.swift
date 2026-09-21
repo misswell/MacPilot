@@ -98,6 +98,14 @@ struct QuickAccessTests {
         #expect(SmartCaptureToast.preview(of: long).count == 81)
     }
 
+    @Test func ocrFailureToastHasItsOwnCopyInBothLanguages() {
+        // 识别失败与「没识别到文字」是两回事，两种语言都得各自的文案。
+        #expect(AppText.value("scOCRFailed", language: .simplifiedChinese) == "文字识别失败。")
+        #expect(AppText.value("scOCRFailed", language: .english) == "Text recognition failed.")
+        #expect(AppText.value("scOCRFailed", language: .english)
+            != AppText.value("scOCRNoText", language: .english))
+    }
+
     @Test func zoomScrubKeepsPinChromeVisibleWhenTheDragOvershoots() {
         #expect(QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: false, zoomScrubbing: true))
         #expect(QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: true, zoomScrubbing: false))

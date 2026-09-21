@@ -1575,6 +1575,10 @@ final class ScreenCaptureModel: ObservableObject {
                 }
             } catch {
                 Task { @MainActor [weak self] in
+                    Self.logger.error(
+                        "OCR recognition failed: \(error.localizedDescription, privacy: .public)"
+                    )
+                    SmartCaptureToast.shared.showOCRFailed(error: error, language: language)
                     self?.errorMessage = error.localizedDescription
                 }
             }

@@ -1369,6 +1369,18 @@ final class SmartCaptureToast {
         )
     }
 
+    /// OCR 本身失败了（Vision 抛错）。识别没跑成，剪贴板保持原样。
+    func showOCRFailed(error: Error, language: AppLanguage) {
+        show(
+            symbol: "xmark.octagon.fill",
+            tint: .red,
+            title: AppText.value("scOCRFailed", language: language),
+            detail: error.localizedDescription,
+            truncation: .tail,
+            autoDismissAfter: 6
+        )
+    }
+
     /// 把识别结果压成一行摘要，避免长文本把轻提示撑开。
     nonisolated static func preview(of text: String, limit: Int = 80) -> String {
         let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
@@ -4515,7 +4527,14 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     private func recognizeText() {
         Task { [weak self] in
             guard let self else { return }
-            guard let text = try? await SmartOCRService.recognize(image: image), !text.isEmpty else {
+            let text: String
+            do {
+                text = try await SmartOCRService.recognize(image: image)
+            } catch {
+                SmartCaptureToast.shared.showOCRFailed(error: error, language: language)
+                return
+            }
+            guard !text.isEmpty else {
                 SmartCaptureToast.shared.showOCRNoText(language: language)
                 return
             }

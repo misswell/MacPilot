@@ -359,7 +359,14 @@ private final class QuickAccessPinWindowController: NSObject {
     guard let image = state.image, let cgImage = Self.cgImage(from: image) else { return }
     Task { [weak self] in
       guard let self else { return }
-      guard let text = try? await SmartOCRService.recognize(image: cgImage), !text.isEmpty else {
+      let text: String
+      do {
+        text = try await SmartOCRService.recognize(image: cgImage)
+      } catch {
+        SmartCaptureToast.shared.showOCRFailed(error: error, language: self.language)
+        return
+      }
+      guard !text.isEmpty else {
         SmartCaptureToast.shared.showOCRNoText(language: self.language)
         return
       }

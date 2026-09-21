@@ -1542,3 +1542,14 @@ restored twice ok
 - 一个差点跟着上线的坑：本想 `host.sizingOptions = []` 让面板独占宽度，结果 **`host.fittingSize` 直接变 (0,0)**，面板会开成一扇 48×0 的空窗。测量必须在 `panel.contentView = host` 之后、保持默认 `sizingOptions`、`layoutSubtreeIfNeeded()` 之后再读。这条已经写成断言（`bare > 0`），因为它比原 bug 更隐蔽。
 - 验证：离屏渲染无表/有表两态在各自面板宽度下（202 / 228）计时、电平表、相机、取消全部完整，两侧留白对称；再故意在 140pt 宽的宿主里渲染，计时仍是完整的 `00:00`，证明 `.fixedSize` 这条防线成立。
 - 测试：`CaptureEnhancementsTests.recordingControllerPanelIsNeverNarrowerThanItsBar`——断言两态的 `fittingSize.width` 都为正、有表比无表宽、`widthSlack` 覆盖得住电平表的增量、且按无表宽度开出来的面板仍装得下有表的条子。全程只用离屏 `NSHostingView` + 一个不 `orderFront` 的 `NSPanel`，不会在跑测试的人桌面上闪出 HUD；`capturesMicrophone` 是用户设置，测完在 `defer` 里还原。
+
+## 五十九、OCR 识别失败也要弹提示：不再只写进设置页（v1.1.385）
+
+用户提「截图 OCR 后应该有 toast 提醒」。三条 OCR 入口（框选工具栏、快捷操作卡片、贴图右键菜单）在 v1.1.356 已经统一走 `SmartCaptureToast`，但只覆盖「已复制」和「没识别到文字」两种结果，**第三种结果——识别本身失败——是完全静默的**：`ScreenCaptureModel.handleOCRCapture` 的 catch 只把 `error.localizedDescription` 赋给 `errorMessage`，而 `errorMessage` 只在截图设置页里渲染。用户按下快捷键框选、Vision 抛错、屏幕上什么都不出现，看起来就是「点了 OCR 没反应」。另外两处 `recognizeText` 更误导：`try? await SmartOCRService.recognize(...)` 把异常和空结果压进同一个 `guard else`，识别失败时弹的是「未识别到文字。」，把人往「这块屏幕没字」的方向引。
+
+- 新增 `SmartCaptureToast.showOCRFailed(error:language:)`：红叉 + `scOCRFailed` 标题 + 错误详情，6 秒自动消失，与落盘失败的 `showFailure` 同一套观感（同一台 `NSPanel`、同样不抢焦点、同样 `ignoresMouseEvents`）。
+- 三条入口一起改：`handleOCRCapture` 的 catch 变成「记日志 + 弹提示 + 仍保留 `errorMessage`」；两处 `recognizeText` 从 `try?` 换成 `do/catch`，让失败与空结果各回各的提示。
+- 失败路径不碰剪贴板：三条路径都是先判空/先抛错再 `clearContents()`，所以「提示失败」和「剪贴板被清空」不会同时发生。
+- 没有加「正在识别」的进行中提示：`.accurate` 级 OCR 通常在 1 秒内返回，同一位置连着闪两条反而更吵；这次补的是**任何一次 OCR 都必有一条 toast**，静默只可能出现在取消（Esc）时。
+- 文案 `scOCRFailed` 中英文各一条，`QuickAccessTests.ocrFailureToastHasItsOwnCopyInBothLanguages` 守住两边同步，并断言它与 `scOCRNoText` 不是一句话——这两个分支混用的代价就是这次的现象。
+- 验证：`swift build -c release -Xswiftc -warnings-as-errors`（全新 worktree，无缓存）+ `swift test --filter QuickAccessTests` + 全量 `swift test`。
