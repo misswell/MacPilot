@@ -577,9 +577,6 @@ enum LocalPortErrorFormatter {
         case let .protectedPID(pid): return AppText.value("localPortsProtectedPID", language: language, pid)
         case let .unknownUser(pid): return AppText.value("localPortsUnknownUser", language: language, pid)
         case let .anotherUser(pid): return AppText.value("localPortsOtherUser", language: language, pid)
-        case let .unknownExecutable(pid): return AppText.value("localPortsUnknownExecutable", language: language, pid)
-        case let .systemExecutable(path): return AppText.value("localPortsSystemProcess", language: language, localPortCompactPath(path))
-        case let .applicationBundle(path): return AppText.value("localPortsApplicationProcess", language: language, localPortCompactPath(path))
         }
     }
 

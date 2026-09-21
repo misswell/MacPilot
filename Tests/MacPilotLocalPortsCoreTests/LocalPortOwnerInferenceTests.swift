@@ -13,7 +13,7 @@ struct LocalPortOwnerInferenceTests {
         #expect(owner.label == "PhotoVault")
     }
 
-    @Test func appProcessIsDetectedAsProtectedOwner() {
+    @Test func appProcessIsDetectedAsApplicationOwner() {
         let process = makeProcess(command: "Safari", path: "/Applications/Safari.app/Contents/MacOS/Safari")
         let application = LocalPortOwnerInference.application(for: process, parents: [])
         #expect(application?.direct == true)

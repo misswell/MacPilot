@@ -66,6 +66,11 @@ public enum LocalPortCloseService {
         )
     }
 
+    /// What blocks a stop request.  Only a limit that is actually real: MacPilot
+    /// must not signal itself or launchd, and `kill` cannot reach another user's
+    /// process.  How the process happened to be started — an `.app` bundle, an
+    /// interpreter under `/usr/bin`, a binary deleted after launch — says nothing
+    /// about whether it may be stopped, so none of that is a reason to refuse.
     public static func protectionReason(
         for activity: LocalPortActivity,
         currentUID: Int32,
@@ -76,16 +81,6 @@ public enum LocalPortCloseService {
         guard process.pid > 1, process.pid != currentPID else { return .protectedPID(process.pid) }
         guard let uid = process.uid else { return .unknownUser(process.pid) }
         guard uid == currentUID else { return .anotherUser(process.pid) }
-        guard let executablePath = process.executablePath,
-              FileManager.default.fileExists(atPath: executablePath) else {
-            return .unknownExecutable(process.pid)
-        }
-        if LocalPortOwnerInference.isSystemExecutable(executablePath) {
-            return .systemExecutable(path: executablePath)
-        }
-        if let application = activity.application {
-            return .applicationBundle(path: application.path)
-        }
         return nil
     }
 
@@ -129,7 +124,7 @@ public enum LocalPortCloseService {
         if let reason = protectionReason(for: activity, currentUID: currentUID, currentPID: currentPID) {
             throw LocalPortCloseError.protected(reason)
         }
-        guard let uid = activity.process.uid, let executablePath = activity.process.executablePath else {
+        guard let uid = activity.process.uid else {
             throw LocalPortCloseError.missingIdentity(pid: selectedPID)
         }
         guard let processStartTime = startTime(selectedPID) else {
@@ -144,7 +139,7 @@ public enum LocalPortCloseService {
             port: port,
             pid: selectedPID,
             uid: uid,
-            executablePath: executablePath,
+            executablePath: activity.process.executablePath,
             processStartTime: processStartTime,
             activity: activity,
             otherPorts: otherPorts,

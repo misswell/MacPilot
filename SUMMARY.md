@@ -1566,7 +1566,9 @@ Local Ports 是 MacPilot 的独立功能页，不增加第二个 `MenuBarExtra`�
 
 ### 安全边界
 
-关闭服务必须经过“重新扫描 → prepare → 用户确认 → 再次扫描 → PID + UID + executable + start time 验证 → SIGTERM → 最多等待 5 秒复查”的链路。系统可执行文件、`.app` 进程、root、其他用户、缺少身份信息、PID 复用和新进程抢占端口一律不关闭；绝不使用 SIGKILL 或进程树终止。
+关闭服务必须经过“重新扫描 → prepare → 用户确认 → 再次扫描 → PID + UID + executable + start time 验证 → SIGTERM → 最多等待 5 秒复查”的链路。只有**确实关不掉**的进程才收起关闭按钮：MacPilot 自身与 launchd（PID ≤ 1）、其他用户的进程（`kill` 必然 EPERM）、取不到 UID 的进程，以及 MacPilot 以 root 运行的配置；PID 复用和新进程抢占端口在验证阶段拒绝。绝不使用 SIGKILL 或进程树终止。
+
+⚠️ **v1.1.391 及之前把“归属”当成了“保护”**：可执行文件落在 `.app` 里、路径在 `/usr/bin` 等系统前缀下、或二进制启动后被删掉，都会被判成受保护。结果是浏览器/IDE 拉起的前端 dev server 全部锁死——可这些进程就是当前用户自己启动的，`kill` 完全杀得动。这三类现在一律可关闭（本机实测：可关闭端口 20/49 → 43/43，受保护分组清空），而 `.app` 父进程、系统可执行文件仍然照常参与**归属识别**和图标展示，只是不再参与关闭判定。判定逻辑收敛在 `LocalPortCloseService.protectionReason`，`LocalPortCloseServiceTests.appAndSystemPathProcessesAreClosable` 是这条边界的 tripwire。
 
 ### 来源与验证
 

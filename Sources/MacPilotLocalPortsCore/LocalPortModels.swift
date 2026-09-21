@@ -237,9 +237,6 @@ public enum LocalPortProtectionReason: Sendable, Equatable {
     case protectedPID(Int32)
     case unknownUser(Int32)
     case anotherUser(Int32)
-    case unknownExecutable(Int32)
-    case systemExecutable(path: String)
-    case applicationBundle(path: String)
 }
 
 public enum LocalPortScanError: Error, Sendable, Equatable {
@@ -266,7 +263,7 @@ public struct LocalPortClosePlan: Sendable, Equatable, Identifiable {
     public let port: Int
     public let pid: Int32
     public let uid: Int32
-    public let executablePath: String
+    public let executablePath: String?
     public let processStartTime: String
     public let activity: LocalPortActivity
     public let otherPorts: [Int]
@@ -276,7 +273,7 @@ public struct LocalPortClosePlan: Sendable, Equatable, Identifiable {
         port: Int,
         pid: Int32,
         uid: Int32,
-        executablePath: String,
+        executablePath: String?,
         processStartTime: String,
         activity: LocalPortActivity,
         otherPorts: [Int],

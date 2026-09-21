@@ -106,8 +106,9 @@ The **CPU Monitor** shows each app's CPU usage in real time:
 The **Local Ports** page shows TCP `LISTEN` sockets grouped by process:
 
 - Merge IPv4/IPv6 entries, show LOCAL versus LAN bind scope, and search ports, PIDs, projects, commands, users, paths, and addresses.
-- Identify project roots, npm packages, Python modules, common local services, `.app` parents, and protected system executables.
+- Identify project roots, npm packages, Python modules, common local services, `.app` parents, and system executables.
 - Open likely HTTP endpoints in a browser and inspect the process identity, arguments, working directory, parent chain, uptime, and all ports owned by that PID.
+- Stop anything you launched, including dev servers started by a browser or IDE; only another user's processes, the system itself, and processes whose owner cannot be verified stay unstoppable.
 - Before stopping a service, re-scan and verify its PID, UID, executable, and process start time. Only SIGTERM is sent; no SIGKILL or privileged helper is used.
 
 Scanning starts only while this page is visible. Leaving the page or disabling the feature cancels refresh work and favicon requests.

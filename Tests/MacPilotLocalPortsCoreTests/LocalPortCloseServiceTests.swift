@@ -33,25 +33,54 @@ struct LocalPortCloseServiceTests {
         }
     }
 
-    @Test func protectionRulesRejectRootSystemAppAndOtherUser() {
+    @Test func appAndSystemPathProcessesAreClosable() {
         let uid = Int32(getuid())
-        let safe = makeActivity(pid: 42, uid: uid)
-        #expect(LocalPortCloseService.protectionReason(for: safe, currentUID: uid, currentPID: 99) == nil)
+
+        // A dev server launched by a browser owns nothing special: same user,
+        // so it must be stoppable even though it resolves to an `.app` bundle.
+        let app = makeActivity(
+            pid: 42,
+            path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            uid: uid,
+            application: LocalPortApplication(
+                name: "Google Chrome",
+                path: "/Applications/Google Chrome.app",
+                sourcePID: 42,
+                direct: true
+            )
+        )
+        #expect(LocalPortCloseService.protectionReason(for: app, currentUID: uid, currentPID: 99) == nil)
+
+        let system = makeActivity(pid: 42, path: "/usr/bin/python3", uid: uid)
+        #expect(LocalPortCloseService.protectionReason(for: system, currentUID: uid, currentPID: 99) == nil)
+
+        // A binary replaced or deleted after launch is the normal state of a
+        // watch-mode dev server; it must not lock the port away from the user.
+        let rebuilt = makeActivity(pid: 42, path: "/definitely/missing/local-port-executable", uid: uid)
+        #expect(LocalPortCloseService.protectionReason(for: rebuilt, currentUID: uid, currentPID: 99) == nil)
+
+        let plan = try? LocalPortCloseService.makePlan(
+            activities: [app],
+            port: 3000,
+            pid: nil,
+            currentUID: uid,
+            currentPID: 99,
+            startTime: { _ in "start" }
+        )
+        #expect(plan?.executablePath == "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    }
+
+    @Test func protectionRulesRejectOnlyProcessesMacPilotCannotSignal() {
+        let uid = Int32(getuid())
 
         let root = makeActivity(pid: 42, uid: uid)
         #expect(LocalPortCloseService.protectionReason(for: root, currentUID: 0, currentPID: 99) == .runningAsRoot)
 
-        let system = makeActivity(pid: 42, path: "/usr/bin/python3", uid: uid)
-        #expect(LocalPortCloseService.protectionReason(for: system, currentUID: uid, currentPID: 99) == .systemExecutable(path: "/usr/bin/python3"))
-
         let otherUser = makeActivity(pid: 42, uid: uid + 1)
         #expect(LocalPortCloseService.protectionReason(for: otherUser, currentUID: uid, currentPID: 99) == .anotherUser(42))
 
-        let app = makeActivity(pid: 42, uid: uid, application: LocalPortApplication(name: "Test", path: "/Applications/Test.app", sourcePID: 42, direct: true))
-        #expect(LocalPortCloseService.protectionReason(for: app, currentUID: uid, currentPID: 99) == .applicationBundle(path: "/Applications/Test.app"))
-
-        let missingExecutable = makeActivity(pid: 42, path: "/definitely/missing/local-port-executable", uid: uid)
-        #expect(LocalPortCloseService.protectionReason(for: missingExecutable, currentUID: uid, currentPID: 99) == .unknownExecutable(42))
+        let missingExecutable = makeActivity(pid: 42, path: nil, uid: uid)
+        #expect(LocalPortCloseService.protectionReason(for: missingExecutable, currentUID: uid, currentPID: 99) == nil)
     }
 
     @Test func protectionRulesRejectProtectedPIDsAndMissingUsers() {
@@ -73,7 +102,7 @@ struct LocalPortCloseServiceTests {
             port: 3000,
             pid: 42,
             uid: uid,
-            executablePath: original.process.executablePath!,
+            executablePath: original.process.executablePath,
             processStartTime: "start-one",
             activity: original,
             otherPorts: [],
@@ -126,7 +155,7 @@ struct LocalPortCloseServiceTests {
             port: 3000,
             pid: 42,
             uid: uid,
-            executablePath: activity.process.executablePath!,
+            executablePath: activity.process.executablePath,
             processStartTime: "start",
             activity: activity,
             otherPorts: [],
@@ -156,7 +185,7 @@ struct LocalPortCloseServiceTests {
             port: 3000,
             pid: 42,
             uid: uid,
-            executablePath: activity.process.executablePath!,
+            executablePath: activity.process.executablePath,
             processStartTime: "start",
             activity: activity,
             otherPorts: [],
@@ -182,7 +211,7 @@ struct LocalPortCloseServiceTests {
     private func makeActivity(
         pid: Int32,
         port: Int = 3000,
-        path: String = CommandLine.arguments.first ?? "/usr/bin/true",
+        path: String? = CommandLine.arguments.first ?? "/usr/bin/true",
         uid: Int32?,
         application: LocalPortApplication? = nil
     ) -> LocalPortActivity {
