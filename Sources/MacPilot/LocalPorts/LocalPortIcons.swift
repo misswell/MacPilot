@@ -124,16 +124,20 @@ enum LocalPortIconResolver {
 actor LocalPortFaviconFetcher {
     static let shared = LocalPortFaviconFetcher()
 
-    private let session: URLSession
+    private var session: URLSession
     private var cache: [String: Data] = [:]
     private var activeRequests = 0
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init() {
+        session = Self.makeSession()
+    }
+
+    private static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 1.5
         configuration.timeoutIntervalForResource = 2.0
-        session = URLSession(
+        return URLSession(
             configuration: configuration,
             delegate: LocalPortLoopbackTrustDelegate(),
             delegateQueue: nil
@@ -172,7 +176,14 @@ actor LocalPortFaviconFetcher {
     }
 
     func clear() {
+        session.invalidateAndCancel()
+        session = Self.makeSession()
         cache.removeAll(keepingCapacity: false)
+        let pendingWaiters = waiters
+        waiters.removeAll(keepingCapacity: false)
+        for waiter in pendingWaiters {
+            waiter.resume()
+        }
     }
 
     private func acquire() async {
@@ -198,7 +209,23 @@ actor LocalPortFaviconFetcher {
 /// Self-signed certificates are accepted only for loopback favicon probes.
 /// LAN addresses use the system's normal TLS validation because they are not
 /// automatically trusted just because a process is listening on the Mac.
-private final class LocalPortLoopbackTrustDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
+private final class LocalPortLoopbackTrustDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard let url = request.url,
+              let host = url.host,
+              LocalPortURLResolver.isLoopback(host) else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
+    }
+
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,

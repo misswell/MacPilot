@@ -307,8 +307,24 @@ public struct LocalPortCloseResult: Sendable, Equatable {
     }
 }
 
+public struct LocalPortUptimeComponents: Sendable, Equatable {
+    public let days: Int
+    public let hours: Int
+    public let minutes: Int
+
+    public init(days: Int, hours: Int, minutes: Int) {
+        self.days = days
+        self.hours = hours
+        self.minutes = minutes
+    }
+
+    public var isUnderMinute: Bool {
+        days == 0 && hours == 0 && minutes == 0
+    }
+}
+
 public enum LocalPortUptimeFormatter {
-    public static func format(etime: String, compact: Bool = false) -> String? {
+    public static func components(etime: String) -> LocalPortUptimeComponents? {
         let trimmed = etime.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -326,16 +342,26 @@ public enum LocalPortUptimeFormatter {
         let hours = parts.count == 3 ? parts[0] : 0
         let minutes = parts.count == 3 ? parts[1] : parts[0]
 
+        return LocalPortUptimeComponents(days: days, hours: hours, minutes: minutes)
+    }
+
+    public static func format(etime: String, compact: Bool = false) -> String? {
+        guard let components = components(etime: etime) else { return nil }
+
         if compact {
-            if days > 0 { return "\(days)d" }
-            if hours > 0 { return "\(hours)h" }
-            if minutes > 0 { return "\(minutes)m" }
+            if components.days > 0 { return "\(components.days)d" }
+            if components.hours > 0 { return "\(components.hours)h" }
+            if components.minutes > 0 { return "\(components.minutes)m" }
             return "< 1m"
         }
 
-        if days > 0 { return hours > 0 ? "\(days)d \(hours)h" : "\(days)d" }
-        if hours > 0 { return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h" }
-        if minutes > 0 { return "\(minutes)m" }
+        if components.days > 0 {
+            return components.hours > 0 ? "\(components.days)d \(components.hours)h" : "\(components.days)d"
+        }
+        if components.hours > 0 {
+            return components.minutes > 0 ? "\(components.hours)h \(components.minutes)m" : "\(components.hours)h"
+        }
+        if components.minutes > 0 { return "\(components.minutes)m" }
         return "< 1m"
     }
 }

@@ -22,7 +22,13 @@ struct LocalPortsView: View {
                 activityList
             }
         }
-        .background(.regularMaterial)
+        .background {
+            if #available(macOS 26.0, *) {
+                Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 0))
+            } else {
+                Color.clear.background(.regularMaterial)
+            }
+        }
         .task {
             model.startVisibleSession()
         }
@@ -289,9 +295,13 @@ private struct LocalPortRow: View {
                             Text(group.representative.process.command)
                             Text("·")
                             Text(appModel.t("localPortsPID", String(group.representative.process.pid)))
-                            if let uptime = group.representative.process.compactUptime {
+                            if group.representative.process.compactUptime != nil {
                                 Text("·")
-                                Text(LocalPortErrorFormatter.uptime(uptime, language: appModel.language))
+                                Text(LocalPortErrorFormatter.uptime(
+                                    group.representative.process,
+                                    compact: true,
+                                    language: appModel.language
+                                ))
                             }
                         }
                         .font(.caption)
@@ -330,6 +340,11 @@ private struct LocalPortRow: View {
                     .foregroundStyle(.secondary)
                     .help(LocalPortErrorFormatter.protection(group.protectionReason, language: appModel.language))
             } else {
+                if model.isPreparingClose {
+                    Text(appModel.t("localPortsVerifying"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Button(role: .destructive) {
                     model.prepareClose(for: group.representative)
                 } label: {
@@ -379,7 +394,7 @@ struct LocalPortDetailView: View {
                     detail(appModel.t("localPortsWorkingDirectory"), localPortCompactPath(activity.process.cwd))
                     detail(
                         appModel.t("localPortsUptime"),
-                        LocalPortErrorFormatter.uptime(activity.process.uptime, language: appModel.language)
+                        LocalPortErrorFormatter.uptime(activity.process, language: appModel.language)
                     )
                     detail(appModel.t("localPortsStartTime"), activity.process.startTime ?? "—")
                     detail(appModel.t("localPortsArguments"), activity.process.arguments ?? "—")
@@ -437,10 +452,15 @@ struct LocalPortDetailView: View {
                     }
                 }
                 if LocalPortCloseService.protectionReason(for: activity) == nil {
+                    if model.isPreparingClose {
+                        Label(appModel.t("localPortsVerifying"), systemImage: "hourglass")
+                            .foregroundStyle(.secondary)
+                    }
                     Button(appModel.t("localPortsClose"), role: .destructive) {
                         model.prepareClose(for: activity)
                     }
                     .disabled(model.isPreparingClose || model.isClosing)
+                    .macPilotProminentButtonStyle()
                 }
             }
         }
@@ -471,10 +491,10 @@ struct LocalPortCloseView: View {
                 Text(plan.activity.process.command).font(.headline)
                 Text(appModel.t("localPortsPID", String(plan.pid)))
                 Text(appModel.t("localPortsPort", String(plan.port)))
-                if let uptime = plan.activity.process.uptime {
+                if plan.activity.process.uptime != nil || plan.activity.process.rawElapsedTime != nil {
                     Text(appModel.t(
                         "localPortsUptime",
-                        LocalPortErrorFormatter.uptime(uptime, language: appModel.language)
+                        LocalPortErrorFormatter.uptime(plan.activity.process, language: appModel.language)
                     ))
                 }
                 if let project = plan.activity.project {
@@ -503,7 +523,10 @@ struct LocalPortCloseView: View {
                 }
                 .macPilotProminentButtonStyle()
                 .disabled(model.isClosing)
-                if model.isClosing { ProgressView().controlSize(.small) }
+                if model.isClosing {
+                    Label(appModel.t("localPortsClosing"), systemImage: "hourglass")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(24)
@@ -604,6 +627,35 @@ enum LocalPortErrorFormatter {
             return AppText.value("localPortsUptimeUnderMinute", language: language)
         }
         return value
+    }
+
+    static func uptime(
+        _ process: LocalPortProcess,
+        compact: Bool = false,
+        language: AppLanguage
+    ) -> String {
+        guard let rawElapsedTime = process.rawElapsedTime,
+              let components = LocalPortUptimeFormatter.components(etime: rawElapsedTime) else {
+            return uptime(process.uptime, language: language)
+        }
+        if components.isUnderMinute {
+            return AppText.value("localPortsUptimeUnderMinute", language: language)
+        }
+
+        let dayKey = compact ? "localPortsUptimeDaysCompact" : "localPortsUptimeDays"
+        let hourKey = compact ? "localPortsUptimeHoursCompact" : "localPortsUptimeHours"
+        let minuteKey = compact ? "localPortsUptimeMinutesCompact" : "localPortsUptimeMinutes"
+        var parts: [String] = []
+        if components.days > 0 {
+            parts.append(AppText.value(dayKey, language: language, components.days))
+        }
+        if components.hours > 0 {
+            parts.append(AppText.value(hourKey, language: language, components.hours))
+        }
+        if components.minutes > 0 && (components.days == 0 || !compact) {
+            parts.append(AppText.value(minuteKey, language: language, components.minutes))
+        }
+        return parts.isEmpty ? AppText.value("localPortsUptimeUnderMinute", language: language) : parts.joined(separator: " ")
     }
 
     static func result(_ result: LocalPortCloseResult?, language: AppLanguage) -> String {

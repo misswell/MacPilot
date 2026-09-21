@@ -21,6 +21,9 @@ final class LocalPortsModel: ObservableObject {
     @Published private(set) var lastCloseResult: LocalPortCloseResult?
 
     private var refreshTask: Task<Void, Never>?
+    private var scanWorker: Task<LocalPortSnapshot, Error>?
+    private var prepareWorker: Task<LocalPortClosePlan, Error>?
+    private var closeWorker: Task<LocalPortCloseResult, Error>?
     private var autoRefreshTask: Task<Void, Never>?
     private var generation: UInt64 = 0
     private var isVisible = false
@@ -54,12 +57,14 @@ final class LocalPortsModel: ObservableObject {
         guard isVisible || refreshTask != nil || autoRefreshTask != nil else { return }
         isVisible = false
         invalidateVisibleWork()
+        Task { await LocalPortFaviconFetcher.shared.clear() }
     }
 
     func shutdown() {
         isVisible = false
         invalidateVisibleWork()
         lastCloseResult = nil
+        Task { await LocalPortFaviconFetcher.shared.clear() }
     }
 
     private func invalidateVisibleWork() {
@@ -68,6 +73,12 @@ final class LocalPortsModel: ObservableObject {
         autoRefreshTask = nil
         refreshTask?.cancel()
         refreshTask = nil
+        scanWorker?.cancel()
+        scanWorker = nil
+        prepareWorker?.cancel()
+        prepareWorker = nil
+        closeWorker?.cancel()
+        closeWorker = nil
         isRefreshing = false
         isPreparingClose = false
         isClosing = false
@@ -92,15 +103,18 @@ final class LocalPortsModel: ObservableObject {
         let pid = activity.process.pid
         let environment = closeEnvironment
 
+        let worker = Task.detached(priority: .utility) {
+            try LocalPortCloseService.prepare(
+                port: port,
+                pid: pid,
+                environment: environment
+            )
+        }
+        prepareWorker = worker
+
         Task { [weak self] in
             do {
-                let plan = try await Task.detached(priority: .utility) {
-                    try LocalPortCloseService.prepare(
-                        port: port,
-                        pid: pid,
-                        environment: environment
-                    )
-                }.value
+                let plan = try await worker.value
                 guard let self,
                       self.isVisible,
                       self.generation == requestGeneration,
@@ -115,6 +129,7 @@ final class LocalPortsModel: ObservableObject {
             }
             guard let self, self.generation == requestGeneration else { return }
             self.isPreparingClose = false
+            self.prepareWorker = nil
         }
     }
 
@@ -129,26 +144,32 @@ final class LocalPortsModel: ObservableObject {
         let requestGeneration = generation
         let environment = closeEnvironment
 
+        let worker = Task.detached(priority: .utility) {
+            try await LocalPortCloseService.execute(plan, environment: environment)
+        }
+        closeWorker = worker
+
         Task { [weak self] in
             do {
-                let result = try await Task.detached(priority: .utility) {
-                    try await LocalPortCloseService.execute(plan, environment: environment)
-                }.value
+                let result = try await worker.value
                 guard let self, self.generation == requestGeneration else { return }
                 self.lastCloseResult = result
                 self.pendingClosePlan = nil
                 self.isClosing = false
+                self.closeWorker = nil
                 self.refresh()
             } catch let error as LocalPortCloseError {
                 guard let self, self.generation == requestGeneration else { return }
                 self.lastCloseError = error
                 self.pendingClosePlan = nil
                 self.isClosing = false
+                self.closeWorker = nil
             } catch {
                 guard let self, self.generation == requestGeneration else { return }
                 self.lastCloseError = .verificationFailed
                 self.pendingClosePlan = nil
                 self.isClosing = false
+                self.closeWorker = nil
             }
         }
     }
@@ -193,11 +214,14 @@ final class LocalPortsModel: ObservableObject {
         let requestGeneration = generation
         let environment = closeEnvironment
 
+        let worker = Task.detached(priority: .utility) {
+            try environment.scan()
+        }
+        scanWorker = worker
+
         let task = Task { [weak self] in
             do {
-                let value = try await Task.detached(priority: .utility) {
-                    try environment.scan()
-                }.value
+                let value = try await worker.value
                 guard let self,
                       !Task.isCancelled,
                       self.isVisible,
@@ -215,6 +239,7 @@ final class LocalPortsModel: ObservableObject {
             guard let self, self.generation == requestGeneration else { return }
             self.isRefreshing = false
             self.refreshTask = nil
+            self.scanWorker = nil
         }
         refreshTask = task
     }

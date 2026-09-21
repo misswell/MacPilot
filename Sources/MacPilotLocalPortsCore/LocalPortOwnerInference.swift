@@ -110,9 +110,18 @@ public enum LocalPortOwnerInference {
             )
         }
 
-        if let interpreter = interpreterOwner(for: process) { return interpreter }
-
         if let path = process.executablePath, isSystemExecutable(path) {
+            // System executables remain in the system-service tier, while a
+            // more specific `python -m` or Node package signal still gives
+            // the user the useful service name required by the UI contract.
+            if let interpreter = interpreterOwner(for: process) {
+                return LocalPortOwner(
+                    label: interpreter.label,
+                    category: .systemService,
+                    confidence: interpreter.confidence,
+                    reason: interpreter.reason
+                )
+            }
             return LocalPortOwner(
                 label: URL(fileURLWithPath: path).lastPathComponent,
                 category: .systemService,
@@ -120,6 +129,8 @@ public enum LocalPortOwnerInference {
                 reason: .systemExecutable(path: path)
             )
         }
+
+        if let interpreter = interpreterOwner(for: process) { return interpreter }
 
         if let service = standaloneService(for: process) { return service }
 
