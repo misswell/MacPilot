@@ -1613,3 +1613,35 @@ Local Ports 是 MacPilot 的独立功能页，不增加第二个 `MenuBarExtra`�
 - 离屏渲染（`cacheDisplay`，窗口摆在 (-30000, -30000)，不在用户桌面上出现）静息 / hover / HUD / 锁定穿透 / 解锁热区五态 × 浅深色：岛在右上角、`− 110% +` 在底部居中、热区里出现 `lock.fill`、图片满幅 r24。
 - **局限要说清楚**：`cacheDisplay` 抓不到 backdrop filter，`screencapture` 在这个 shell 里被 Screen Recording 权限挡住（`could not create image from display`）。所以 Liquid Glass 的**实际观感没有逐像素验证过**，验证的是它的几何（同心路径元素数）与 fallback 分支能编译能布局。
 - `swift build -c release -Xswiftc -warnings-as-errors`（`--scratch-path` 全新目录，无缓存，与 CI 同一条命令）+ `swift test` 804 条：失败只有 `heartbeatFailureTriggersABoundedReconnect`、`startupShortcutRegistrationRetriesTransientFailure`（单独跑全绿，并行计时抖动）与 `recapturingAHiddenSourceRestoresItsExistingPipSession`（需要真实窗口环境，HEAD 上同样失败）。`QuickAccessTests` + `SnapzyCaptureTests` 58 条全绿。
+
+## 六十一、贴图的玻璃退化成一块灰板：改成不依赖 backdrop 的 HUD 胶囊（v1.1.390）
+
+第六十节发出去没几分钟，用户贴了张实际渲染图过来：「截图的样式好丑啊，改为 macos27 的那种风格」。图里那枚控制岛是**一块不透明的中灰圆角矩形**，白色细图标压在上面几乎看不清——不是玻璃，是灰板。
+
+根因不在我们的代码里。`glassEffect` 折射的是**窗口背后**的内容，而贴图窗口是 `.borderless + .nonactivatingPanel`、`level = floating + 2`、`canJoinAllSpaces` 的浮层面板：macOS 26 的 `NSGlassEffectView` 在这种自建窗口里拿不到 backdrop，直接给一层默认 tint。这是 Apple 自己的集成方也在绕的坑——cmux 的 issue #2459 里那段源码注释写得很直白：*「skip on macOS 26+ where NSGlassEffectView can cause blank or incorrectly tinted SwiftUI content」*。所以第六十节那条「局限：玻璃观感没逐像素验证过」不是保守，是这次事故的预告。
+
+### 改了什么
+
+1. **彻底不用 `glassEffect`**，也**不用任何 `Material`**（`.regularMaterial` / `.ultraThinMaterial` 同样要采样背后，同一个坑）。岛改成自绘的系统 HUD 胶囊：`Color.black.opacity(0.62)` 填充 + 1pt `Color.white.opacity(0.22)` 描边 + 0.18/6 阴影。理由写进 `PinCapsuleSurface` 的注释里——**浮层压在任意截图上，对比度必须来自填充本身，不能来自它后面恰好是什么**。只靠描边撑住的方案在浅色截图上没问题，在深色截图上会整块糊掉。
+2. **同心圆角手算，不再指望系统推导**：`controlCornerRadius = controlHeight / 2 = 16`，而 `NSWindow.defaultCornerRadius(24) - outerInset(8) = 16`，两者恰好相等，所以胶囊天然与贴图外框同心。`ConcentricRectangle`、root 上的 `containerShape`、`#available(macOS 26.0, *)` 分支、`legacyControlCornerRadius` 一并删掉——**两套 OS 现在走同一条渲染路径**，这本身就是这次最想要的性质：在用户机器上丑，在任何机器上都丑，不会再有"我这边看着是对的"。
+3. **图标改粗改大改白**：11.5pt medium 的 `labelColor` → 13pt semibold 的固定白色。原来那套自适应字色是给"卡片在系统外观里"用的；压在截图上时 `labelColor` 会跟随**app** 的外观而不是**图片**的明暗，浅色模式下就是深灰图标落在深灰底上。
+4. `PinGlassIsland` / `PinGlassSurface` → `PinCapsule` / `PinCapsuleSurface`，`controlIsland` → `controlCapsule`，注释里的「island / glass」全部换成「capsule」，防止下一个人以为这里还有玻璃。
+
+### 这次能验、上次验不了的部分
+
+填充是纯色不是 backdrop filter，所以 `cacheDisplay` **这次真的能抓到它**。用一次性探针在 900×600 的离屏窗口里渲染四态（浅色图 / 深色图 / 缩放 HUD / 锁定热区），图片右上角另画一条 0.5 中灰带来制造最坏对比场景：
+
+- 浅图：胶囊明显压得住，白色 `lock.open` / `xmark` 清晰。
+- 暗图：0.62 的黑底与背景趋同，但 1pt 白描边把轮廓找回来了——这正是描边存在的唯一理由。
+- 缩放 HUD：`− 110% +` 等宽数字，居中、不溢出。
+- 锁定热区：只有一枚圆形 `lock.fill`（单控件时胶囊即正圆），位置仍在 48pt 热点内。
+
+新增三条断言把这次的不变量钉住：`controlCornerRadius == NSWindow.defaultCornerRadius - outerInset`（同心一旦破了就红）、`capsuleFillOpacity >= 0.5`（白字必须有足够暗的底撑着）。
+
+### 没有做的
+
+没有让胶囊跟随系统外观变浅。**贴图的内容和外观无关**：一张白底网页截图在深色模式下仍然需要暗底浮层。真要做"浅图用浅底"得实时采样图片对应区域的亮度，那是另一个量级的改动，这次先把灰板修掉。
+
+### 验证
+
+`swift test --filter "QuickAccessTests|SnapzyCaptureTests"` 58 条全绿；`swift build -c release -Xswiftc -warnings-as-errors`（`--scratch-path` 全新目录、universal）通过。探针文件与 `/tmp` 图片用完即删。

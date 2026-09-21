@@ -500,6 +500,12 @@ struct SnapzyCaptureTests {
         #expect(PinnedScreenshotChromeStyle.controlHeight > PinnedScreenshotChromeStyle.controlSide)
         // 锁定后唯一可点的热点比画出来的控件大一圈：目标要好找，视觉要小。
         #expect(PinnedScreenshotChromeStyle.lockHotspotSide > PinnedScreenshotChromeStyle.controlHeight)
+        // 胶囊与贴图外框同心：半径 = 窗口半径 - 离边距离。这条等式一旦不成立，
+        // 两圈曲线就会各自为政，浮层立刻显得是贴上去的。
+        #expect(PinnedScreenshotChromeStyle.controlCornerRadius
+            == NSWindow.defaultCornerRadius - PinnedScreenshotChromeStyle.outerInset)
+        // 浮层压在任意截图上，对比只能来自填充本身：白字要有足够暗的底撑着。
+        #expect(PinnedScreenshotChromeStyle.capsuleFillOpacity >= 0.5)
     }
 
     @Test @MainActor func selectionBarCardFollowsTheAppearanceInsteadOfBeingPaintedBlack() throws {

@@ -38,7 +38,6 @@ struct QuickAccessPinWindowView: View {
       }
     }
     .frame(width: state.displaySize.width, height: state.displaySize.height)
-    .pinContainerShape()
     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     .overlay(pinBorder)
     .background(Color.clear)
@@ -111,13 +110,13 @@ struct QuickAccessPinWindowView: View {
 
   // MARK: - Unlocked chrome
 
-  /// Hover reveals one glass island in the trailing top corner.  A pin at rest
+  /// Hover reveals one HUD capsule in the trailing top corner.  A pin at rest
   /// is a picture with nothing on it.
   private var unlockedChrome: some View {
     VStack {
       HStack {
         Spacer(minLength: 0)
-        controlIsland
+        controlCapsule
       }
       Spacer(minLength: 0)
     }
@@ -129,13 +128,13 @@ struct QuickAccessPinWindowView: View {
 
   /// A file drag orders the window out and runs its own event loop, so the
   /// pointer state is stale by the time the window comes back.  Holding the
-  /// island up for the duration keeps the control the drag started from — the
-  /// island itself — from disappearing under the cursor.
+  /// capsule up for the duration keeps the control the drag started from — the
+  /// capsule itself — from disappearing under the cursor.
   private var isChromeVisible: Bool {
     QuickAccessPinChromeVisibility.isVisible(mouseInside: state.isMouseInside, isDraggingFile: isFileDragActive)
   }
 
-  private var controlIsland: some View {
+  private var controlCapsule: some View {
     HStack(spacing: PinnedScreenshotChromeStyle.controlSpacing) {
       control(
         systemName: "lock.open",
@@ -149,14 +148,14 @@ struct QuickAccessPinWindowView: View {
 
       control(systemName: "xmark", help: L10n.PreferencesQuickAccess.unpinAction, action: onClose)
     }
-    .modifier(PinGlassIsland())
+    .modifier(PinCapsule())
   }
 
   private func control(systemName: String, help: String, action: @escaping () -> Void) -> some View {
     Button(action: action) {
       Image(systemName: systemName)
-        .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: .medium))
-        .foregroundStyle(Color(nsColor: PinnedScreenshotChromeStyle.glyph))
+        .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: PinnedScreenshotChromeStyle.glyphWeight))
+        .foregroundStyle(PinnedScreenshotChromeStyle.capsuleGlyph)
         .frame(width: PinnedScreenshotChromeStyle.controlSide, height: PinnedScreenshotChromeStyle.controlSide)
         .contentShape(Rectangle())
     }
@@ -178,8 +177,8 @@ struct QuickAccessPinWindowView: View {
     .frame(width: PinnedScreenshotChromeStyle.controlSide, height: PinnedScreenshotChromeStyle.controlSide)
     .overlay {
       Image(systemName: "arrow.up.forward.app")
-        .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: .medium))
-        .foregroundStyle(Color(nsColor: PinnedScreenshotChromeStyle.glyph))
+        .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: PinnedScreenshotChromeStyle.glyphWeight))
+        .foregroundStyle(PinnedScreenshotChromeStyle.capsuleGlyph)
         .allowsHitTesting(false)
     }
     .help(L10n.AnnotateUI.dragToAppHelp)
@@ -190,7 +189,7 @@ struct QuickAccessPinWindowView: View {
 
   /// Locked means the image lets the mouse through everywhere except the
   /// hotspot, so this state has its own single-control chrome rather than the
-  /// unlocked island at a different opacity.  The image itself never fades.
+  /// unlocked capsule at a different opacity.  The image itself never fades.
   private var lockedChrome: some View {
     ZStack(alignment: .topTrailing) {
       Color.clear
@@ -200,7 +199,7 @@ struct QuickAccessPinWindowView: View {
           help: L10n.QuickAccess.unlockPinnedWindow,
           action: toggleLock
         )
-        .modifier(PinGlassIsland())
+        .modifier(PinCapsule())
       }
     }
     .padding(PinnedScreenshotChromeStyle.outerInset)
@@ -225,9 +224,9 @@ struct QuickAccessPinWindowView: View {
 
           Button(action: resetZoom) {
             Text("\(state.zoomPercent)%")
-              .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: .medium))
+              .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: PinnedScreenshotChromeStyle.glyphWeight))
               .monospacedDigit()
-              .foregroundStyle(Color(nsColor: PinnedScreenshotChromeStyle.glyph))
+              .foregroundStyle(PinnedScreenshotChromeStyle.capsuleGlyph)
               .frame(height: PinnedScreenshotChromeStyle.controlSide)
               .frame(minWidth: 40)
               .contentShape(Rectangle())
@@ -241,7 +240,7 @@ struct QuickAccessPinWindowView: View {
           }
         }
         .frame(width: PinnedScreenshotChromeStyle.zoomHUDWidth, height: PinnedScreenshotChromeStyle.zoomHUDHeight)
-        .modifier(PinGlassSurface())
+        .modifier(PinCapsuleSurface())
         .accessibilityElement(children: .contain)
         .transition(.opacity)
       }
@@ -264,8 +263,8 @@ struct QuickAccessPinWindowView: View {
   private func hudControl(systemName: String, help: String, action: @escaping () -> Void) -> some View {
     Button(action: action) {
       Image(systemName: systemName)
-        .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: .medium))
-        .foregroundStyle(Color(nsColor: PinnedScreenshotChromeStyle.glyph))
+        .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: PinnedScreenshotChromeStyle.glyphWeight))
+        .foregroundStyle(PinnedScreenshotChromeStyle.capsuleGlyph)
         .frame(width: PinnedScreenshotChromeStyle.controlSide, height: PinnedScreenshotChromeStyle.controlSide)
         .contentShape(Rectangle())
     }
@@ -289,39 +288,31 @@ struct QuickAccessPinWindowView: View {
 
 // MARK: - Chrome surfaces
 
-/// The island's shape comes from the pin it floats on: on Liquid Glass the
-/// control derives concentric corners from the window radius, so the inset and
-/// the curve are related instead of two unrelated numbers.  Below macOS 26
-/// there is no container shape to read, so the island keeps its own smaller
-/// radius.
-private struct PinGlassIsland: ViewModifier {
+/// The capsule a control row is drawn into.  Its radius is half its height,
+/// which is also the pin's radius minus the edge inset, so the two curves stay
+/// concentric without asking the system to derive it.
+private struct PinCapsule: ViewModifier {
   func body(content: Content) -> some View {
     content
       .padding(.horizontal, PinnedScreenshotChromeStyle.controlSpacing)
       .frame(height: PinnedScreenshotChromeStyle.controlHeight)
-      .modifier(PinGlassSurface())
+      .modifier(PinCapsuleSurface())
   }
 }
 
-/// One layer of system glass for one control container.  Never applied to the
-/// individual buttons inside it: a pin gets a single island, not three chips.
-private struct PinGlassSurface: ViewModifier {
-  func body(content: Content) -> some View {
-    if #available(macOS 26.0, *) {
-      content.glassEffect(.regular.interactive(), in: ConcentricRectangle())
-    } else {
-      fallback(content)
-    }
+/// A system-HUD surface: dark translucent fill, light hairline, soft shadow.
+/// Deliberately free of `glassEffect` and of any `Material` — both sample what
+/// is behind them, and a control that only looks right over some part of the
+/// user's screenshot is a control that disappears over the rest of it.
+private struct PinCapsuleSurface: ViewModifier {
+  private var shape: Capsule {
+    Capsule()
   }
 
-  private func fallback(_ content: Content) -> some View {
-    let shape = RoundedRectangle(
-      cornerRadius: PinnedScreenshotChromeStyle.legacyControlCornerRadius,
-      style: .continuous
-    )
-    return content
-      .background(shape.fill(.regularMaterial))
-      .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
+  func body(content: Content) -> some View {
+    content
+      .background(shape.fill(Color.black.opacity(PinnedScreenshotChromeStyle.capsuleFillOpacity)))
+      .overlay(shape.strokeBorder(Color.white.opacity(PinnedScreenshotChromeStyle.capsuleStrokeOpacity), lineWidth: 1))
       .shadow(
         color: Color(nsColor: .black).opacity(PinnedScreenshotChromeStyle.chromeShadowOpacity),
         radius: PinnedScreenshotChromeStyle.chromeShadowRadius,
@@ -331,33 +322,10 @@ private struct PinGlassSurface: ViewModifier {
   }
 }
 
-/// Publishes the container shape that `ConcentricRectangle` reads.  It has to
-/// be on the root, outside the chrome, because that is the surface the island
-/// is concentric *to*.
-private struct PinContainerShape: ViewModifier {
-  let cornerRadius: CGFloat
-
-  func body(content: Content) -> some View {
-    if #available(macOS 26.0, *) {
-      content.containerShape(
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-      )
-    } else {
-      content
-    }
-  }
-}
-
-private extension View {
-  func pinContainerShape() -> some View {
-    modifier(PinContainerShape(cornerRadius: NSWindow.defaultCornerRadius))
-  }
-}
-
 // MARK: - Chrome policies
 
 enum QuickAccessPinChromeVisibility {
-  /// The island is a hover affordance, so it follows the pointer into the
+  /// The capsule is a hover affordance, so it follows the pointer into the
   /// window.  It also has to survive a file drag, which hides the window and
   /// stops the pointer state from updating while it runs.
   static func isVisible(mouseInside: Bool, isDraggingFile: Bool) -> Bool {
