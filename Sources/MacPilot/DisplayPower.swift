@@ -149,6 +149,15 @@ enum DisplayPower {
     /// not be driven.
     @MainActor private static var isOverlayShowing = false
     @MainActor private static var unblankWatcher: Task<Void, Never>?
+    /// Retries keyboard restoration after CoreBrightness accepts a write without
+    /// applying it immediately. The retry count is finite; an unresolved state
+    /// remains in the crash snapshot for the next launch.
+    @MainActor private static var keyboardRestoreRetryTask: Task<Void, Never>?
+    private static let keyboardRestoreRetryDelays: [Duration] = [
+        .milliseconds(100),
+        .milliseconds(250),
+        .milliseconds(500)
+    ]
     /// Held while the screen is blacked, so macOS cannot run its own
     /// display-sleep timer underneath. On a Mac that requires a password as soon
     /// as the display turns off — the default — that timer is what eventually
@@ -183,7 +192,10 @@ enum DisplayPower {
 
         // Input arriving after this point is what brings the screen back, so the
         // moment of blanking is the baseline to compare against.
-        let idleAtBlank = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInputEventType)
+        let inputCounterAtBlank = CGEventSource.counterForEventType(
+            .combinedSessionState,
+            eventType: anyInputEventType
+        )
 
         var blanked: [CGDirectDisplayID: Float] = [:]
         var ddcBlanked: [CGDirectDisplayID: Double] = [:]
@@ -268,7 +280,7 @@ enum DisplayPower {
             isOverlayShowing = true
         }
         holdDisplaySleepAssertion()
-        startUnblankWatcher(idleAtBlank: idleAtBlank)
+        startUnblankWatcher(inputCounterAtBlank: inputCounterAtBlank)
         DiagnosticLog.write(
             "DisplayPower",
             "display blanked without sleeping backlight=\(blanked.count) ddc=\(ddcBlanked.count) ddcOff=\(ddcPoweredOff.count) overlay=\(overlayScreens.count) keyboard=\(keyboards.count) displays=\(steps.map(\.displayID))"
@@ -297,13 +309,15 @@ enum DisplayPower {
     static func unblankDisplay() {
         unblankWatcher?.cancel()
         unblankWatcher = nil
+        keyboardRestoreRetryTask?.cancel()
+        keyboardRestoreRetryTask = nil
         // Released even when nothing is blanked: a state that cleared
         // `blankedDisplays` on another path must not strand the assertion.
         defer { releaseDisplaySleepAssertion() }
         guard isBlanked else { return }
 
         let restoredBacklights = blankedDisplays.count
-        let restoredKeyboards = blankedKeyboardBacklights.count
+        let capturedKeyboards = blankedKeyboardBacklights.count
         let hidOverlay = isOverlayShowing
         if let driver = BrightnessDriver.shared {
             for (displayID, original) in blankedDisplays {
@@ -342,42 +356,93 @@ enum DisplayPower {
         // their automatic control if they ran it from the light sensor. Restoring
         // is skipped when nothing was captured, which is every Mac without a
         // backlit keyboard and every macOS without the private framework.
-        KeyboardBacklightController.shared?.restore(blankedKeyboardBacklights)
-        blankedKeyboardBacklights.removeAll()
-        // Cleared only after the restores: a crash between a restore and this
-        // line leaves the snapshot in place, and the next launch re-decides per
-        // display, skipping the ones already raised. A power-on still waiting
-        // for its monitor is the one case that must survive on purpose.
-        if stillWaiting.isEmpty {
-            snapshotStore.clear()
-        } else {
-            keepSnapshot(forPoweredOff: stillWaiting)
-        }
+        let unresolvedKeyboards = KeyboardBacklightController.shared?.restore(blankedKeyboardBacklights, attempt: 1)
+            ?? blankedKeyboardBacklights
+        blankedKeyboardBacklights = unresolvedKeyboards
         if isOverlayShowing {
             ScreenBlankOverlay.shared.hide()
             isOverlayShowing = false
         }
+        // The snapshot is cleared only after every attempted restore has been
+        // read back. Any keyboard CoreBrightness did not actually restore stays
+        // queued alongside a monitor that is still waiting to power on.
+        persistPendingRecovery(
+            keyboardBacklights: unresolvedKeyboards,
+            poweredOffDisplays: stillWaiting
+        )
+        if !unresolvedKeyboards.isEmpty {
+            scheduleKeyboardBacklightRetries()
+        }
         DiagnosticLog.write(
             "DisplayPower",
-            "display unblanked backlight=\(restoredBacklights) ddcOn=\(poweredOn) ddcOnPending=\(stillWaiting.count) overlay=\(hidOverlay ? 1 : 0) keyboard=\(restoredKeyboards)"
+            "display unblanked backlight=\(restoredBacklights) ddcOn=\(poweredOn) ddcOnPending=\(stillWaiting.count) overlay=\(hidOverlay ? 1 : 0) keyboardCaptured=\(capturedKeyboards) keyboardPending=\(unresolvedKeyboards.count)"
         )
     }
 
-    /// Narrows the crash snapshot down to the displays still waiting for their
-    /// power-on, so a launch after an unsuccessful wake retries exactly those and
-    /// has nothing else left to replay.
+    /// Keeps only state that the just-finished unblank still needs to retry.
+    /// `poweredOffDisplays` is optional for keyboard-only retries: in that case
+    /// the monitor state already persisted by the first pass must be retained.
     @MainActor
-    private static func keepSnapshot(forPoweredOff displayIDs: [CGDirectDisplayID]) {
-        var snapshot = snapshotStore.load()
+    private static func persistPendingRecovery(
+        keyboardBacklights: [KeyboardBacklightState],
+        poweredOffDisplays: [CGDirectDisplayID]? = nil
+    ) {
+        let existing = snapshotStore.load()
+        let pendingPoweredOff = poweredOffDisplays
+            ?? existing?.poweredOffDisplays.compactMap(UInt32.init)
+            ?? []
+        guard !keyboardBacklights.isEmpty || !pendingPoweredOff.isEmpty else {
+            snapshotStore.clear()
+            return
+        }
+        var snapshot = existing
             ?? DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: [:], ddcBacklight: [:])
         snapshot.systemBacklight = [:]
         snapshot.ddcBacklight = [:]
-        snapshot.ddcPowerOff = displayIDs.map(String.init)
-        // The keyboards were already put back by this point, so replaying their
-        // levels on the next launch would only fight whatever the user chose
-        // meanwhile.
-        snapshot.keyboardBacklights = []
+        snapshot.ddcPowerOff = pendingPoweredOff.map(String.init)
+        snapshot.keyboardBacklights = keyboardBacklights
         snapshotStore.save(snapshot)
+    }
+
+    /// CoreBrightness can acknowledge a write before the keyboard controller has
+    /// applied it. Retry only the unresolved keyboards, at bounded intervals; if
+    /// all attempts fail the snapshot remains for the next launch to recover.
+    @MainActor
+    private static func scheduleKeyboardBacklightRetries() {
+        guard !blankedKeyboardBacklights.isEmpty else { return }
+        keyboardRestoreRetryTask?.cancel()
+        keyboardRestoreRetryTask = Task { @MainActor in
+            for (index, delay) in keyboardRestoreRetryDelays.enumerated() {
+                do {
+                    try await Task.sleep(for: delay)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled, !blankedKeyboardBacklights.isEmpty else { return }
+
+                let attempt = index + 2
+                let unresolved = KeyboardBacklightController.shared?.restore(
+                    blankedKeyboardBacklights,
+                    attempt: attempt
+                )
+                    ?? blankedKeyboardBacklights
+                blankedKeyboardBacklights = unresolved
+                persistPendingRecovery(keyboardBacklights: unresolved)
+                DiagnosticLog.write(
+                    "DisplayPower",
+                    "keyboard backlight restore retry attempt=\(attempt) unresolved=\(unresolved.count)"
+                )
+                if unresolved.isEmpty {
+                    keyboardRestoreRetryTask = nil
+                    return
+                }
+            }
+            keyboardRestoreRetryTask = nil
+            DiagnosticLog.write(
+                "DisplayPower",
+                "keyboard backlight restore retries exhausted unresolved=\(blankedKeyboardBacklights.count)"
+            )
+        }
     }
 
     /// Termination teardown: stops the 400 ms wake watcher and hands the display
@@ -454,27 +519,34 @@ enum DisplayPower {
 
     /// The display is not asleep, so nothing in the system brings the backlight
     /// back on its own — a key press would leave the screen black until someone
-    /// reached for the brightness key. Idle time is polled rather than observed
-    /// through an event monitor because that needs no Accessibility grant, and
-    /// this must not be able to strand a user on a black screen.
+    /// reached for the brightness key. The WindowServer input counter is polled
+    /// rather than observed through an event monitor because that needs no
+    /// Accessibility grant, and this must not be able to strand a user on a
+    /// black screen.
     /// Whether the user has touched anything since the screen was blanked.
     ///
     /// Pulled out as a pure rule because getting it backwards would strand
     /// someone on a black screen, and that is worth a test that does not need a
     /// real key press.
-    static func didUserInputOccur(idleNow: CFTimeInterval, idleAtBlank: CFTimeInterval) -> Bool {
-        idleNow < idleAtBlank
+    static func didUserInputOccur(inputCounterNow: UInt32, inputCounterAtBlank: UInt32) -> Bool {
+        inputCounterNow != inputCounterAtBlank
     }
 
     @MainActor
-    private static func startUnblankWatcher(idleAtBlank: CFTimeInterval) {
+    private static func startUnblankWatcher(inputCounterAtBlank: UInt32) {
         unblankWatcher?.cancel()
         unblankWatcher = Task { @MainActor in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(400))
                 guard !Task.isCancelled, isBlanked else { return }
-                let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInputEventType)
-                if didUserInputOccur(idleNow: idle, idleAtBlank: idleAtBlank) {
+                let inputCounterNow = CGEventSource.counterForEventType(
+                    .combinedSessionState,
+                    eventType: anyInputEventType
+                )
+                if didUserInputOccur(
+                    inputCounterNow: inputCounterNow,
+                    inputCounterAtBlank: inputCounterAtBlank
+                ) {
                     unblankDisplay()
                     return
                 }

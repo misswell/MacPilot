@@ -259,7 +259,9 @@ enum DisplayBlankRecovery {
             switch decision(current: appliers.readKeyboardBrightness(state.keyboardID).map(Double.init)) {
             case .restore:
                 touched = true
-                if !appliers.writeKeyboardBrightness(state.keyboardID, state.brightness) {
+                _ = appliers.writeKeyboardBrightness(state.keyboardID, state.brightness)
+                let actual = appliers.readKeyboardBrightness(state.keyboardID)
+                if !keyboardBrightnessMatches(actual, target: state.brightness) {
                     needsAnotherLaunch = true
                 }
             case .alreadyRepaired, .undrivable:
@@ -270,7 +272,8 @@ enum DisplayBlankRecovery {
                 current: appliers.readKeyboardAuto(state.keyboardID)
             ) == .switchBackOn {
                 touched = true
-                if !appliers.writeKeyboardAuto(state.keyboardID, true) {
+                _ = appliers.writeKeyboardAuto(state.keyboardID, true)
+                if appliers.readKeyboardAuto(state.keyboardID) != true {
                     needsAnotherLaunch = true
                 }
             }
@@ -294,5 +297,10 @@ enum DisplayBlankRecovery {
             DiagnosticLog.write("DisplayPower", "blank snapshot restored items=\(restored) capturedAt=\(snapshot.capturedAt)")
         }
         return restored
+    }
+
+    private static func keyboardBrightnessMatches(_ current: Float?, target: Float) -> Bool {
+        guard let current else { return false }
+        return abs(current - target) <= 0.01
     }
 }

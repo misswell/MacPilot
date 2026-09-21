@@ -25,6 +25,9 @@ private final class FakeKeyboardBacklight: @unchecked Sendable {
     var answers = true
     /// Whether every write is refused, the way a locked session can refuse one.
     var acceptsWrites = true
+    /// Whether an accepted write is reflected by the next read. CoreBrightness
+    /// can report success before the hardware has actually applied the value.
+    var appliesWrites = true
     /// Keyboards that report no level, so there is nothing to restore to.
     var unreadable: Set<UInt64> = []
 
@@ -42,14 +45,18 @@ private final class FakeKeyboardBacklight: @unchecked Sendable {
             setBrightness: { value, keyboardID in
                 self.brightnessWrites.append((keyboardID, value))
                 guard self.answers, self.acceptsWrites, !self.unreadable.contains(keyboardID) else { return false }
-                self.levels[keyboardID] = value
+                if self.appliesWrites {
+                    self.levels[keyboardID] = value
+                }
                 return true
             },
             autoBrightnessEnabled: { self.answers ? self.sensors[$0] : nil },
             setAutoBrightnessEnabled: { enabled, keyboardID in
                 self.autoWrites.append((keyboardID, enabled))
                 guard self.answers, self.acceptsWrites else { return false }
-                self.sensors[keyboardID] = enabled
+                if self.appliesWrites {
+                    self.sensors[keyboardID] = enabled
+                }
                 return true
             }
         )
@@ -75,6 +82,26 @@ struct KeyboardBacklightTests {
         #expect(keyboard.autoWrites.first?.1 == false)
 
         controller.restore(captured)
+        #expect(keyboard.levels[1] == 0.7)
+        #expect(keyboard.sensors[1] == true)
+    }
+
+    /// CoreBrightness may report both writes as accepted while the keyboard is
+    /// still at zero. The captured state must remain available for a later retry,
+    /// and the next read-back-confirmed pass may then consume it.
+    @Test func restoreKeepsStateWhenAcceptedWritesDoNotChangeTheHardware() {
+        let keyboard = FakeKeyboardBacklight([1: (0.7, true)])
+        let controller = keyboard.controller()
+        let captured = controller.blank()
+
+        keyboard.appliesWrites = false
+        let unresolved = controller.restore(captured)
+        #expect(unresolved == captured)
+        #expect(keyboard.levels[1] == 0)
+        #expect(keyboard.sensors[1] == false)
+
+        keyboard.appliesWrites = true
+        #expect(controller.restore(unresolved).isEmpty)
         #expect(keyboard.levels[1] == 0.7)
         #expect(keyboard.sensors[1] == true)
     }
@@ -297,6 +324,31 @@ extension KeyboardBacklightTests {
         #expect(keyboard.levels[1] == 0.65)
     }
 
+    /// A true write result is not enough for crash recovery either: the snapshot
+    /// remains until both the brightness and sensor reads confirm the repair.
+    @Test func recoveryKeepsAKeyboardQueuedWhenAcceptedWritesDoNotReadBack() {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        let keyboard = FakeKeyboardBacklight([1: (0, false)])
+        keyboard.appliesWrites = false
+        let state = KeyboardBacklightState(keyboardID: 1, brightness: 0.65, autoBrightnessEnabled: true)
+        store.save(DisplayBlankSnapshot(
+            capturedAt: Date(),
+            systemBacklight: [:],
+            ddcBacklight: [:],
+            keyboardBacklights: [state]
+        ))
+
+        #expect(DisplayBlankRecovery.recover(store: store, appliers: keyboard.appliers()) == 0)
+        #expect(store.load()?.keyboardStates == [state])
+
+        keyboard.appliesWrites = true
+        #expect(DisplayBlankRecovery.recover(store: store, appliers: keyboard.appliers()) == 1)
+        #expect(store.load() == nil)
+        #expect(keyboard.levels[1] == 0.65)
+        #expect(keyboard.sensors[1] == true)
+    }
+
     /// Snapshots written by the release before keyboards existed carry no
     /// `keyboardBacklights` key. Refusing to read one would strand the displays
     /// that file does describe.
@@ -373,14 +425,18 @@ private extension FakeKeyboardBacklight {
             writeKeyboardBrightness: { id, level in
                 self.brightnessWrites.append((id, level))
                 guard self.acceptsWrites else { return false }
-                self.levels[id] = level
+                if self.appliesWrites {
+                    self.levels[id] = level
+                }
                 return true
             },
             readKeyboardAuto: { self.sensors[$0] },
             writeKeyboardAuto: { id, enabled in
                 self.autoWrites.append((id, enabled))
                 guard self.acceptsWrites else { return false }
-                self.sensors[id] = enabled
+                if self.appliesWrites {
+                    self.sensors[id] = enabled
+                }
                 return true
             }
         )

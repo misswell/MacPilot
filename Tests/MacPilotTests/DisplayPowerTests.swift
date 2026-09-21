@@ -10,15 +10,13 @@ struct DisplayPowerTests {
 
 extension DisplayPowerTests {
     /// The rule that brings the backlight back after MacPilot blanks the screen.
-    /// Idle time only ever grows while nobody touches anything, so a reading
-    /// smaller than the one taken at blank time can only mean fresh input — and
-    /// getting this comparison backwards would leave a user staring at a black
-    /// screen with no way back except the brightness keys.
-    @Test func inputIsDetectedOnlyWhenTheIdleClockGoesBackwards() {
-        #expect(DisplayPower.didUserInputOccur(idleNow: 0.1, idleAtBlank: 5) == true)
-        #expect(DisplayPower.didUserInputOccur(idleNow: 5.4, idleAtBlank: 5) == false)
-        #expect(DisplayPower.didUserInputOccur(idleNow: 5, idleAtBlank: 5) == false)
-        #expect(DisplayPower.didUserInputOccur(idleNow: 900, idleAtBlank: 0.2) == false)
+    /// A counter change survives the polling interval: the idle clock can be
+    /// larger than its value at blank time after a mouse event, but the counter
+    /// still records that event.
+    @Test func inputIsDetectedWhenTheWindowServerCounterChanges() {
+        #expect(DisplayPower.didUserInputOccur(inputCounterNow: 101, inputCounterAtBlank: 100))
+        #expect(DisplayPower.didUserInputOccur(inputCounterNow: 100, inputCounterAtBlank: 100) == false)
+        #expect(DisplayPower.didUserInputOccur(inputCounterNow: 102, inputCounterAtBlank: 100))
     }
 }
 

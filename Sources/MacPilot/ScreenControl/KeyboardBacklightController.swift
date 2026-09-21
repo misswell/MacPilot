@@ -38,6 +38,8 @@ struct KeyboardBacklightState: Codable, Equatable, Sendable {
 /// keyboard attached — and a test that ran against the real one would darken the
 /// user's keyboard.
 final class KeyboardBacklightController: Sendable {
+    private static let restoreBrightnessTolerance: Float = 0.01
+
     let keyboardIDsProvider: @Sendable () -> [UInt64]
     let brightnessReader: @Sendable (UInt64) -> Float?
     let brightnessWriter: @Sendable (Float, UInt64) -> Bool
@@ -148,22 +150,68 @@ final class KeyboardBacklightController: Sendable {
     /// pinned to the captured number. A value already in place is not rewritten:
     /// the whole pass is then idempotent, which matters because an unblank can be
     /// reached twice (the wake watcher and the user's own brightness change).
-    func restore(_ states: [KeyboardBacklightState]) {
-        guard !states.isEmpty else { return }
-        var restored = 0
+    ///
+    /// - Returns: the captured states whose final brightness or automatic mode
+    ///   could not be confirmed by a read-back.
+    @discardableResult
+    func restore(_ states: [KeyboardBacklightState]) -> [KeyboardBacklightState] {
+        restore(states, attempt: 1)
+    }
+
+    /// Same restore pass with an explicit attempt number for diagnostics and
+    /// bounded retries owned by `DisplayPower`.
+    @discardableResult
+    func restore(_ states: [KeyboardBacklightState], attempt: Int) -> [KeyboardBacklightState] {
+        guard !states.isEmpty else { return [] }
+        var unresolved: [KeyboardBacklightState] = []
         for state in states {
-            if brightness(for: state.keyboardID) != state.brightness,
-               setBrightness(state.brightness, for: state.keyboardID) {
-                restored += 1
+            let beforeBrightness = brightness(for: state.keyboardID)
+            let needsBrightness = !brightnessMatches(beforeBrightness, target: state.brightness)
+            var brightnessWrite: Bool?
+            if needsBrightness {
+                brightnessWrite = setBrightness(state.brightness, for: state.keyboardID)
             }
-            if isAutoBrightnessEnabled(for: state.keyboardID) != state.autoBrightnessEnabled {
-                _ = setAutoBrightnessEnabled(state.autoBrightnessEnabled, for: state.keyboardID)
+            let afterBrightness = brightness(for: state.keyboardID)
+            let brightnessVerified = brightnessMatches(afterBrightness, target: state.brightness)
+
+            let beforeAuto = isAutoBrightnessEnabled(for: state.keyboardID)
+            let needsAuto = beforeAuto != state.autoBrightnessEnabled
+            var autoWrite: Bool?
+            if needsAuto {
+                autoWrite = setAutoBrightnessEnabled(state.autoBrightnessEnabled, for: state.keyboardID)
             }
+            let afterAuto = isAutoBrightnessEnabled(for: state.keyboardID)
+            let autoVerified = afterAuto == state.autoBrightnessEnabled
+            let verified = brightnessVerified && autoVerified
+
+            if !verified {
+                unresolved.append(state)
+            }
+
+            DiagnosticLog.write(
+                "KeyboardBacklight",
+                "keyboard backlight restore attempt=\(attempt) keyboard=\(state.keyboardID) "
+                    + "targetBrightness=\(state.brightness) "
+                    + "beforeBrightness=\(String(describing: beforeBrightness)) "
+                    + "writeResult=\(String(describing: brightnessWrite)) "
+                    + "afterBrightness=\(String(describing: afterBrightness)) "
+                    + "targetAuto=\(state.autoBrightnessEnabled) "
+                    + "beforeAuto=\(String(describing: beforeAuto)) "
+                    + "autoWriteResult=\(String(describing: autoWrite)) "
+                    + "afterAuto=\(String(describing: afterAuto)) "
+                    + "verified=\(verified)"
+            )
         }
         DiagnosticLog.write(
             "KeyboardBacklight",
-            "keyboard backlight restored keyboards=\(states.count) levels=\(restored)"
+            "keyboard backlight restore summary attempt=\(attempt) keyboards=\(states.count) unresolved=\(unresolved.count)"
         )
+        return unresolved
+    }
+
+    private func brightnessMatches(_ current: Float?, target: Float) -> Bool {
+        guard let current else { return false }
+        return abs(current - target) <= Self.restoreBrightnessTolerance
     }
 }
 
