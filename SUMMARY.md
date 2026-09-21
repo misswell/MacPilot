@@ -1779,6 +1779,8 @@ Scripts/measure-memory.sh --diff a.json b.json         # 按角色列 delta
 - `bestOverlap` 每对帧建两份**全分辨率** RGBA 栅格（24 MB × 2）。它实际只按行比较、横向是抽样——于是横向缩到 256 列、纵向保持精确（重叠量是按行数出来的）。每对栅格 28.8 MB → 2.5 MB。
 - `finish()` 在 `@MainActor` 上把几十帧重画进一张长图，这是 HUD 卡死、整个 App 不响的那个瞬间。改成 `Task.detached` + `autoreleasepool`，回来再关面板；顺带一个 `isStitching` 防止「完成」被连点两次。
 
+改成异步之后「完成」按下去会有零点几秒到几秒什么都不动——原来那是卡住，现在是**安静**。所以按钮自己说话：`isStitching` 期间标题换成「正在拼接…」并禁用（`scScrollingStitching`，中英同步），取消键仍然可用（取消会丢掉这次拼接结果，正是它该有的语义）。
+
 ### 量到的结果
 
 同一台机器、同一份默认配置、两个 bundle 副本并排闲置两分钟后取中位数：

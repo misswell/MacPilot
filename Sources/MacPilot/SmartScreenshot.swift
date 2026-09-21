@@ -4079,6 +4079,7 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
         panel.contentView = NSHostingView(rootView: SmartScrollingCaptureView(
             frameCount: frames.count,
             reachedLimit: reachedLimit,
+            isStitching: isStitching,
             language: language,
             onFinish: { [weak self] in self?.finish() },
             onCancel: { [weak self] in self?.close() }
@@ -4157,6 +4158,7 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
     private func finish() {
         guard !isStitching else { return }
         isStitching = true
+        refreshContent()
         // Stitching redraws every frame into one canvas — hundreds of
         // megabytes of work for a long page. On the main thread that is the
         // moment the HUD freezes and the whole app stops answering.
@@ -4193,6 +4195,7 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
 private struct SmartScrollingCaptureView: View {
     let frameCount: Int
     let reachedLimit: Bool
+    let isStitching: Bool
     let language: AppLanguage
     let onFinish: () -> Void
     let onCancel: () -> Void
@@ -4209,8 +4212,12 @@ private struct SmartScrollingCaptureView: View {
                 Label(AppText.value("scScrollingFrames", language: language, frameCount), systemImage: "square.stack.3d.up")
                 Spacer()
                 Button(AppText.value("scCancel", language: language), action: onCancel)
-                Button(AppText.value("scDone", language: language), action: onFinish)
-                    .buttonStyle(.borderedProminent)
+                Button(
+                    AppText.value(isStitching ? "scScrollingStitching" : "scDone", language: language),
+                    action: onFinish
+                )
+                .buttonStyle(.borderedProminent)
+                .disabled(isStitching)
             }
         }
         .padding(16)

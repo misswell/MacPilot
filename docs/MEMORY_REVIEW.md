@@ -172,7 +172,7 @@ swift test --skip shortcutConfigEncodesAndDecodesCarbonModifiers
 | `UpdatePackageValidator.prepare` | 先把 zip 复制进暂存目录再 `ditto -x -k`：归档在磁盘上同时存在两份，且源文件就躺在要写入的目录里 | 直接解下载好的那份，删掉复制 |
 | `SmartScrollingCaptureWindowController` | `frames.count < 30`，全屏 Retina 一帧 ~24 MB → 峰值 ~700 MB | `SmartScrollingCaptureBudget`：256 MB 字节预算 **且** 30 帧；触顶时 HUD 换橙色提示（替换而非追加，面板定高） |
 | `ScreenCaptureVerticalStitcher.raster` | 每对帧两份全分辨率 RGBA 栅格 | 横向缩到 256 列、纵向保持精确：28.8 MB → 2.5 MB / 对 |
-| `SmartScrollingCaptureWindowController.finish` | `@MainActor` 上拼接几十帧 → HUD 与全 App 卡死 | `Task.detached` + `autoreleasepool`，`isStitching` 防连点 |
+| `SmartScrollingCaptureWindowController.finish` | `@MainActor` 上拼接几十帧 → HUD 与全 App 卡死 | `Task.detached` + `autoreleasepool`，`isStitching` 防连点；按钮标题在拼接期间变成「正在拼接…」并禁用（异步之后不能再有「按了没反应」的窗口） |
 | 进程级内存压力 | 无 | `Sources/MacPilot/MemoryPressure.swift`：一个 `DispatchSource` 供多方订阅，最后一个订阅者走时销毁 |
 
 ### 量到的结果
