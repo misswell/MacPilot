@@ -1553,3 +1553,21 @@ restored twice ok
 - 没有加「正在识别」的进行中提示：`.accurate` 级 OCR 通常在 1 秒内返回，同一位置连着闪两条反而更吵；这次补的是**任何一次 OCR 都必有一条 toast**，静默只可能出现在取消（Esc）时。
 - 文案 `scOCRFailed` 中英文各一条，`QuickAccessTests.ocrFailureToastHasItsOwnCopyInBothLanguages` 守住两边同步，并断言它与 `scOCRNoText` 不是一句话——这两个分支混用的代价就是这次的现象。
 - 验证：`swift build -c release -Xswiftc -warnings-as-errors`（全新 worktree，无缓存）+ `swift test --filter QuickAccessTests` + 全量 `swift test`。
+
+## 五十九、本地端口：LeftOpen 核心能力接入 MacPilot
+
+Local Ports 是 MacPilot 的独立功能页，不增加第二个 `MenuBarExtra`，也不增加权限、root Helper、后台 daemon 或第三方依赖。它只在页面可见时运行，菜单栏仅提供“打开本地端口…”入口。
+
+### 分层
+
+- `Sources/MacPilotLocalPortsCore/`：Foundation/Darwin-only 的 `lsof`/`ps` 扫描、IPv4/IPv6 合并、LOCAL/LAN 判断、项目/npm/Python/常见服务/.app 归属推断、URL 解析和关闭安全规则。
+- `Sources/MacPilot/LocalPorts/`：`@MainActor` 生命周期模型、原生全高 `List`、搜索、详情、项目图标、localhost favicon、关闭确认与结果提示。
+- `LocalPortsModel` 只在页面出现时立即扫描并每 10 秒刷新；页面离开、首页关闭功能或应用退出时取消任务，并用 generation 丢弃迟到的旧扫描结果。
+
+### 安全边界
+
+关闭服务必须经过“重新扫描 → prepare → 用户确认 → 再次扫描 → PID + UID + executable + start time 验证 → SIGTERM → 最多等待 5 秒复查”的链路。系统可执行文件、`.app` 进程、root、其他用户、缺少身份信息、PID 复用和新进程抢占端口一律不关闭；绝不使用 SIGKILL 或进程树终止。
+
+### 来源与验证
+
+核心迁移自 [LeftOpen](https://github.com/SonghaiFan/leftopen)，基准 commit 为 `2fde101440583f95c86c7408c63b77d73aaa5ea0`，归因与 MIT License 见 `THIRD_PARTY_NOTICES.md`。`MacPilotLocalPortsCoreTests` 覆盖监听解析、地址范围、项目/包/服务推断、PID 复用与关闭安全验证；`LocalPortsModelTests` 覆盖页面生命周期与旧扫描结果丢弃。

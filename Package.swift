@@ -29,12 +29,17 @@ let package = Package(
                 .linkedFramework("CryptoKit"),
             ]
         ),
+        // Local Ports is intentionally a plain Foundation/Darwin core.  It
+        // contains the scanner and safety checks, but no SwiftUI or app-model
+        // dependency, so a future CLI can reuse the same identity boundary.
+        .target(name: "MacPilotLocalPortsCore"),
         .executableTarget(
             name: "MacPilot",
             dependencies: [
                 "MacPilotRightClickKit",
                 "MacPilotPowerIPC",
                 "MacPilotDockGroupsCore",
+                "MacPilotLocalPortsCore",
                 .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol"),
                 .product(name: "MacPilotRemoteTransport", package: "MacPilotRemoteProtocol")
             ]
@@ -92,6 +97,10 @@ let package = Package(
                 "MacPilotDockGroupsCore",
                 .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol")
             ]
+        ),
+        .testTarget(
+            name: "MacPilotLocalPortsCoreTests",
+            dependencies: ["MacPilotLocalPortsCore"]
         ),
         .testTarget(
             name: "MacPilotRightClickKitTests",

@@ -1045,6 +1045,176 @@ enum AppText {
         "dockGroupsGroupSummary": "%d groups · %d apps",
     ]
 
+    private static let localPortsChinese: [String: String] = [
+        "localPorts": "本地端口",
+        "localPortsSubtitle": "查看本机正在监听的服务，以及它们所属的项目和进程。",
+        "localPortsListening": "%d 个监听端口",
+        "localPortsClosable": "%d 个可关闭",
+        "localPortsLAN": "%d 个 LAN",
+        "localPortsLastUpdated": "最后更新 %@",
+        "localPortsLANWarning": "LAN 表示监听地址可能被局域网设备访问，不代表防火墙一定允许访问。",
+        "localPortsScanLimitations": "部分进程信息不可用",
+        "localPortsProjects": "开发项目",
+        "localPortsServices": "其他服务",
+        "localPortsUnknown": "未知服务",
+        "localPortsProtected": "受保护的应用与系统服务（%d）",
+        "localPortsSearch": "搜索端口、项目、进程或 PID",
+        "localPortsRefresh": "刷新",
+        "localPortsOpen": "打开本地端口…",
+        "localPortsRefreshing": "正在刷新…",
+        "localPortsLocal": "LOCAL",
+        "localPortsLANScope": "LAN",
+        "localPortsPort": "端口 %@",
+        "localPortsPorts": "端口",
+        "localPortsPID": "PID %@",
+        "localPortsPPID": "PPID %@",
+        "localPortsParentChain": "父进程链",
+        "localPortsProcess": "进程",
+        "localPortsUser": "用户",
+        "localPortsExecutable": "可执行文件",
+        "localPortsWorkingDirectory": "工作目录",
+        "localPortsArguments": "启动参数",
+        "localPortsUptime": "运行时间 %@",
+        "localPortsAddresses": "监听地址",
+        "localPortsProjectRoot": "项目目录 %@",
+        "localPortsOwnerEvidence": "识别依据",
+        "localPortsEvidenceProject": "项目标记 %@（%@）",
+        "localPortsEvidenceDirectApplication": "当前进程来自应用 %@",
+        "localPortsEvidenceParentApplication": "父进程 PID %d 来自应用 %@",
+        "localPortsEvidenceSystemExecutable": "系统可执行文件 %@",
+        "localPortsEvidenceNodePackage": "Node 包 %@（目录 %@）",
+        "localPortsEvidencePythonModule": "Python 模块 %@",
+        "localPortsEvidenceKnownService": "已知服务 %@",
+        "localPortsEvidenceUserExecutable": "用户可执行文件 %@",
+        "localPortsEvidenceUnknown": "没有足够证据",
+        "localPortsOpenBrowser": "在浏览器打开",
+        "localPortsRevealProject": "在访达中显示项目目录",
+        "localPortsCopyPort": "复制端口",
+        "localPortsCopyPID": "复制 PID",
+        "localPortsCopyPath": "复制路径",
+        "localPortsClose": "关闭服务",
+        "localPortsCloseTitle": "关闭 %@ 开发服务？",
+        "localPortsCloseHint": "MacPilot 只会发送 SIGTERM，让进程自行退出，不会执行强制终止。",
+        "localPortsOtherPorts": "该进程还监听：%@。关闭该进程将同时释放这些端口。",
+        "localPortsCloseConfirm": "关闭服务",
+        "localPortsCloseFailed": "无法关闭服务",
+        "localPortsCloseResult": "关闭结果",
+        "localPortsClosing": "正在发送停止请求…",
+        "localPortsProtectedReason": "关闭状态",
+        "localPortsSystemProcess": "系统可执行文件 %@ 受到保护。",
+        "localPortsApplicationProcess": "应用进程 %@ 受到保护。",
+        "localPortsOtherUser": "PID %d 属于其他用户，受到保护。",
+        "localPortsProtectedRoot": "当前进程以 root 运行，不执行关闭操作。",
+        "localPortsProtectedPID": "PID %d 受到保护。",
+        "localPortsUnknownUser": "无法确认 PID %d 的用户身份。",
+        "localPortsUnknownExecutable": "无法确认 PID %d 的可执行文件。",
+        "localPortsClosableProcess": "可发送 SIGTERM",
+        "localPortsPortFreed": "端口已释放。",
+        "localPortsProcessStoppedPortTaken": "原进程已停止监听，但端口现在由其他进程占用。",
+        "localPortsStillListening": "已发送停止请求，但该进程仍在监听。MacPilot 未尝试强制终止。",
+        "localPortsNoServices": "当前没有监听中的 TCP 服务",
+        "localPortsNoSearchResults": "没有匹配的监听服务",
+        "localPortsScanFailed": "扫描失败",
+        "localPortsCommandFailed": "%@ 执行失败（状态码 %d）。",
+        "localPortsMissingTool": "找不到系统工具 %@。",
+        "localPortsNothingListening": "端口 %d 当前没有监听服务。",
+        "localPortsMultipleOwners": "端口 %d 由多个进程占用（%@），请选择明确的进程。",
+        "localPortsProcessNotListening": "PID %d 已不再监听端口 %d。",
+        "localPortsMissingIdentity": "无法确认 PID %d 的身份，不会发送信号。",
+        "localPortsMissingStartTime": "无法确认 PID %d 的启动时间，不会发送信号。",
+        "localPortsProcessDisappeared": "PID %d 已退出，不会发送信号。",
+        "localPortsNewPortOwner": "端口 %d 已被新的 PID %d 抢占，不会发送信号。",
+        "localPortsIdentityChanged": "PID %d 的身份已变化，不会发送信号。",
+        "localPortsSignalFailed": "无法向 PID %d 发送 SIGTERM（错误码 %d）。",
+        "localPortsVerificationFailed": "关闭前的身份验证失败，不会发送信号。",
+        "localPortsRescanFailed": "已发送停止请求，但无法重新检查端口状态。",
+    ]
+
+    private static let localPortsEnglish: [String: String] = [
+        "localPorts": "Local Ports",
+        "localPortsSubtitle": "See listening services on this Mac and the projects and processes behind them.",
+        "localPortsListening": "%d listening ports",
+        "localPortsClosable": "%d closable",
+        "localPortsLAN": "%d LAN",
+        "localPortsLastUpdated": "Updated %@",
+        "localPortsLANWarning": "LAN means the bind address may be reachable from the local network; it is not a firewall verdict.",
+        "localPortsScanLimitations": "Some process details are unavailable",
+        "localPortsProjects": "Development Projects",
+        "localPortsServices": "Other Services",
+        "localPortsUnknown": "Unknown Service",
+        "localPortsProtected": "Protected Apps & System Services (%d)",
+        "localPortsSearch": "Search ports, projects, processes, or PIDs",
+        "localPortsRefresh": "Refresh",
+        "localPortsOpen": "Open Local Ports…",
+        "localPortsRefreshing": "Refreshing…",
+        "localPortsLocal": "LOCAL",
+        "localPortsLANScope": "LAN",
+        "localPortsPort": "Port %@",
+        "localPortsPorts": "Ports",
+        "localPortsPID": "PID %@",
+        "localPortsPPID": "PPID %@",
+        "localPortsParentChain": "Parent chain",
+        "localPortsProcess": "Process",
+        "localPortsUser": "User",
+        "localPortsExecutable": "Executable",
+        "localPortsWorkingDirectory": "Working directory",
+        "localPortsArguments": "Launch arguments",
+        "localPortsUptime": "Uptime %@",
+        "localPortsAddresses": "Listening addresses",
+        "localPortsProjectRoot": "Project %@",
+        "localPortsOwnerEvidence": "Recognition evidence",
+        "localPortsEvidenceProject": "Project marker %@ (%@)",
+        "localPortsEvidenceDirectApplication": "Current process comes from app %@",
+        "localPortsEvidenceParentApplication": "Parent PID %d comes from app %@",
+        "localPortsEvidenceSystemExecutable": "System executable %@",
+        "localPortsEvidenceNodePackage": "Node package %@ (directory %@)",
+        "localPortsEvidencePythonModule": "Python module %@",
+        "localPortsEvidenceKnownService": "Known service %@",
+        "localPortsEvidenceUserExecutable": "User-installed executable %@",
+        "localPortsEvidenceUnknown": "Not enough evidence",
+        "localPortsOpenBrowser": "Open in Browser",
+        "localPortsRevealProject": "Reveal Project in Finder",
+        "localPortsCopyPort": "Copy Port",
+        "localPortsCopyPID": "Copy PID",
+        "localPortsCopyPath": "Copy Path",
+        "localPortsClose": "Stop Service",
+        "localPortsCloseTitle": "Stop %@ development service?",
+        "localPortsCloseHint": "MacPilot sends SIGTERM and lets the process exit on its own. It never force-kills it.",
+        "localPortsOtherPorts": "This process also listens on: %@. Stopping it releases those ports too.",
+        "localPortsCloseConfirm": "Stop Service",
+        "localPortsCloseFailed": "Couldn’t Stop Service",
+        "localPortsCloseResult": "Stop Result",
+        "localPortsClosing": "Sending stop request…",
+        "localPortsProtectedReason": "Close status",
+        "localPortsSystemProcess": "System executable %@ is protected.",
+        "localPortsApplicationProcess": "Application process %@ is protected.",
+        "localPortsOtherUser": "PID %d belongs to another user and is protected.",
+        "localPortsProtectedRoot": "MacPilot is running as root, so it will not stop services.",
+        "localPortsProtectedPID": "PID %d is protected.",
+        "localPortsUnknownUser": "The user identity for PID %d could not be verified.",
+        "localPortsUnknownExecutable": "The executable for PID %d could not be verified.",
+        "localPortsClosableProcess": "SIGTERM can be sent",
+        "localPortsPortFreed": "The port is now free.",
+        "localPortsProcessStoppedPortTaken": "The original process stopped listening, but another process now owns the port.",
+        "localPortsStillListening": "The stop request was sent, but the process is still listening. MacPilot did not force-kill it.",
+        "localPortsNoServices": "No TCP services are listening",
+        "localPortsNoSearchResults": "No listening services match your search",
+        "localPortsScanFailed": "Scan Failed",
+        "localPortsCommandFailed": "%@ failed with status %d.",
+        "localPortsMissingTool": "The system tool %@ is not available.",
+        "localPortsNothingListening": "Nothing is listening on port %d.",
+        "localPortsMultipleOwners": "Port %d has multiple owners (%@); choose a specific process.",
+        "localPortsProcessNotListening": "PID %d is no longer listening on port %d.",
+        "localPortsMissingIdentity": "PID %d has no verified identity; no signal was sent.",
+        "localPortsMissingStartTime": "PID %d has no verified start time; no signal was sent.",
+        "localPortsProcessDisappeared": "PID %d disappeared; no signal was sent.",
+        "localPortsNewPortOwner": "Port %d was acquired by new PID %d; no signal was sent.",
+        "localPortsIdentityChanged": "PID %d changed identity; no signal was sent.",
+        "localPortsSignalFailed": "SIGTERM could not be sent to PID %d (errno %d).",
+        "localPortsVerificationFailed": "Identity verification failed before closing; no signal was sent.",
+        "localPortsRescanFailed": "The stop request was sent, but the port could not be checked again.",
+    ]
+
     static func value(_ key: String, language: AppLanguage, arguments: [CVarArg]) -> String {
         let useChinese: Bool
         switch language {
@@ -1078,7 +1248,8 @@ enum AppText {
             memoryMonitorChinese,
             cpuMonitorChinese,
             screenCaptureFeedbackChinese,
-            dockGroupsChinese
+            dockGroupsChinese,
+            localPortsChinese
         ]
     }
 
@@ -1089,7 +1260,8 @@ enum AppText {
             memoryMonitorEnglish,
             cpuMonitorEnglish,
             screenCaptureFeedbackEnglish,
-            dockGroupsEnglish
+            dockGroupsEnglish,
+            localPortsEnglish
         ]
     }
 
@@ -1710,6 +1882,8 @@ final class MacPilotModel: ObservableObject {
     )
     /// Dock Groups：分组配置 + 每个分组的 Helper App。
     let dockGroups = DockGroupsModel()
+    /// Local Ports is deliberately idle until its page becomes visible.
+    let localPorts = LocalPortsModel()
     @Published var requestedSection: MainSection?
     /// Set by the menu bar/deep-link shortcut entry so the capture settings
     /// can present the recorder immediately after the main window is opened.
@@ -2595,6 +2769,7 @@ final class MacPilotModel: ObservableObject {
         // Dock Groups：停掉运行状态轮询与 Workspace 监听。
         // 生成的 Helper App 保持原样，下次启动可以直接继续用。
         dockGroups.shutdown()
+        localPorts.shutdown()
 
         for observer in lifetimeObservers { NotificationCenter.default.removeObserver(observer) }
         lifetimeObservers.removeAll(keepingCapacity: false)
@@ -3020,7 +3195,7 @@ extension MacPilotModel {
             clipboard.setEnabled(true)
         case .dockGroups:
             dockGroups.setEnabled(true)
-        case .home, .exit, .launch, .compression, .rightClick, .memoryMonitor, .cpuMonitor, .settings:
+        case .home, .exit, .launch, .compression, .rightClick, .memoryMonitor, .cpuMonitor, .localPorts, .settings:
             break
         }
     }
@@ -3062,7 +3237,7 @@ extension MacPilotModel {
             startRightClickMenu()
         case .dockGroups:
             dockGroups.activateFromConfiguration()
-        case .memoryMonitor, .cpuMonitor:
+        case .memoryMonitor, .cpuMonitor, .localPorts:
             break
         }
     }
@@ -3111,6 +3286,8 @@ extension MacPilotModel {
         case .cpuMonitor:
             cpuMonitor.stopAutoRefresh()
             CPUMonitorModel.clearMenuCache()
+        case .localPorts:
+            localPorts.shutdown()
         }
     }
 }
@@ -3119,7 +3296,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
     case home
     case exit, launch, awake, ble, remoteControl, inputSources, compression, capture, screenRecording
     case pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick
-    case dockGroups, memoryMonitor, cpuMonitor, settings
+    case dockGroups, memoryMonitor, cpuMonitor, localPorts, settings
 
     var id: Self { self }
 
@@ -3143,6 +3320,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .dockGroups: "dockGroups"
         case .memoryMonitor: "memoryMonitor"
         case .cpuMonitor: "cpuMonitor"
+        case .localPorts: "localPorts"
         case .settings: "settings"
         }
     }
@@ -3167,6 +3345,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .dockGroups: "square.grid.2x2"
         case .memoryMonitor: "memorychip"
         case .cpuMonitor: "cpu"
+        case .localPorts: "network"
         case .settings: "gearshape"
         }
     }
@@ -3182,7 +3361,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
     static let utilitySections: [MainSection] = [
         .compression, .capture, .screenRecording, .pictureInPicture,
         .windowSwitcher, .smoothScrolling, .clipboard, .rightClick,
-        .memoryMonitor, .cpuMonitor, .dockGroups
+        .memoryMonitor, .cpuMonitor, .localPorts, .dockGroups
     ]
 
     static var featureSections: [MainSection] {
@@ -3209,6 +3388,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .dockGroups: "dockGroupsSubtitle"
         case .memoryMonitor: "memoryMonitorSubtitle"
         case .cpuMonitor: "cpuMonitorSubtitle"
+        case .localPorts: "localPortsSubtitle"
         }
     }
 }
@@ -3344,6 +3524,8 @@ struct ContentView: View {
             MemoryMonitorView(monitor: model.memoryMonitor)
         case .cpuMonitor:
             CPUMonitorView(monitor: model.cpuMonitor)
+        case .localPorts:
+            LocalPortsView(model: model.localPorts)
         case .settings:
             SettingsView()
         }
@@ -4972,6 +5154,13 @@ struct MenuBarView: View {
             Divider()
             CPUMonitorMenuSection {
                 model.requestSection(.cpuMonitor)
+                showMainWindow()
+            }
+        }
+        if model.isFeatureEnabled(.localPorts) {
+            Divider()
+            Button(model.t("localPortsOpen")) {
+                model.requestSection(.localPorts)
                 showMainWindow()
             }
         }

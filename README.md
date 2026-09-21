@@ -15,6 +15,8 @@ Rules, launch plans, and preferences persist in `~/Library/Application Support/M
 
 You can pick a running app or browse for an `.app` bundle, reorder rules, pause enforcement globally, and choose Start at Login from the menu-bar menu.
 
+Local Ports shows TCP listeners, identifies their projects and processes, and safely stops development services with a re-scan, PID identity check, and SIGTERM only. It never force-kills processes, targets another user's process, or runs as root.
+
 MacPilot is intentionally lightweight: it has a very small app footprint, uses very little memory while running, ships without a bundled cross-platform runtime, and lets you disable each feature independently.
 
 ## BLE Unlock
@@ -98,6 +100,17 @@ The **CPU Monitor** shows each app's CPU usage in real time:
 - Processes belonging to the same app are rolled up into one row; expand it to inspect each process.
 - The system overview shows total, user, system, nice, and idle usage, logical cores, and the 1/5/15-minute load averages.
 - It refreshes every 3 seconds by default; percentages are normalized to the whole machine, where full logical-core capacity is 100%.
+
+## Local Ports
+
+The **Local Ports** page shows TCP `LISTEN` sockets grouped by process:
+
+- Merge IPv4/IPv6 entries, show LOCAL versus LAN bind scope, and search ports, PIDs, projects, commands, users, paths, and addresses.
+- Identify project roots, npm packages, Python modules, common local services, `.app` parents, and protected system executables.
+- Open likely HTTP endpoints in a browser and inspect the process identity, arguments, working directory, parent chain, uptime, and all ports owned by that PID.
+- Before stopping a service, re-scan and verify its PID, UID, executable, and process start time. Only SIGTERM is sent; no SIGKILL or privileged helper is used.
+
+Scanning starts only while this page is visible. Leaving the page or disabling the feature cancels refresh work and favicon requests.
 
 ## Window Switcher
 
