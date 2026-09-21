@@ -15,12 +15,6 @@ enum QuickAccessPinWindowSizing {
   private static let screenMaxRatio: CGFloat = 0.78
   private static let screenMargin: CGFloat = 24
 
-  /// Distance from the image edge to the pin's chrome, and the hit side of one
-  /// control.  Both come from the pin's own visual language, not from the
-  /// capture toolbar's chips.
-  static let chromeInset: CGFloat = PinnedScreenshotChromeStyle.outerInset
-  static let chromeButtonSide: CGFloat = PinnedScreenshotChromeStyle.controlSide
-
   static func sizes(for imageSize: CGSize, on screen: NSScreen) -> (base: CGSize, max: CGSize) {
     sizes(for: imageSize, visibleSize: screen.visibleFrame.size)
   }

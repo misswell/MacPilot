@@ -1601,7 +1601,7 @@ Local Ports 是 MacPilot 的独立功能页，不增加第二个 `MenuBarExtra`�
 
 `SnapzyCaptureTests` 里删掉了 `selectionBarChipsAreThePinWindowsChips` 那条耦合断言（它守的正是这次要拆的东西），换成三条：
 - `selectionBarChipsComeFromCaptureChromeStyle`：工具栏仍按自己的 token 出 28×28 chip；
-- `pinControlsAreSizedByThePinStyleNotTheToolbar`：贴图侧的 `chromeButtonSide` / `chromeInset` 来自 `PinnedScreenshotChromeStyle`；
+- `pinChromeGeometryIsOneTokenSet`：贴图的 hit area、玻璃高度、热点尺寸只由 `PinnedScreenshotChromeStyle` 定义。滑条的定宽几何删掉之后，`QuickAccessPinWindowSizing.chromeInset` / `chromeButtonSide` 这两个转发别名就再没有生产代码读过（grep 确认），一并删掉——留一组"没人用但测试还在断言"的常量，等于把解耦变成测试里的自说自话。
 - `pinnedSurfaceNeverDrawsFromTheCaptureToolbarPalette`：**扫 `Sources/MacPilot/SnapzyQuickAccess` 全部源文件**（剔除注释行），断言没有一处引用 `CaptureChromeStyle`。目录被搬走时先 `#expect(!sources.isEmpty)`，避免扫描退化成空跑。
 
 缩放测试从三条滑条用例改成 `zoomHUDBecomesVisibleWhileZooming` / `zoomHUDHidesWhenIdle` / `zoomStepNeverEscapesReachableScale`，`zoomOnlyOffersReachableScales` 保留但改成断言模型区间（40 / 131）而不是滑条区间。

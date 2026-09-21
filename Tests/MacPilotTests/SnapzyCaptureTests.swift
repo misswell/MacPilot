@@ -491,12 +491,12 @@ struct SnapzyCaptureTests {
         #expect(bar.layer?.cornerRadius == CaptureChromeStyle.cardCornerRadius)
     }
 
-    @Test func pinControlsAreSizedByThePinStyleNotTheToolbar() {
-        // 贴图的控制岛属于贴图自己那套语言：hit area、离图边的距离、玻璃高度
-        // 都由 PinnedScreenshotChromeStyle 决定。数值偶然相同不算解耦，
+    @Test func pinChromeGeometryIsOneTokenSet() {
+        // 贴图的控制岛属于贴图自己那套语言：hit area、玻璃高度、离图边的距离
+        // 全部只由 PinnedScreenshotChromeStyle 定义，`QuickAccessPinWindowSizing`
+        // 不再转发第二份数字。数值偶然相同不算解耦，
         // 「不引用 CaptureChromeStyle」由上面的源码扫描把守。
-        #expect(QuickAccessPinWindowSizing.chromeButtonSide == PinnedScreenshotChromeStyle.controlSide)
-        #expect(QuickAccessPinWindowSizing.chromeInset == PinnedScreenshotChromeStyle.outerInset)
+        #expect(PinnedScreenshotChromeStyle.outerInset > 0)
         #expect(PinnedScreenshotChromeStyle.controlHeight > PinnedScreenshotChromeStyle.controlSide)
         // 锁定后唯一可点的热点比画出来的控件大一圈：目标要好找，视觉要小。
         #expect(PinnedScreenshotChromeStyle.lockHotspotSide > PinnedScreenshotChromeStyle.controlHeight)

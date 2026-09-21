@@ -78,5 +78,4 @@ enum PinnedScreenshotChromeStyle {
   // MARK: - Glyphs
 
   static var glyph: NSColor { NSColor.labelColor }
-  static var glyphMuted: NSColor { NSColor.secondaryLabelColor }
 }
