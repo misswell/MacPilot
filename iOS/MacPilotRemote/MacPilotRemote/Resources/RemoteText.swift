@@ -29,7 +29,7 @@ enum RemoteText {
     }
 
     private static let chinese: [String: String] = [
-        "appName": "PilotMate",
+        "appName": "PilotNest",
         "tabHome": "控制",
         "tabDevices": "设备",
         "tabSettings": "设置",
@@ -123,10 +123,10 @@ enum RemoteText {
         "metricRTT": "往返延迟",
         "metricExecution": "命令耗时",
         "about": "关于",
-        "aboutBody": "PilotMate 通过局域网直连 Mac，不经过任何服务器。Mac 的登录密码始终保存在 Mac 上，不会传输到 iPhone。",
+        "aboutBody": "PilotNest 通过局域网直连 Mac，不经过任何服务器。Mac 的登录密码始终保存在 Mac 上，不会传输到 iPhone。",
 
         "requirements": "使用前需要准备",
-        "requirementsIntro": "PilotMate 只是手机上的遥控端，本身不能控制 Mac。请先在 Mac 上装好 MacPilot 并保持运行：",
+        "requirementsIntro": "PilotNest 只是手机上的遥控端，本身不能控制 Mac。请先在 Mac 上装好 MacPilot 并保持运行：",
         "requirementsStep1": "在 Mac 上安装 MacPilot（macOS 14 或更高版本）。",
         "requirementsStep2": "打开 MacPilot，在「远程控制」里启用 iPhone 遥控。",
         "requirementsStep3": "回到本 App，在「设备」页找到这台 Mac，点「配对」。",
@@ -158,7 +158,7 @@ enum RemoteText {
     ]
 
     private static let english: [String: String] = [
-        "appName": "PilotMate",
+        "appName": "PilotNest",
         "tabHome": "Control",
         "tabDevices": "Devices",
         "tabSettings": "Settings",
@@ -252,10 +252,10 @@ enum RemoteText {
         "metricRTT": "Round trip",
         "metricExecution": "Command",
         "about": "About",
-        "aboutBody": "PilotMate talks to your Mac directly over the local network. Nothing goes through a server, and the Mac login password never leaves the Mac.",
+        "aboutBody": "PilotNest talks to your Mac directly over the local network. Nothing goes through a server, and the Mac login password never leaves the Mac.",
 
         "requirements": "Before you start",
-        "requirementsIntro": "PilotMate is only the remote control on your phone; it cannot control a Mac by itself. Install MacPilot on the Mac and keep it running:",
+        "requirementsIntro": "PilotNest is only the remote control on your phone; it cannot control a Mac by itself. Install MacPilot on the Mac and keep it running:",
         "requirementsStep1": "Install MacPilot on the Mac (macOS 14 or later).",
         "requirementsStep2": "Open MacPilot and enable iPhone remote control under Remote Control.",
         "requirementsStep3": "Come back to this app, find the Mac on the Devices tab and tap Pair.",
