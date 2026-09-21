@@ -20,7 +20,12 @@ struct RecordingSelectionBarConfiguration {
 }
 
 struct RecordingSelectionActionBarView: View {
-    static let preferredSize = CGSize(width: 474, height: 48)
+    private typealias Chrome = RecordingChromeStyle
+
+    static let preferredSize = CGSize(
+        width: 500,
+        height: RecordingChromeStyle.stripHeight
+    )
 
     private let configuration: RecordingSelectionBarConfiguration
     private let onAction: (AreaSelectionAction) -> Void
@@ -44,166 +49,143 @@ struct RecordingSelectionActionBarView: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Chrome.controlSpacing) {
             HStack(spacing: 6) {
                 Circle()
-                    .fill(Color.blue)
+                    .fill(Chrome.recordRed)
                     .frame(width: 7, height: 7)
                 Text(AppText.value("scRecordingPrepare", language: configuration.language))
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Chrome.glyph)
             }
+            // Without this the label is the one compressible item, and a strip
+            // sized for 准备录制 clips "Ready to Record" down to an ellipsis.
+            .fixedSize()
 
             Divider()
                 .frame(height: 20)
-                .overlay(Color.white.opacity(0.22))
+                .overlay(Color.white.opacity(Chrome.strokeOpacity))
 
-            toggleButton(
+            glyphButton(
                 systemImage: capturesMicrophone ? "mic.fill" : "mic.slash.fill",
-                isOn: capturesMicrophone,
+                emphasis: capturesMicrophone ? .tinted : .dimmed,
                 helpKey: "scRecordingMicrophone"
             ) {
                 capturesMicrophone.toggle()
                 onAction(.recordingToggleMicrophone)
             }
 
-            toggleButton(
+            glyphButton(
                 systemImage: capturesSystemAudio ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                isOn: capturesSystemAudio,
+                emphasis: capturesSystemAudio ? .tinted : .dimmed,
                 helpKey: "scRecordingSystemAudio"
             ) {
                 capturesSystemAudio.toggle()
                 onAction(.recordingToggleSystemAudio)
             }
 
-            Button {
+            pillButton(
+                label: videoQuality == .high ? "HD" : "SD",
+                isSelected: videoQuality == .high,
+                helpKey: videoQuality == .high
+                    ? "scRecordingQualityHighHint"
+                    : "scRecordingQualityLowHint"
+            ) {
                 videoQuality = videoQuality == .high ? .low : .high
                 onAction(.recordingToggleQuality)
-            } label: {
-                Text(videoQuality == .high ? "HD" : "SD")
-                    .font(.system(size: 11, weight: .bold).monospacedDigit())
-                    .foregroundStyle(videoQuality == .high ? .white : .white.opacity(0.72))
-                    .frame(width: 28, height: 24)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(videoQuality == .high ? Color.blue.opacity(0.78) : Color.white.opacity(0.14))
-                    )
             }
-            .buttonStyle(.plain)
-            .help(AppText.value(
-                videoQuality == .high ? "scRecordingQualityHighHint" : "scRecordingQualityLowHint",
-                language: configuration.language
-            ))
 
-            toggleButton(
+            glyphButton(
                 systemImage: cameraEnabled ? "video.fill" : "video.slash.fill",
-                isOn: cameraEnabled,
+                emphasis: cameraEnabled ? .tinted : .dimmed,
                 helpKey: "scRecordingCameraToggle"
             ) {
                 cameraEnabled.toggle()
                 onAction(.recordingToggleCamera)
             }
 
-            aspectButton(label: "16:9", aspect: 16.0 / 9.0, action: .recordingAspectLandscape)
-            aspectButton(label: "9:16", aspect: 9.0 / 16.0, action: .recordingAspectPortrait)
+            pillButton(
+                label: "16:9",
+                isSelected: activeAspect == 16.0 / 9.0,
+                helpKey: "scRecordingAspectHorizontal"
+            ) {
+                activeAspect = 16.0 / 9.0
+                onAction(.recordingAspectLandscape)
+            }
+
+            pillButton(
+                label: "9:16",
+                isSelected: activeAspect == 9.0 / 16.0,
+                helpKey: "scRecordingAspectVertical"
+            ) {
+                activeAspect = 9.0 / 16.0
+                onAction(.recordingAspectPortrait)
+            }
 
             Spacer(minLength: 0)
 
-            Button {
+            glyphButton(
+                systemImage: "slider.horizontal.3",
+                emphasis: .resting,
+                helpKey: "scRecordingPrepareSettings"
+            ) {
                 onAction(.recordingSettings)
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.78))
-                    .frame(width: 24, height: 24)
             }
-            .buttonStyle(.plain)
-            .help(AppText.value("scRecordingPrepareSettings", language: configuration.language))
 
-            Button {
+            glyphButton(systemImage: "xmark", emphasis: .resting, helpKey: "cancel") {
                 onAction(.cancel)
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 17))
-                    .foregroundStyle(Color.red.opacity(0.92))
             }
-            .buttonStyle(.plain)
-            .help(AppText.value("cancel", language: configuration.language))
 
             Button {
                 onAction(.recordingStart)
             } label: {
-                ZStack {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 22, height: 22)
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .offset(x: 1)
-                }
+                Chrome.CircleAction(
+                    color: Chrome.startGreen,
+                    systemImage: "play.fill",
+                    glyphOffset: CGSize(width: 1, height: 0)
+                )
             }
             .buttonStyle(.plain)
             .help(AppText.value("scRecordingStart", language: configuration.language))
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Chrome.capsulePadding)
         .frame(width: Self.preferredSize.width, height: Self.preferredSize.height)
-        .background(
-            RoundedRectangle(cornerRadius: Self.preferredSize.height / 2, style: .continuous)
-                .fill(Color.black.opacity(0.86))
-                .overlay {
-                    RoundedRectangle(cornerRadius: Self.preferredSize.height / 2, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                }
-                .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
-        )
+        .recordingHUDCapsule(height: Self.preferredSize.height)
     }
 
-    private func toggleButton(
+    /// A square glyph control: a plain action (`resting`) or a switch
+    /// (`.tinted` / `.dimmed`).
+    private func glyphButton(
         systemImage: String,
-        isOn: Bool,
+        emphasis: Chrome.ControlEmphasis,
         helpKey: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(isOn ? .white : .white.opacity(0.4))
-                .frame(width: 24, height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isOn ? Color.white.opacity(0.14) : Color.clear)
-                )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(Chrome.ControlButtonStyle(emphasis: emphasis))
         .help(AppText.value(helpKey, language: configuration.language))
     }
 
-    private func aspectButton(
+    /// A text pill — the framing and quality choices, where the active one
+    /// inverts to a white pill with a dark label.
+    private func pillButton(
         label: String,
-        aspect: CGFloat,
-        action: AreaSelectionAction
+        isSelected: Bool,
+        helpKey: String,
+        action: @escaping () -> Void
     ) -> some View {
-        let isActive = activeAspect == aspect
-        return Button {
-            activeAspect = aspect
-            onAction(action)
-        } label: {
+        Button(action: action) {
             Text(label)
-                .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                .foregroundStyle(isActive ? Color.black : Color.white.opacity(0.76))
-                .padding(.horizontal, 6)
-                .frame(height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isActive ? Color.white : Color.white.opacity(0.14))
-                )
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .padding(.horizontal, 7)
         }
-        .buttonStyle(.plain)
-        .help(AppText.value(
-            aspect > 1 ? "scRecordingAspectHorizontal" : "scRecordingAspectVertical",
-            language: configuration.language
+        .buttonStyle(Chrome.ControlButtonStyle(
+            emphasis: isSelected ? .inverted : .tinted,
+            width: nil
         ))
+        .help(AppText.value(helpKey, language: configuration.language))
     }
 }
 

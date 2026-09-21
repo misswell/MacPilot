@@ -1645,3 +1645,55 @@ Local Ports 是 MacPilot 的独立功能页，不增加第二个 `MenuBarExtra`�
 ### 验证
 
 `swift test --filter "QuickAccessTests|SnapzyCaptureTests"` 58 条全绿；`swift build -c release -Xswiftc -warnings-as-errors`（`--scratch-path` 全新目录、universal）通过。探针文件与 `/tmp` 图片用完即删。
+
+## 六十二、录制流程的四条浮层归成一套 HUD 语言（v1.1.391）
+
+用户接着提「录制功能的操作栏样式也进行调整，适配 macos27 样式」。第六十一节只修了贴图，录制流程这边还是**四条浮层四种画法**：
+
+| 表面 | 改造前 |
+| --- | --- |
+| 悬浮控制条 | `Color.purple.cornerRadius(4)`、高 24、控件 24×24 |
+| 准备条 | 定宽 344×44、`black.opacity(0.82)`、r22 |
+| 框选设置条 | 定宽 474×48、`black.opacity(0.86)`、r24 |
+| 倒计时 | `.ultraThickMaterial`、r10 |
+
+紫色那条是最刺眼的：它跟系统 HUD 没有任何关系，24pt 高配上 `stop.circle.fill` 只有 16pt 命中区。倒计时则还在采样背景——和灰板事故同一个坑。
+
+### 一份 token，四条浮层
+
+新增 `Sources/MacPilot/Recording/RecordingChromeStyle.swift`：胶囊（`fillOpacity 0.62` + 1pt `strokeOpacity 0.22` 发丝边）、`stripHeight = controlSide + 2 * capsulePadding = 44`、28pt 方形 chip（r8 `.continuous`）、`ControlButtonStyle` + 五档 `ControlEmphasis`、`CircleAction`，以及 `recordingHUDCapsule(height:)` 和 `panelSize(barFitting:)`。
+
+**胶囊不投影。** 贴图的胶囊和截图工具栏都能投影，因为它们待在比自己大的表面里；这三条浮层的宿主却是按浮层量出来的——面板走 `panelSize(barFitting:)`、`NSHostingView` 直接 frame 成 `preferredSize`——胶囊边缘之外没有留给阴影的位置。留着它只有两种结局：要么被裁掉，要么只在其中一条上出现，变成一种没人解释得了的差别。对比度于是只能来自填充 + 发丝边，这也正是这两样都在 token 里的原因。控件自己的光晕是另一回事：`CircleAction` 的阴影落在胶囊**内部**，那里有 `capsulePadding` 的空间。倒计时同理（120×120 的窗口里圆盘铺满），它那条 `.shadow` 一并删了。
+
+**为什么不并进 `CaptureChromeStyle` 或 `PinnedScreenshotChromeStyle`**：前者画的是*工具卡片*（`windowBackgroundColor` 自适应底 + 原生控件），后者的 chrome 属于一张图片、是 hover 才出现的附加物；录制条是一个会话期间的常驻固定件。胶囊数值撞车只因为三者都是 HUD，这层关系仅此而已——合成一个文件，等于让下一次给某条流程微调把另外两条一起改掉，正是第六十节刚拆掉的那种耦合。
+
+### 具体改动
+
+1. **控制条 24 → 44pt 胶囊**，控件全部 28×28 方形 chip。`Color.purple` 没了，`stop.circle.fill` 换成实心红圆里打出一个白色 `stop.fill`。
+2. **色相只留给状态**：`recordRed`（正在录 / 二次确认要丢弃）、`startGreen`（开始）。其余全是白色字 + 白色半透明底。原来的 `Color.blue` HD 徽标、`Color.green` 摄像头方块一并退掉。
+3. **当前选项反色**：白色胶囊 + 深色字（暂停中的播放键、`16:9`/`9:16`、`HD`），比"再深一档的白"读得快得多；未选中的一侧退回 `controlFillTinted`。
+4. **开关关掉时字自己变暗**（`glyphDimmed` 0.42）而不是靠底色消失，麦克风/扬声器/摄像头三个开关从此同一套语法；摄像头原来是「绿方块 / 灰方块」，现在是 `video.fill` 与 `video.slash.fill`。
+5. **倒计时不再采样背景**：`black 0.62` + 白发丝边 + r22 圆盘，配 `.contentTransition(.numericText(countsDown: true))`，数字是往下跳的。
+6. **两步取消的交互逻辑一行没动**，只是 arm 之后从「红色 `xmark.circle.fill` 变 `trash.circle.fill`」变成 `.destructive`（红底 + 白 `trash.fill`）。
+
+### 顺带修掉一个真 bug
+
+准备条原来是 `frame(width: 344)`，英文标签比中文宽，`Ready to Record` 直接被压成省略号——**没人报，因为它只在英文下发生**。现在条子按内容定宽（`fixedSize` + `panel.setContentSize(RecordingChromeStyle.panelSize(barFitting: host.fittingSize))`），和第五十八节控制条那条同一个已验证套路；`panelWidthSlack` / `panelSize` 因此从 `ScreenRecordingFloatingController` 上收到 token 文件里，`RecordingSelectionActionBarView.preferredSize` 也从 474×48 改成 500×`stripHeight`。框选条的标题另加 `.fixedSize()`，因为它定宽时是唯一可压缩项。
+
+### 三条断言把约定变成可检查的东西
+
+`CaptureEnhancementsTests` 新增：
+
+- `recordingStripsAreOneTokenSet`：`stripHeight` 必须由 `controlSide + 2 * capsulePadding` 推导，chip 半径必须小于 `controlSide / 2`（否则控件和装着它的胶囊看不出区别）。
+- `recordingControlEmphasesAreFiveDistinctStates`：把五档 emphasis 的 `(fill, glyph)` 取 NSColor deviceRGB 签名塞进 Set，撞色即红——防止某一档画出来和另一档一模一样、在 UI 上根本不可达。
+- `recordingOverlaysNeverSampleTheirBackdrop`：**扫 `Sources/MacPilot/Recording` 全部源文件的非注释行**，禁 `glassEffect` / `Material` / `Color.purple`。先 `#expect(!sources.isEmpty)`，目录被搬走时扫描不会静默退化成空跑。
+
+`recordingControllerPanelIsNeverNarrowerThanItsBar` 改成对 `RecordingChromeStyle.panelWidthSlack` / `panelSize(barFitting:)` 断言，不再引用控制器自己的常量。
+
+### 验证
+
+一次性探针离屏渲染（宿主窗口摆在 (-30000, -30000)，**没有任何真实面板被排到用户桌面上**）四条浮层在生产尺寸下的样子：控制条（含麦克风电平）、准备条、英文框选条、倒计时圆盘。确认胶囊轮廓与发丝边、反色的 `HD` 白胶囊、`16:9`/`9:16` 的 tinted chip、红/绿实心圆动作、`video.slash.fill` 的暗字开关都对，删掉阴影之后没有变平——发丝边把边界兜住了。探针与 `/tmp` 图片用完即删。
+
+**阴影这件事没法用像素证明，只能靠几何。** 探针里那组对照（同样的胶囊，宿主从 44 高改成 68 高、留出投影空间）渲染结果**逐字节相同**：`cacheDisplay` 根本不抓 `.shadow`。所以" tight 宿主里差分为 nil"不能当作被裁切的证据，结论来自窗口尺寸本身——面板高度就是 `ceil(fitting.height)`，胶囊就是 `stripHeight`，窗口外没有像素可画。第六十一节那条"玻璃观感没逐像素验证过"的局限是同一类：这个离屏管线能验几何与填充，验不了合成。
+
+`swift test --filter CaptureEnhancementsTests` 26 条全绿；全量 807 条只有 `heartbeatFailureTriggersABoundedReconnect` 与 `startupShortcutRegistrationRetriesTransientFailure` 红（单独跑 0.055 秒双双通过，是第五十五/五十六节记在案的并行抖动）。

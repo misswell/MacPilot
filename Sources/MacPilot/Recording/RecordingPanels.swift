@@ -14,17 +14,30 @@ import SwiftUI
 // MARK: - Countdown panel
 
 /// Centered countdown shown before a recording starts.
+///
+/// The disc is drawn, not sampled: this floats in a borderless panel over
+/// whatever the user's desktop happens to be, and a `Material` there goes pale
+/// on a white page — the digits would disappear exactly when they matter.
 struct CountdownPanelView: View {
     @State var remainingSeconds: Int
     var atEnd: () -> Void
 
+    private static let cornerRadius: CGFloat = 22
+
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(.ultraThickMaterial)
+            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+                .fill(Color.black.opacity(RecordingChromeStyle.fillOpacity))
+            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+                .strokeBorder(
+                    Color.white.opacity(RecordingChromeStyle.strokeOpacity),
+                    lineWidth: 1
+                )
             Text("\(remainingSeconds)")
                 .font(.system(size: 60, weight: .bold, design: .rounded))
-                .foregroundStyle(.primary)
+                .foregroundStyle(RecordingChromeStyle.glyph)
+                .contentTransition(.numericText(countsDown: true))
+                .animation(.snappy(duration: 0.25), value: remainingSeconds)
         }
         .task {
             while remainingSeconds > 1 {
@@ -91,72 +104,75 @@ struct FloatingControllerBarView: View {
     @State private var isCancelArmed = false
     @State private var cancelArmResetTask: Task<Void, Never>?
 
+    private typealias Chrome = RecordingChromeStyle
+
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Chrome.controlSpacing) {
             Button(action: { model.stop() }, label: {
-                ZStack {
-                    Image(systemName: "circle.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.red)
-                    Image(systemName: "stop.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.white)
-                }
+                Chrome.CircleAction(
+                    color: Chrome.recordRed,
+                    systemImage: "stop.fill",
+                    side: 24,
+                    glyphSize: 9
+                )
             })
             .buttonStyle(.plain)
+            .help(AppText.value("scRecordingStop", language: model.language))
 
             Button(action: { model.togglePause() }, label: {
-                Image(systemName: model.state == .paused ? "play.circle.fill" : "pause.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white)
+                Image(systemName: model.state == .paused ? "play.fill" : "pause.fill")
+                    .offset(x: model.state == .paused ? 1 : 0)
             })
-            .buttonStyle(.plain)
+            .buttonStyle(Chrome.ControlButtonStyle(
+                emphasis: model.state == .paused ? .inverted : .resting
+            ))
+            .help(AppText.value(
+                model.state == .paused ? "scRecordingResume" : "scRecordingPause",
+                language: model.language
+            ))
 
             Text(Self.timerText(model.elapsedTime))
-                .foregroundStyle(.white)
-                .font(.system(size: 15).monospaced())
+                .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                .foregroundStyle(Chrome.glyph)
                 .fixedSize()
                 .layoutPriority(1)
 
             if model.settings.capturesMicrophone {
                 MicrophoneLevelMeter(level: model.microphoneLevel)
-                    .frame(width: 22, height: 14)
+                    .frame(width: 22, height: 16)
                     .accessibilityLabel(Text(AppText.value("scRecordingMicLevel", language: model.language)))
                     .help(AppText.value("scRecordingMicLevel", language: model.language))
             }
 
             Button(action: { showsDevicePicker = true }, label: {
-                ZStack {
-                    Rectangle()
-                        .fill(model.selectedCameraName.isEmpty ? Color.gray : Color.green)
-                        .cornerRadius(4)
-                    Image(systemName: "camera.fill")
-                        .foregroundStyle(.white)
-                }
-                .frame(width: 26)
+                Image(systemName: model.selectedCameraName.isEmpty ? "video.slash.fill" : "video.fill")
             })
-            .buttonStyle(.plain)
+            .buttonStyle(Chrome.ControlButtonStyle(
+                emphasis: model.selectedCameraName.isEmpty ? .dimmed : .tinted
+            ))
+            .help(AppText.value("scRecordingCamera", language: model.language))
             .popover(isPresented: $showsDevicePicker, arrowEdge: .bottom) {
                 CaptureDeviceMenuView(model: model)
             }
 
             Button(action: { handleCancelPressed() }, label: {
-                Image(systemName: isCancelArmed ? "trash.circle.fill" : "xmark.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(isCancelArmed ? .red : .white.opacity(0.85))
+                Image(systemName: isCancelArmed ? "trash.fill" : "xmark")
             })
-            .buttonStyle(.plain)
+            .buttonStyle(Chrome.ControlButtonStyle(
+                emphasis: isCancelArmed ? .destructive : .resting
+            ))
             .help(AppText.value(
                 isCancelArmed ? "scRecordingCancelArmed" : "scRecordingCancel",
                 language: model.language
             ))
         }
-        .padding([.leading, .trailing], 4)
-        .frame(height: 24)
-        // The bar lays out at its own width; a narrower panel used to spend
-        // the shortfall on the timer ("00…"), the one compressible item.
+        .padding(.horizontal, Chrome.capsulePadding)
+        .frame(height: Chrome.stripHeight)
+        // The bar lays out at its own width and the panel measures that width;
+        // a narrower panel used to spend the shortfall on the timer ("00…"),
+        // the one compressible item.
         .fixedSize(horizontal: true, vertical: false)
-        .background(Color.purple.cornerRadius(4).shadow(color: .black.opacity(0.3), radius: 4))
+        .recordingHUDCapsule(height: Chrome.stripHeight)
     }
 
     /// First press arms the cancel button, a second press within three
@@ -193,7 +209,9 @@ struct MicrophoneLevelMeter: View {
             ForEach(0..<4, id: \.self) { index in
                 let threshold = Double(index + 1) / 4.0
                 Capsule()
-                    .fill(level >= threshold * 0.85 ? Color.white : Color.white.opacity(0.3))
+                    .fill(level >= threshold * 0.85
+                        ? RecordingChromeStyle.glyph
+                        : RecordingChromeStyle.glyphDimmed)
                     .frame(width: 3, height: CGFloat(4 + index * 3))
             }
         }
@@ -269,16 +287,6 @@ struct CaptureDeviceMenuView: View {
 final class ScreenRecordingFloatingController {
     static let shared = ScreenRecordingFloatingController()
 
-    /// Room beyond the bar's own width: the drop shadow needs it, and the mic
-    /// meter or a fourth timer digit can widen the bar after the panel opens.
-    static let widthSlack: CGFloat = 48
-
-    /// Window size for a bar measured at `fitting`. The panel is never exactly
-    /// as wide as the bar was at the moment it opened.
-    static func panelSize(barFitting fitting: NSSize) -> NSSize {
-        NSSize(width: ceil(fitting.width) + widthSlack, height: ceil(fitting.height))
-    }
-
     private var panel: NSPanel?
     private weak var model: ScreenRecordingModel?
 
@@ -303,7 +311,7 @@ final class ScreenRecordingFloatingController {
         // Width measured off the bar, not the 262 that predated the mic meter.
         // Keep the default `sizingOptions`: clearing them zeroes `fittingSize`.
         host.layoutSubtreeIfNeeded()
-        let size = Self.panelSize(barFitting: host.fittingSize)
+        let size = RecordingChromeStyle.panelSize(barFitting: host.fittingSize)
         panel.setContentSize(size)
         if let screen = NSScreen.screenWithMouse {
             panel.setFrameOrigin(NSPoint(

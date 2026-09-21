@@ -67,7 +67,7 @@ final class ScreenRecordingPrepareBarController: ObservableObject {
         activeAspect = nil
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 344, height: 44),
+            contentRect: NSRect(x: 0, y: 0, width: 10, height: 10),
             styleMask: [.fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -81,8 +81,15 @@ final class ScreenRecordingPrepareBarController: ObservableObject {
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = NSHostingView(rootView: RecordingPrepareBarView(controller: self))
-        panel.setFrameOrigin(Self.barOrigin(for: captureRect, barSize: NSSize(width: 344, height: 44)))
+        let host = NSHostingView(rootView: RecordingPrepareBarView(controller: self))
+        panel.contentView = host
+        // The bar is as wide as its own controls, and that width differs per
+        // language: the old fixed 344 clipped the English labels. Keep the
+        // default `sizingOptions`, which clearing would zero `fittingSize` with.
+        host.layoutSubtreeIfNeeded()
+        let size = RecordingChromeStyle.panelSize(barFitting: host.fittingSize)
+        panel.setContentSize(size)
+        panel.setFrameOrigin(Self.barOrigin(for: captureRect, barSize: size))
         panel.orderFrontRegardless()
         self.panel = panel
     }
@@ -165,12 +172,14 @@ final class ScreenRecordingPrepareBarController: ObservableObject {
     }
 }
 
-/// The bar itself: dark pill with 准备录制 + live dimension badge on the
+/// The bar itself: dark HUD capsule with 准备录制 + live dimension badge on the
 /// left, audio toggles and H/V framing in the middle, cancel/confirm on the
 /// right (浮光's 准备录制 layout).
 struct RecordingPrepareBarView: View {
     @ObservedObject var controller: ScreenRecordingPrepareBarController
     @ObservedObject private var model: ScreenRecordingModel
+
+    private typealias Chrome = RecordingChromeStyle
 
     init(controller: ScreenRecordingPrepareBarController) {
         self.controller = controller
@@ -178,81 +187,79 @@ struct RecordingPrepareBarView: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Chrome.controlSpacing) {
             Text(AppText.value("scRecordingPrepare", language: model.language))
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Chrome.glyph)
 
             Text("\(Int(controller.regionRect.width)) × \(Int(controller.regionRect.height))")
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.75))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 5))
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(Chrome.glyphDimmed)
+                .padding(.horizontal, 7)
+                .frame(height: Chrome.controlSide)
+                .background(
+                    Chrome.controlFillTinted,
+                    in: RoundedRectangle(
+                        cornerRadius: Chrome.controlCornerRadius,
+                        style: .continuous
+                    )
+                )
 
             Button(action: { controller.toggleMicrophone() }, label: {
                 Image(systemName: model.settings.capturesMicrophone ? "mic.fill" : "mic.slash.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(model.settings.capturesMicrophone ? Color.white : Color.white.opacity(0.4))
             })
-            .buttonStyle(.plain)
+            .buttonStyle(Chrome.ControlButtonStyle(
+                emphasis: model.settings.capturesMicrophone ? .tinted : .dimmed
+            ))
             .help(AppText.value("scRecordingMicrophone", language: model.language))
 
             Button(action: { controller.toggleSystemAudio() }, label: {
                 Image(systemName: model.settings.capturesSystemAudio ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(model.settings.capturesSystemAudio ? Color.white : Color.white.opacity(0.4))
             })
-            .buttonStyle(.plain)
+            .buttonStyle(Chrome.ControlButtonStyle(
+                emphasis: model.settings.capturesSystemAudio ? .tinted : .dimmed
+            ))
             .help(AppText.value("scRecordingSystemAudio", language: model.language))
 
             aspectButton(label: "16:9", aspect: 16.0 / 9.0)
             aspectButton(label: "9:16", aspect: 9.0 / 16.0)
 
             Button(action: { controller.cancel() }, label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white.opacity(0.85))
+                Image(systemName: "xmark")
             })
-            .buttonStyle(.plain)
+            .buttonStyle(Chrome.ControlButtonStyle(emphasis: .resting))
             .help(AppText.value("cancel", language: model.language))
 
             Button(action: { controller.confirm() }, label: {
-                ZStack {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 18, height: 18)
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.white)
-                }
+                Chrome.CircleAction(
+                    color: Chrome.startGreen,
+                    systemImage: "play.fill",
+                    side: 24,
+                    glyphSize: 9,
+                    glyphOffset: CGSize(width: 1, height: 0)
+                )
             })
             .buttonStyle(.plain)
             .help(AppText.value("scRecordingStart", language: model.language))
         }
-        .padding(.horizontal, 12)
-        .frame(width: 344, height: 44)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.black.opacity(0.82))
-                .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
-        )
+        .padding(.horizontal, Chrome.capsulePadding)
+        // The bar is as wide as its own controls: a fixed width was too narrow
+        // for the English labels and clipped them without saying so.
+        .frame(height: Chrome.stripHeight)
+        .fixedSize(horizontal: true, vertical: false)
+        .recordingHUDCapsule(height: Chrome.stripHeight)
     }
 
     private func aspectButton(label: String, aspect: CGFloat) -> some View {
-        let isActive = controller.activeAspect == aspect
-        return Button(action: { controller.reframe(toAspect: aspect) }, label: {
+        Button(action: { controller.reframe(toAspect: aspect) }, label: {
             Text(label)
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundStyle(isActive ? Color.black : Color.white.opacity(0.75))
                 .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(isActive ? Color.white : Color.white.opacity(0.14))
-                )
         })
-        .buttonStyle(.plain)
+        .buttonStyle(Chrome.ControlButtonStyle(
+            emphasis: controller.activeAspect == aspect ? .inverted : .tinted,
+            width: nil
+        ))
         .help(AppText.value(
             aspect > 1 ? "scRecordingAspectHorizontal" : "scRecordingAspectVertical",
             language: model.language

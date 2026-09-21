@@ -286,8 +286,9 @@ struct CaptureEnhancementsTests {
         #expect(metered > bare)
         // The meter can appear after the panel opened, so the room beyond the
         // bar has to cover it rather than only the shadow.
-        #expect(ScreenRecordingFloatingController.widthSlack >= metered - bare)
-        #expect(ScreenRecordingFloatingController.panelSize(barFitting: NSSize(width: bare, height: 24)).width >= metered)
+        #expect(RecordingChromeStyle.panelWidthSlack >= metered - bare)
+        #expect(RecordingChromeStyle.panelSize(barFitting: NSSize(width: bare, height: RecordingChromeStyle.stripHeight)).width >= metered)
+        #expect(RecordingChromeStyle.panelSize(barFitting: NSSize(width: bare, height: RecordingChromeStyle.stripHeight)).height == ceil(RecordingChromeStyle.stripHeight))
     }
 
     @Test @MainActor func recordingSelectionBarStaysInsideTheDisplay() {
@@ -347,5 +348,80 @@ struct CaptureEnhancementsTests {
             bounds: bounds
         )
         #expect(topSelection.contains(nearTopFullscreen))
+    }
+
+    // MARK: - Recording chrome
+
+    /// Every Swift file that draws the recording flow's floating surfaces, with
+    /// comment lines stripped. A doc comment may *explain* why glass is absent;
+    /// what must not happen is the code reaching for a backdrop again.
+    private var recordingChromeSources: [(file: String, code: String)] {
+        get throws {
+            let root = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()  // Tests/MacPilotTests
+                .deletingLastPathComponent()  // Tests
+                .deletingLastPathComponent()  // repository root
+                .appendingPathComponent("Sources/MacPilot/Recording")
+            let walker = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+            let files = (walker?.compactMap { $0 as? URL } ?? []).filter { $0.pathExtension == "swift" }
+            return try files.map { url in
+                let code = try String(contentsOf: url, encoding: .utf8)
+                    .components(separatedBy: "\n")
+                    .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                    .joined(separator: "\n")
+                return (url.lastPathComponent, code)
+            }
+        }
+    }
+
+    @Test func recordingStripsAreOneTokenSet() {
+        // One height for the whole flow, derived rather than repeated.
+        #expect(RecordingChromeStyle.stripHeight
+            == RecordingChromeStyle.controlSide + 2 * RecordingChromeStyle.capsulePadding)
+        #expect(RecordingSelectionActionBarView.preferredSize.height
+            == RecordingChromeStyle.stripHeight)
+        // Controls are chips, not capsules: if the radius reached half the side,
+        // a control would be indistinguishable from the strip holding it.
+        #expect(RecordingChromeStyle.controlCornerRadius
+            < RecordingChromeStyle.controlSide / 2)
+    }
+
+    @Test func recordingControlEmphasesAreFiveDistinctStates() {
+        let emphases: [RecordingChromeStyle.ControlEmphasis] = [
+            .resting, .tinted, .dimmed, .inverted, .destructive
+        ]
+        func signature(_ color: Color) -> String {
+            guard let rgb = NSColor(color).usingColorSpace(.deviceRGB) else {
+                return "\(color)"
+            }
+            return [rgb.redComponent, rgb.greenComponent, rgb.blueComponent, rgb.alphaComponent]
+                .map { String(format: "%.3f", $0) }
+                .joined(separator: ",")
+        }
+        let states = emphases.map { signature($0.fill) + "|" + signature($0.glyph) }
+        // Two states that draw identically would make one of them unreachable
+        // from the UI without anyone noticing.
+        #expect(Set(states).count == states.count)
+    }
+
+    @Test func recordingOverlaysNeverSampleTheirBackdrop() throws {
+        let sources = try recordingChromeSources
+        // The scan must not silently become a no-op if the folder moves.
+        #expect(!sources.isEmpty)
+        for source in sources {
+            // `Material` and `glassEffect` need something behind the window, and
+            // in a borderless non-activating panel macOS 26 answers with a flat
+            // grey slab. `Color.purple` is how the live bar shipped once.
+            for banned in ["glassEffect", "Material", "Color.purple"] {
+                #expect(
+                    !source.code.contains(banned),
+                    "\(source.file) still styles itself with \(banned)"
+                )
+            }
+        }
     }
 }
