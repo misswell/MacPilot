@@ -1699,3 +1699,102 @@ Local Ports 是 MacPilot 的独立功能页，不增加第二个 `MenuBarExtra`�
 **阴影这件事没法用像素证明，只能靠几何。** 探针里那组对照（同样的胶囊，宿主从 44 高改成 68 高、留出投影空间）渲染结果**逐字节相同**：`cacheDisplay` 根本不抓 `.shadow`。所以" tight 宿主里差分为 nil"不能当作被裁切的证据，结论来自窗口尺寸本身——面板高度就是 `ceil(fitting.height)`，胶囊就是 `stripHeight`，窗口外没有像素可画。第六十一节那条"玻璃观感没逐像素验证过"的局限是同一类：这个离屏管线能验几何与填充，验不了合成。
 
 `swift test --filter CaptureEnhancementsTests` 26 条全绿；全量 807 条只有 `heartbeatFailureTriggersABoundedReconnect` 与 `startupShortcutRegistrationRetriesTransientFailure` 红（单独跑 0.055 秒双双通过，是第五十五/五十六节记在案的并行抖动）。
+
+## 六十三、空闲常驻内存：窗口内容按需、浮层用完就还、峰值按字节算（v1.1.392）
+
+`docs/MEMORY_REVIEW.md` 第二轮列的遗留项里，「空闲时白占着」和「瞬时峰值」是两类问题，混在一起量就都量不准。这一轮把它们分开做，并且**先建尺子再改代码**。
+
+### 尺子：`Scripts/measure-memory.sh`
+
+绝对值没有意义（同一台机器换一分钟就不一样），验收只看**同条件下的两次快照之差**：
+
+```sh
+Scripts/measure-memory.sh --label cold-idle --deep     # 采 5 次取中位数
+Scripts/measure-memory.sh --diff a.json b.json         # 按角色列 delta
+```
+
+三个坑在写的时候就踩过了，记下来：
+
+1. **按 UID 过滤**。这台机器上同时跑着别人的 `agentuse` 实例，`pgrep` 一把抓会把别人的内存算到本机账上。
+2. **`phys_footprint` 而不是 RSS**。RSS 把 clean file-backed 页算进来，`footprint` 才是 jetsam 与活动监视器用的那个数；两者差到 100 MB 是常态（本轮实测：footprint 87 MB / RSS 130 MB）。
+3. **读不到就说读不到**。root 的 PowerHelper 没有 task-for-pid 权限，`footprint` 直接失败——脚本输出 `n/a`，绝不填 0，否则 TOTAL 会假装自己完整。
+4. 顺带一条：`--only <路径片段>` 是为了 A/B 同时跑两个 bundle 副本；快照落在 gitignore 的 `build/memory/`，里面有 pid 和本机路径，不进仓库。
+
+**闲置 30 秒不够。** 新实例在 30 秒时读到 101 → 103 MB，六分钟后同一进程 87 MB——分配器把页还给内核是要时间的。30 秒口径只够看「有没有涨」，看「降了多少」要等两分钟以上。
+
+### 主窗口：内容跟着窗口走，而不是常驻
+
+`Window("MacPilot", id: "main")` 在启动时就把整棵 `ContentView` 建出来，之后 `orderOut` 只是**藏起来**——视图图、布局缓存、渲染过的 symbol 全在。菜单栏应用一天里 99% 的时间不显示这个窗口，却为它付着内存。
+
+改法是给内容加一个状态机（`Sources/MacPilot/MainWindowScene.swift`）：
+
+- `MainWindowContentState.isLoaded` 决定 `MainWindowRoot` 画 `ContentView()` 还是 `Color.clear`；**登录启动初始为 false**（父进程是 `loginwindow` 这个判断从 `AppDelegate` 私有方法挪到 `AppLaunchContext`，模型构造时就要读）。
+- 打开路径全部先 `model.loadMainWindowContent()` 再提窗口——先建内容后上屏，才不会有一帧空窗口。菜单栏项、`applicationShouldHandleReopen`、深链三条路都走同一个通知。
+- 关闭用 `NSWindow.willCloseNotification`（SDK 里**没有** `didCloseNotification`），并且**延后一拍**再释放：`willClose` 触发时窗口还在屏幕上，立刻换掉内容会闪白。延后就有一拍竞态——用户在这一拍里重开，那次关闭必须作废，于是 `beginClose()` 返回代号、`completeClose(requestedGeneration:)` 只认最新代号。
+- `lastMainSection` 记住用户停在哪个页面：以前关掉窗口等于丢掉位置。
+
+**没有按方案改成自建 `NSWindow`。** 方案要求「从 `MacPilotApp.body` 移除 `Window` Scene，换成 `MainWindowCoordinator`」。实测下来内容门控已经拿到本轮最大的一笔（见下面的 −10 MB），而换掉 scene 会一起动掉这些没人复核过的东西：SwiftUI 自动生成的窗口菜单（Cmd-W / Cmd-M）、`.windowToolbarStyle(.unified(showsTitle: false))`、窗口状态恢复。更关键的是**这台机器当时验不了**（见最后一节）。留着 scene、只把内容做成按需，是这一轮能负责交付的边界。
+
+顺带记一个**改前就存在**的缺口：窗口被真正关闭（不是隐藏）之后，`.macPilotShowMainWindow` 没有活的观察者——它挂在窗口内容上。旧代码把它挂在 `ContentView` 上，覆盖范围更小，所以本轮不是回归，但也谈不上修好。要彻底解决只能走上面那条自建窗口的路。
+
+### 切换器：面板不再在启动时就建好
+
+`startRuntime()` 里那句 `panelController?.prepare()` 是方案点名的第一条：功能一加载就把 `NSPanel` + `NSHostingView` + 整个 overlay 建出来，之后**再也没人释放**。删掉之后 `show()` 第一次才建（`panel ?? makePanel(...)` 本来就在），关掉之后按两档收：
+
+| 时机 | 交还什么 | 为什么是这个顺序 |
+| --- | --- | --- |
+| 关闭 15 秒 | 缩略图缓存 + 在飞的采集任务 | 最大的一块，且重采最便宜 |
+| 关闭 60 秒 | Panel / HostingView / Overlay | 连按快捷键时最贵的一次重建 |
+| 内存告警 | 上面两档一起 | 正在显示时不动，避免把界面拆了 |
+
+两档共用**一个** `Task`，句柄全程留在 `panelIdleTask` 里（中途置 nil 会让第二档再也取消不掉——用户在这一分钟里重按，面板却在他眼前被 release）。回收判定走 `WindowSwitcherPanelLifetimePolicy.canRelease(isShowing:hasPendingSession:)`，纯函数、可测。
+
+方案里「缩略图缓存 `totalCostLimit = 6 MB`」**没有做，因为不可达**：预览最宽 256×160 px（`thumbnailMaximumPixelSize`），30 张顶天 ≈ 4.8 MB，条数上限已经把字节锁住了。给 `NSCache` 再加一套按像素计费只会是第二轮评审里 `IconCache.cost(of:)` 那种「上限永远碰不到」的装饰。
+
+### Dock 分组 Helper：待命 5 分钟 → 45 秒，且待命时不带着面板
+
+一个待命 Helper 实测 20 MB 以上，`warmLifetime` 原来是 300 秒——同时点开几个分组，就是几百 MB 挂在后台。现在：
+
+- 时长挪进 `MacPilotDockGroupsCore` 的 `DockHelperWarmLifetimePolicy`，由单测锁住 `10 < seconds <= 60`（一个可执行 target 里的常量是测不到的）。
+- `dismiss()` 从「只 `orderOut`」变成「收起 + `contentView = nil` + `close()` + 面板置 nil」，并调 `model.releaseContent()` 交出图标与解析结果；`contentGeneration` 自增，让还在后台跑的那轮加载不要把图标写回已经关掉的面板。
+- 待命期间收到内存告警**直接退出**，不等 45 秒：面板和图标已经还了，进程本身是那时唯一能给出去的东西，换回来的代价只有一次冷启动。
+
+热展开仍然成立——重建面板是毫秒级，冷启动才是那 0.25 秒。
+
+### 更新与滚动截图：把峰值按下去
+
+更新链路三处：
+
+1. `UpdatePackageValidator.sha256(of:)` 原来是 `Data(contentsOf: url, options: .mappedIfSafe)` 整包哈希——改成 `FileHandle` 1 MB 分块，和 `FileCompression.swift:977` 已有的那个写法对齐（那里早就是流式的，两处不该长得不一样）。
+2. `run()` 里 `waitUntilExit()` 在 `readDataToEndOfFile()` **之前**：管道只有 64 KB，`ditto`/`codesign` 输出写满就永久阻塞子进程，父进程在等它退出。改成先读后等。
+3. `launchInstaller` 里 `process.run()` 抛错时，`MacPilotUpdater-<uuid>`（updater 副本）和 `MacPilotUpdate-<uuid>`（解出来的整份 app，上百 MB）都没人删。现在 catch 里一起删掉再抛。
+
+滚动长截图原来是 `frames.count < 30` 的**按帧**上限，而一帧全屏 Retina 约 24 MB —— 30 帧就是 ~700 MB 峰值；反过来窄区域（聊天栏那种）本来花不了多少，却被同一个 30 掐着。改成两个上限同时成立（`SmartScrollingCaptureBudget`）：字节预算 256 MB + 帧数 30。窄区域行为一字不变（仍然给满 30 帧），全屏选择大约 10 帧封顶。
+
+**触顶要说话**：HUD 原来只是数字不再涨，看起来像采集坏了；现在把提示行换成橙色的「采样已达内存上限…」（替换而不是追加，面板是定高的）。
+
+拼接本身两处：
+
+- `bestOverlap` 每对帧建两份**全分辨率** RGBA 栅格（24 MB × 2）。它实际只按行比较、横向是抽样——于是横向缩到 256 列、纵向保持精确（重叠量是按行数出来的）。每对栅格 28.8 MB → 2.5 MB。
+- `finish()` 在 `@MainActor` 上把几十帧重画进一张长图，这是 HUD 卡死、整个 App 不响的那个瞬间。改成 `Task.detached` + `autoreleasepool`，回来再关面板；顺带一个 `isStitching` 防止「完成」被连点两次。
+
+### 量到的结果
+
+同一台机器、同一份默认配置、两个 bundle 副本并排闲置两分钟后取中位数：
+
+| 角色 | 基线（HEAD） | 本轮 | delta |
+| --- | --- | --- | --- |
+| main | 97.5 MB | 87.3 MB | **−10.2 MB** |
+| peak footprint | 147.4 MB | 149.4 MB | +2.0 MB（噪声内） |
+
+`--deep` 的 malloc 那一行同样指向这里：基线 116.2 M allocated / 65.0 M free，本轮 120.6 M / 29.0 M free——**空闲态里被占住的堆少了约 36 MB**，而总量没涨。
+
+### 没验到的部分（以及为什么）
+
+`20 次开关窗口`、`切换器首屏延迟`、`分组浮层开合`三条交互验收**没跑成**：这台机器上 `MacPilot` 是 `LSUIElement`，System Events 报 `count of windows = 0`（隐藏与关闭都看不出区别）；`set frontmost` 不生效，`key code 13 using command down` 会落到**当时真正的前台 App**上；`screencapture` 回来是一张全黑的图。也就是说当时既看不见、也点不准，硬跑只会产出假绿。
+
+> ⚠️ 副作用要交代：在确认这条路径不可靠之前，向两个沙箱实例发过两次 Cmd-W，键很可能落进了当时的前台应用（Chrome），**可能关掉过标签页**（Cmd-Shift-T 可恢复）。沙箱实例（`HOME=/tmp/mp-home*`，各自一份全新配置，不碰用户的 `config.json`）测完已经 kill，`/tmp` 副本待清理。
+
+代码侧的替代证据是 15 条新单测（`Tests/MacPilotTests/MemoryLifecycleTests.swift`）：主窗口内容状态机 5 条（含「延后一拍里重开不能被关掉」这条竞态）、切换器回收判定 3 条、字节预算 2 条、宽帧拼接 2 条、Helper 待命时长 1 条、内存压力登记 2 条。全量 823 条只剩三条负载抖动（`samplerReportsAFullyBusyCoreAtItsRealShare`、`quickCopyAutoSaveWritesFileAndRecordsStats`、`heartbeatFailureTriggersABoundedReconnect`），单独跑 14 条 2.6 秒全绿。
+
+其中宽帧拼接那两条值得单说：构造测试图时先用「行号 × 黄金比例常数」做假数据，结果**错误重叠的得分反而更低**——纯乘法只把高位平移，相邻行成了固定偏移，均值绝对差几乎为零。换成 splitmix64 雪崩混合之后，`startRow 0` 与 `startRow 150` 这对 1200×400 帧才精确判出 250 行重叠。这条断言是「横向缩放没有破坏行对齐」的唯一证据，值得留着。

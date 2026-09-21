@@ -5,6 +5,8 @@
 本文件是**第二轮评审**，覆盖 `c2639ad`（含闭盖休眠提权 helper、iPhone 亮度/音量控制、iOS 唤醒按钮）。
 第一轮的结论在 §二 被逐条复核，**其中 4 条被推翻或夸大**，已就地更正。
 
+**第三轮（内存方案落地）见 §七**：空闲常驻 −10.2 MB、滚动截图峰值按字节收口、更新链路三处修复，并记录了两条**评估后不做**的项与一条**没能验证**的清单。
+
 关联提交：第一轮 `67f95eb`，第二轮见文末 §六。
 
 ---
@@ -141,3 +143,63 @@ swift test --skip shortcutConfigEncodesAndDecodesCarbonModifiers
 > `ShortcutConfig.currentLayoutPrintableKeyDisplayString` → CarbonCore）。
 > 已由诊断报告确认该崩溃在本轮编辑之前（21:22:37，另一处会话触发）即存在，
 > 单独运行该用例同样崩溃。
+
+---
+
+## 七、第三轮：空闲常驻与瞬时峰值分开收口
+
+方案来源是一份十节的重构计划（`§10` 的顺序：先量、再主窗口、再切换器、再 Helper、再生命周期、再峰值）。这一轮按那个顺序做到第 7 步，**两处经评估后不做**，**三条交互验收没跑成**。细节叙述在 `SUMMARY.md` 第六十三节，这里只记评审结论。
+
+### 尺子
+
+`Scripts/measure-memory.sh`：按当前 UID + 可执行文件路径识别四类角色（main / finder-sync / power-helper / dock-helper），`footprint` 取 `phys_footprint` 与 peak，5 次采样取中位数，`--deep` 加 malloc 分区，`--diff` 出按角色的 delta，`--only <路径片段>` 用于并排跑两个 bundle。快照写在 gitignore 的 `build/memory/`（含 pid 与本机路径，不进仓库）。
+
+两条口径纠正：
+
+- **RSS 与 footprint 不是一回事**，实测同一进程 87 MB / 130 MB。以前按 RSS 得出的结论要重新看。
+- **闲置 30 秒不够**：同一进程 30 秒时 101 → 103 MB，六分钟后 87 MB。分配器还页有延迟，短窗口只能看「有没有涨」，不能看「降了多少」。
+
+### 本轮修复
+
+| 位置 | 之前 | 现在 |
+| --- | --- | --- |
+| `MacPilotApp.swift` `Window` scene | 启动即建整棵 `ContentView`，`orderOut` 只是隐藏，视图图常驻 | `MainWindowContentState` 门控：登录启动不加载，`willClose` 延后一拍释放（代号防重开竞态），`lastMainSection` 记住页面 |
+| `WindowSwitcher.startRuntime` | `panelController?.prepare()` 功能一加载就建面板且**从不释放** | 删除；首次 `show()` 才建；关闭 15 秒交还缩略图、60 秒交还面板；`MemoryPressure` 告警时两档一起（正在显示不动） |
+| `DockHelperPanelController.warmLifetime` | 300 秒，且待命时面板/图标全留着 | 45 秒（常量移入 `MacPilotDockGroupsCore.DockHelperWarmLifetimePolicy`，可测）；`dismiss()` 释放面板 + `model.releaseContent()`；待命期间内存告警直接退出 |
+| `UpdatePackageValidator.sha256(of:)` | `Data(contentsOf: .mappedIfSafe)` 整包 | `FileHandle` 1 MB 分块（与 `FileCompression.swift:977` 已有写法一致） |
+| `UpdatePackageValidator.run` | `waitUntilExit()` 在读管道**之前**，>64 KB 输出会死锁 | 先 `readDataToEndOfFile()` 再 wait |
+| `launchInstaller` | `process.run()` 抛错时两个暂存目录（含上百 MB 解包 app）不删 | catch 内删除后再抛 |
+| `SmartScrollingCaptureWindowController` | `frames.count < 30`，全屏 Retina 一帧 ~24 MB → 峰值 ~700 MB | `SmartScrollingCaptureBudget`：256 MB 字节预算 **且** 30 帧；触顶时 HUD 换橙色提示（替换而非追加，面板定高） |
+| `ScreenCaptureVerticalStitcher.raster` | 每对帧两份全分辨率 RGBA 栅格 | 横向缩到 256 列、纵向保持精确：28.8 MB → 2.5 MB / 对 |
+| `SmartScrollingCaptureWindowController.finish` | `@MainActor` 上拼接几十帧 → HUD 与全 App 卡死 | `Task.detached` + `autoreleasepool`，`isStitching` 防连点 |
+| 进程级内存压力 | 无 | `Sources/MacPilot/MemoryPressure.swift`：一个 `DispatchSource` 供多方订阅，最后一个订阅者走时销毁 |
+
+### 量到的结果
+
+同机、同默认配置、两个 bundle 副本并排闲置两分钟取中位数：main **97.5 → 87.3 MB（−10.2 MB）**，peak 147.4 → 149.4 MB（噪声内）。`--deep` 的 malloc 分区指向同一处：基线 116.2 M allocated / 65.0 M free，本轮 120.6 M / 29.0 M free——**真正被占住的堆少了约 36 MB**，而总分配量没涨。
+
+### 评估后不做（两条）
+
+1. **缩略图缓存 `totalCostLimit = 6 MB`**：预览最宽 256×160 px，30 张顶天 ≈ 4.8 MB，字节上限不可达。条数上限已经锁住字节，再加一套按像素计费就是 §二 里 `IconCache.cost(of:)` 那种「永远碰不到的上限」。已在 `WindowSwitcherThumbnailCachePolicy.maximumCount` 上写明。
+2. **CPU/内存菜单快照的 TTL 自清理**：`static let menuSampler` + `cachedMenuSample` 存的是每 App 一行的结构体与 pid→计数器字典，量级几十 KB，且采样只在菜单展开时同步发生（没有定时器）。为它加一个 5 秒清理任务是净负担。
+
+`FeatureRuntime` 协议（§6 第 5 阶段）**没有做**：九个子系统里真正持有「可交还且能重建」状态的只有切换器与截图链路，已经各自接上 `MemoryPressure`；其余多数是常驻观察者与热键，deactivate 与 stop 语义重复。协议会先带来九个空实现。
+
+### 仍未解决（在 §四 基础上追加）
+
+| # | 项目 | 说明 |
+| --- | --- | --- |
+| 13 | **窗口真正关闭后，`.macPilotShowMainWindow` 没有活着的观察者** | 观察者挂在窗口内容上（本轮从 `ContentView` 上移到 `MainWindowRoot`，覆盖范围是旧的**超集**：隐藏但存在的窗口现在也能响应）。深链 / `applicationShouldHandleReopen` 在窗口已关闭时不生效，**改前改后一样**。要根治只能自建 `NSWindow`（见下条） |
+| 14 | **方案的「移除 `Window` scene + `MainWindowCoordinator`」没有执行** | 内容门控已拿到本轮最大单笔收益；换 scene 会一起动掉自动生成的窗口菜单（Cmd-W/Cmd-M）、`.windowToolbarStyle(.unified(showsTitle: false))`、状态恢复，而这一轮**在这台机器上无法验证**（见下条）。留作下一轮，且需要先在能看能点的机器上做 20 次开关的回归 |
+| 15 | **三条交互验收未跑** | 20 次开关窗口、切换器首屏延迟、分组浮层开合。原因：`LSUIElement` 进程 System Events 报 `count of windows = 0`（隐藏/关闭不可区分）、`set frontmost` 不生效、`key code` 会落到当时真正的前台 App、`screencapture` 返回全黑。**副作用**：确认该路径不可靠之前发过两次 Cmd-W，可能关掉了用户前台 Chrome 的标签页 |
+| 16 | 切换器 `cachedWindows` 仍长期持有 `WindowSwitcherItem`（含 `AXUIElement` 与每 App 一份 `NSImage`） | 有界（按窗口/App 数），且清掉会直接违反「首屏 ≤ 现在 +50 ms」，只在内存告警时随缩略图一起交还 |
+
+### 验证
+
+```sh
+swift build            # 零 error / 零 warning
+swift test             # 823 条，3 条负载抖动，单独跑全绿
+./Scripts/build-app.sh # 签名与 designated requirement 校验通过
+```
+
+新增 `Tests/MacPilotTests/MemoryLifecycleTests.swift` 15 条：主窗口内容状态机 5（含延后一拍的重开竞态）、切换器回收 3、字节预算 2、宽帧拼接 2、Helper 待命时长 1、内存压力登记 2。
