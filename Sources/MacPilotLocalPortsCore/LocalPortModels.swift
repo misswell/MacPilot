@@ -80,6 +80,7 @@ public struct LocalPortProcess: Sendable, Equatable {
     public let uptime: String?
     public let rawElapsedTime: String?
     public let arguments: String?
+    public let startTime: String?
 
     public init(
         pid: Int32,
@@ -91,7 +92,8 @@ public struct LocalPortProcess: Sendable, Equatable {
         cwd: String?,
         uptime: String? = nil,
         rawElapsedTime: String? = nil,
-        arguments: String? = nil
+        arguments: String? = nil,
+        startTime: String? = nil
     ) {
         self.pid = pid
         self.ppid = ppid
@@ -103,6 +105,7 @@ public struct LocalPortProcess: Sendable, Equatable {
         self.uptime = uptime
         self.rawElapsedTime = rawElapsedTime
         self.arguments = arguments
+        self.startTime = startTime
     }
 
     public var compactUptime: String? {
@@ -193,6 +196,7 @@ public enum LocalPortScanLimitation: String, Codable, Sendable, Equatable {
     case cwdUnavailable
     case executableUnavailable
     case argumentsUnavailable
+    case startTimeUnavailable
 }
 
 public struct LocalPortSnapshot: Sendable, Equatable {

@@ -76,7 +76,8 @@ public enum LocalPortCloseService {
         guard process.pid > 1, process.pid != currentPID else { return .protectedPID(process.pid) }
         guard let uid = process.uid else { return .unknownUser(process.pid) }
         guard uid == currentUID else { return .anotherUser(process.pid) }
-        guard let executablePath = process.executablePath else {
+        guard let executablePath = process.executablePath,
+              FileManager.default.fileExists(atPath: executablePath) else {
             return .unknownExecutable(process.pid)
         }
         if LocalPortOwnerInference.isSystemExecutable(executablePath) {
@@ -190,10 +191,14 @@ public enum LocalPortCloseService {
             throw LocalPortCloseError.verificationFailed
         }
 
+        guard let freshStartTime = environment.startTime(plan.pid) else {
+            throw LocalPortCloseError.missingStartTime(pid: plan.pid)
+        }
+
         try verify(
             plan: plan,
             activities: freshSnapshot.activities,
-            freshStartTime: environment.startTime(plan.pid),
+            freshStartTime: freshStartTime,
             currentUID: environment.currentUID(),
             currentPID: environment.currentPID()
         )

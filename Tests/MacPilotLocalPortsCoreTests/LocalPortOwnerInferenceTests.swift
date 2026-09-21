@@ -22,6 +22,21 @@ struct LocalPortOwnerInferenceTests {
         #expect(owner.category == .application)
     }
 
+    @Test func parentAppAndUnknownProcessesAreClassified() {
+        let process = makeProcess(command: "node", path: "/opt/homebrew/bin/node")
+        let parent = makeProcess(command: "Code", path: "/Applications/Visual Studio Code.app/Contents/MacOS/Electron")
+        let application = LocalPortOwnerInference.application(for: process, parents: [parent])
+        #expect(application?.direct == false)
+        #expect(application?.sourcePID == parent.pid)
+
+        let owner = LocalPortOwnerInference.infer(process: process, project: nil, application: application)
+        #expect(owner.category == .application)
+        #expect(owner.reason == .parentApplication(pid: parent.pid, path: "/Applications/Visual Studio Code.app"))
+
+        let unknown = makeProcess(command: "mystery-service", path: "/tmp/mystery-service")
+        #expect(LocalPortOwnerInference.infer(process: unknown, project: nil, application: nil).category == .unknown)
+    }
+
     @Test func nodeAndPythonEvidenceUsesUsefulNames() {
         let node = makeProcess(
             command: "node",
@@ -49,6 +64,9 @@ struct LocalPortOwnerInferenceTests {
         let system = makeProcess(command: "launchd", path: "/sbin/launchd")
         let systemOwner = LocalPortOwnerInference.infer(process: system, project: nil, application: nil)
         #expect(systemOwner.category == .systemService)
+
+        let ollama = makeProcess(command: "ollama", path: "/opt/homebrew/bin/ollama")
+        #expect(LocalPortOwnerInference.infer(process: ollama, project: nil, application: nil).label == "Ollama")
     }
 
     @Test func nodePackageLocatorHandlesScopedAndPnpmLayouts() {

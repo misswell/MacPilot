@@ -22,7 +22,7 @@ struct LocalPortsView: View {
                 activityList
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(.regularMaterial)
         .task {
             model.startVisibleSession()
         }
@@ -288,10 +288,10 @@ private struct LocalPortRow: View {
                         HStack(spacing: 6) {
                             Text(group.representative.process.command)
                             Text("·")
-                            Text(appModel.t("localPortsPID", group.representative.process.pid))
+                            Text(appModel.t("localPortsPID", String(group.representative.process.pid)))
                             if let uptime = group.representative.process.compactUptime {
                                 Text("·")
-                                Text(uptime)
+                                Text(LocalPortErrorFormatter.uptime(uptime, language: appModel.language))
                             }
                         }
                         .font(.caption)
@@ -374,9 +374,14 @@ struct LocalPortDetailView: View {
                     detail(appModel.t("localPortsPID"), String(activity.process.pid))
                     detail(appModel.t("localPortsPPID"), activity.process.ppid.map(String.init) ?? "—")
                     detail(appModel.t("localPortsUser"), activity.process.user ?? "—")
+                    detail(appModel.t("localPortsUID"), activity.process.uid.map(String.init) ?? "—")
                     detail(appModel.t("localPortsExecutable"), activity.process.executablePath ?? "—")
                     detail(appModel.t("localPortsWorkingDirectory"), localPortCompactPath(activity.process.cwd))
-                    detail(appModel.t("localPortsUptime"), activity.process.uptime ?? "—")
+                    detail(
+                        appModel.t("localPortsUptime"),
+                        LocalPortErrorFormatter.uptime(activity.process.uptime, language: appModel.language)
+                    )
+                    detail(appModel.t("localPortsStartTime"), activity.process.startTime ?? "—")
                     detail(appModel.t("localPortsArguments"), activity.process.arguments ?? "—")
                     detail(appModel.t("localPortsProcess"), activity.process.command)
                     if let project = activity.project {
@@ -464,10 +469,13 @@ struct LocalPortCloseView: View {
                 .font(.title2.bold())
             VStack(alignment: .leading, spacing: 7) {
                 Text(plan.activity.process.command).font(.headline)
-                Text(appModel.t("localPortsPID", plan.pid))
-                Text(appModel.t("localPortsPort", plan.port))
+                Text(appModel.t("localPortsPID", String(plan.pid)))
+                Text(appModel.t("localPortsPort", String(plan.port)))
                 if let uptime = plan.activity.process.uptime {
-                    Text(appModel.t("localPortsUptime", uptime))
+                    Text(appModel.t(
+                        "localPortsUptime",
+                        LocalPortErrorFormatter.uptime(uptime, language: appModel.language)
+                    ))
                 }
                 if let project = plan.activity.project {
                     Text(appModel.t("localPortsProjectRoot", localPortCompactPath(project.root)))
@@ -493,6 +501,7 @@ struct LocalPortCloseView: View {
                 Button(appModel.t("localPortsCloseConfirm"), role: .destructive) {
                     model.confirmClose()
                 }
+                .macPilotProminentButtonStyle()
                 .disabled(model.isClosing)
                 if model.isClosing { ProgressView().controlSize(.small) }
             }
@@ -587,6 +596,14 @@ enum LocalPortErrorFormatter {
         case .unknown:
             return AppText.value("localPortsEvidenceUnknown", language: language)
         }
+    }
+
+    static func uptime(_ value: String?, language: AppLanguage) -> String {
+        guard let value else { return "—" }
+        if value == "< 1m" {
+            return AppText.value("localPortsUptimeUnderMinute", language: language)
+        }
+        return value
     }
 
     static func result(_ result: LocalPortCloseResult?, language: AppLanguage) -> String {

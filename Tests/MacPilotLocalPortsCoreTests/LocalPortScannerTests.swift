@@ -30,6 +30,21 @@ struct LocalPortScannerTests {
         #expect(LocalPortScanner.listenerScope(["127.0.0.1", "*"]) == .lan)
     }
 
+    @Test func listenerParserRejectsEmptyAndInvalidPortRecords() {
+        let output = """
+        p42
+        cnode
+        n127.0.0.1:0
+        n127.0.0.1:65536
+        n127.0.0.1:not-a-port
+        n127.0.0.1:3000
+        """
+
+        #expect(LocalPortScanner.parseListeners("").isEmpty)
+        #expect(LocalPortScanner.parseListeners(output).map(\.port) == [3000])
+        #expect(LocalPortScanner.listenerScope(["192.168.1.20"]) == .lan)
+    }
+
     @Test func processTableParsesElapsedTimeAndLegacyRows() {
         let output = """
             1     0 01-16:20:00 /sbin/launchd
@@ -45,6 +60,9 @@ struct LocalPortScannerTests {
         let legacy = LocalPortScanner.parseProcessTable("1 0 /sbin/launchd")
         #expect(legacy[1]?.command == "launchd")
         #expect(legacy[1]?.uptime == nil)
+
+        let legacyWithHyphen = LocalPortScanner.parseProcessTable("7 1 my-server")
+        #expect(legacyWithHyphen[7]?.command == "my-server")
     }
 
     @Test func projectLocatorReadsPackageAndPythonNames() throws {
@@ -75,5 +93,28 @@ struct LocalPortScannerTests {
 
         #expect(LocalPortProjectLocator.locate(cwd: dependencies.path, homeDirectory: "/Users/test") == nil)
         #expect(LocalPortProjectLocator.locate(cwd: app.path, homeDirectory: "/Users/test") == nil)
+    }
+
+    @Test func projectLocatorReadsPythonCargoAndGoMarkers() throws {
+        let fixtures: [(String, String, String)] = [
+            ("pyproject.toml", "[project]\nname = 'python-demo'\n", "python-demo"),
+            ("Cargo.toml", "[package]\nname = 'cargo-demo'\n", "directory"),
+            ("go.mod", "module example.com/demo\n", "directory"),
+        ]
+
+        for (marker, contents, expectedName) in fixtures {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("LocalPortProject-\(UUID().uuidString)")
+            let child = root.appendingPathComponent("Sources")
+            try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try Data(contents.utf8).write(to: root.appendingPathComponent(marker))
+
+            let project = try #require(
+                LocalPortProjectLocator.locate(cwd: child.path, homeDirectory: "/Users/test")
+            )
+            #expect(project.marker == marker)
+            #expect(project.name == (expectedName == "directory" ? root.lastPathComponent : expectedName))
+        }
     }
 }

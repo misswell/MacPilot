@@ -49,6 +49,21 @@ struct LocalPortCloseServiceTests {
 
         let app = makeActivity(pid: 42, uid: uid, application: LocalPortApplication(name: "Test", path: "/Applications/Test.app", sourcePID: 42, direct: true))
         #expect(LocalPortCloseService.protectionReason(for: app, currentUID: uid, currentPID: 99) == .applicationBundle(path: "/Applications/Test.app"))
+
+        let missingExecutable = makeActivity(pid: 42, path: "/definitely/missing/local-port-executable", uid: uid)
+        #expect(LocalPortCloseService.protectionReason(for: missingExecutable, currentUID: uid, currentPID: 99) == .unknownExecutable(42))
+    }
+
+    @Test func protectionRulesRejectProtectedPIDsAndMissingUsers() {
+        let uid = Int32(getuid())
+        let initProcess = makeActivity(pid: 1, uid: uid)
+        #expect(LocalPortCloseService.protectionReason(for: initProcess, currentUID: uid, currentPID: 99) == .protectedPID(1))
+
+        let ownProcess = makeActivity(pid: 42, uid: uid)
+        #expect(LocalPortCloseService.protectionReason(for: ownProcess, currentUID: uid, currentPID: 42) == .protectedPID(42))
+
+        let missingUser = makeActivity(pid: 42, uid: nil)
+        #expect(LocalPortCloseService.protectionReason(for: missingUser, currentUID: uid, currentPID: 99) == .unknownUser(42))
     }
 
     @Test func verifyRejectsPidReuseAndNewPortOwner() throws {
@@ -58,7 +73,7 @@ struct LocalPortCloseServiceTests {
             port: 3000,
             pid: 42,
             uid: uid,
-            executablePath: "/opt/local/bin/node",
+            executablePath: original.process.executablePath!,
             processStartTime: "start-one",
             activity: original,
             otherPorts: [],
@@ -83,6 +98,25 @@ struct LocalPortCloseServiceTests {
                 currentPID: 99
             )
         }
+
+        #expect(throws: LocalPortCloseError.identityChanged(pid: 42)) {
+            try LocalPortCloseService.verify(
+                plan: plan,
+                activities: [makeActivity(pid: 42, uid: uid + 1)],
+                freshStartTime: "start-one",
+                currentUID: uid,
+                currentPID: 99
+            )
+        }
+        #expect(throws: LocalPortCloseError.identityChanged(pid: 42)) {
+            try LocalPortCloseService.verify(
+                plan: plan,
+                activities: [original],
+                freshStartTime: "start-two",
+                currentUID: uid,
+                currentPID: 99
+            )
+        }
     }
 
     @Test func executeSendsOnlySigtermAndReportsReleasedPort() async throws {
@@ -92,7 +126,7 @@ struct LocalPortCloseServiceTests {
             port: 3000,
             pid: 42,
             uid: uid,
-            executablePath: "/opt/local/bin/node",
+            executablePath: activity.process.executablePath!,
             processStartTime: "start",
             activity: activity,
             otherPorts: [],
@@ -115,10 +149,40 @@ struct LocalPortCloseServiceTests {
         #expect(result.portFree)
     }
 
+    @Test func executeRefusesMissingStartTimeBeforeSendingSignal() async {
+        let uid = Int32(getuid())
+        let activity = makeActivity(pid: 42, uid: uid)
+        let plan = LocalPortClosePlan(
+            port: 3000,
+            pid: 42,
+            uid: uid,
+            executablePath: activity.process.executablePath!,
+            processStartTime: "start",
+            activity: activity,
+            otherPorts: [],
+            peerPIDs: []
+        )
+        let recorder = SignalRecorder()
+        let environment = LocalPortCloseEnvironment(
+            scan: { LocalPortSnapshot(activities: [activity]) },
+            listenerScan: { [] },
+            startTime: { _ in nil },
+            signal: { _, signal in recorder.record(signal); return 0 },
+            sleep: { _ in },
+            currentUID: { uid },
+            currentPID: { 999 }
+        )
+
+        await #expect(throws: LocalPortCloseError.missingStartTime(pid: 42)) {
+            try await LocalPortCloseService.execute(plan, environment: environment)
+        }
+        #expect(recorder.value == nil)
+    }
+
     private func makeActivity(
         pid: Int32,
         port: Int = 3000,
-        path: String = "/opt/local/bin/node",
+        path: String = CommandLine.arguments.first ?? "/usr/bin/true",
         uid: Int32?,
         application: LocalPortApplication? = nil
     ) -> LocalPortActivity {

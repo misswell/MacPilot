@@ -108,6 +108,9 @@ public enum LocalPortScanner {
             limitations.append(.processTableUnavailable)
         }
 
+        let startTimeResult = processStartTimes(pids)
+        if startTimeResult.failed { limitations.append(.startTimeUnavailable) }
+
         var projects: [String: LocalPortProject] = [:]
         for cwd in Set(cwdByPID.values) {
             if let project = LocalPortProjectLocator.locate(cwd: cwd) {
@@ -127,7 +130,8 @@ public enum LocalPortScanner {
                 cwd: cwdByPID[listener.pid],
                 uptime: tableProcess?.uptime,
                 rawElapsedTime: tableProcess?.rawElapsedTime,
-                arguments: argumentResult.values[listener.pid]
+                arguments: argumentResult.values[listener.pid],
+                startTime: startTimeResult.values[listener.pid]
             )
             let parents = parentChain(for: process, in: processTable)
             let project = process.cwd.flatMap { projects[$0] }
@@ -163,7 +167,7 @@ public enum LocalPortScanner {
 
             let elapsed: String?
             let rawCommand: String
-            if pieces.count >= 4, pieces[2].contains(":") || pieces[2].contains("-") {
+            if pieces.count >= 4, (pieces[2].contains(":") || pieces[2].contains("-")) {
                 elapsed = String(pieces[2])
                 rawCommand = pieces.dropFirst(3).joined(separator: " ")
             } else {
@@ -229,6 +233,32 @@ public enum LocalPortScanner {
                     guard let firstSpace = trimmed.firstIndex(where: \.isWhitespace),
                           let pid = Int32(trimmed[..<firstSpace]) else { continue }
                     values[pid] = trimmed[firstSpace...].trimmingCharacters(in: .whitespaces)
+                }
+            } catch {
+                failed = true
+            }
+        }
+        return (values, failed)
+    }
+
+    private static func processStartTimes(_ pids: [Int32]) -> (values: [Int32: String], failed: Bool) {
+        guard !pids.isEmpty else { return ([:], false) }
+        var values: [Int32: String] = [:]
+        var failed = false
+
+        for start in stride(from: 0, to: pids.count, by: 100) {
+            let end = min(start + 100, pids.count)
+            let chunk = pids[start..<end]
+            do {
+                let output = try LocalPortCommandRunner.output(
+                    "/bin/ps",
+                    ["-ww", "-p", chunk.map(String.init).joined(separator: ","), "-o", "pid=,lstart="]
+                )
+                for line in output.split(whereSeparator: \.isNewline) {
+                    let fields = line.split(maxSplits: 1, whereSeparator: \.isWhitespace)
+                    guard fields.count == 2, let pid = Int32(fields[0]) else { continue }
+                    let value = String(fields[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !value.isEmpty { values[pid] = value }
                 }
             } catch {
                 failed = true

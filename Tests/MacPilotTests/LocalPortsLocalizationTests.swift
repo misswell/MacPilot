@@ -16,5 +16,7 @@ struct LocalPortsLocalizationTests {
         #expect(!AppText.value("localPortsSubtitle", language: .english).isEmpty)
         #expect(!AppText.value("localPortsCloseHint", language: .simplifiedChinese).isEmpty)
         #expect(!AppText.value("localPortsCloseHint", language: .english).isEmpty)
+        #expect(AppText.value("localPortsPort", language: .english, "3000") == "Port 3000")
+        #expect(AppText.value("localPortsPID", language: .simplifiedChinese, "42") == "PID 42")
     }
 }

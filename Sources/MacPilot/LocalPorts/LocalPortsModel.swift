@@ -53,20 +53,16 @@ final class LocalPortsModel: ObservableObject {
     func stopVisibleSession() {
         guard isVisible || refreshTask != nil || autoRefreshTask != nil else { return }
         isVisible = false
-        generation &+= 1
-        autoRefreshTask?.cancel()
-        autoRefreshTask = nil
-        refreshTask?.cancel()
-        refreshTask = nil
-        isRefreshing = false
-        isPreparingClose = false
-        isClosing = false
-        pendingClosePlan = nil
-        selectedActivityID = nil
+        invalidateVisibleWork()
     }
 
     func shutdown() {
         isVisible = false
+        invalidateVisibleWork()
+        lastCloseResult = nil
+    }
+
+    private func invalidateVisibleWork() {
         generation &+= 1
         autoRefreshTask?.cancel()
         autoRefreshTask = nil
@@ -77,7 +73,6 @@ final class LocalPortsModel: ObservableObject {
         isClosing = false
         pendingClosePlan = nil
         selectedActivityID = nil
-        lastCloseResult = nil
     }
 
     func refreshNow() {

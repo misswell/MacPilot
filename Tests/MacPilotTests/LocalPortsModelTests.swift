@@ -38,15 +38,92 @@ struct LocalPortsModelTests {
         #expect(!model.isRefreshing)
     }
 
+    @Test func repeatedRefreshDoesNotOverlapAndReentryRefreshesImmediately() async throws {
+        let snapshot = LocalPortSnapshot(activities: [fixtureActivity()])
+        let recorder = ScanRecorder(snapshot: snapshot, delay: .milliseconds(25))
+        let model = LocalPortsModel(environment: makeEnvironment(scan: { recorder.scan() }))
+
+        model.startVisibleSession()
+        model.refreshNow()
+        for _ in 0..<100 where model.isRefreshing {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(recorder.calls == 1)
+        #expect(recorder.maximumActive == 1)
+
+        model.stopVisibleSession()
+        model.startVisibleSession()
+        for _ in 0..<100 where model.isRefreshing {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(recorder.calls == 2)
+        model.shutdown()
+    }
+
+    @Test func successfulCloseClearsPlanAndRefreshesSnapshot() async throws {
+        let snapshot = LocalPortSnapshot(activities: [fixtureActivity()])
+        let recorder = ScanRecorder(snapshot: snapshot)
+        let model = LocalPortsModel(environment: makeEnvironment(scan: { recorder.scan() }))
+
+        model.startVisibleSession()
+        try await waitForRefresh(toFinish: model)
+        model.prepareClose(for: fixtureActivity())
+        for _ in 0..<100 where model.pendingClosePlan == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(model.pendingClosePlan != nil)
+
+        model.confirmClose()
+        for _ in 0..<100 where model.isClosing {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(model.pendingClosePlan == nil)
+        #expect(model.lastCloseResult?.portFree == true)
+        #expect(recorder.calls >= 4)
+        model.shutdown()
+    }
+
+    @Test func failedCloseClearsPendingPlanWithoutSendingASecondSignal() async throws {
+        let activity = fixtureActivity()
+        let sequence = ScanSequence(values: [
+            LocalPortSnapshot(activities: [activity]),
+            LocalPortSnapshot(activities: [activity]),
+            .empty,
+        ])
+        let model = LocalPortsModel(environment: makeEnvironment(scan: { sequence.next() }))
+
+        model.startVisibleSession()
+        try await waitForRefresh(toFinish: model)
+        model.prepareClose(for: activity)
+        for _ in 0..<100 where model.pendingClosePlan == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(model.pendingClosePlan != nil)
+
+        model.confirmClose()
+        for _ in 0..<100 where model.isClosing {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(model.pendingClosePlan == nil)
+        #expect(model.lastCloseError == .processDisappeared(pid: activity.process.pid))
+        model.shutdown()
+    }
+
     private func makeEnvironment(
         snapshot: LocalPortSnapshot,
         delay: Duration = .milliseconds(1)
     ) -> LocalPortCloseEnvironment {
+        makeEnvironment {
+            Thread.sleep(forTimeInterval: delay == .milliseconds(1) ? 0.001 : 0.08)
+            return snapshot
+        }
+    }
+
+    private func makeEnvironment(
+        scan: @escaping @Sendable () throws -> LocalPortSnapshot
+    ) -> LocalPortCloseEnvironment {
         LocalPortCloseEnvironment(
-            scan: {
-                Thread.sleep(forTimeInterval: delay == .milliseconds(1) ? 0.001 : 0.08)
-                return snapshot
-            },
+            scan: scan,
             listenerScan: { [] },
             startTime: { _ in "start" },
             signal: { _, _ in 0 },
@@ -54,6 +131,12 @@ struct LocalPortsModelTests {
             currentUID: { 501 },
             currentPID: { 999 }
         )
+    }
+
+    private func waitForRefresh(toFinish model: LocalPortsModel) async throws {
+        for _ in 0..<100 where model.isRefreshing {
+            try await Task.sleep(for: .milliseconds(5))
+        }
     }
 
     private func fixtureActivity() -> LocalPortActivity {
@@ -69,7 +152,7 @@ struct LocalPortsModelTests {
             pid: 42,
             ppid: 1,
             command: "node",
-            executablePath: "/opt/local/bin/node",
+            executablePath: CommandLine.arguments.first ?? "/usr/bin/true",
             uid: 501,
             user: "me",
             cwd: "/tmp/project",
@@ -87,5 +170,50 @@ struct LocalPortsModelTests {
             scope: .local,
             owner: owner
         )
+    }
+
+    private final class ScanRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private let snapshot: LocalPortSnapshot
+        private let delay: Duration
+        private(set) var calls = 0
+        private(set) var active = 0
+        private(set) var maximumActive = 0
+
+        init(snapshot: LocalPortSnapshot, delay: Duration = .milliseconds(1)) {
+            self.snapshot = snapshot
+            self.delay = delay
+        }
+
+        func scan() -> LocalPortSnapshot {
+            lock.lock()
+            calls += 1
+            active += 1
+            maximumActive = max(maximumActive, active)
+            lock.unlock()
+            Thread.sleep(forTimeInterval: delay == .milliseconds(1) ? 0.001 : 0.025)
+            lock.lock()
+            active -= 1
+            lock.unlock()
+            return snapshot
+        }
+    }
+
+    private final class ScanSequence: @unchecked Sendable {
+        private let lock = NSLock()
+        private let values: [LocalPortSnapshot]
+        private var index = 0
+
+        init(values: [LocalPortSnapshot]) {
+            self.values = values
+        }
+
+        func next() -> LocalPortSnapshot {
+            lock.lock()
+            defer { lock.unlock() }
+            let value = values[min(index, values.count - 1)]
+            index += 1
+            return value
+        }
     }
 }

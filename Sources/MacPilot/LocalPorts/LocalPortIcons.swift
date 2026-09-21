@@ -1,3 +1,10 @@
+// Portions adapted from LeftOpen:
+// https://github.com/SonghaiFan/leftopen
+//
+// Copyright (c) 2026 Songhai Fan
+// Licensed under the MIT License.
+// See THIRD_PARTY_NOTICES.md.
+
 import AppKit
 import Foundation
 import MacPilotLocalPortsCore
@@ -5,16 +12,10 @@ import SwiftUI
 
 @MainActor
 enum LocalPortIconResolver {
-    static func image(for activity: LocalPortActivity, pointSize: CGFloat = 28) -> NSImage? {
+    static func applicationImage(for activity: LocalPortActivity, pointSize: CGFloat = 28) -> NSImage? {
         if let application = activity.application,
            let icon = NSWorkspace.shared.icon(forFile: application.path) as NSImage? {
             return thumbnail(icon, pointSize: pointSize)
-        }
-
-        for url in localIconURLs(for: activity) {
-            if let icon = NSImage(contentsOf: url) {
-                return thumbnail(icon, pointSize: pointSize)
-            }
         }
         return nil
     }
@@ -35,7 +36,7 @@ enum LocalPortIconResolver {
         }
     }
 
-    private static func localIconURLs(for activity: LocalPortActivity) -> [URL] {
+    nonisolated static func localIconURLs(for activity: LocalPortActivity) -> [URL] {
         var candidates: [URL] = []
         if let project = activity.project {
             candidates.append(contentsOf: [
@@ -62,7 +63,7 @@ enum LocalPortIconResolver {
         return candidates
     }
 
-    private static func indexHTMLIconURL(projectRoot: String) -> URL? {
+    nonisolated static func indexHTMLIconURL(projectRoot: String) -> URL? {
         let index = URL(fileURLWithPath: projectRoot).appendingPathComponent("index.html")
         guard let contents = try? String(contentsOf: index, encoding: .utf8) else { return nil }
         let patterns = [
@@ -79,13 +80,26 @@ enum LocalPortIconResolver {
             break
         }
         guard let value else { return nil }
-        guard !value.contains("<"), !value.hasPrefix("data:") else { return nil }
+        let templateMarkers = ["%PUBLIC_URL%", "{{", "}}", "${", "process.env."]
+        guard !value.contains("<"),
+              !value.hasPrefix("data:"),
+              !templateMarkers.contains(where: value.contains) else { return nil }
         if value.hasPrefix("/") {
             return URL(fileURLWithPath: projectRoot)
                 .appendingPathComponent(String(value.dropFirst()))
                 .standardizedFileURL
         }
-        return URL(string: value, relativeTo: index)?.standardizedFileURL
+        guard let url = URL(string: value, relativeTo: index), url.isFileURL else { return nil }
+        return url.standardizedFileURL
+    }
+
+    nonisolated static func localIconData(for activity: LocalPortActivity) -> Data? {
+        for url in localIconURLs(for: activity) {
+            if let data = try? Data(contentsOf: url), !data.isEmpty {
+                return data
+            }
+        }
+        return nil
     }
 
     private static func thumbnail(_ source: NSImage, pointSize: CGFloat) -> NSImage {
@@ -135,7 +149,7 @@ actor LocalPortFaviconFetcher {
               let host = url.host,
               LocalPortURLResolver.isLoopback(host) else { return nil }
 
-        let key = "\(activity.process.pid):\(activity.process.rawElapsedTime ?? "unknown"):\(activity.listener.port)"
+        let key = "\(activity.process.pid):\(activity.process.startTime ?? activity.process.rawElapsedTime ?? "unknown"):\(activity.listener.port)"
         if let cached = cache[key] { return cached }
         await acquire()
         defer { release() }
@@ -219,8 +233,15 @@ struct LocalPortIconView: View {
         }
         .frame(width: 30, height: 30)
         .task(id: activity.id) {
-            if let local = LocalPortIconResolver.image(for: activity) {
+            if let local = LocalPortIconResolver.applicationImage(for: activity) {
                 image = local
+                return
+            }
+            let localData = await Task.detached(priority: .utility) {
+                LocalPortIconResolver.localIconData(for: activity)
+            }.value
+            if let localData, let localImage = NSImage(data: localData) {
+                image = LocalPortIconResolver.image(from: localImage)
                 return
             }
             guard let data = await LocalPortFaviconFetcher.shared.fetch(for: activity),
