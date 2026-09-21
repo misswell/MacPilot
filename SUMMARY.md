@@ -1571,3 +1571,45 @@ Local Ports 是 MacPilot 的独立功能页，不增加第二个 `MenuBarExtra`�
 ### 来源与验证
 
 核心迁移自 [LeftOpen](https://github.com/SonghaiFan/leftopen)，基准 commit 为 `2fde101440583f95c86c7408c63b77d73aaa5ea0`，归因与 MIT License 见 `THIRD_PARTY_NOTICES.md`。`MacPilotLocalPortsCoreTests` 覆盖监听解析、地址范围、项目/包/服务推断、PID 复用与关闭安全验证；`LocalPortsModelTests` 覆盖页面生命周期与旧扫描结果丢弃。
+
+## 六十、贴图与框选工具栏彻底分家：图片优先的浮层（v1.1.389）
+
+用户提「截图贴图在样式上要和 snapzy 风格不一致，优化一下，特别是贴图，更现代一些」。第五十六节把两条浮层并成一份 `CaptureChromeStyle`，方向当时是对的（工具栏去靠贴图），但把它当成**唯一**的视觉语言就过头了：贴图不是工具，它是一张钉在桌面上的图片。结果就是图片被三层东西压着——顶部一条常驻滑条、底部一块拖拽把手、锁定态整张图 18% 透明。这几种都是「卡片语言」套在图片上的产物。
+
+这次把耦合反向解开：贴图有自己的一份 token（`PinnedScreenshotChromeStyle`），`CaptureChromeStyle` 退回成只服务框选工具栏。
+
+### 贴图侧改了什么
+
+1. **右上角三枚圆 chip 合成一枚 Glass Control Island**：锁定 / 拖出文件 / 关闭挤在同一条胶囊里，`lock.open`、`arrow.up.forward.app`、`xmark`，字形 11.5pt medium，间距 2。按钮**不再各自画圆底、描边、阴影**——底、边、影是岛的一层，命中区仍是 28×28。
+2. **真的用 Liquid Glass**：`glassEffect(.regular.interactive(), in: ConcentricRectangle())`，macOS 26 以下退到 `RoundedRectangle(11, .continuous)` + `.regularMaterial` + 1pt `separatorColor` 描边 + 0.10/5 阴影。`Package.swift` 仍是 `.macOS(.v14)`，没有为了新 API 抬部署目标。
+3. **同心圆角不是把半径调大**：`ConcentricRectangle` 只是个 `Shape`，它的半径要从祖先的 `containerShape` 反推。root 上是 `.containerShape(RoundedRectangle(cornerRadius: NSWindow.defaultCornerRadius, style: .continuous))`，岛离边 8pt，于是岛的外缘曲率和贴图外框内缩 8pt 后的曲率一致。**探针实测：没有 `containerShape` 时 `ConcentricRectangle().path(in:)` 只有 5 个元素（一条直角矩形），有 containerShape 时是 4 弧 4 线**——这个 shape 静默退化成直角矩形是没有任何编译期提示的，所以这条必须留在注释和验证记录里。
+4. **删掉锁定的 18% 透明**（`pinOpacity`）。图片永远满不透明；锁上的表达改成「chrome 收起来、只留解锁热区里那一枚 `lock.fill`」，而不是把内容弄淡。
+5. **顶部常驻滑条换成底部 `− 100% +` HUD**（108×30，步进 ±10%，点百分比回 100%）。只在滚轮/捏合/指针停在底部 200×56 区域时出现，约 1 秒后淡出。模型侧 API 不动（`minimumZoomFactor` / `maximumZoomFactor` / `setZoomFactor` / `applyZoomStep`），删的是 `zoomScrubRange`、`zoomScrubWidth`、`zoomScrubIdealWidth`、`chromeReservedWidth` 这一整串为「胶囊必须定宽」而存在的几何——第五十五节那条不变量随滑条一起作废了。
+6. **拖拽把手的 UI 删掉，逻辑一行没动**：`QuickAccessPinDragHandleNSView` 与它的 `NSDraggingSession` 原样保留，只是入口挪进岛里（`dragControl(fileURL:)` 用 `.overlay` 盖一层符号、`allowsHitTesting(false)`，把手本身仍是透明命中层）。
+7. **图片满幅**：去掉 `Color.black.opacity(0.03)` 打底，只留一条随外观翻转的 1pt 白色发丝边（浅色 0.18 / 深色 0.12），窗口阴影交给 panel 自己。hover 动画 140ms，只动透明度，`.scaleEffect(1.015)` 删了。
+8. 文本贴图不再为一条不存在的工具栏预留 `chromeBand = 40`，改成上 14 / 左右 16 / 下 16。
+
+### 一处实现选择：HUD 的「最近交互」计时器放在模型
+
+`isZoomInteractionLive` 需要一个 1 秒后自动熄灭的一次性 `Timer`。放在 `View` 结构体里要么挂 `onAppear`（贴图窗口是复用的，不保证重新出现），要么每次 body 重算都重建。最后落到 `@MainActor` 的 `QuickAccessPinWindowState` 里，`markZoomInteraction()` 统一在 `updateZoomFactor` / `setZoomFactor` 两条路径上续期，视图只读一个 `@Published` 布尔。顺带复用仓库里既有的 `Timer` + `MainActor.assumeIsolated` 写法，避开 Swift 6 在 View 里闭包捕获的 Sendable 问题。
+
+### 解锁热区从写死数字变成 token
+
+锁定态贴图是 `ignoresMouseEvents = true` 的，只有右上角 48×48 例外（鼠标进去才临时接管事件）。这个 48 原先散在 `QuickAccessPinWindow` 里，现在收进 `PinnedScreenshotChromeStyle.lockHotspotSide`，并且 `isPointerInLockHotspot` 提升为模型上的 `@Published`，视图据此决定画不画那枚 `lock.fill`。**赋值加了「只在真的变化时写」**：这段代码跑在每个 mouse-moved 上，无脑写 `@Published` 会让整棵视图树跟着重算。
+
+### 解耦要能被机器守住，不能只靠「数字刚好不一样」
+
+`SnapzyCaptureTests` 里删掉了 `selectionBarChipsAreThePinWindowsChips` 那条耦合断言（它守的正是这次要拆的东西），换成三条：
+- `selectionBarChipsComeFromCaptureChromeStyle`：工具栏仍按自己的 token 出 28×28 chip；
+- `pinControlsAreSizedByThePinStyleNotTheToolbar`：贴图侧的 `chromeButtonSide` / `chromeInset` 来自 `PinnedScreenshotChromeStyle`；
+- `pinnedSurfaceNeverDrawsFromTheCaptureToolbarPalette`：**扫 `Sources/MacPilot/SnapzyQuickAccess` 全部源文件**（剔除注释行），断言没有一处引用 `CaptureChromeStyle`。目录被搬走时先 `#expect(!sources.isEmpty)`，避免扫描退化成空跑。
+
+缩放测试从三条滑条用例改成 `zoomHUDBecomesVisibleWhileZooming` / `zoomHUDHidesWhenIdle` / `zoomStepNeverEscapesReachableScale`，`zoomOnlyOffersReachableScales` 保留但改成断言模型区间（40 / 131）而不是滑条区间。
+
+`CaptureChromeStyle` 顺手清掉因贴图迁走而失去消费者的 `chipFill`、`cardFillEmphasized`、`cardStrokeEmphasized`、`emphasizedShadowRadius`、`emphasizedShadowOpacity`（先 grep 确认 0 引用），文件头那段「两种家族」的说明改成只讲工具栏，并明写贴图归 `PinnedScreenshotChromeStyle`。
+
+### 验证
+
+- 离屏渲染（`cacheDisplay`，窗口摆在 (-30000, -30000)，不在用户桌面上出现）静息 / hover / HUD / 锁定穿透 / 解锁热区五态 × 浅深色：岛在右上角、`− 110% +` 在底部居中、热区里出现 `lock.fill`、图片满幅 r24。
+- **局限要说清楚**：`cacheDisplay` 抓不到 backdrop filter，`screencapture` 在这个 shell 里被 Screen Recording 权限挡住（`could not create image from display`）。所以 Liquid Glass 的**实际观感没有逐像素验证过**，验证的是它的几何（同心路径元素数）与 fallback 分支能编译能布局。
+- `swift build -c release -Xswiftc -warnings-as-errors`（`--scratch-path` 全新目录，无缓存，与 CI 同一条命令）+ `swift test` 804 条：失败只有 `heartbeatFailureTriggersABoundedReconnect`、`startupShortcutRegistrationRetriesTransientFailure`（单独跑全绿，并行计时抖动）与 `recapturingAHiddenSourceRestoresItsExistingPipSession`（需要真实窗口环境，HEAD 上同样失败）。`QuickAccessTests` + `SnapzyCaptureTests` 58 条全绿。

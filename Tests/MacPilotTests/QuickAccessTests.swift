@@ -106,25 +106,58 @@ struct QuickAccessTests {
             != AppText.value("scOCRNoText", language: .english))
     }
 
-    @Test func zoomScrubKeepsPinChromeVisibleWhenTheDragOvershoots() {
-        #expect(QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: false, zoomScrubbing: true))
-        #expect(QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: true, zoomScrubbing: false))
-        #expect(!QuickAccessPinWindowChromeVisibility.isVisible(mouseInside: false, zoomScrubbing: false))
+    @Test @MainActor func zoomHUDBecomesVisibleWhileZooming() {
+        // 滚轮、pinch 和 HUD 自己的 +/− 最后都落在缩放值上，
+        // 所以「刚刚缩放过」就是 HUD 出现的信号。
+        let state = Self.makeZoomablePinState()
+        #expect(!state.isZoomInteractionLive)
+
+        _ = state.applyZoomStep(PinnedScreenshotChromeStyle.zoomHUDStep)
+        #expect(state.isZoomInteractionLive)
+        #expect(QuickAccessPinZoomHUDPolicy.isVisible(pointerInZone: false, interactionIsLive: true))
+
+        // 指针探到图片底部中央，也是把它留下来的正当理由。
+        let zone = QuickAccessPinZoomHUDPolicy.zone(in: CGSize(width: 900, height: 600))
+        #expect(zone.contains(CGPoint(x: 450, y: 588)))
+        #expect(QuickAccessPinZoomHUDPolicy.isVisible(pointerInZone: true, interactionIsLive: false))
     }
 
-    @Test @MainActor func zoomScrubOnlyOffersReachableScales() {
-        // 1000x700 on a 1440x920 stage: the screen fit caps the top at 131%,
-        // the interactive floor leaves the 40% bottom intact.
-        let image = NSImage(size: NSSize(width: 1_000, height: 700))
-        let state = QuickAccessPinWindowState(
+    @Test func zoomHUDHidesWhenIdle() {
+        // 静止下来的贴图必须只是一张图：HUD 是缩放期间的读数，不是常驻控件。
+        #expect(!QuickAccessPinZoomHUDPolicy.isVisible(pointerInZone: false, interactionIsLive: false))
+
+        let zone = QuickAccessPinZoomHUDPolicy.zone(in: CGSize(width: 900, height: 600))
+        #expect(!zone.contains(CGPoint(x: 20, y: 20)))
+        #expect(!zone.contains(CGPoint(x: 20, y: 588)))
+        #expect(zone.maxY == 600)
+        // 读数只在底部一小条里等着，不会盖住画面中间。
+        #expect(zone.height <= 600 * 0.1)
+
+        // 它自己会走：出现后由一个有限的时间决定何时淡掉。
+        #expect(PinnedScreenshotChromeStyle.zoomHUDIdleInterval > 0)
+    }
+
+    @MainActor
+    private static func makeZoomablePinState(
+        image size: NSSize = NSSize(width: 900, height: 600)
+    ) -> QuickAccessPinWindowState {
+        let image = NSImage(size: size)
+        return QuickAccessPinWindowState(
             id: UUID(),
             url: nil,
             image: image,
             thumbnail: image,
-            baseSize: CGSize(width: 1_000, height: 700),
+            baseSize: CGSize(width: size.width, height: size.height),
             maxSize: CGSize(width: 1_440, height: 920)
         )
-        #expect(state.zoomScrubRange == 40...131)
+    }
+
+    @Test @MainActor func zoomOnlyOffersReachableScales() {
+        // 1000x700 on a 1440x920 stage: the screen fit caps the top at 131%,
+        // the interactive floor leaves the 40% bottom intact.
+        let state = Self.makeZoomablePinState(image: NSSize(width: 1_000, height: 700))
+        #expect(Int((state.minimumZoomFactor * 100).rounded()) == 40)
+        #expect(Int((state.maximumZoomFactor * 100).rounded(.down)) == 131)
 
         for percent in [40, 100, 131] {
             let size = state.setZoomPercent(percent)
@@ -133,20 +166,35 @@ struct QuickAccessTests {
         }
 
         // Shrinking the stage below the current scale pulls the ceiling in but
-        // never drops the value the scrubber is showing.
+        // never drops the value the HUD is showing.
         _ = state.updateSizing(baseSize: CGSize(width: 1_000, height: 700), maxSize: CGSize(width: 1_010, height: 707))
-        #expect(state.zoomScrubRange.contains(state.zoomPercent))
-        #expect(state.zoomScrubRange.lowerBound <= state.zoomScrubRange.upperBound)
+        #expect(state.zoomFactor >= state.minimumZoomFactor)
+        #expect(state.zoomFactor <= state.maximumZoomFactor)
     }
 
-    @Test func zoomScrubStaysPutWhileTheWindowScales() {
-        // Only the narrowest pins give up width; past that the capsule keeps a
-        // constant width, which is what holds the thumb under the cursor.
-        #expect(QuickAccessPinWindowSizing.zoomScrubWidth(for: 800) == QuickAccessPinWindowSizing.zoomScrubIdealWidth)
-        #expect(QuickAccessPinWindowSizing.zoomScrubWidth(for: 1_440) == QuickAccessPinWindowSizing.zoomScrubIdealWidth)
-        let narrowest = QuickAccessPinWindowSizing.minimumInteractiveSize.width
-        #expect(QuickAccessPinWindowSizing.zoomScrubWidth(for: narrowest) == narrowest - QuickAccessPinWindowSizing.chromeReservedWidth)
-        #expect(QuickAccessPinWindowSizing.zoomScrubWidth(for: narrowest) < QuickAccessPinWindowSizing.zoomScrubIdealWidth)
+    @Test @MainActor func zoomStepNeverEscapesReachableScale() {
+        // +/− 每次 10%，一路按到底也不能越过可达范围：缩到底还能停住，
+        // 放到头也不会越过屏幕能装下的那个比例。
+        let state = Self.makeZoomablePinState(image: NSSize(width: 1_000, height: 700))
+        let step = PinnedScreenshotChromeStyle.zoomHUDStep
+
+        for _ in 0..<40 { _ = state.applyZoomStep(-step) }
+        #expect(state.zoomFactor == state.minimumZoomFactor)
+        #expect(state.zoomPercent == 40)
+
+        for _ in 0..<60 { _ = state.applyZoomStep(step) }
+        #expect(state.zoomFactor == state.maximumZoomFactor)
+        #expect(state.zoomPercent == 131)
+        #expect(state.displaySize.width <= 1_440 + 0.5)
+        #expect(state.displaySize.height <= 920 + 0.5)
+    }
+
+    @Test @MainActor func pinChromeFollowsThePointerAndSurvivesTheDrag() {
+        // 控制岛是 hover 才出现的 affordance；拖文件时窗口被藏起来、指针状态
+        // 停在拖走的那一刻，岛不能从光标底下消失。
+        #expect(QuickAccessPinChromeVisibility.isVisible(mouseInside: true, isDraggingFile: false))
+        #expect(QuickAccessPinChromeVisibility.isVisible(mouseInside: false, isDraggingFile: true))
+        #expect(!QuickAccessPinChromeVisibility.isVisible(mouseInside: false, isDraggingFile: false))
     }
 
     @Test func toastPathDetailKeepsTheFileNameAndAbbreviatesHome() {

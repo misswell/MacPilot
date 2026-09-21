@@ -432,7 +432,46 @@ struct SnapzyCaptureTests {
         ].map { Int(($0 * 1_000).rounded()) }
     }
 
-    @Test @MainActor func selectionBarChipsAreThePinWindowsChips() throws {
+    /// Every Swift file that draws the pinned-screenshot surface, with comment
+    /// lines stripped.  A pin may *talk about* the capture palette in a doc
+    /// comment; what must not happen is it reading its geometry or colours from
+    /// it, because then retuning the toolbar retunes the pin.
+    private var pinSurfaceSources: [(file: String, code: String)] {
+        get throws {
+            let root = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()  // Tests/MacPilotTests
+                .deletingLastPathComponent()  // Tests
+                .deletingLastPathComponent()  // repository root
+                .appendingPathComponent("Sources/MacPilot/SnapzyQuickAccess")
+            let walker = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+            let files = (walker?.compactMap { $0 as? URL } ?? []).filter { $0.pathExtension == "swift" }
+            return try files.map { url in
+                let code = try String(contentsOf: url, encoding: .utf8)
+                    .components(separatedBy: "\n")
+                    .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                    .joined(separator: "\n")
+                return (url.lastPathComponent, code)
+            }
+        }
+    }
+
+    @Test func pinnedSurfaceNeverDrawsFromTheCaptureToolbarPalette() throws {
+        let sources = try pinSurfaceSources
+        // 目录被搬走时扫描不能变成空跑。
+        #expect(!sources.isEmpty)
+        for source in sources {
+            #expect(
+                !source.code.contains("CaptureChromeStyle"),
+                "\(source.file) still styles itself from the capture toolbar"
+            )
+        }
+    }
+
+    @Test @MainActor func selectionBarChipsComeFromCaptureChromeStyle() throws {
         _ = NSApplication.shared
         let bar = AreaSelectionActionBar { _ in }
         // Two passes: the bar declares its size from the rows' fitting size,
@@ -442,8 +481,7 @@ struct SnapzyCaptureTests {
         bar.frame = NSRect(origin: .zero, size: bar.intrinsicContentSize)
         bar.layoutSubtreeIfNeeded()
 
-        // 贴图窗口角上的圆形按钮和这条工具栏共用同一份 token。
-        #expect(QuickAccessPinWindowSizing.chromeButtonSide == CaptureChromeStyle.chipSide)
+        // 工具栏的每个圆 chip 都按同一份 token 长出来，不是各自写死的数字。
         #expect(bar.chipButtons.count >= 10)
         for chip in bar.chipButtons {
             #expect(chip.frame.width == CaptureChromeStyle.chipSide)
@@ -451,6 +489,17 @@ struct SnapzyCaptureTests {
             #expect(chip.layer?.cornerRadius == CaptureChromeStyle.chipCornerRadius)
         }
         #expect(bar.layer?.cornerRadius == CaptureChromeStyle.cardCornerRadius)
+    }
+
+    @Test func pinControlsAreSizedByThePinStyleNotTheToolbar() {
+        // 贴图的控制岛属于贴图自己那套语言：hit area、离图边的距离、玻璃高度
+        // 都由 PinnedScreenshotChromeStyle 决定。数值偶然相同不算解耦，
+        // 「不引用 CaptureChromeStyle」由上面的源码扫描把守。
+        #expect(QuickAccessPinWindowSizing.chromeButtonSide == PinnedScreenshotChromeStyle.controlSide)
+        #expect(QuickAccessPinWindowSizing.chromeInset == PinnedScreenshotChromeStyle.outerInset)
+        #expect(PinnedScreenshotChromeStyle.controlHeight > PinnedScreenshotChromeStyle.controlSide)
+        // 锁定后唯一可点的热点比画出来的控件大一圈：目标要好找，视觉要小。
+        #expect(PinnedScreenshotChromeStyle.lockHotspotSide > PinnedScreenshotChromeStyle.controlHeight)
     }
 
     @Test @MainActor func selectionBarCardFollowsTheAppearanceInsteadOfBeingPaintedBlack() throws {
@@ -1250,7 +1299,7 @@ struct SnapzyCaptureTests {
         #expect(short.width >= QuickAccessPinTextMetrics.minimumSize.width)
         #expect(short.height >= QuickAccessPinTextMetrics.minimumSize.height)
         #expect(long.height > short.height)
-        #expect(long.width <= QuickAccessPinTextMetrics.maximumTextWidth + QuickAccessPinTextMetrics.padding * 2 + 1)
+        #expect(long.width <= QuickAccessPinTextMetrics.maximumTextWidth + QuickAccessPinTextMetrics.horizontalPadding * 2 + 1)
 
         let state = QuickAccessPinWindowState(id: UUID(), text: "hi", baseSize: short)
         #expect(state.isText)

@@ -15,21 +15,11 @@ enum QuickAccessPinWindowSizing {
   private static let screenMaxRatio: CGFloat = 0.78
   private static let screenMargin: CGFloat = 24
 
-  static let zoomScrubIdealWidth: CGFloat = 176
-  static let chromeInset: CGFloat = 12
-  /// The pin's corner buttons are the same chips as the selection toolbar's
-  /// tool buttons; one token defines both.
-  static var chromeButtonSide: CGFloat { CaptureChromeStyle.chipSide }
-
-  /// Close and lock buttons plus their insets on both edges of the chrome row.
-  static let chromeReservedWidth: CGFloat = 2 * (chromeInset + chromeButtonSide + 4)
-
-  /// Width of the top-centre zoom scrubber. It only gives up width on the
-  /// narrowest pins so it never slides under the corner buttons, and it stays
-  /// constant while scaling so the thumb does not shift under the cursor.
-  static func zoomScrubWidth(for windowWidth: CGFloat) -> CGFloat {
-    min(zoomScrubIdealWidth, windowWidth - chromeReservedWidth)
-  }
+  /// Distance from the image edge to the pin's chrome, and the hit side of one
+  /// control.  Both come from the pin's own visual language, not from the
+  /// capture toolbar's chips.
+  static let chromeInset: CGFloat = PinnedScreenshotChromeStyle.outerInset
+  static let chromeButtonSide: CGFloat = PinnedScreenshotChromeStyle.controlSide
 
   static func sizes(for imageSize: CGSize, on screen: NSScreen) -> (base: CGSize, max: CGSize) {
     sizes(for: imageSize, visibleSize: screen.visibleFrame.size)

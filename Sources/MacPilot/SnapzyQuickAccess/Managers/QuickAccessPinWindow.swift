@@ -84,6 +84,9 @@ final class QuickAccessPinWindow: NSPanel {
     pinState.isMouseInside = isInside
 
     guard pinState.isLocked else {
+      if pinState.isPointerInLockHotspot {
+        pinState.isPointerInLockHotspot = false
+      }
       ignoresMouseEvents = false
       if isInside {
         if !isKeyWindow {
@@ -99,7 +102,13 @@ final class QuickAccessPinWindow: NSPanel {
       return
     }
 
-    ignoresMouseEvents = isInside && !lockButtonScreenRect.contains(mouseLocation)
+    let isInsideLockHotspot = lockHotspotScreenRect.contains(mouseLocation)
+    // Assigned only when it actually changes: this runs on every mouse-move,
+    // and a published write would redraw the pin for no visible reason.
+    if pinState.isPointerInLockHotspot != isInsideLockHotspot {
+      pinState.isPointerInLockHotspot = isInsideLockHotspot
+    }
+    ignoresMouseEvents = isInside && !isInsideLockHotspot
   }
 
   private func configure() {
@@ -117,8 +126,12 @@ final class QuickAccessPinWindow: NSPanel {
     becomesKeyOnlyIfNeeded = false
   }
 
-  private var lockButtonScreenRect: NSRect {
-    NSRect(x: frame.maxX - 48, y: frame.maxY - 48, width: 48, height: 48)
+  /// The one square of a locked pin that still takes the mouse.  It is larger
+  /// than the unlock control drawn inside it so the control is reachable by
+  /// feel; the token keeps this and the drawn chrome in agreement.
+  private var lockHotspotScreenRect: NSRect {
+    let side = PinnedScreenshotChromeStyle.lockHotspotSide
+    return NSRect(x: frame.maxX - side, y: frame.maxY - side, width: side, height: side)
   }
 
   private func installMouseMonitors() {

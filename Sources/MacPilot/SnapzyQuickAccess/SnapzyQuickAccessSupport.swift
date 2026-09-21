@@ -231,6 +231,8 @@ extension L10n {
         static let unlockPinnedWindow = "解锁固定窗口"
         static let lockPinnedWindow = "锁定固定窗口"
         static let zoomPinnedWindow = "缩放固定窗口"
+        static let zoomInPinnedWindow = "放大"
+        static let zoomOutPinnedWindow = "缩小"
         static let fitPinnedWindow = "适合窗口"
     }
 

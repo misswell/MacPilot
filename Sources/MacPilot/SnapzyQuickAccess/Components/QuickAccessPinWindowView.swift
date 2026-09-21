@@ -18,30 +18,43 @@ struct QuickAccessPinWindowView: View {
   let onLockChanged: () -> Void
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var isZoomScrubbing = false
-  @State private var isZoomHovering = false
-  @State private var isDragHovering = false
-  @State private var isDragActive = false
+  @Environment(\.colorScheme) private var colorScheme
+  @State private var isFileDragActive = false
+  @State private var isPointerInZoomHUDZone = false
 
   private let cornerRadius = NSWindow.defaultCornerRadius
-  private let dragHandleCornerRadius = CaptureChromeStyle.cardCornerRadius
-  private let controlInset = QuickAccessPinWindowSizing.chromeInset
 
   var body: some View {
     ZStack {
       dragSurface
       content
         .allowsHitTesting(false)
-      chromeLayer
+
+      if state.isLocked {
+        lockedChrome
+      } else {
+        unlockedChrome
+        zoomHUD
+      }
     }
     .frame(width: state.displaySize.width, height: state.displaySize.height)
+    .pinContainerShape()
     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        .stroke(Color.white.opacity(0.22), lineWidth: 1)
-    )
+    .overlay(pinBorder)
     .background(Color.clear)
+    .onContinuousHover { phase in
+      switch phase {
+      case .active(let location):
+        isPointerInZoomHUDZone = QuickAccessPinZoomHUDPolicy
+          .zone(in: state.displaySize)
+          .contains(location)
+      case .ended:
+        isPointerInZoomHUDZone = false
+      }
+    }
   }
+
+  // MARK: - Image and text surface
 
   private var dragSurface: some View {
     QuickAccessPinWindowDragView(
@@ -65,16 +78,15 @@ struct QuickAccessPinWindowView: View {
     }
   }
 
+  /// Full bleed.  The panel already carries the window shadow, and the sizing
+  /// policy keeps this frame on the image's own aspect ratio, so there is no
+  /// letterbox to paint a backing colour for.
   private func screenshotImage(_ image: NSImage) -> some View {
     Image(nsImage: image)
       .resizable()
       .aspectRatio(contentMode: .fit)
       .frame(width: state.displaySize.width, height: state.displaySize.height)
-      .background(Color.black.opacity(0.03))
       .clipped()
-      .opacity(pinOpacity)
-      .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: state.isMouseInside)
-      .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: state.isLocked)
   }
 
   /// Clipboard-text pins render as a readable card: the text bubble the old
@@ -86,237 +98,292 @@ struct QuickAccessPinWindowView: View {
       .multilineTextAlignment(.leading)
       .lineLimit(nil)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      .padding(.horizontal, QuickAccessPinTextMetrics.padding)
-      .padding(.top, QuickAccessPinTextMetrics.chromeBand)
-      .padding(.bottom, QuickAccessPinTextMetrics.padding)
+      .padding(.horizontal, QuickAccessPinTextMetrics.horizontalPadding)
+      .padding(.top, QuickAccessPinTextMetrics.topPadding)
+      .padding(.bottom, QuickAccessPinTextMetrics.bottomPadding)
       .background(Color(nsColor: .textBackgroundColor).opacity(0.97))
-      .opacity(pinOpacity)
-      .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: state.isMouseInside)
-      .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: state.isLocked)
   }
 
-  private var pinOpacity: Double {
-    state.isLocked && state.isMouseInside ? 0.18 : 1
+  private var pinBorder: some View {
+    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+      .stroke(Color.white.opacity(PinnedScreenshotChromeStyle.borderOpacity(for: colorScheme)), lineWidth: 1)
   }
 
-  private var chromeLayer: some View {
-    ZStack {
-      unlockedControls
-        .opacity(state.isLocked ? 0 : 1)
-        .allowsHitTesting(!state.isLocked)
+  // MARK: - Unlocked chrome
 
-      lockButton
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        .padding(controlInset)
+  /// Hover reveals one glass island in the trailing top corner.  A pin at rest
+  /// is a picture with nothing on it.
+  private var unlockedChrome: some View {
+    VStack {
+      HStack {
+        Spacer(minLength: 0)
+        controlIsland
+      }
+      Spacer(minLength: 0)
     }
+    .padding(PinnedScreenshotChromeStyle.outerInset)
     .opacity(isChromeVisible ? 1 : 0)
     .allowsHitTesting(isChromeVisible)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isChromeVisible)
+    .animation(chromeAnimation, value: isChromeVisible)
   }
 
+  /// A file drag orders the window out and runs its own event loop, so the
+  /// pointer state is stale by the time the window comes back.  Holding the
+  /// island up for the duration keeps the control the drag started from — the
+  /// island itself — from disappearing under the cursor.
   private var isChromeVisible: Bool {
-    QuickAccessPinWindowChromeVisibility.isVisible(
-      mouseInside: state.isMouseInside,
-      zoomScrubbing: isZoomScrubbing
-    )
+    QuickAccessPinChromeVisibility.isVisible(mouseInside: state.isMouseInside, isDraggingFile: isFileDragActive)
   }
 
-  private var unlockedControls: some View {
-    ZStack {
-      chromeButton(systemName: "xmark", help: L10n.PreferencesQuickAccess.unpinAction, action: onClose)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(controlInset)
-
-      if state.supportsZoom {
-        zoomScrub
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-          .padding(.top, controlInset)
-      }
+  private var controlIsland: some View {
+    HStack(spacing: PinnedScreenshotChromeStyle.controlSpacing) {
+      control(
+        systemName: "lock.open",
+        help: L10n.QuickAccess.lockPinnedWindow,
+        action: toggleLock
+      )
 
       if let fileURL = state.url {
-        dragHandle(fileURL: fileURL)
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-          .padding(.bottom, controlInset)
+        dragControl(fileURL: fileURL)
+      }
+
+      control(systemName: "xmark", help: L10n.PreferencesQuickAccess.unpinAction, action: onClose)
+    }
+    .modifier(PinGlassIsland())
+  }
+
+  private func control(systemName: String, help: String, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Image(systemName: systemName)
+        .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: .medium))
+        .foregroundStyle(Color(nsColor: PinnedScreenshotChromeStyle.glyph))
+        .frame(width: PinnedScreenshotChromeStyle.controlSide, height: PinnedScreenshotChromeStyle.controlSide)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(help)
+    .accessibilityLabel(help)
+  }
+
+  /// The drag-out entry point.  The glyph is drawn over the drag view, which is
+  /// the same `NSView` that has always started the `NSDraggingSession` — only
+  /// its position changed, from a handle under the image to this control.
+  private func dragControl(fileURL: URL) -> some View {
+    QuickAccessPinDragHandleView(
+      fileURL: fileURL,
+      image: state.image ?? state.thumbnail ?? NSImage(),
+      thumbnail: state.thumbnail ?? state.image ?? NSImage(),
+      onDragStateChanged: { isFileDragActive = $0 }
+    )
+    .frame(width: PinnedScreenshotChromeStyle.controlSide, height: PinnedScreenshotChromeStyle.controlSide)
+    .overlay {
+      Image(systemName: "arrow.up.forward.app")
+        .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: .medium))
+        .foregroundStyle(Color(nsColor: PinnedScreenshotChromeStyle.glyph))
+        .allowsHitTesting(false)
+    }
+    .help(L10n.AnnotateUI.dragToAppHelp)
+    .accessibilityLabel(L10n.AnnotateUI.dragToAppHelp)
+  }
+
+  // MARK: - Locked chrome
+
+  /// Locked means the image lets the mouse through everywhere except the
+  /// hotspot, so this state has its own single-control chrome rather than the
+  /// unlocked island at a different opacity.  The image itself never fades.
+  private var lockedChrome: some View {
+    ZStack(alignment: .topTrailing) {
+      Color.clear
+      if state.isPointerInLockHotspot {
+        control(
+          systemName: "lock.fill",
+          help: L10n.QuickAccess.unlockPinnedWindow,
+          action: toggleLock
+        )
+        .modifier(PinGlassIsland())
       }
     }
+    .padding(PinnedScreenshotChromeStyle.outerInset)
   }
 
-  private var lockButton: some View {
-    chromeButton(
-      systemName: state.isLocked ? "lock.fill" : "lock.open",
-      help: state.isLocked ? L10n.QuickAccess.unlockPinnedWindow : L10n.QuickAccess.lockPinnedWindow
-    ) {
-      state.isLocked.toggle()
-      onLockChanged()
-    }
+  private func toggleLock() {
+    state.isLocked.toggle()
+    onLockChanged()
   }
 
-  private var zoomScrub: some View {
-    HStack(spacing: 7) {
-      Text("\(state.zoomPercent)%")
-        .font(.system(size: 12, weight: .semibold))
-        .monospacedDigit()
-        .foregroundStyle(.white)
-        .frame(width: 40, alignment: .trailing)
+  // MARK: - Zoom HUD
 
-      Slider(
-        value: zoomScrubValue,
-        in: zoomScrubRange,
-        onEditingChanged: { isScrubbing in
-          isZoomScrubbing = isScrubbing
+  /// Not a permanent control row: it comes up while the image is actually being
+  /// scaled, or when the pointer goes looking for it at the bottom centre.
+  private var zoomHUD: some View {
+    Group {
+      if showsZoomHUD {
+        HStack(spacing: 0) {
+          hudControl(systemName: "minus", help: L10n.QuickAccess.zoomOutPinnedWindow) {
+            stepZoom(-PinnedScreenshotChromeStyle.zoomHUDStep)
+          }
+
+          Button(action: resetZoom) {
+            Text("\(state.zoomPercent)%")
+              .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: .medium))
+              .monospacedDigit()
+              .foregroundStyle(Color(nsColor: PinnedScreenshotChromeStyle.glyph))
+              .frame(height: PinnedScreenshotChromeStyle.controlSide)
+              .frame(minWidth: 40)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .help(L10n.QuickAccess.fitPinnedWindow)
+          .accessibilityLabel(L10n.QuickAccess.zoomPinnedWindow)
+
+          hudControl(systemName: "plus", help: L10n.QuickAccess.zoomInPinnedWindow) {
+            stepZoom(PinnedScreenshotChromeStyle.zoomHUDStep)
+          }
         }
-      )
-      .controlSize(.mini)
-      .frame(maxWidth: .infinity)
-      .accessibilityLabel(L10n.QuickAccess.zoomPinnedWindow)
-
-      Button(action: resetZoom) {
-        Image(systemName: "arrow.down.right.and.arrow.up.left")
-          .font(.system(size: 10, weight: .semibold))
-          .foregroundStyle(.white)
-          .frame(width: 14, height: 20)
-          .contentShape(Rectangle())
+        .frame(width: PinnedScreenshotChromeStyle.zoomHUDWidth, height: PinnedScreenshotChromeStyle.zoomHUDHeight)
+        .modifier(PinGlassSurface())
+        .accessibilityElement(children: .contain)
+        .transition(.opacity)
       }
-      .buttonStyle(.plain)
-      .help(L10n.QuickAccess.fitPinnedWindow)
     }
-    .padding(.horizontal, 11)
-    .frame(width: QuickAccessPinWindowSizing.zoomScrubWidth(for: state.displaySize.width), height: QuickAccessPinWindowSizing.chromeButtonSide)
-    .background(
-      Capsule(style: .continuous)
-        .fill(Color.black.opacity(isZoomHovering || isZoomScrubbing ? 0.64 : 0.54))
-    )
-    .overlay(
-      Capsule(style: .continuous)
-        .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
-    )
-    .shadow(color: Color.black.opacity(0.2), radius: 5, x: 0, y: 2)
-    .onHover { isZoomHovering = $0 }
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isZoomHovering)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isZoomScrubbing)
-    .help(L10n.QuickAccess.zoomPinnedWindow)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+    .padding(.bottom, PinnedScreenshotChromeStyle.outerInset)
+    .allowsHitTesting(showsZoomHUD)
+    .animation(chromeAnimation, value: showsZoomHUD)
   }
 
-  private var zoomScrubValue: Binding<Double> {
-    Binding(
-      get: { Double(state.zoomPercent) },
-      // Whole percent is snapped here, not with Slider's `step:`: a stepped
-      // slider draws a tick-mark row under the track.
-      set: { percent in onZoomSizeChange(state.setZoomPercent(Int(percent.rounded())), false) }
-    )
+  private var showsZoomHUD: Bool {
+    state.supportsZoom
+      && !state.isLocked
+      && QuickAccessPinZoomHUDPolicy.isVisible(
+        pointerInZone: isPointerInZoomHUDZone,
+        interactionIsLive: state.isZoomInteractionLive
+      )
   }
 
-  private var zoomScrubRange: ClosedRange<Double> {
-    let bounds = state.zoomScrubRange
-    return Double(bounds.lowerBound)...Double(bounds.upperBound)
+  private func hudControl(systemName: String, help: String, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Image(systemName: systemName)
+        .font(.system(size: PinnedScreenshotChromeStyle.glyphSize, weight: .medium))
+        .foregroundStyle(Color(nsColor: PinnedScreenshotChromeStyle.glyph))
+        .frame(width: PinnedScreenshotChromeStyle.controlSide, height: PinnedScreenshotChromeStyle.controlSide)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(help)
+    .accessibilityLabel(help)
+  }
+
+  private func stepZoom(_ step: CGFloat) {
+    onZoomSizeChange(state.applyZoomStep(step), false)
   }
 
   private func resetZoom() {
     onZoomSizeChange(state.resetZoom(), true)
   }
 
-  private func dragHandle(fileURL: URL) -> some View {
-    QuickAccessPinDragHandleView(
-      fileURL: fileURL,
-      image: state.image ?? state.thumbnail ?? NSImage(),
-      thumbnail: state.thumbnail ?? state.image ?? NSImage(),
-      onDragStateChanged: { isDragActive = $0 }
-    )
-    .frame(width: 72, height: 32)
-    .overlay(
-      HStack(spacing: 8) {
-        dragGrip
-
-        Image(systemName: "doc.fill")
-          .font(.system(size: 15, weight: .semibold))
-          .frame(width: 14)
-
-        dragGrip
-      }
-      .foregroundStyle(dragForegroundColor)
-      .allowsHitTesting(false)
-    )
-    .background(dragHandleFill(isActive: isDragHovering || isDragActive))
-    .overlay(dragHandleStroke(isActive: isDragHovering || isDragActive))
-    .scaleEffect(isDragHovering || isDragActive ? 1.015 : 1)
-    .shadow(
-      color: Color(nsColor: .black).opacity(
-        isDragHovering || isDragActive
-          ? CaptureChromeStyle.emphasizedShadowOpacity
-          : CaptureChromeStyle.shadowOpacity
-      ),
-      radius: isDragHovering || isDragActive
-        ? CaptureChromeStyle.emphasizedShadowRadius
-        : CaptureChromeStyle.shadowRadius,
-      x: 0,
-      y: -CaptureChromeStyle.shadowOffset.height
-    )
-    .onHover { isDragHovering = $0 }
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isDragHovering)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isDragActive)
-    .help(L10n.AnnotateUI.dragToAppHelp)
+  private var chromeAnimation: Animation? {
+    reduceMotion ? nil : .easeInOut(duration: PinnedScreenshotChromeStyle.hoverAnimationDuration)
   }
+}
 
-  private var dragGrip: some View {
-    VStack(spacing: 3) {
-      ForEach(0..<3, id: \.self) { _ in
-        Capsule(style: .continuous)
-          .fill(Color(nsColor: CaptureChromeStyle.glyphFaint))
-          .frame(width: 7, height: 1.3)
-      }
+// MARK: - Chrome surfaces
+
+/// The island's shape comes from the pin it floats on: on Liquid Glass the
+/// control derives concentric corners from the window radius, so the inset and
+/// the curve are related instead of two unrelated numbers.  Below macOS 26
+/// there is no container shape to read, so the island keeps its own smaller
+/// radius.
+private struct PinGlassIsland: ViewModifier {
+  func body(content: Content) -> some View {
+    content
+      .padding(.horizontal, PinnedScreenshotChromeStyle.controlSpacing)
+      .frame(height: PinnedScreenshotChromeStyle.controlHeight)
+      .modifier(PinGlassSurface())
+  }
+}
+
+/// One layer of system glass for one control container.  Never applied to the
+/// individual buttons inside it: a pin gets a single island, not three chips.
+private struct PinGlassSurface: ViewModifier {
+  func body(content: Content) -> some View {
+    if #available(macOS 26.0, *) {
+      content.glassEffect(.regular.interactive(), in: ConcentricRectangle())
+    } else {
+      fallback(content)
     }
-    .frame(width: 10)
   }
 
-  private func chromeButton(systemName: String, help: String, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      Image(systemName: systemName)
-        .font(.system(size: 12, weight: .bold))
-        .foregroundStyle(Color(nsColor: CaptureChromeStyle.glyph))
-        .frame(width: QuickAccessPinWindowSizing.chromeButtonSide, height: QuickAccessPinWindowSizing.chromeButtonSide)
-        .background(
-          Circle()
-            .fill(Color(nsColor: CaptureChromeStyle.chipFill))
-        )
-        .overlay(
-          Circle()
-            .stroke(Color(nsColor: CaptureChromeStyle.chipStroke), lineWidth: 1)
-        )
-        .shadow(
-          color: Color(nsColor: .black).opacity(CaptureChromeStyle.shadowOpacity),
-          radius: CaptureChromeStyle.shadowRadius,
-          x: 0,
-          y: -CaptureChromeStyle.shadowOffset.height
-        )
-    }
-    .buttonStyle(.plain)
-    .help(help)
-  }
-
-  private var dragForegroundColor: Color {
-    Color(nsColor: isDragHovering || isDragActive
-      ? CaptureChromeStyle.glyph
-      : CaptureChromeStyle.glyphMuted)
-  }
-
-  private func dragHandleFill(isActive: Bool) -> some View {
-    RoundedRectangle(cornerRadius: dragHandleCornerRadius, style: .continuous)
-      .fill(Color(nsColor: isActive ? CaptureChromeStyle.cardFillEmphasized : CaptureChromeStyle.cardFill))
-  }
-
-  private func dragHandleStroke(isActive: Bool) -> some View {
-    RoundedRectangle(cornerRadius: dragHandleCornerRadius, style: .continuous)
-      .strokeBorder(
-        Color(nsColor: isActive ? CaptureChromeStyle.cardStrokeEmphasized : CaptureChromeStyle.cardStroke),
-        lineWidth: 1
+  private func fallback(_ content: Content) -> some View {
+    let shape = RoundedRectangle(
+      cornerRadius: PinnedScreenshotChromeStyle.legacyControlCornerRadius,
+      style: .continuous
+    )
+    return content
+      .background(shape.fill(.regularMaterial))
+      .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
+      .shadow(
+        color: Color(nsColor: .black).opacity(PinnedScreenshotChromeStyle.chromeShadowOpacity),
+        radius: PinnedScreenshotChromeStyle.chromeShadowRadius,
+        x: 0,
+        y: -PinnedScreenshotChromeStyle.chromeShadowOffset
       )
   }
 }
 
-enum QuickAccessPinWindowChromeVisibility {
-  /// The scrubber's drag can overshoot the pin, and chrome that vanishes
-  /// mid-drag would drop the value the user is aiming at.
-  static func isVisible(mouseInside: Bool, zoomScrubbing: Bool) -> Bool {
-    mouseInside || zoomScrubbing
+/// Publishes the container shape that `ConcentricRectangle` reads.  It has to
+/// be on the root, outside the chrome, because that is the surface the island
+/// is concentric *to*.
+private struct PinContainerShape: ViewModifier {
+  let cornerRadius: CGFloat
+
+  func body(content: Content) -> some View {
+    if #available(macOS 26.0, *) {
+      content.containerShape(
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+      )
+    } else {
+      content
+    }
+  }
+}
+
+private extension View {
+  func pinContainerShape() -> some View {
+    modifier(PinContainerShape(cornerRadius: NSWindow.defaultCornerRadius))
+  }
+}
+
+// MARK: - Chrome policies
+
+enum QuickAccessPinChromeVisibility {
+  /// The island is a hover affordance, so it follows the pointer into the
+  /// window.  It also has to survive a file drag, which hides the window and
+  /// stops the pointer state from updating while it runs.
+  static func isVisible(mouseInside: Bool, isDraggingFile: Bool) -> Bool {
+    mouseInside || isDraggingFile
+  }
+}
+
+/// When the bottom zoom HUD earns its space on the image.  Wheel, pinch and the
+/// HUD's own buttons all end up changing the scale, so recency of the scale is
+/// the signal; the zone gives the pointer somewhere to go for explicit control.
+enum QuickAccessPinZoomHUDPolicy {
+  static func isVisible(pointerInZone: Bool, interactionIsLive: Bool) -> Bool {
+    pointerInZone || interactionIsLive
+  }
+
+  /// The bottom-centre band that keeps the HUD up.  Wider than the HUD itself
+  /// so the pointer can reach the controls without missing them, and expressed
+  /// in the view's local space, where `y` grows downwards from the top edge.
+  static func zone(in size: CGSize) -> CGRect {
+    let width = min(PinnedScreenshotChromeStyle.zoomHUDZoneWidth, size.width)
+    let height = min(PinnedScreenshotChromeStyle.zoomHUDZoneHeight, size.height)
+    return CGRect(
+      x: (size.width - width) / 2,
+      y: size.height - height,
+      width: width,
+      height: height
+    )
   }
 }

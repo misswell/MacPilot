@@ -19,9 +19,11 @@
 //  apart by a collision solver, and three of the column's commands duplicated
 //  gestures the frame already supports.
 //
-//  Its chrome is not bespoke: the card and the round tool chips are the same
-//  `CaptureChromeStyle` vocabulary the pinned-screenshot window draws with, so
-//  the two surfaces move together whenever that palette is retuned.
+//  Its chrome is not bespoke: the card and the round tool chips are all drawn
+//  from `CaptureChromeStyle`, so the toolbar moves as one surface whenever that
+//  palette is retuned.  The pinned-screenshot window deliberately does *not*
+//  share it — a pin is a floating picture, not a tool, and carries its own
+//  `PinnedScreenshotChromeStyle`.
 //
 
 import AppKit
@@ -68,7 +70,7 @@ final class AreaSelectionActionBar: NSView {
   private var swatchButtons: [NSButton] = []
   /// Every circular tool chip the bar has built. Internal so the chrome tests
   /// can assert they come out of `CaptureChromeStyle` rather than ad-hoc
-  /// numbers that drift from the pinned-window chips.
+  /// numbers.
   var chipButtons: [NSButton] = []
   private var toolDisplayButtons: [SmartAnnotationTool: NSButton] = [:]
   private var groupMainButtons: [ToolGroup: NSButton] = [:]
@@ -409,8 +411,7 @@ final class AreaSelectionActionBar: NSView {
     )
   }
 
-  /// A circular `CaptureChromeStyle` chip — the same shape and palette the pin
-  /// window's corner buttons use.
+  /// A circular `CaptureChromeStyle` chip.
   /// A symbol drawn on a chip-sized canvas.
   ///
   /// The canvas is not decoration: an `NSButton` adds required content-size

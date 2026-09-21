@@ -22,12 +22,20 @@ final class QuickAccessPinWindowState: ObservableObject {
   @Published private(set) var text: String?
   @Published var isLocked = false
   @Published var isMouseInside = false
+  /// Whether the pointer is inside the locked pin's top-trailing hotspot.  Only
+  /// that square is clickable while the image lets the mouse through, so the
+  /// unlock control is drawn exactly there and nowhere else.
+  @Published var isPointerInLockHotspot = false
   @Published private(set) var zoomFactor: CGFloat = 1
+  /// Whether the scale moved recently enough that the zoom HUD still belongs on
+  /// the image.
+  @Published private(set) var isZoomInteractionLive = false
 
   private(set) var baseSize: CGSize
   private(set) var maxSize: CGSize
 
   private let absoluteMinimumZoomFactor: CGFloat = 0.4
+  private var zoomInteractionTimer: Timer?
 
   /// Image pins can be zoomed; a text pin has no raster to scale.
   var supportsZoom: Bool { image != nil }
@@ -63,15 +71,6 @@ final class QuickAccessPinWindowState: ObservableObject {
 
   var zoomPercent: Int {
     Int((zoomFactor * 100).rounded())
-  }
-
-  /// Scrubber bounds: both ends round inwards so every value it offers is one
-  /// the clamp can actually reach, current scale included.
-  var zoomScrubRange: ClosedRange<Int> {
-    let current = zoomPercent
-    let lower = min(current, Int((minimumZoomFactor * 100).rounded(.up)))
-    let upper = max(current, Int((maximumZoomFactor * 100).rounded(.down)))
-    return lower...upper
   }
 
   var minimumZoomFactor: CGFloat {
@@ -126,18 +125,41 @@ final class QuickAccessPinWindowState: ObservableObject {
 
   func updateZoomFactor(_ factor: CGFloat) {
     zoomFactor = clampedZoomFactor(factor)
+    markZoomInteraction()
   }
 
   @discardableResult
   private func setZoomFactor(_ factor: CGFloat) -> CGSize {
     guard supportsZoom else { return displaySize }
     zoomFactor = clampedZoomFactor(factor)
+    markZoomInteraction()
     return displaySize
   }
 
   func clampedZoomFactor(_ factor: CGFloat) -> CGFloat {
     guard supportsZoom else { return 1 }
     return min(max(factor, minimumZoomFactor), maximumZoomFactor)
+  }
+
+  /// Wheel, pinch and the HUD's own buttons all end up changing the scale, so
+  /// the scale is what the HUD listens to.  It holds for a beat after the last
+  /// change — a burst of scrolling should read as one gesture — and then gets
+  /// out of the picture.
+  private func markZoomInteraction() {
+    if !isZoomInteractionLive {
+      isZoomInteractionLive = true
+    }
+    zoomInteractionTimer?.invalidate()
+    let timer = Timer(
+      timeInterval: PinnedScreenshotChromeStyle.zoomHUDIdleInterval,
+      repeats: false
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        self?.isZoomInteractionLive = false
+      }
+    }
+    zoomInteractionTimer = timer
+    RunLoop.main.add(timer, forMode: .common)
   }
 }
 
@@ -147,10 +169,9 @@ final class QuickAccessPinWindowState: ObservableObject {
 enum QuickAccessPinTextMetrics {
   static let font = NSFont.systemFont(ofSize: 14, weight: .regular)
   static let maximumTextWidth: CGFloat = 360
-  static let padding: CGFloat = 14
-  /// Top inset reserved for the pin's close/lock chrome so a text pin never
-  /// renders its first line underneath those buttons.
-  static let chromeBand: CGFloat = 40
+  static let topPadding: CGFloat = 14
+  static let horizontalPadding: CGFloat = 16
+  static let bottomPadding: CGFloat = 16
   static let minimumSize = CGSize(width: 140, height: 78)
 
   static func baseSize(for text: String) -> CGSize {
@@ -160,8 +181,8 @@ enum QuickAccessPinTextMetrics {
       attributes: [.font: font]
     ).size
     return CGSize(
-      width: max(minimumSize.width, ceil(measured.width) + padding * 2),
-      height: max(minimumSize.height, ceil(measured.height) + padding + chromeBand)
+      width: max(minimumSize.width, ceil(measured.width) + horizontalPadding * 2),
+      height: max(minimumSize.height, ceil(measured.height) + topPadding + bottomPadding)
     )
   }
 }
