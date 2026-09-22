@@ -79,6 +79,8 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
 
     private static let imageTypes: [NSPasteboard.PasteboardType] = [.tiff, .png, .jpeg, .heic]
 
+    static let imageTypeRawValues: Set<String> = Set(imageTypes.map(\.rawValue))
+
     /// 新条目是否完全包含既有条目的内容（用于合并重复复制）。
     /// 磁盘引用（value 均为 nil）的内容退化为按 (type, size) 比较：
     /// 大小相同的文件/图片内容会被视为重复合并。
@@ -125,9 +127,16 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
         }
     }
 
+    /// 一次复制多个文件时，pasteboard 的 fileURL 数据是**一行一个 URL** 的整体，
+    /// 所以必须按行拆开；整块丢给 `URL(dataRepresentation:)` 只会得到一个把换行
+    /// 含在里面的假 URL。
     var fileURLs: [URL] {
         allContentData([.fileURL])
-            .compactMap { URL(dataRepresentation: $0, relativeTo: nil, isAbsolute: true) }
+            .flatMap { data in
+                data.split(separator: 0x0A).compactMap {
+                    URL(dataRepresentation: Data($0), relativeTo: nil, isAbsolute: true)
+                }
+            }
     }
 
     var htmlData: Data? { contentData([.html]) }
@@ -150,7 +159,10 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
 
     /// A bounded preview for the clipboard panel. The original image stays
     /// file-backed and is never decoded just to render a 20px row thumbnail.
-    var thumbnailImage: NSImage? {
+    var thumbnailImage: NSImage? { previewImage(maxPixelSize: 80) }
+
+    /// 按需解码一张有界尺寸的图片缩略图（列表行用 80，悬停详情用更大的值）。
+    func previewImage(maxPixelSize: Int) -> NSImage? {
         guard let content = contents.first(where: { content in
             Self.imageTypes.contains(NSPasteboard.PasteboardType(content.type))
         }) else { return nil }
@@ -173,11 +185,38 @@ struct ClipboardItem: Codable, Hashable, Identifiable, Sendable {
                   [
                       kCGImageSourceCreateThumbnailFromImageAlways: true,
                       kCGImageSourceCreateThumbnailWithTransform: true,
-                      kCGImageSourceThumbnailMaxPixelSize: 80
+                      kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
                   ] as CFDictionary
               ) else { return nil }
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
+
+    /// 原始图片的像素尺寸（不解码位图数据）。
+    var imagePixelSize: NSSize? {
+        guard let content = contents.first(where: {
+            Self.imageTypeRawValues.contains($0.type)
+        }) else { return nil }
+        let source: CGImageSource?
+        if let file = content.file {
+            source = CGImageSourceCreateWithURL(ClipboardContentStore.fileURL(for: file) as CFURL, nil)
+        } else if let value = content.value {
+            source = CGImageSourceCreateWithData(value as CFData, nil)
+        } else {
+            source = nil
+        }
+        guard let source,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        return NSSize(width: width, height: height)
+    }
+
+    /// 内容总字节数（用于详情里的体积提示）。
+    var contentByteCount: Int { contents.reduce(0) { $0 + $1.size } }
+
+    /// 内容种类。只看 pasteboard 类型与已存标题，不解码任何数据，
+    /// 因此可以在列表的每一行上放心调用。
+    var displayKind: ClipboardContentKind { ClipboardContentKind(item: self) }
 
     var rtfData: Data? { contentData([.rtf]) }
     var rtf: NSAttributedString? {

@@ -48,20 +48,25 @@ final class ClipboardModel: ObservableObject {
     /// 界面语言（由 MacPilotModel 同步），用于面板内文案。
     var language: AppLanguage = .system
 
-    let history = ClipboardHistory()
+    let history: ClipboardHistory
+    /// 悬停详情列的状态机。视图通过本模型观察它（见 `observations`）。
+    let preview = ClipboardPreviewController()
     private let monitor = ClipboardMonitor()
     private lazy var hotKeyCenter = ClipboardHotKeyCenter()
 
     var persist: (() -> Void)?
 
     private var panel: ClipboardPanel?
-    private var historyObservation: AnyCancellable?
+    private var observations: [AnyCancellable] = []
 
-    init() {
-        // history 是独立的 ObservableObject，视图只观察本模型；
-        // 不桥接的话，选中移动、搜索过滤、条目增删都不会触发界面刷新。
-        historyObservation = history.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+    init(history: ClipboardHistory = ClipboardHistory()) {
+        self.history = history
+        // history 与 preview 是独立的 ObservableObject，视图只观察本模型；
+        // 不桥接的话，选中移动、搜索过滤、条目增删、详情展开都不会触发界面刷新。
+        observations = [
+            history.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() },
+            preview.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() },
+        ]
         monitor.settingsProvider = { [weak self] in self?.settings ?? ClipboardSettings() }
         monitor.onNewCopy { [weak self] item in
             self?.history.add(item)
@@ -197,6 +202,7 @@ final class ClipboardModel: ObservableObject {
     }
 
     func closePanel() {
+        preview.reset()
         panel?.close()
         panel = nil
         monitor.isSuspended = false
@@ -207,6 +213,10 @@ final class ClipboardModel: ObservableObject {
             self?.monitor.isSuspended = false
         } content: {
             ClipboardPanelContent(model: self)
+        }
+        // 详情列是窗口的一部分，展开与收起都要跟着改窗口宽度。
+        preview.onVisibilityChange = { [weak panel] expanded in
+            panel?.resize(showsPreview: expanded)
         }
         return panel
     }

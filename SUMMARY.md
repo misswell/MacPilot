@@ -1853,3 +1853,52 @@ Scripts/measure-memory.sh --diff a.json b.json         # 按角色列 delta
 `sizes(for:visibleSize:)` 此前**没有任何直接测试**，这次补上：`pinOpensAtTheSizeItWasCaptured`（150×100 与 900×600 原样打开、3000×1000 按比例缩、`max` 恰为可视区内缩 48）、`smallPinKeepsHundredPercentReachable`（`minimumZoomFactor == 1`、放大到 200% 再由 `resetZoom()` 精确回到 150×100）、`clipboardPinReaderHonoursTheDeclaredImageDensity`（往 pasteboard 写一张真带 144 DPI 的 PNG，断言 `scaleFactor == 2`）。既有的 `zoomOnlyOffersReachableScales`（1000×700 → 40…131%）与 `zoomStepNeverEscapesReachableScale` 一字未改仍然通过，说明大图那一侧的行为没被顺手改掉。
 
 > ⚠️ 没验到的部分：贴图窗口是真窗口，测试里画它会把用户的桌面当画布，所以「小图不再发糊」「全屏截图现在几乎铺满可视区」这两条观感只推自代码，没在屏幕上看过。第二条尤其需要人看一眼——默认尺寸从 78% 提到实际大小之后，全屏贴图会比过去明显地大一圈。
+
+## 六十五、剪贴板面板：左侧留白收掉，悬停一秒在右侧展开详情（v1.1.403）
+
+用户提的三件事：「左边的空的距离有点大，再优化一下布局」「鼠标停在某条记录上超过一秒，就把它的详情展示到右边，划走就隐藏」「依然保持 macOS 27 的设计风格」。
+
+### 左侧那条空档不是留白，是没用的槽位
+
+原来的行是 `[序号键帽][标题 ……][来源][类型图标]`：最左边那个键帽只有 1-9 才有点内容，图片条目和固定条目在那儿放的是空框，视觉上就是一条 40pt 宽的死区。改法是把这个槽位换成**永远有内容的 20pt 视觉锚点**——图片条目放真正的缩略图（`CGImageSourceCreateThumbnailAtIndex` 有界解码 80px，不解全图），其余放内容类型图标（文本/富文本/链接/文件），底下垫一层 `Color.primary.opacity(0.06)` 的圆角底。序号键帽移到行尾，和来源应用名并排，选中时才染成 accent。
+
+配套的三处收紧：列表横向内边距 12→8，行内 9→8，行高固定 30pt。正文起点从约 79pt 提到约 44pt。选中态原来是 1.5pt 实线 `systemBlue` 描边，换成 accent 填充 22% + 1pt 描边，和 macOS 26/27 的列表选中一致。表头、搜索框（30pt 高、9pt 圆角）、页脚（数量 + 四枚键帽提示）都归到同一套字号与间距上，页脚原来那行「快捷键 ⌘⇧V」的文字换成键帽本体。
+
+顺带修掉一个 O(n²)：`shortcutLabel(for:in:)` 每行都要重扫一遍历史算序号，现在整表一次算成 `[ID: String]`。
+
+### 详情列是窗口的第二列，不是浮层
+
+面板是 `.nonactivatingPanel`，用子窗口或 popover 挂详情会引入两个新问题：抢焦点（用户正在别的应用里，粘贴目标会被带偏）和被父窗口边界裁掉。所以详情列做成**窗口自己的第二列**，宽度从 400 涨到 700：
+
+- 两列都是硬编码宽度（`ClipboardPanelLayout`），SwiftUI 排版和 `NSPanel` 尺寸共用同一份数字。
+- 内容是一个左对齐、允许溢出的 `HStack`，超出窗口的部分被窗口裁掉。于是 `setFrame(animate: true)` 只把右边缘推出去，**列表一像素都不动**，详情列像被「揭开」一样出现。
+- 打开面板时就按「将来会展开到 700」预留位置（`positionOnScreen` 里 `roomForExpansion` 那一步），展开时才不会被顶到屏幕右边缘；`resize(showsPreview:)` 里再兜一次边界钳制。
+- 收起时详情列不能立刻从布局里消失，否则窗口缩回去的动画还没放完，右边已经空出一块。控制器把「信号」和「移除」分成两拍：`onVisibilityChange(false)` 立刻发（窗口开始缩），条目在 `collapseDuration`（0.25s，与 `setFrame(animate:)` 对齐）之后才置 nil。
+
+### 状态机：三段延时，谁说了算
+
+`ClipboardPreviewController` 只有三段延时：悬停 1 秒展开、划走 0.15 秒宽限、收起动画 0.25 秒。三处容易想当然的地方：
+
+1. **相邻行之间 `enter(B)` 可能先于 `exit(A)` 送达**。`endHover` 先判 `hoveredID == item.id`，不属于自己就不许取消别人的计时器，否则贴着边界滑动永远出不来详情。
+2. **行卡片的左右 8pt 留白原本是悬停死区**：卡片视觉缩进 8pt，`onHover` 挂在卡片上，指针从卡片划向详情列要穿过这段什么都不认的空档，宽限期就在这段路上过完了。把 `.padding(.horizontal, 8)` 从 `LazyVStack` 挪到行外面、`onHover` 之前，卡片照样缩进，触发区却铺满整列宽度。
+3. **划得慢时收起已经启动**。指针进入详情列，除了取消待收起，还要把已经开始的收起动画接回去（`collapseToken` 换掉 + 重新撑开），而不是让它缩掉再重开一次。详情列里开了 `.textSelection(.enabled)`，指针落上去是正常操作，不是「划走了」。
+
+内容种类只依据 pasteboard 类型字符串和已存标题判定，**不解码任何内容数据**——Chrome 复制一次可能带几 MB 的 HTML，逐行解码会把面板拖死。详情正文截到 4000 字符（字符数/行数按截断前统计），图片按 900px 有界解码，尺寸从 `CGImageSourceCopyPropertiesAtIndex` 读属性拿。
+
+### 离屏渲染顺手抓到一个既有的假 URL
+
+文件列表那一列渲染出来是「1 个文件」，两条路径挤在同一行里。根因在既有的 `ClipboardItem.fileURLs`：访达一次复制多个文件时，`fileURL` 类型写的是**一个数据块、里面一行一个 URL**，而代码把整块丢给 `URL(dataRepresentation:isAbsolute:)`，于是得到一个把换行含在里面的假 URL。现在先按 `\n` 拆开再逐条构造。
+
+这条一直没被发现，是因为原有的测试给每个 URL 单独建了一条 `ClipboardContent`——那不是 pasteboard 的真实形状。测试已改成单块多行的形状，断言 `["/tmp/one.txt", "/tmp/two.txt"]`。
+
+### 计时测试改成注入式，因为主 Actor 会被堵 148 秒
+
+第一版计时测试用 `Task.sleep` + 轮询等条件，单跑全绿，进完整套件就成片误报——同进程其他 `@MainActor` 套件会把主 Actor 队列堵上一两分钟（`previewOpensAfterHoveringForTheDelay()` 那次实测跑了 **148.388 秒**，而它等的是 1 秒）。这正是仓库里 `quickCopyAutoSave…`、`startupShortcutRegistration…` 那几个既有 flaky 的同一个根因。
+
+所以状态机不再自己 `Task.sleep`，而是走一个注入点：`schedule(delay, work)`。生产实现就是原来的真实计时器；测试换成手动放行的 `ManualClock`，在同一轮主 Actor 里把延时「过完」，于是 16 条用例全同步、0.2 秒跑完，`clock.delays == [1, hideGrace]` 这类断言还能把「停满一秒才展开」这条产品要求本身钉住。取消用令牌而不是 `Task.cancel`：每段延时登记一个 `UUID`，重新计时或清场时换令牌，迟到的那一发到点发现令牌对不上就自行作废——注入的计时器因此只需要「延时后调用」这一件事。
+
+### 验到了什么
+
+`swift build` 干净；`ClipboardPreviewTests` 16 条在完整套件里全绿。面板观感是**在测试里离屏渲染真实视图**（`NSHostingView.cacheDisplay`）逐张看过的：收起态、文本详情、图片详情、文件列表详情各一张，确认列表列没有跟着展开挪位。
+
+> ⚠️ 没验到的部分：真机上的鼠标行为。`setFrame(animate:)` 的实际手感、0.15 秒宽限够不够划过交界处、以及双屏/菜单栏右侧空间不足时预留展开位的表现，都只推自代码，需要人拿鼠标试一遍。

@@ -766,9 +766,23 @@ enum AppText {
         "clipboardAccessibilityReady": "辅助功能权限已就绪",
         "clipboardSearchPlaceholder": "搜索剪贴板历史…",
         "clipboardHistoryEmpty": "剪贴板历史为空",
-        "clipboardFooterHint": "%d 条 · ↑↓ 选择 · ⏎ 粘贴 · ⌘⏎ 复制 · ⌫ 删除",
         "clipboardImageLabel": "图片",
-        "clipboardHotkeyLabel": "快捷键 %@"
+        "clipboardItemCount": "%d 条",
+        "clipboardHintSelect": "选择",
+        "clipboardHintPaste": "粘贴",
+        "clipboardHintCopy": "复制",
+        "clipboardHintDelete": "删除",
+        "clipboardKindText": "文本",
+        "clipboardKindRichText": "富文本",
+        "clipboardKindFiles": "文件",
+        "clipboardKindLink": "链接",
+        "clipboardPreviewCharacters": "%d 字符",
+        "clipboardPreviewLines": "%d 行",
+        "clipboardPreviewCopies": "复制 %d 次",
+        "clipboardPreviewDimensions": "%d × %d 像素",
+        "clipboardPreviewFileCount": "%d 个文件",
+        "clipboardPreviewTruncated": "仅预览前 %d 个字符",
+        "clipboardPreviewEmpty": "没有可预览的内容"
     ]
 
     static func value(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
@@ -1666,9 +1680,23 @@ enum AppText {
             "clipboardAccessibilityReady": "Accessibility access is ready",
             "clipboardSearchPlaceholder": "Search clipboard history…",
             "clipboardHistoryEmpty": "Clipboard history is empty",
-            "clipboardFooterHint": "%d items · ↑↓ select · ⏎ paste · ⌘⏎ copy · ⌫ delete",
             "clipboardImageLabel": "Image",
-            "clipboardHotkeyLabel": "Shortcut %@"
+            "clipboardItemCount": "%d items",
+            "clipboardHintSelect": "select",
+            "clipboardHintPaste": "paste",
+            "clipboardHintCopy": "copy",
+            "clipboardHintDelete": "delete",
+            "clipboardKindText": "Text",
+            "clipboardKindRichText": "Rich text",
+            "clipboardKindFiles": "Files",
+            "clipboardKindLink": "Link",
+            "clipboardPreviewCharacters": "%d characters",
+            "clipboardPreviewLines": "%d lines",
+            "clipboardPreviewCopies": "%d copies",
+            "clipboardPreviewDimensions": "%d × %d pixels",
+            "clipboardPreviewFileCount": "%d files",
+            "clipboardPreviewTruncated": "Preview shows the first %d characters",
+            "clipboardPreviewEmpty": "Nothing to preview"
         ]
 }
 

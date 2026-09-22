@@ -63,6 +63,7 @@ This feature is an independent implementation using macOS Carbon, Accessibility,
 Clipboard History keeps recent copied content available from a searchable panel:
 
 - Press `⌘⇧V` to open it, then use search, arrow keys, Return, or number/letter shortcuts to paste or copy an item.
+- Rest the pointer on a record for one second and a details column opens on the right (full text, a larger image, or the file list, plus source app, character/line counts, size and copy count); move away and it collapses. Arrow keys move the preview along with the selection.
 - Pin important items, remove individual entries, clear unpinned history, and configure the history limit.
 - Text, images, URLs, and other supported pasteboard content are deduplicated and persisted across launches.
 
