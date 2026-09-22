@@ -12,22 +12,17 @@ struct LocalPortsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            summary
-            searchBar
 
-            if model.isRefreshing && model.snapshot.activities.isEmpty {
-                ProgressView(appModel.t("localPortsRefreshing"))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                activityList
+            // Before the first scan lands there is no finding to show; a card of
+            // zeros would read as "nothing is listening".
+            if model.lastRefresh != nil {
+                overviewCard
+                    .padding(.horizontal, 36)
+                    .padding(.bottom, 16)
             }
-        }
-        .background {
-            if #available(macOS 26.0, *) {
-                Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 0))
-            } else {
-                Color.clear.background(.regularMaterial)
-            }
+
+            listControls
+            activityList
         }
         .task {
             model.startVisibleSession()
@@ -92,7 +87,7 @@ struct LocalPortsView: View {
         }
         .padding(.horizontal, 36)
         .padding(.top, 34)
-        .padding(.bottom, 18)
+        .padding(.bottom, 22)
     }
 
     private var scanErrorMessage: String {
@@ -107,48 +102,71 @@ struct LocalPortsView: View {
         LocalPortErrorFormatter.result(model.lastCloseResult, language: appModel.language)
     }
 
-    private var summary: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 16) {
-                summaryItem(appModel.t("localPortsListening", model.snapshot.portCount))
-                summaryItem(appModel.t("localPortsClosable", model.snapshot.closablePortCount), tint: .green)
-                summaryItem(appModel.t("localPortsLAN", model.snapshot.lanPortCount), tint: .orange)
-                if let lastRefresh = model.lastRefresh {
-                    summaryItem(appModel.t("localPortsLastUpdated", lastRefresh.formatted(.dateTime.hour().minute().second().locale(appModel.language.locale))))
-                }
-                Spacer(minLength: 0)
+    private var overviewCard: some View {
+        SettingsCard {
+            Text(appModel.t("localPortsOverview")).font(.headline)
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 24), GridItem(.flexible())],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                overviewValue(appModel.t("localPortsPortCount"), String(model.snapshot.portCount))
+                overviewValue(appModel.t("localPortsClosableCount"), String(model.snapshot.closablePortCount), tint: .green)
+                overviewValue(appModel.t("localPortsLANCount"), String(model.snapshot.lanPortCount), tint: .orange)
             }
             if model.snapshot.lanPortCount > 0 {
                 Text(appModel.t("localPortsLANWarning"))
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if !model.snapshot.limitations.isEmpty {
                 Text(appModel.t("localPortsScanLimitations"))
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.orange)
             }
         }
-        .font(.caption)
-        .padding(.horizontal, 36)
-        .padding(.bottom, 14)
     }
 
-    private func summaryItem(_ text: String, tint: Color? = nil) -> some View {
-        HStack(spacing: 5) {
-            if let tint {
-                Circle().fill(tint).frame(width: 6, height: 6)
+    private func overviewValue(_ label: String, _ value: String, tint: Color? = nil) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            HStack(spacing: 6) {
+                if let tint {
+                    Circle().fill(tint).frame(width: 8, height: 8)
+                }
+                Text(value)
+                    .font(.subheadline.monospacedDigit().weight(.medium))
+                    .lineLimit(1)
             }
-            Text(text)
-                .foregroundStyle(tint ?? .secondary)
         }
+        .accessibilityElement(children: .combine)
     }
 
-    private var searchBar: some View {
-        HStack(spacing: 10) {
+    private var listControls: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(appModel.t("localPortsProcessList"))
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                if let lastRefresh = model.lastRefresh {
+                    Text(appModel.t(
+                        "localPortsLastUpdated",
+                        lastRefresh.formatted(.dateTime
+                            .hour().minute().second()
+                            .locale(appModel.language.locale))
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 16)
             TextField(appModel.t("localPortsSearch"), text: $model.query)
                 .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 430)
+                .frame(width: 200)
             Button {
                 model.refreshNow()
             } label: {
@@ -160,10 +178,10 @@ struct LocalPortsView: View {
                 }
             }
             .disabled(model.isRefreshing)
-            Spacer(minLength: 0)
+            .fixedSize()
         }
         .padding(.horizontal, 36)
-        .padding(.bottom, 10)
+        .padding(.bottom, 12)
     }
 
     private var activityList: some View {
@@ -174,41 +192,49 @@ struct LocalPortsView: View {
         let hasResults = !projects.isEmpty || !services.isEmpty || !protected.isEmpty
 
         return List {
-            if !projects.isEmpty {
-                Section(appModel.t("localPortsProjects")) {
-                    ForEach(projects) { group in row(group) }
+            if model.isRefreshing && model.snapshot.activities.isEmpty {
+                HStack(spacing: 10) {
+                    Spacer()
+                    ProgressView()
+                    Text(appModel.t("localPortsRefreshing")).foregroundStyle(.secondary)
+                    Spacer()
                 }
-            }
-            if !services.isEmpty {
-                Section(appModel.t("localPortsServices")) {
-                    ForEach(services) { group in row(group) }
-                }
-            }
-            if !protected.isEmpty {
-                Section {
-                    if protectedExpanded {
-                        ForEach(protected) { group in row(group) }
+                .listRowSeparator(.hidden)
+            } else if !hasResults {
+                Text(model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? appModel.t("localPortsNoServices")
+                    : appModel.t("localPortsNoSearchResults"))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .listRowSeparator(.hidden)
+            } else {
+                if !projects.isEmpty {
+                    Section(appModel.t("localPortsProjects")) {
+                        ForEach(projects) { group in row(group) }
                     }
-                } header: {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.15)) { protectedExpanded.toggle() }
-                    } label: {
-                        Label(
-                            appModel.t("localPortsProtected", protected.count),
-                            systemImage: protectedExpanded ? "chevron.down" : "chevron.right"
-                        )
-                    }
-                    .buttonStyle(.plain)
                 }
-            }
-            if !hasResults {
-                ContentUnavailableView(
-                    model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? appModel.t("localPortsNoServices")
-                        : appModel.t("localPortsNoSearchResults"),
-                    systemImage: "network"
-                )
-                .listRowBackground(Color.clear)
+                if !services.isEmpty {
+                    Section(appModel.t("localPortsServices")) {
+                        ForEach(services) { group in row(group) }
+                    }
+                }
+                if !protected.isEmpty {
+                    Section {
+                        if protectedExpanded {
+                            ForEach(protected) { group in row(group) }
+                        }
+                    } header: {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.15)) { protectedExpanded.toggle() }
+                        } label: {
+                            Label(
+                                appModel.t("localPortsProtected", protected.count),
+                                systemImage: protectedExpanded ? "chevron.down" : "chevron.right"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
         }
         .listStyle(.inset(alternatesRowBackgrounds: false))
@@ -222,8 +248,7 @@ struct LocalPortsView: View {
             selectedActivity = group.representative
         }
         .environmentObject(appModel)
-        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(top: 7, leading: 14, bottom: 7, trailing: 14))
         .listRowSeparator(.hidden)
     }
 
@@ -296,7 +321,7 @@ private struct LocalPortRow: View {
                         .foregroundStyle(.secondary)
                         if let cwd = group.representative.process.cwd {
                             Text(localPortCompactPath(cwd))
-                                .font(.caption2.monospaced())
+                                .font(.caption.monospaced())
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                         }
@@ -347,7 +372,6 @@ private struct LocalPortRow: View {
                 .disabled(model.isPreparingClose || model.isClosing)
             }
         }
-        .padding(.vertical, 2)
     }
 }
 

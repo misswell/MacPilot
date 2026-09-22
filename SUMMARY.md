@@ -1561,7 +1561,7 @@ Local Ports 是 MacPilot 的独立功能页，不增加第二个 `MenuBarExtra`�
 ### 分层
 
 - `Sources/MacPilotLocalPortsCore/`：Foundation/Darwin-only 的 `lsof`/`ps` 扫描、IPv4/IPv6 合并、LOCAL/LAN 判断、项目/npm/Python/常见服务/.app 归属推断、URL 解析和关闭安全规则。
-- `Sources/MacPilot/LocalPorts/`：`@MainActor` 生命周期模型、原生全高 `List`、搜索、详情、项目图标、localhost favicon、关闭确认与结果提示。
+- `Sources/MacPilot/LocalPorts/`：`@MainActor` 生命周期模型、自适应玻璃总览卡片（`SettingsCard`）+ 原生全高 `List`、搜索、详情、项目图标、localhost favicon、关闭确认与结果提示。
 - `LocalPortsModel` 只在页面出现时立即扫描并每 10 秒刷新；页面离开、首页关闭功能或应用退出时取消任务，并用 generation 丢弃迟到的旧扫描结果。菜单栏子菜单求值时调用 `refreshForMenu(maxAge:)`：它按同样的 10 秒有效期补扫一次，页面没打开时结果也照落地，因此全局始终只有一条扫描在跑。
 
 ### 菜单栏二级菜单
@@ -1572,6 +1572,25 @@ Local Ports 是 MacPilot 的独立功能页，不增加第二个 `MenuBarExtra`�
 
 与「内存监控」「CPU 监控」的唯一区别是取数方式：那两个可以在菜单求值时同步采样，端口要起 `lsof`/`ps` 子进程，所以 `refreshForMenu` 只承诺“数据过期就补扫”，本次求值仍显示上一轮快照，并且把 `@Published` 写入 hop 到下一轮主循环——在视图更新过程中改可观察状态是 SwiftUI 的未定义行为。
 
+### 页面骨架归队：拆掉那一整页玻璃（v1.1.401）
+
+用户提「本地端口的页面样式与其他页面不同，改为和其他页面风格一致」。根因只有一行：`LocalPortsView` 是**全应用唯一一个给自己铺一层整页玻璃的页面**——`VStack.background { Color.clear.glassEffect(.regular…) / .regularMaterial }`。其余页面都直接落在 `NavigationSplitView` 的 detail 列上，由窗口自身材质兜底；这一层玻璃把整块内容变成一张大卡片，`List` 的 `Section` 头因此读起来像色带，页面和侧边栏的关系也和其他页面对不上。
+
+其余偏差都是围绕这一层“顺手自己画”的结果。逐项对齐同构的 `MemoryMonitorView` / `CPUMonitorView`（总览卡 + 列表控制行 + 原生全高 `List`）：
+
+- **删掉整页背景玻璃**，页面不再自带材质。
+- 顶部统计从「页头下面一行 `.caption` 文本 + 彩色圆点」改成 `SettingsCard` + `LazyVGrid(columns: [.flexible(spacing: 24), .flexible()], spacing: 12)` 的 label-value 卡：小节标题 `.font(.headline)`，标签 `.subheadline` + secondary，值 `.subheadline.monospacedDigit().weight(.medium)`；“可关闭/LAN”的绿橙语义不丢，改成值前 8pt 圆点，与内存页 `pressureValue` 同一手法。LAN 说明与“部分进程信息不可用”收进同一张卡片，`.caption` + secondary / orange。
+- 「最后更新」从统计行移到列表控制行的 `.headline` 标题下方（`.caption` + secondary）；控制行左缘 36、下边距 12，搜索框由 `maxWidth: 430` 收到 `width: 200`，刷新按钮补 `.fixedSize()`。
+- 页头下边距 18 → **22**，总览卡下边距 **16**——回到令牌表的数值。
+- 行 `listRowInsets` 由 `6/0/6/0` 改为 **`7/14/7/14`**，删掉 `.listRowBackground(Color.clear)` 和行内多余的 `.padding(.vertical, 2)`；行不再自行抹掉列表原生层次。
+- 首轮加载与空态由「整页 `ProgressView`」/「`ContentUnavailableView` + 透明行背景」改为**列表内的一行居中文字**，和两个监控页一致，数据落地时骨架不跳版。
+- 两处 `.caption2`（LAN 说明、工作目录）→ `.caption`；`.caption2` 不在令牌表里。
+- 总览卡只在 `lastRefresh != nil` 之后出现：首轮扫描还没落地时显示 0/0/0 就是谎报，和菜单栏那三种空态同源。
+
+文案：`localPortsMenuOverview` 更名 `localPortsOverview`（页面卡片与菜单小节共用同一句），新增 `localPortsProcessList`、`localPortsPortCount`、`localPortsClosableCount`、`localPortsLANCount`，中英文各一条；`LocalPortsLocalizationTests.pageCardAndListHeaderCopyExistsInBothLanguages` 除“两边都非空”外还断言两边不相等——少一条英文键会静默把中文渲染到英文系统上，而这张卡片没有任何菜单路径会替它兜底。
+
+⚠️ 这次同样**没有像素级验证**，且原因和上面那条不同：想离屏渲染真实页面就得构造 `MacPilotModel`，而它的 `init()` 在 `load()` 之后紧跟一次 **`save()`**，写的就是用户正在用的 `~/Library/Application Support/MacPilot/config.json`，还要 `restoreLoginItemIfNeeded()` 动系统登录项、`DisplayBlankRecovery.recover()` 动显示器背光（`MacPilotApp.swift:1940-1958`）。也就是说“起个宿主把页面画出来”这个动作本身就会改用户配置，所以没做。这里的依据是三个页面逐 token 对照（页头 36/34/22、卡片 36+16、控制行 36+12、列表 22/20、行 insets 7/14/7/14、`.headline`/`.subheadline`/`.caption` 全部取自监控页原值）加上 `swift build` 与 `swift test --filter LocalPorts`。
+
 ### 安全边界
 
 关闭服务必须经过“重新扫描 → prepare → 用户确认 → 再次扫描 → PID + UID + executable + start time 验证 → SIGTERM → 最多等待 5 秒复查”的链路。只有**确实关不掉**的进程才收起关闭按钮：MacPilot 自身与 launchd（PID ≤ 1）、其他用户的进程（`kill` 必然 EPERM）、取不到 UID 的进程，以及 MacPilot 以 root 运行的配置；PID 复用和新进程抢占端口在验证阶段拒绝。绝不使用 SIGKILL 或进程树终止。
@@ -1580,7 +1599,7 @@ Local Ports 是 MacPilot 的独立功能页，不增加第二个 `MenuBarExtra`�
 
 ### 来源与验证
 
-核心迁移自 [LeftOpen](https://github.com/SonghaiFan/leftopen)，基准 commit 为 `2fde101440583f95c86c7408c63b77d73aaa5ea0`，归因与 MIT License 见 `THIRD_PARTY_NOTICES.md`。`MacPilotLocalPortsCoreTests` 覆盖监听解析、地址范围、项目/包/服务推断、PID 复用与关闭安全验证；`LocalPortsModelTests` 覆盖页面生命周期与旧扫描结果丢弃；`LocalPortsMenuTests` 覆盖菜单栏列表的分组、去重、排序、截断、行文案与三种空态的判定，`LocalPortsModelTests.menuRefresh*` 覆盖“页面没打开也要有数据”和 10 秒 TTL 不重复起扫描。
+核心迁移自 [LeftOpen](https://github.com/SonghaiFan/leftopen)，基准 commit 为 `2fde101440583f95c86c7408c63b77d73aaa5ea0`，归因与 MIT License 见 `THIRD_PARTY_NOTICES.md`。`MacPilotLocalPortsCoreTests` 覆盖监听解析、地址范围、项目/包/服务推断、PID 复用与关闭安全验证；`LocalPortsModelTests` 覆盖页面生命周期与旧扫描结果丢弃；`LocalPortsMenuTests` 覆盖菜单栏列表的分组、去重、排序、截断、行文案与三种空态的判定，`LocalPortsModelTests.menuRefresh*` 覆盖“页面没打开也要有数据”和 10 秒 TTL 不重复起扫描；`LocalPortsLocalizationTests` 覆盖页面与菜单两套文案的中英同步。
 
 ⚠️ 二级菜单在真实菜单栏里的渲染**未做在线验证**：验证它需要再启一个同 bundle id 的实例，而实测 `NSHomeDirectory()` 与 `cfprefsd` 都忽略 `$HOME`（探针写出的 `mpHomeProbe.plist` 落在真实 `~/Library/Preferences/`），也就是临时 HOME 并不能把 `config.json` 和 defaults 隔开——那样会把用户已启用的功能（含强制关闭、登录项、更新镜像记忆）在别人的桌面上跑第二遍。因此这里只有单元测试 + 与「内存监控」同构（`Menu { Section { … } }`，该结构已在正式版渲染出 `›`）作为依据。
 

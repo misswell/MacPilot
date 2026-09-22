@@ -21,12 +21,31 @@ struct LocalPortsLocalizationTests {
     }
 
     @Test func menuSubmenuCopyExistsInBothLanguages() {
-        #expect(!AppText.value("localPortsMenuOverview", language: .simplifiedChinese).isEmpty)
-        #expect(!AppText.value("localPortsMenuOverview", language: .english).isEmpty)
+        #expect(!AppText.value("localPortsOverview", language: .simplifiedChinese).isEmpty)
+        #expect(!AppText.value("localPortsOverview", language: .english).isEmpty)
         #expect(AppText.value("localPortsMenuMore", language: .simplifiedChinese, 3) == "还有 3 个进程未显示…")
         #expect(AppText.value("localPortsMenuMore", language: .english, 3) == "3 more processes not shown…")
         // The submenu reuses the page's own section titles rather than inventing new ones.
         #expect(AppText.value("localPortsProjects", language: .simplifiedChinese) == "开发项目")
         #expect(AppText.value("localPortsServices", language: .english) == "Other Services")
+    }
+
+    /// The page's overview card and list header label/value split must exist in
+    /// both tables: a missing English key silently renders Chinese on an English
+    /// system, and the card is new copy that no menu path exercises.
+    @Test func pageCardAndListHeaderCopyExistsInBothLanguages() {
+        for key in [
+            "localPortsOverview",
+            "localPortsProcessList",
+            "localPortsPortCount",
+            "localPortsClosableCount",
+            "localPortsLANCount",
+        ] {
+            let chinese = AppText.value(key, language: .simplifiedChinese)
+            let english = AppText.value(key, language: .english)
+            #expect(!chinese.isEmpty, "\(key)")
+            #expect(!english.isEmpty, "\(key)")
+            #expect(chinese != english, "\(key) was not translated")
+        }
     }
 }

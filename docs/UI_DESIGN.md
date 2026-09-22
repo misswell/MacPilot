@@ -13,6 +13,7 @@ MacPilot 的界面统一采用 **「原生侧边栏 + 大标题页头 + 自适�
 - macOS 26 使用原生 Liquid Glass；macOS 15–25 使用视觉等价的 `regularMaterial` 降级实现。
 - 卡片内的小节标题使用 `headline`。
 - 不同功能页之间只有内容不同，骨架、间距、材质完全一致。
+- **页面自身不铺背景材质**：内容直接落在 `NavigationSplitView` 的 detail 列上，由窗口兜底；玻璃只出现在 `SettingsCard` 这一层。给整页加 `.background { glassEffect / regularMaterial }` 会把页面变成一张大卡片，`List` 的 `Section` 头随之读成色带，和其余页面对不上。
 
 Liquid Glass 只用于导航、操作和内容分组表面。内容本身保持安静，避免多层玻璃嵌套、过度着色或额外装饰。
 
@@ -110,6 +111,36 @@ var body: some View {
 - 不要在列表外加 `ScrollView`，也不要给列表设固定 `minHeight`。
 - 列表上方的少量设置控件（如折叠开关、添加按钮）放在页头与列表之间的普通行里。
 
+### 「总览 + 列表」三段骨架
+
+内存监控、CPU 监控、本地端口三页共用同一个纵向结构，顺序和边距都不许变：
+
+```swift
+VStack(alignment: .leading, spacing: 0) {
+    // 1) 页头：36 / 34 / 22
+    if 已经拿到数据 {
+        SettingsCard { … }                                   // 2) 总览卡
+            .padding(.horizontal, 36).padding(.bottom, 16)
+    }
+    HStack(spacing: 12) {                                    // 3) 列表控制行
+        VStack(alignment: .leading, spacing: 2) {
+            Text(列表标题).font(.headline).accessibilityAddTraits(.isHeader)
+            Text(最后更新).font(.caption).foregroundStyle(.secondary)
+        }
+        Spacer(minLength: 16)
+        TextField(搜索, …).textFieldStyle(.roundedBorder).frame(width: 180...200)
+        Button(刷新) { … }.fixedSize()
+    }
+    .padding(.horizontal, 36).padding(.bottom, 12)
+    List { … }        // 行：listRowInsets(7/14/7/14) + listRowSeparator(.hidden)
+}
+```
+
+- 总览卡**只在真的拿到数据之后**出现：首轮采样没落地时显示一排 0 就是谎报。
+- 卡片里 label 用 `.subheadline` + secondary、value 用 `.subheadline.monospacedDigit().weight(.medium)`，两列 `GridItem(.flexible(), spacing: 24)`；要保留状态色就在值前放 8pt 圆点（见 `pressureValue`），不要把整行染色。
+- 加载态与空态是列表里的一行居中文字，不是整页 `ProgressView` / `ContentUnavailableView`——否则数据落地时整页骨架会跳版。
+- 行不要加 `.listRowBackground(Color.clear)`：`List` 自己负责层次，抹掉行背景会让 `Section` 头读成色带。
+
 ### 首页功能网格
 
 首页（`HomeView`）是唯一不使用「一张卡片装一组控件」的页面：每个功能是一张独立的开关卡片，按自适应网格排列。
@@ -149,6 +180,8 @@ var body: some View {
 
 - [ ] 页头：30pt 粗体标题 + 副标题（secondary）
 - [ ] 内容全部放进 `SettingsCard`（主模块用 `SettingsCard`，Kit 用 `RightClickSettingsCard`）
+- [ ] 页面没有自行铺整页背景材质：玻璃只在 `SettingsCard` 这一层
+- [ ] 统计/总览是卡片里的 label-value 网格，不是页头下方的裸文本行；列表上方有 `.headline` 标题行
 - [ ] 外边距 `36 / 34 / 30`，卡片间距 `24`
 - [ ] 卡片内小节标题用 `.font(.headline)`，说明文字用 `caption/subheadline` + `secondary`
 - [ ] 启停开关用 `.toggleStyle(.switch)`

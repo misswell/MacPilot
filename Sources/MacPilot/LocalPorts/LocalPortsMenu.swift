@@ -98,7 +98,7 @@ struct LocalPortsMenuSection: View {
         let services = shown.filter { !$0.isProject }
 
         Menu(model.t("localPorts")) {
-            Section(model.t("localPortsMenuOverview")) {
+            Section(model.t("localPortsOverview")) {
                 Text(model.t("localPortsListening", snapshot.portCount))
                 Text(model.t("localPortsClosable", snapshot.closablePortCount))
                 Text(model.t("localPortsLAN", snapshot.lanPortCount))
