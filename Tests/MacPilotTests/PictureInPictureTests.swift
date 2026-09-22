@@ -39,9 +39,17 @@ struct PictureInPictureTests {
 
     @Test @MainActor func menuBarViewsObserveTheLivePictureInPictureModel() {
         let pictureInPicture = PictureInPictureModel()
-        let appMenu = MenuBarView(pictureInPicture: pictureInPicture, screenRecording: ScreenRecordingModel())
+        let localPorts = LocalPortsModel()
+        let appMenu = MenuBarView(
+            pictureInPicture: pictureInPicture,
+            screenRecording: ScreenRecordingModel(),
+            localPorts: localPorts
+        )
 
         #expect(appMenu.pictureInPicture === pictureInPicture)
+        // The submenu lists the same model the page drives, so a scan started
+        // from either side feeds both.
+        #expect(appMenu.localPorts === localPorts)
 
         pictureInPicture.setEnabled(false)
         #expect(!appMenu.pictureInPicture.settings.isEnabled)

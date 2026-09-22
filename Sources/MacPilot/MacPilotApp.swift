@@ -29,7 +29,8 @@ struct MacPilotApp: App {
                 inputSources: model.inputSources,
                 windowSwitcher: model.windowSwitcher,
                 smoothScrolling: model.smoothScrolling,
-                clipboard: model.clipboard
+                clipboard: model.clipboard,
+                localPorts: model.localPorts
             ).environmentObject(model)
         } label: {
             MenuBarIconView(awake: model.awake, model: model)
@@ -1049,6 +1050,8 @@ enum AppText {
         "localPortsSearch": "搜索端口、项目、进程或 PID",
         "localPortsRefresh": "刷新",
         "localPortsOpen": "打开本地端口…",
+        "localPortsMenuOverview": "监听总览",
+        "localPortsMenuMore": "还有 %d 个进程未显示…",
         "localPortsRefreshing": "正在刷新…",
         "localPortsLocal": "LOCAL",
         "localPortsLANScope": "LAN",
@@ -1141,6 +1144,8 @@ enum AppText {
         "localPortsSearch": "Search ports, projects, processes, or PIDs",
         "localPortsRefresh": "Refresh",
         "localPortsOpen": "Open Local Ports…",
+        "localPortsMenuOverview": "Listening Overview",
+        "localPortsMenuMore": "%d more processes not shown…",
         "localPortsRefreshing": "Refreshing…",
         "localPortsLocal": "LOCAL",
         "localPortsLANScope": "LAN",
@@ -5105,6 +5110,7 @@ struct MenuBarView: View {
     @ObservedObject var windowSwitcher: WindowSwitcherModel
     @ObservedObject var smoothScrolling: SmoothScrollModel
     @ObservedObject var clipboard: ClipboardModel
+    @ObservedObject var localPorts: LocalPortsModel
 
     init(
         awake: AwakeSessionManager = AwakeSessionManager(),
@@ -5113,7 +5119,8 @@ struct MenuBarView: View {
         inputSources: InputSourceModel = InputSourceModel(),
         windowSwitcher: WindowSwitcherModel = WindowSwitcherModel(),
         smoothScrolling: SmoothScrollModel = SmoothScrollModel(),
-        clipboard: ClipboardModel = ClipboardModel()
+        clipboard: ClipboardModel = ClipboardModel(),
+        localPorts: LocalPortsModel
     ) {
         self._awake = ObservedObject(wrappedValue: awake)
         self._pictureInPicture = ObservedObject(wrappedValue: pictureInPicture)
@@ -5122,6 +5129,7 @@ struct MenuBarView: View {
         self._windowSwitcher = ObservedObject(wrappedValue: windowSwitcher)
         self._smoothScrolling = ObservedObject(wrappedValue: smoothScrolling)
         self._clipboard = ObservedObject(wrappedValue: clipboard)
+        self._localPorts = ObservedObject(wrappedValue: localPorts)
     }
 
     var body: some View {
@@ -5205,7 +5213,7 @@ struct MenuBarView: View {
         }
         if model.isFeatureEnabled(.localPorts) {
             Divider()
-            Button(model.t("localPortsOpen")) {
+            LocalPortsMenuSection(ports: model.localPorts) {
                 model.requestSection(.localPorts)
                 showMainWindow()
             }

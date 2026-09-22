@@ -258,18 +258,6 @@ private struct LocalPortProcessGroup: Identifiable {
     }
 }
 
-private extension LocalPortOwnerCategory {
-    var sortIndex: Int {
-        switch self {
-        case .project: 0
-        case .service: 1
-        case .application: 2
-        case .systemService: 3
-        case .unknown: 4
-        }
-    }
-}
-
 private struct LocalPortRow: View {
     @EnvironmentObject private var appModel: MacPilotModel
     let group: LocalPortProcessGroup

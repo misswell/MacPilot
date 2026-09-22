@@ -8,6 +8,10 @@ import SwiftUI
 /// close verification runs in the utility executor through the Core target.
 @MainActor
 final class LocalPortsModel: ObservableObject {
+    /// 菜单栏子菜单的补扫有效期：与页面可见时的自动刷新同频，
+    /// 让一次菜单开合最多起一轮 lsof/ps。
+    static let menuRefreshInterval: TimeInterval = 10
+
     @Published private(set) var snapshot: LocalPortSnapshot = .empty
     @Published private(set) var isRefreshing = false
     @Published private(set) var isPreparingClose = false
@@ -88,6 +92,23 @@ final class LocalPortsModel: ObservableObject {
 
     func refreshNow() {
         refresh()
+    }
+
+    /// Asks for a scan on behalf of the menu-bar submenu, which has data even
+    /// while its page is closed.
+    ///
+    /// A scan spawns subprocesses, so it cannot return synchronously the way the
+    /// memory and CPU menus do: this call only promises to refresh stale data,
+    /// and the submenu shows the previous snapshot until the scan lands. The hop
+    /// to the next run-loop turn keeps the `@Published` writes out of the menu's
+    /// own view update.
+    func refreshForMenu(maxAge: TimeInterval = LocalPortsModel.menuRefreshInterval) {
+        Task { [weak self] in
+            guard let self, !self.isRefreshing else { return }
+            if let lastRefresh = self.lastRefresh,
+               Date().timeIntervalSince(lastRefresh) < maxAge { return }
+            self.startScan(appliesWhileHidden: true)
+        }
     }
 
     func prepareClose(for activity: LocalPortActivity) {
@@ -209,6 +230,13 @@ final class LocalPortsModel: ObservableObject {
 
     private func refresh() {
         guard isVisible, !isRefreshing else { return }
+        startScan(appliesWhileHidden: false)
+    }
+
+    /// One scan at a time, and a result only lands while the caller still wants
+    /// it: `generation` moves whenever the visible session is torn down, and a
+    /// menu-driven scan outlives the page being closed on purpose.
+    private func startScan(appliesWhileHidden: Bool) {
         isRefreshing = true
         lastScanError = nil
         let requestGeneration = generation
@@ -224,8 +252,8 @@ final class LocalPortsModel: ObservableObject {
                 let value = try await worker.value
                 guard let self,
                       !Task.isCancelled,
-                      self.isVisible,
                       self.generation == requestGeneration else { return }
+                if !appliesWhileHidden, !self.isVisible { return }
                 self.snapshot = value
                 self.lastRefresh = Date()
             } catch let error as LocalPortScanError {

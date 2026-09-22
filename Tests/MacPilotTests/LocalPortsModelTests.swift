@@ -60,6 +60,44 @@ struct LocalPortsModelTests {
         model.shutdown()
     }
 
+    @Test func menuRefreshFillsTheSnapshotWithoutOpeningThePage() async throws {
+        let snapshot = LocalPortSnapshot(activities: [fixtureActivity()])
+        let recorder = ScanRecorder(snapshot: snapshot)
+        let model = LocalPortsModel(environment: makeEnvironment(scan: { recorder.scan() }))
+
+        model.refreshForMenu(maxAge: 0)
+        for _ in 0..<200 where model.snapshot.activities.isEmpty {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(model.snapshot.portCount == 1)
+        #expect(recorder.calls == 1)
+        #expect(model.lastRefresh != nil)
+        model.shutdown()
+    }
+
+    @Test func menuRefreshWithinItsTTLStartsNoSecondScan() async throws {
+        let snapshot = LocalPortSnapshot(activities: [fixtureActivity()])
+        let recorder = ScanRecorder(snapshot: snapshot)
+        let model = LocalPortsModel(environment: makeEnvironment(scan: { recorder.scan() }))
+
+        model.refreshForMenu(maxAge: 60)
+        for _ in 0..<200 where recorder.calls == 0 {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.refreshForMenu(maxAge: 60)
+        model.refreshForMenu(maxAge: 60)
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(recorder.calls == 1)
+        #expect(recorder.maximumActive == 1)
+
+        model.refreshForMenu(maxAge: 0)
+        for _ in 0..<200 where recorder.calls < 2 {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(recorder.calls == 2)
+        model.shutdown()
+    }
+
     @Test func successfulCloseClearsPlanAndRefreshesSnapshot() async throws {
         let snapshot = LocalPortSnapshot(activities: [fixtureActivity()])
         let recorder = ScanRecorder(snapshot: snapshot)

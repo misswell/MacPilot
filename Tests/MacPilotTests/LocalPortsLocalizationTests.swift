@@ -19,4 +19,14 @@ struct LocalPortsLocalizationTests {
         #expect(AppText.value("localPortsPort", language: .english, "3000") == "Port 3000")
         #expect(AppText.value("localPortsPID", language: .simplifiedChinese, "42") == "PID 42")
     }
+
+    @Test func menuSubmenuCopyExistsInBothLanguages() {
+        #expect(!AppText.value("localPortsMenuOverview", language: .simplifiedChinese).isEmpty)
+        #expect(!AppText.value("localPortsMenuOverview", language: .english).isEmpty)
+        #expect(AppText.value("localPortsMenuMore", language: .simplifiedChinese, 3) == "还有 3 个进程未显示…")
+        #expect(AppText.value("localPortsMenuMore", language: .english, 3) == "3 more processes not shown…")
+        // The submenu reuses the page's own section titles rather than inventing new ones.
+        #expect(AppText.value("localPortsProjects", language: .simplifiedChinese) == "开发项目")
+        #expect(AppText.value("localPortsServices", language: .english) == "Other Services")
+    }
 }
