@@ -3,6 +3,7 @@ import Foundation
 import AppKit
 import SwiftUI
 import Testing
+import UniformTypeIdentifiers
 @preconcurrency import ScreenCaptureKit
 @testable import MacPilot
 
@@ -85,8 +86,38 @@ struct SnapzyCaptureTests {
         pasteboard.setData(pngData, forType: .png)
 
         let pastedImage = try #require(SmartCaptureClipboard.image(from: pasteboard))
-        #expect(pastedImage.width == sourceImage.width)
-        #expect(pastedImage.height == sourceImage.height)
+        #expect(pastedImage.image.width == sourceImage.width)
+        #expect(pastedImage.image.height == sourceImage.height)
+        #expect(pastedImage.scaleFactor == 1)
+    }
+
+    @Test @MainActor func clipboardPinReaderHonoursTheDeclaredImageDensity() throws {
+        // Retina 截图的 PNG 写着 144 DPI，那是 2 倍像素密度。贴图必须按声明的
+        // 密度换算成点，否则一张 150x100 点的截图会以 300x200 打开 —— 小图放大。
+        let sourceImage = image(width: 300, height: 200)
+        let pasteboard = NSPasteboard(name: .init("MacPilotTests-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.setData(
+            try #require(pngData(from: sourceImage, dpi: 144)),
+            forType: .png
+        )
+
+        let pasted = try #require(SmartCaptureClipboard.image(from: pasteboard))
+        #expect(pasted.image.width == 300)
+        #expect(pasted.scaleFactor == 2)
+    }
+
+    private func pngData(from source: CGImage, dpi: Double? = nil) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data, UTType.png.identifier as CFString, 1, nil
+        ) else { return nil }
+        let properties = dpi.map {
+            [kCGImagePropertyDPIWidth: $0, kCGImagePropertyDPIHeight: $0] as CFDictionary
+        }
+        CGImageDestinationAddImage(destination, source, properties)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
     }
 
     private final class InitialTargetResolverRecorder: @unchecked Sendable {

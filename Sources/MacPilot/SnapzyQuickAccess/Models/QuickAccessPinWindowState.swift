@@ -80,8 +80,10 @@ final class QuickAccessPinWindowState: ObservableObject {
       interactiveSize.width / baseSize.width,
       interactiveSize.height / baseSize.height
     )
-    let floor = max(absoluteMinimumZoomFactor, interactiveFloor)
-    return min(floor, maximumZoomFactor)
+    // Capped at 1 so 100 % is always reachable: a pin whose base is already
+    // below the interactive minimum must not be pushed back up by the zoom
+    // clamp, or `resetZoom()` would stop meaning "the size you captured".
+    return min(1, max(absoluteMinimumZoomFactor, interactiveFloor))
   }
 
   var maximumZoomFactor: CGFloat {

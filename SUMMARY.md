@@ -1830,3 +1830,26 @@ Scripts/measure-memory.sh --diff a.json b.json         # 按角色列 delta
 代码侧的替代证据是 15 条新单测（`Tests/MacPilotTests/MemoryLifecycleTests.swift`）：主窗口内容状态机 5 条（含「延后一拍里重开不能被关掉」这条竞态）、切换器回收判定 3 条、字节预算 2 条、宽帧拼接 2 条、Helper 待命时长 1 条、内存压力登记 2 条。全量 823 条只剩三条负载抖动（`samplerReportsAFullyBusyCoreAtItsRealShare`、`quickCopyAutoSaveWritesFileAndRecordsStats`、`heartbeatFailureTriggersABoundedReconnect`），单独跑 14 条 2.6 秒全绿。
 
 其中宽帧拼接那两条值得单说：构造测试图时先用「行号 × 黄金比例常数」做假数据，结果**错误重叠的得分反而更低**——纯乘法只把高位平移，相邻行成了固定偏移，均值绝对差几乎为零。换成 splitmix64 雪崩混合之后，`startRow 0` 与 `startRow 150` 这对 1200×400 帧才精确判出 250 行重叠。这条断言是「横向缩放没有破坏行对齐」的唯一证据，值得留着。
+
+## 六十四、贴图默认就是它截下来的那个大小（v1.1.402）
+
+用户提「贴图功能要默认贴图大小就是实际的大小，而不是小图放大」。查下来「放大」有三条来源，其中一条比另外两条更常撞到：
+
+1. **240×180 被当成了默认下限**。`QuickAccessPinWindowSizing.sizes` 里那句 `preferredScale = max(1, minFitScale)`，图片小于「最小可交互尺寸」时会按比例**放大**去凑：一张 150×100 的框选，打开就是 270×180——糊，还白占两倍地方。
+2. **剪贴板贴图把 Retina 像素当成了点**。`SmartCaptureClipboard.image(from:)` 用 `CGImageSourceCreateImageAtIndex` 解码，同时把文件自带的 DPI 丢了；`pinClipboardImage()` 只能按默认的 `scaleFactor: 1` 去贴，而 macOS 截图 PNG 写的是 144 DPI。**一张 150×100 点的截图因此以 300×200 打开**，正好两倍。F3 贴图走的就是这条路，也是「小图放大」最日常的那个来源。
+3. **反方向的同一个毛病**：`absoluteMaxSize 1440×920` 加 `screenMaxRatio 0.78`，让大图默认只有实际大小的 78%，屏幕再大也吃这个凭空上限——同样不是「实际大小」。
+
+### 收成一条规则
+
+**默认尺寸 = 图片自己的点尺寸；只有屏幕装不下时才缩，永远不放大。**
+
+- `sizes(for:visibleSize:)` 现在只剩 `scale = min(1, fitScale)`；`maxSize` 等于可视区四边各内缩 24pt，与 `constrainedFrame` 一直在用的那块边界同一个数——两条线从此不会各自为政。`absoluteMaxSize` 与 `screenMaxRatio` 删掉。
+- `minimumInteractiveSize` 留下，但只管**缩放下限**（大图不能缩成一个抓不住的点），不再参与默认尺寸。
+- ⚠️ 配套必改：`QuickAccessPinWindowState.minimumZoomFactor` 原来是 `max(0.4, interactiveFloor)` 再对 `maximumZoomFactor` 取小。基础尺寸一旦允许小于 240×180，这个 floor 会**大于 1**，缩放钳制把小图重新顶回 240×180——放大从另一扇门回来了，`resetZoom()` 也不再指向原图。现在写成 `min(1, max(0.4, interactiveFloor))`，100% 永远可达。这条最容易漏，因为它根本不在「决定默认尺寸」的那段代码里。
+- 剪贴板侧连同声明密度一起返回：`image(from:)` 改为 `(image, scaleFactor)`，`declaredScaleFactor(of:)` 读 `kCGImagePropertyDPIWidth/Height` 除以 72（两个都取，用较小值；缺密度或数值不合理时回 1）。框选贴图那条路本来就传的是 `crop.scaleFactor`，没动；快捷操作卡片那条走 `NSImage(contentsOf:)`，它自己认 DPI，也没动。
+
+### 验到了什么
+
+`sizes(for:visibleSize:)` 此前**没有任何直接测试**，这次补上：`pinOpensAtTheSizeItWasCaptured`（150×100 与 900×600 原样打开、3000×1000 按比例缩、`max` 恰为可视区内缩 48）、`smallPinKeepsHundredPercentReachable`（`minimumZoomFactor == 1`、放大到 200% 再由 `resetZoom()` 精确回到 150×100）、`clipboardPinReaderHonoursTheDeclaredImageDensity`（往 pasteboard 写一张真带 144 DPI 的 PNG，断言 `scaleFactor == 2`）。既有的 `zoomOnlyOffersReachableScales`（1000×700 → 40…131%）与 `zoomStepNeverEscapesReachableScale` 一字未改仍然通过，说明大图那一侧的行为没被顺手改掉。
+
+> ⚠️ 没验到的部分：贴图窗口是真窗口，测试里画它会把用户的桌面当画布，所以「小图不再发糊」「全屏截图现在几乎铺满可视区」这两条观感只推自代码，没在屏幕上看过。第二条尤其需要人看一眼——默认尺寸从 78% 提到实际大小之后，全屏贴图会比过去明显地大一圈。

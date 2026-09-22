@@ -189,6 +189,50 @@ struct QuickAccessTests {
         #expect(state.displaySize.height <= 920 + 0.5)
     }
 
+    @Test func pinOpensAtTheSizeItWasCaptured() {
+        // 默认贴图 = 实际大小：小图不再被抬到「可交互最小尺寸」，大图只在屏幕
+        // 装不下时按比例缩，上限就是屏幕能装下的那块地方。
+        let screen = CGSize(width: 1_512, height: 950)
+
+        let small = QuickAccessPinWindowSizing.sizes(
+            for: CGSize(width: 150, height: 100), visibleSize: screen)
+        #expect(small.base == CGSize(width: 150, height: 100))
+
+        let fits = QuickAccessPinWindowSizing.sizes(
+            for: CGSize(width: 900, height: 600), visibleSize: screen)
+        #expect(fits.base == CGSize(width: 900, height: 600))
+
+        let large = QuickAccessPinWindowSizing.sizes(
+            for: CGSize(width: 3_000, height: 1_000), visibleSize: screen)
+        #expect(large.max == CGSize(width: 1_512 - 48, height: 950 - 48))
+        #expect(large.base.width <= large.max.width + 0.5)
+        #expect(large.base.height <= large.max.height + 0.5)
+        // 缩的是比例，不是把图压扁。
+        #expect(abs(large.base.width / large.base.height - 3) < 0.01)
+    }
+
+    @Test @MainActor func smallPinKeepsHundredPercentReachable() {
+        // 小于交互下限时，缩放下限不能被那个下限顶过 100%：否则「放大」会从缩放
+        // 钳制里偷偷回来，`resetZoom()` 也不再是截下来的那个尺寸。
+        let image = NSImage(size: NSSize(width: 150, height: 100))
+        let state = QuickAccessPinWindowState(
+            id: UUID(),
+            url: nil,
+            image: image,
+            thumbnail: image,
+            baseSize: CGSize(width: 150, height: 100),
+            maxSize: CGSize(width: 1_464, height: 902)
+        )
+        #expect(state.zoomPercent == 100)
+        #expect(state.minimumZoomFactor == 1)
+        #expect(state.displaySize == CGSize(width: 150, height: 100))
+
+        // 放大依旧可以，但那是用户主动要的比例，不是打开时强加的。
+        #expect(state.maximumZoomFactor == 2)
+        #expect(state.setZoomPercent(200) == CGSize(width: 300, height: 200))
+        #expect(state.resetZoom() == CGSize(width: 150, height: 100))
+    }
+
     @Test @MainActor func pinChromeFollowsThePointerAndSurvivesTheDrag() {
         // 控制岛是 hover 才出现的 affordance；拖文件时窗口被藏起来、指针状态
         // 停在拖走的那一刻，岛不能从光标底下消失。

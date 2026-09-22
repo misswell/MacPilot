@@ -464,22 +464,46 @@ enum SmartCaptureClipboard {
     /// selection. Text, URLs, and other pasteboard payloads are intentionally
     /// ignored. The representation data is scoped to this call and is not
     /// retained by the controller after the decoded image is returned.
-    static func image(from pasteboard: NSPasteboard = .general) -> CGImage? {
+    ///
+    /// `scaleFactor` is the density the encoded file declares (pixels per
+    /// screen point), so a Retina screenshot's 2× pixels pin at the points the
+    /// user actually captured instead of at double size.
+    static func image(
+        from pasteboard: NSPasteboard = .general
+    ) -> (image: CGImage, scaleFactor: CGFloat)? {
         let imageTypes: [NSPasteboard.PasteboardType] = [.png, .tiff, .jpeg, .heic]
         for item in pasteboard.pasteboardItems ?? [] {
             for type in imageTypes {
                 guard let data = item.data(forType: type) else { continue }
-                if let image = autoreleasepool(invoking: { () -> CGImage? in
-                    guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
-                        return nil
-                    }
-                    return CGImageSourceCreateImageAtIndex(source, 0, nil)
-                }) {
-                    return image
+                let decoded: (image: CGImage, scaleFactor: CGFloat)? = autoreleasepool {
+                    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                          let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+                    else { return nil }
+                    return (image, declaredScaleFactor(of: source))
+                }
+                if let decoded {
+                    return decoded
                 }
             }
         }
         return nil
+    }
+
+    /// ImageIO reports 72 DPI when a format carries no density, and a macOS
+    /// Retina screenshot carries 144 — that ratio *is* the display scale.
+    /// Anything unusable falls back to 1, which is the pre-DPI behaviour.
+    private static func declaredScaleFactor(of source: CGImageSource) -> CGFloat {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any] else { return 1 }
+        var densities: [Double] = []
+        for key in [kCGImagePropertyDPIWidth, kCGImagePropertyDPIHeight] {
+            if let dpi = (properties[key] as? NSNumber)?.doubleValue, dpi > 0 {
+                densities.append(dpi)
+            }
+        }
+        guard let smallest = densities.min() else { return 1 }
+        let factor = CGFloat(smallest / 72)
+        return factor.isFinite && factor >= 0.25 ? factor : 1
     }
 }
 
@@ -3120,8 +3144,8 @@ final class SmartScreenshotController {
             pinClipboardShortcutOverride()
             return
         }
-        if let image = SmartCaptureClipboard.image(from: .general) {
-            pin(image: image)
+        if let pasted = SmartCaptureClipboard.image(from: .general) {
+            pin(image: pasted.image, scaleFactor: pasted.scaleFactor)
             return
         }
         if let text = Self.clipboardText(from: .general), !text.isEmpty {
