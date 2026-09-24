@@ -27,10 +27,13 @@ final class RemoteDiscoveryService: ObservableObject {
     var onResultsChanged: (@MainActor ([DiscoveredMac]) -> Void)?
 
     private var browser: NWBrowser?
+    private var browseGeneration = 0
     private let queue = DispatchQueue(label: "com.misswell.macpilot.remote.ios.browser")
 
     func start() {
         guard browser == nil else { return }
+        browseGeneration += 1
+        let generation = browseGeneration
         let parameters = NWParameters.tcp
         parameters.includePeerToPeer = true
 
@@ -42,10 +45,16 @@ final class RemoteDiscoveryService: ObservableObject {
             using: parameters
         )
         browser.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor in self?.handleState(state) }
+            Task { @MainActor in
+                guard let self, self.browseGeneration == generation else { return }
+                self.handleState(state)
+            }
         }
         browser.browseResultsChangedHandler = { [weak self] results, _ in
-            Task { @MainActor in self?.handle(results) }
+            Task { @MainActor in
+                guard let self, self.browseGeneration == generation else { return }
+                self.handle(results)
+            }
         }
         self.browser = browser
         browser.start(queue: queue)
@@ -53,11 +62,14 @@ final class RemoteDiscoveryService: ObservableObject {
     }
 
     func stop() {
+        browseGeneration += 1
         browser?.stateUpdateHandler = nil
         browser?.browseResultsChangedHandler = nil
         browser?.cancel()
         browser = nil
         isBrowsing = false
+        lastError = nil
+        isPermissionDenied = false
         discovered = []
         unrecognizedServiceCount = 0
     }

@@ -87,6 +87,11 @@ struct DevicesView: View {
 
     private var discoveredSection: some View {
         Section(appModel.text("discoveredSection")) {
+            Button {
+                appModel.searchDevices()
+            } label: {
+                Label(appModel.text("searchDevices"), systemImage: "arrow.clockwise")
+            }
             let unpaired = appModel.discoveredMacs.filter { !appModel.store.isPaired(id: $0.id) }
             if unpaired.isEmpty {
                 // "No MacPilot found" would be wrong here: a Mac may be present

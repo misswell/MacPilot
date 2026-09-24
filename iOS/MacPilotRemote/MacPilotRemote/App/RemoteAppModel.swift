@@ -200,6 +200,14 @@ final class RemoteAppModel: ObservableObject {
         startConnectSupervisor()
     }
 
+    /// Recreate the Bonjour browser when its initial browse missed a Mac.
+    func searchDevices() {
+        discovery.stop()
+        handleDiscovery([])
+        discoveryStartedAt = Date()
+        discovery.start()
+    }
+
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
