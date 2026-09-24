@@ -2,210 +2,51 @@
 
 [简体中文](README.zh-CN.md)
 
-A native macOS menu-bar app with a tiny footprint and very low memory use while it stays in the menu bar. MacPilot helps you manage distracting apps automatically. Each app can have independent rules to:
+MacPilot is a native macOS menu-bar toolkit for everyday automation, window management, screen capture, and system utilities. Enable only the tools you need; disabled features stop their own shortcuts and background monitoring.
 
-- hide after a period of inactivity;
-- close its closable windows after inactivity while leaving its process running;
-- quit after a period of inactivity;
-- quit after it has been hidden for a period of time.
+## Features
 
-It can also launch selected apps after a per-app delay following login. Each launch rule can bring the app to the foreground, hide it, or wait through a 10-second startup grace period before closing its windows while keeping its background process alive. Launch rules use seconds, show a live countdown, skip apps that are already running, and run automatically only when MacPilot is configured to start at login.
+### App automation and control
 
-Rules, launch plans, and preferences persist in `~/Library/Application Support/MacPilot/config.json`. This file is independent from the app bundle, so updating or replacing `MacPilot.app` preserves your configuration. On first launch, MacPilot automatically migrates compatible configuration from the previous version without modifying the original file. You can also see and reveal the exact path in Settings.
+- **App rules:** Set inactivity rules per app to hide it, close its windows while keeping the app running, or quit it. Apps can also quit after remaining hidden.
+- **Scheduled launch:** Start selected apps after login with an individual delay. Choose whether each app opens in front, stays hidden, or closes its windows after startup.
+- **Awake:** Keep your Mac awake in a session, or start one automatically based on app, process, power, or display conditions. Battery safeguards can end sessions when needed.
+- **Closed-lid operation:** Keeping a MacBook awake with its lid closed requires approval for MacPilot’s background power service.
+- **BLE Unlock:** Lock or unlock your Mac based on the proximity of Bluetooth Low Energy devices. Set separate lock and unlock thresholds, delays, and behavior. Devices need a stable Bluetooth address for reliable tracking.
+- **iPhone Remote:** Pair the companion iPhone app once to lock, turn off the display, unlock, or wake and unlock your Mac over the same local network. Your Mac login password stays on the Mac.
 
-You can pick a running app or browse for an `.app` bundle, reorder rules, pause enforcement globally, and choose Start at Login from the menu-bar menu.
+### Input and window navigation
 
-Local Ports shows TCP listeners, identifies their projects and processes, and safely stops development services with a re-scan, PID identity check, and SIGTERM only. It never force-kills processes, targets another user's process, or runs as root.
+- **Input Sources:** Switch keyboard input sources automatically by app or browser website. Set punctuation and function-key behavior per app, and use a visual indicator or keyboard shortcut to switch manually.
+- **Window Switcher:** Use Option-Tab to cycle through windows across apps, with optional titles, previews, and support for hidden or minimized windows.
+- **Smooth Scrolling:** Make mouse-wheel input feel more like continuous trackpad scrolling, with controls for direction, speed, and app-specific exclusions.
 
-MacPilot is intentionally lightweight: it has a very small app footprint, uses very little memory while running, ships without a bundled cross-platform runtime, and lets you disable each feature independently.
+### Screen capture and focus
 
-## BLE Unlock
+- **Screenshots:** Capture interface elements, windows, areas, or the full screen. Annotate images, recognize text with OCR, capture scrolling pages, and pin captures above other windows.
+- **Screen Recording:** Record a screen, window, or selected area with optional system audio, microphone, camera, and iPhone or iPad capture.
+- **Picture-in-Picture:** Keep a live view of a window or selected region in a floating panel across Spaces, with zoom and media controls.
 
-MacPilot can also lock and unlock your Mac by proximity of up to two Bluetooth Low Energy devices - an iPhone, Apple Watch, or any BLE device that periodically advertises from a **static MAC address**.
+### Everyday tools
 
-Open **BLE Unlock** from the sidebar (or the menu-bar menu) and:
+- **Clipboard History:** Search recent copied text, images, links, and files; pin useful entries and paste them again when needed.
+- **Finder Context Menu:** Add configurable Finder actions such as copying paths, opening items with an app, using Terminal, managing file visibility, creating files, and opening common folders.
+- **Dock Groups:** Keep related apps together in groups that open from the macOS Dock. Select an app to bring it forward or launch it.
 
-- Scan for nearby devices and pick yours. Devices are shown with name, resolved MAC address, and live RSSI.
-- Add an optional second device and choose whether **either device** or **both devices** must be nearby to keep the Mac unlocked.
-- Set **Unlock RSSI** (unlock when the device is close) and **Lock RSSI** (lock when it moves away). Either can be disabled independently.
-- Set a **Delay to Lock** (grace period before locking when the device leaves) and a **No-Signal Timeout** (lock when signal is lost).
-- Optionally: wake the display on proximity, wake without unlocking, pause "Now Playing" while locked, use the screen saver to lock, turn off the screen on lock, or switch to **Passive Mode** to avoid interfering with other Bluetooth devices.
-- Use **Lock Screen Now** to lock immediately; it unlocks once the device leaves and returns.
-- Review recent lock and unlock events in the built-in screen-lock history.
-- Your login password is stored securely in **Keychain** and is only used to type it on the lock screen. Set or update it with **Set Password…**.
+### System tools
 
-Bluetooth and Accessibility access are required. Devices whose BLE MAC address rotates (most non-Apple devices) cannot be tracked reliably.
+- **Memory and CPU Monitors:** See per-app memory or CPU use, with related processes grouped together.
+- **Local Ports:** Find listening network services, identify their projects and processes, and stop eligible services you launched.
+- **Storage Compression:** Reduce the disk space used by stable text-based files with macOS filesystem compression. Files remain readable by normal apps and can be restored.
 
-## Remote Control from iPhone
+## Permissions and settings
 
-MacPilot ships with a companion iPhone app, **MacPilot Remote** (`iOS/MacPilotRemote/`), that locks, blanks, unlocks or wakes and unlocks your Mac from your pocket. It finds the Mac over Bonjour on the same Wi-Fi and reconnects to it automatically - no IP address, no port, no re-pairing every time.
+MacPilot requires macOS 14 or later. Accessibility is needed for cross-app actions and shortcuts; Screen Recording is needed for capture and window previews.
 
-- **Discovery and transport**: Bonjour (`_macpilot._tcp`) plus Network.framework TCP. No IP range scanning, no UDP broadcast and no HTTP server. A remembered address is tried first so an already paired Mac is usually connected in well under a second, with Bonjour taking over if that address no longer answers.
-- **Pairing**: open **Remote Control** in MacPilot on the Mac, click **Start Pairing**, and the Mac shows a 6 digit code for two minutes. Type that code on the iPhone once. The code is derived from an ephemeral P-256 ECDH exchange and is only a confirmation value - the long lived pairing key is generated independently and stored in the Keychain on both sides.
-- **Security**: every command travels over a ChaChaPoly sealed channel keyed by HKDF-SHA256, with a strictly increasing sequence number and a timestamp skew check to reject replayed frames. **Your Mac login password never leaves the Mac** - the protocol has no password field, the iPhone never asks for it, and the unlock itself is performed locally by the same screen control service BLE Unlock uses.
-- **Actions**: Lock, Blank (display off), Unlock and Wake & Unlock, all one tap, with the Mac's screen state reflected back in the app.
+Bluetooth is needed for BLE Unlock, and microphone access is needed when recording microphone audio. The Awake closed-lid option requires approval for its background power service.
 
-To build the iOS app, run `xcodegen generate` then `xcodebuild -scheme MacPilotRemote -sdk iphonesimulator` inside `iOS/MacPilotRemote/`.
-
-## Input Source Automation
-
-The **Input Sources** sidebar brings the core Input Source Pro workflow into MacPilot:
-
-- Enumerate and select macOS keyboard input sources with Carbon, then switch automatically by application or browser domain/URL rules.
-- Show an on-screen indicator near the cursor or in the center of the screen, and cycle sources from the menu bar.
-- Force English punctuation and switch between standard function keys and media keys per application.
-- Use `⌥⌘I` as the global cycle shortcut, or record custom combinations for individual input sources. Accessibility access is required in other apps; settings are persisted with the rest of `config.json`.
-
-This feature is an independent implementation using macOS Carbon, Accessibility, Core Graphics, and IOKit APIs; it does not bundle Input Source Pro source code or third-party dependencies.
-
-## Clipboard History
-
-Clipboard History keeps recent copied content available from a searchable panel:
-
-- Press `⌘⇧V` to open it, then use search, arrow keys, Return, or number/letter shortcuts to paste or copy an item.
-- Rest the pointer on a record for one second and a details column opens on the right (full text, a larger image, or the file list, plus source app, character/line counts, size and copy count); move away and it collapses. Arrow keys move the preview along with the selection.
-- Pin important items, remove individual entries, clear unpinned history, and configure the history limit.
-- Text, images, URLs, and other supported pasteboard content are deduplicated and persisted across launches.
-
-## Dock Groups
-
-The **Dock Groups** feature collects several apps into one lightweight helper you can pin to the real macOS Dock:
-
-- Create a group, add apps by picking them from a scan of installed apps, dragging `.app` bundles in, or browsing for them; drag rows to reorder.
-- Each group generates its own helper app under `~/Library/Application Support/MacPilot/DockGroups/`. Drag that `.app` onto the Dock (MacPilot never rewrites `com.apple.dock.plist`), then click it to open a secondary popover listing the group's apps in a grid or list layout.
-- Clicking an app activates it when it is already running and launches it otherwise — never a second instance. Running apps show a green dot.
-- The popover header is just the group name plus a settings gear (shortcut `⌘,`) and the app list follows immediately; it has no title bar, no second Dock icon, and no normal window chrome; it closes on Escape or an outside click and supports arrow-key navigation and Retina. A failed launch reports itself beside the title instead of taking a row of its own.
-- It appears the instant you click the Dock icon, with the app icons filling in right after. Once closed, the helper stays warm for five minutes (and macOS may reclaim it sooner under memory pressure), so clicking the icon again reopens it in tens of milliseconds (20-50 ms measured) instead of paying the 0.2 s-plus process launch and resolution path again.
-- The popover always opens next to the Dock icon you clicked: MacPilot reads that icon's exact frame from the Dock through Accessibility and publishes it into `groups.json`, so the popover is centred on the **icon's centre** along the Dock (not on the pointer) and sits flush against the Dock's inner edge on the other axis — which is what stops it from sliding up and down with the mouse. Left, bottom, and right Docks alike. When that geometry is unavailable (no Accessibility grant, the group is not pinned yet, the Dock layout just changed), it falls back to the click position along the Dock.
-- Group icons follow the system appearance: in dark mode they switch to a darkened background with a softer accent, and the glyph stays legible on that darker fill.
-- Every group also has its own **Icon Appearance** setting — **Match System** by default, or a pinned Light/Dark — that decides which variant the helper's Dock icon is drawn in. An `.icns` cannot carry appearance variants, so Match System is implemented by **regenerating the helper**: when the system appearance changes, or you change the setting, MacPilot redraws the icon and rebuilds the helper app (the helper's `Info.plist` records which appearance it was drawn with, which is how MacPilot knows to rebuild). Note that macOS caches the icon image of an item already **pinned to the Dock**: if the Dock still shows the old icon afterwards, remove the item from the Dock and drag the helper back in (or log out and back in).
-- The settings page puts the two preferences (default layout, show running state) in one card, gives the list a section title with group/app counts, and anchors the actions to that same row; the master feature switch lives on the Home page only, so the detail page does not repeat it.
-- Apps stay read-only. MacPilot stores a reference only (bundle identifier first, path as a fallback) and reads just the bundle identifier, name, version, icon, executable URL, and running state. It never copies, moves, patches, injects into, or re-signs a third-party app, so updates, TCC permissions, and code signatures are unaffected.
-- A group whose app moved shows “App not found” with options to relocate it or remove the reference; a missing app is never downloaded or substituted automatically.
-- App icons are read from the system on demand and cached as PNG thumbnails in `~/Library/Caches/MacPilot/DockGroups/`; the cache key includes the app version, so a rebuilt icon invalidates automatically and deleting the cache affects no app.
-- Deleting a group removes only MacPilot's own helper app and configuration, and only after verifying the target lives inside MacPilot's own folder. “Clean Up Group Data” removes every helper, the configuration, the custom icons, and the icon cache MacPilot created — never a third-party app.
-- Off by default. While disabled, MacPilot does no app scanning, no helper management, and no background timers.
-
-## Memory Monitor
-
-The **Memory Monitor** shows how much physical memory each app uses in real time:
-
-- Scattered processes of the same app (helpers, XPC services, CLI children…) are rolled up into a single row; expand it to inspect each process.
-- A system overview covers physical, used, app, wired, compressed, cached-file, and swap usage plus the current memory pressure level.
-- It refreshes every 3 seconds by default and can be paused or refreshed manually; values match Activity Monitor's Memory column.
-
-## CPU Monitor
-
-The **CPU Monitor** shows each app's CPU usage in real time:
-
-- Processes belonging to the same app are rolled up into one row; expand it to inspect each process.
-- The system overview shows total, user, system, nice, and idle usage, logical cores, and the 1/5/15-minute load averages.
-- It refreshes every 3 seconds by default; percentages are normalized to the whole machine, where full logical-core capacity is 100%.
-
-## Local Ports
-
-The **Local Ports** page shows TCP `LISTEN` sockets grouped by process:
-
-- Merge IPv4/IPv6 entries, show LOCAL versus LAN bind scope, and search ports, PIDs, projects, commands, users, paths, and addresses.
-- Identify project roots, npm packages, Python modules, common local services, `.app` parents, and system executables.
-- Open likely HTTP endpoints in a browser and inspect the process identity, arguments, working directory, parent chain, uptime, and all ports owned by that PID.
-- Stop anything you launched, including dev servers started by a browser or IDE; only another user's processes, the system itself, and processes whose owner cannot be verified stay unstoppable.
-- Before stopping a service, re-scan and verify its PID, UID, executable, and process start time. Only SIGTERM is sent; no SIGKILL or privileged helper is used.
-
-Scanning starts only while this page is visible. Leaving the page or disabling the feature cancels refresh work and favicon requests.
-
-## Window Switcher
-
-The **Window Switcher** provides fast keyboard navigation across application windows:
-
-- Press `⌥Tab` to open it, hold Option to keep cycling, use Shift for reverse order, and release Option to focus the selected window; Escape cancels.
-- Show application icons, window titles, and optional previews; include minimized or hidden windows when needed.
-- Merge multiple windows from selected applications into one switcher card without changing the applications' actual windows.
-
-## Screenshot Capture
-
-The **Screenshot** sidebar adds Snapzy-style capture and quick actions to MacPilot:
-
-- Press the global shortcut (default `F1`) to enter smart-element capture. The selector highlights the element under the pointer after a short debounce, and keeps the highlight stable while moving between elements.
-- Area, application window, fullscreen, current window, area + annotate, OCR, scrolling screenshot, and object-cutout entry points are also available from the Screenshot settings page.
-- Area and application-window selections remain in a PixPin-style editing state with eight resize handles, a size badge, and a floating toolbar; move or resize the selection before copying, saving, annotating, running OCR, pinning, or cancelling.
-- Annotate directly on the current capture with shapes, arrows, lines, pencil/highlighter strokes, blur, spotlight, counters, text, watermarks, and crop; adjust line width and opacity with the toolbar or mouse wheel.
-- After capture, MacPilot can save the image to the output folder, copy it to the clipboard, show a quick-access preview card, pin it on screen, run OCR, open the annotation editor, upload it manually to GitHub or Gitee, or reveal the file in Finder. Automatic saving can be turned off in Screenshot settings; captures then only reach the clipboard, the quick-access stack, and pins.
-- Explicit image uploads show progress and success/error feedback, then copy the public image URL to the clipboard.
-- Screenshot shortcuts are configurable in Settings and can be edited per entry point.
-
-Any feature can be toggled on or off from its Settings page. Disabled features do not register global shortcuts, do not start background monitoring or scheduled work, and disappear from the menu-bar menu. For example, turning off **Enable screenshot capture** removes the screenshot entry from the top menu entirely and stops all screenshot-related idle resources.
-
-## Finder Context Menu
-
-MacPilot includes a Finder Sync extension that adds configurable actions to Finder's context menu:
-
-- **Copy Path** copies the paths of selected files and folders.
-- Open selected items with configured applications.
-- Open a terminal, delete items directly, hide or unhide items, and send items with AirDrop.
-- Create configured file types from Finder's blank-area menu and open configured common directories.
-- Enable, disable, and reorder actions, applications, new-file types, and common directories independently.
-
-## Performance and Resource Usage
-
-MacPilot's core design choice is lightweight residency: a very small app footprint and very low memory use while it runs. It is built with native Swift/SwiftUI and macOS system APIs, without a bundled cross-platform runtime. Its long-lived data paths are designed to keep memory bounded:
-
-- Clipboard images and content larger than 64 KB are stored as files under Application Support. The history model keeps only type, filename, and size metadata, and reads the content on demand.
-- Screenshot copies use a file-backed, lazy pasteboard provider. PNG data is generated only when another app requests it, then released after the request.
-- Window-switcher previews are downscaled to at most 256×160 pixels, prefetch at most 30 windows, and are pruned when the window inventory changes. Disabling thumbnails cancels capture work and clears the thumbnail cache.
-- Quick Access shows at most five cards at once; dismissing an item releases its associated panel and annotation session resources.
-- Disabled features do not keep global event taps, monitors, timers, or scheduled work running. Diagnostic file I/O runs on a utility queue and log data is retained for one hour.
-
-## Storage Compression
-
-The **Storage Compression** sidebar scans a folder for stable text-based files and uses macOS filesystem compression to reduce their physical disk usage without changing their logical contents. Choose extensions, a minimum file size, a stability period, and a minimum savings threshold; then scan and compress manually or enable a five-minute periodic scan.
-
-MacPilot verifies every compressed copy with SHA-256 before atomically replacing the original. It preserves visible dates and filesystem metadata through macOS `ditto`, skips packages, hidden folders, symbolic links, hard links, sparse files, and cloud placeholders, and only operates on APFS or HFS+ volumes. Compressed files remain directly readable by normal applications and can be restored from the same screen.
-
-## Picture-in-Picture
-
-The **Picture-in-Picture** sidebar uses ScreenCaptureKit to capture an individual window and show it as a live floating panel across Spaces:
-
-- The default global shortcut is `⌥⌘P` (configurable in the Picture-in-Picture settings); add `Shift` to select a region, or double-click with the modifier keys to capture a quick area around the pointer.
-- Panels keep the source aspect ratio, support resizing, ⌘-dragging a region to zoom into it, scroll-wheel zooming, ⌘-scroll panning, `+/-` zoom, and fullscreen Spaces.
-- Auto-hide, click-to-focus, double-click-to-focus-and-close, Backspace/Esc close, Space QuickLook, media play/pause, and arrow-key seeking are supported.
-- Media controls use the source app's real Now Playing session for play/pause, five-second seeking, progress display, and YouTube captions.
-- Configure 1–60 fps, 0–100% contrast enhancement, multi-window mode, hover hints, corner radius, and per-app idle/change/sensitive detection. Detection scripts receive `PIPIRI_EVENT`, `PIPIRI_APP`, `PIPIRI_BUNDLE_ID`, and `PIPIRI_WINDOW_ID`.
-- Off-screen rendering fixes can relaunch Chromium/Electron apps with their supported background-rendering flag. Firefox, Floorp, kitty, Ghostty, iTerm2, and explicitly selected custom-compositor apps can instead be patched after confirmation; MacPilot creates a complete backup, supports restoration and administrator authorization, watches patched bundles with FSEvents to reapply after updates, and automatically restores after repeated fast crashes.
-- Picture-in-Picture settings are persisted with the rest of the app configuration in `~/Library/Application Support/MacPilot/config.json`.
-
-The first capture requires Screen Recording access in **System Settings → Privacy & Security → Screen Recording**. To intercept the global shortcut while another app is active, also grant MacPilot **Accessibility** access; without it, the in-app fallback can observe the shortcut but cannot suppress the original keystroke. Custom-compositor patching never runs silently: the target app must be quit, the user must confirm the modification, and its original bundle remains restorable from MacPilot's Application Support directory.
-
-## Smooth Scrolling
-
-The **Smooth Scrolling** sidebar makes mouse-wheel scrolling feel more like a
-trackpad by rewriting wheel events into interpolated, continuous scroll frames.
-
-- Enable smooth vertical/horizontal scrolling independently, or pass one axis
-  through untouched while the other is smoothed.
-- Reverse vertical/horizontal wheel direction independently.
-- Adjust the minimum wheel step, speed gain, glide duration, and dead zone.
-- Optionally accelerate more the faster the wheel is rotated, with a
-  configurable acceleration limit.
-- Optionally simulate trackpad scroll/momentum phases for apps that rely on them.
-- Exclude selected applications from smoothing; their original mouse-wheel
-  events pass through without interpolation, with an independent direction
-  reversal switch for each app. Apps can be selected while running or browsed
-  from disk.
-- Settings are persisted with the rest of `config.json`; Accessibility access is
-  required because MacPilot must read and rewrite wheel events in other apps.
-
-## Permissions and Configuration
-
-MacPilot stores rules and preferences in `~/Library/Application Support/MacPilot/config.json`. Updating the app preserves this file, and compatible settings are migrated automatically.
-
-- **Accessibility** is needed for global keyboard shortcuts, window switching, input-source automation, smooth scrolling, BLE screen control, and actions that operate in other apps.
-- **Screen Recording** is needed for screenshots, window previews, and Picture-in-Picture capture. If it is unavailable, window previews fall back to application icons.
-- **Bluetooth** is needed for BLE Unlock. The login password is stored in the macOS Keychain and is never written to the configuration file.
-- Features can be disabled independently; disabled features stop their event monitors, timers, scheduled work, and other runtime resources.
-
-If MacPilot remains untrusted after an update even though it is enabled in the Accessibility list, toggle the permission off and on again. The permission alert also provides **Reset Permission and Quit** to refresh the Accessibility authorization before reopening the app.
+Rules and preferences are stored in your user account and remain available after app updates. The BLE login password is stored in the macOS Keychain.
 
 ## Download
 
-Download the latest notarized release from [GitHub Releases](https://github.com/misswell/MacPilot/releases/latest). Choose the **Apple Silicon (arm64)** package for Apple silicon Macs or the **Intel (x86_64)** package for Intel Macs.
+Download the latest notarized release from [GitHub Releases](https://github.com/misswell/MacPilot/releases/latest). Choose **Apple Silicon (arm64)** for Apple silicon Macs or **Intel (x86_64)** for Intel Macs.
