@@ -11,6 +11,52 @@
 import AppKit
 import SwiftUI
 
+/// A click-through outline of the actual display crop. Window sharing is
+/// disabled so the guide cannot become part of the recorded video.
+@MainActor
+final class ScreenRecordingRangeBorder {
+    static let shared = ScreenRecordingRangeBorder()
+    private var panel: NSPanel?
+
+    func show(rect: CGRect) {
+        close()
+        guard !rect.isNull, !rect.isEmpty else { return }
+        let panel = NSPanel(
+            contentRect: rect,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Recording Range Border"
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.sharingType = .none
+        panel.level = .screenSaver
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.contentView = ScreenRecordingRangeBorderView(frame: CGRect(origin: .zero, size: rect.size))
+        panel.orderFrontRegardless()
+        self.panel = panel
+    }
+
+    func close() {
+        panel?.orderOut(nil)
+        panel?.close()
+        panel = nil
+    }
+}
+
+private final class ScreenRecordingRangeBorderView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let border = NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 1))
+        border.lineWidth = 2
+        NSColor.systemRed.setStroke()
+        border.stroke()
+    }
+}
+
 // MARK: - Countdown panel
 
 /// Centered countdown shown before a recording starts.

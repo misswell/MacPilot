@@ -1678,7 +1678,7 @@ final class SmartScreenshotController {
             mode,
             point in
             switch mode {
-            case .smartElement:
+            case .smartElement, .recordingArea:
                 SmartAXTargetQuery.target(at: point)
             case .applicationWindow, .recordingApplication:
                 SmartAXTargetQuery.applicationWindowTarget(at: point)
@@ -2583,7 +2583,7 @@ final class SmartScreenshotController {
         }
 
         let interactionMode: AreaSelectionInteractionMode = switch mode {
-        case .smartElement:
+        case .smartElement, .recordingArea:
             .smartElement
         case .applicationWindow, .recordingApplication:
             .applicationWindow
@@ -2612,7 +2612,7 @@ final class SmartScreenshotController {
                 prefetchedContentTask: applicationConfiguration?.prefetchedContentTask
             )
         }
-        if mode == .smartElement, let sessionID {
+        if (mode == .smartElement || mode == .recordingArea), let sessionID {
             initialTargetUpdateTask?.cancel()
             let resolver = initialTargetResolver
             initialTargetUpdateTask = Task { @MainActor [weak self] in
@@ -2648,7 +2648,7 @@ final class SmartScreenshotController {
         let snapzyMode: SelectionMode =
             (mode == .recordingArea || mode == .recordingApplication) ? .recording : .screenshot
         let interactionMode: AreaSelectionInteractionMode = switch mode {
-        case .smartElement:
+        case .smartElement, .recordingArea:
             .smartElement
         case .applicationWindow, .recordingApplication:
             .applicationWindow

@@ -36,6 +36,8 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
     /// The file the finished recording is delivered under.
     private let finalURL: URL
     private let settings: ScreenRecordingSettings
+    /// AppKit screen coordinates for the fixed display crop shown to the user.
+    let capturedScreenRect: CGRect?
     private let audioEngine = AVAudioEngine()
     private let sleepAssertion = DisplaySleepAssertion()
     private let sampleQueue = DispatchQueue(label: "com.misswell.macpilot.screen-recording.samples", qos: .userInitiated)
@@ -89,7 +91,8 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
         systemAudioInput: AVAssetWriterInput?,
         workURL: URL,
         finalURL: URL,
-        settings: ScreenRecordingSettings
+        settings: ScreenRecordingSettings,
+        capturedScreenRect: CGRect?
     ) {
         self.writer = writer
         self.videoInput = videoInput
@@ -97,6 +100,7 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
         self.workURL = workURL
         self.finalURL = finalURL
         self.settings = settings
+        self.capturedScreenRect = capturedScreenRect
     }
 
     /// Wires the stream after construction because `SCStream` receives its
@@ -120,8 +124,16 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
         guard CGPreflightScreenCaptureAccess() else {
             throw ScreenRecordingError.permissionRequired
         }
+        // The selection panel reports AppKit coordinates; ScreenCaptureKit's
+        // display and window frames use Quartz coordinates (flipped Y axis).
+        let quartzSelection = captureRect.flatMap {
+            SmartCaptureCoordinateConversion.quartzRect(fromAppKitRect: $0)
+        }
+        if captureRect != nil && quartzSelection == nil {
+            throw ScreenRecordingError.noDisplayFound
+        }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = activeDisplay(from: content.displays, captureRect: captureRect) else {
+        guard let display = activeDisplay(from: content.displays, captureRect: quartzSelection) else {
             throw ScreenRecordingError.noDisplayFound
         }
 
@@ -130,7 +142,7 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
             content: content,
             display: display,
             mode: settings.captureMode,
-            selection: captureRect,
+            selection: quartzSelection,
             frontmostOnly: frontmostWindowOnly,
             settings: settings
         )
@@ -146,7 +158,11 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
             throw ScreenRecordingError.writerCreationFailed
         }
 
-        let pixelScale = max(1, Double(display.width) / max(1, display.frame.width))
+        // SCDisplay.width may describe a scaled display mode. The filter's
+        // pointPixelScale is the capture pixel ratio, as in still screenshots.
+        let filterScale = Double(blueprint.filter.pointPixelScale)
+        let fallbackScale = max(1, Double(display.width) / max(1, display.frame.width))
+        let pixelScale = filterScale.isFinite && filterScale > 0 ? filterScale : fallbackScale
         let scale = settings.highRes ? pixelScale : 1
         let outputWidth = ScreenRecordingCodecPlanner.snapToEven(Int((blueprint.renderSize.width * scale).rounded()))
         let outputHeight = ScreenRecordingCodecPlanner.snapToEven(Int((blueprint.renderSize.height * scale).rounded()))
@@ -205,7 +221,14 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
             systemAudioInput: systemAudioInput,
             workURL: targets.workURL,
             finalURL: targets.finalURL,
-            settings: settings
+            settings: settings,
+            capturedScreenRect: settings.captureMode == .area
+                ? blueprint.cropRect.flatMap {
+                    SmartCaptureCoordinateConversion.appKitRect(
+                        fromQuartzRect: $0.offsetBy(dx: display.frame.minX, dy: display.frame.minY)
+                    )
+                }
+                : nil
         )
         // The engine is also the stream delegate so presenter overlay
         // lifecycle callbacks reach the session.

@@ -696,6 +696,9 @@ final class ScreenRecordingModel: ObservableObject {
             accumulatedPauseDuration = 0
             elapsedTime = 0
             state = .recording
+            if let rect = session.capturedScreenRect {
+                ScreenRecordingRangeBorder.shared.show(rect: rect)
+            }
             startTimer()
             recordingSessionBegan()
         } catch {
@@ -831,6 +834,7 @@ final class ScreenRecordingModel: ObservableObject {
             return
         }
         state = .stopping
+        ScreenRecordingRangeBorder.shared.close()
         stopTimer()
         self.session = nil
         ScreenRecordingFloatingController.shared.close()
@@ -874,6 +878,7 @@ final class ScreenRecordingModel: ObservableObject {
     }
 
     func cancel() {
+        ScreenRecordingRangeBorder.shared.close()
         guard let session else {
             state = .idle
             stopTimer()
@@ -927,6 +932,7 @@ final class ScreenRecordingModel: ObservableObject {
     }
 
     func shutdown() {
+        ScreenRecordingRangeBorder.shared.close()
         timerTask?.cancel()
         timerTask = nil
         ScreenRecordingPrepareBarController.shared.close()
