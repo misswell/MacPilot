@@ -497,6 +497,10 @@ enum AppText {
         "launchDuplicate": "已存在 \"%@\" 的启动规则。", "launchPlanRunning": "%d 个任务正在等待启动",
         "launchPlanIdle": "没有待启动任务", "launchPlanDone": "本次启动计划已完成",
         "bleUnlock": "BLE 解锁", "ble": "BLE", "bleUnlockSubtitle": "根据 BLE 设备（iPhone、Apple Watch 等）的接近程度自动锁定和解锁 Mac。",
+        "bleAdvertisementStalledTitle": "蓝牙广播接收异常",
+        "bleAdvertisementStalledMessage": "MacPilot 已经很长时间没有收到任何蓝牙广播，接近解锁暂时无法工作。系统的蓝牙服务可能停止了向本应用投递数据。重启 MacPilot 无效时，请关闭再打开系统蓝牙，或注销其他用户会话后重启电脑。",
+        "bleConflictingInstanceTitle": "其他用户会话正在运行 MacPilot",
+        "bleConflictingInstanceCount": "检测到另外 %d 个 MacPilot 实例正在运行（通常来自其他用户账户）。多个实例同时监控蓝牙会互相干扰，可能导致接近解锁失效。建议只保留当前会话的 MacPilot。",
         "remoteControl": "远程控制",
         "remoteControlSubtitle": "用同一局域网内的 iPhone 远程执行锁屏、黑屏、解锁和唤醒解锁。登录密码始终只保存在这台 Mac 上。",
         "remoteEnableSection": "iPhone 遥控",
@@ -1411,6 +1415,10 @@ enum AppText {
             "launchDuplicate": "A launch rule for \"%@\" already exists.", "launchPlanRunning": "%d launches are waiting",
             "launchPlanIdle": "No scheduled launches", "launchPlanDone": "This launch plan is complete",
             "bleUnlock": "BLE Unlock", "ble": "BLE", "bleUnlockSubtitle": "Automatically lock and unlock your Mac by proximity of a BLE device (iPhone, Apple Watch, etc.).",
+            "bleAdvertisementStalledTitle": "Bluetooth advertisement stream stalled",
+            "bleAdvertisementStalledMessage": "MacPilot has not received any Bluetooth advertisements for a long time, so proximity unlock cannot work right now. The system Bluetooth service may have stopped delivering data to this app. If restarting MacPilot does not help, toggle Bluetooth off and on, or sign out of other user sessions and reboot.",
+            "bleConflictingInstanceTitle": "MacPilot is running in another user session",
+            "bleConflictingInstanceCount": "%d other MacPilot instance(s) are running right now (usually from another user account). Multiple instances monitoring Bluetooth can interfere with each other and break proximity unlock. Keep only this session's MacPilot.",
             "remoteControl": "Remote Control",
             "remoteControlSubtitle": "Lock, blank, unlock and wake-and-unlock this Mac from an iPhone on the same local network. The login password never leaves this Mac.",
             "remoteEnableSection": "iPhone Remote",
@@ -4496,6 +4504,9 @@ struct BLEUnlockView: View {
                 header
                 enableSection
                 if ble.settings.isEnabled {
+                    if ble.advertisementStreamStalled || ble.conflictingInstanceCount > 0 {
+                        healthWarnings
+                    }
                     deviceSection
                     thresholdSection
                     optionsSection
@@ -4570,6 +4581,35 @@ struct BLEUnlockView: View {
                 accessibilityHint
             }
         }
+    }
+
+    @ViewBuilder private var healthWarnings: some View {
+        if ble.advertisementStreamStalled {
+            inlineWarning(
+                icon: "antenna.radiowaves.left.and.right.slash",
+                title: model.t("bleAdvertisementStalledTitle"),
+                message: model.t("bleAdvertisementStalledMessage")
+            )
+        }
+        if ble.conflictingInstanceCount > 0 {
+            inlineWarning(
+                icon: "person.2.fill",
+                title: model.t("bleConflictingInstanceTitle"),
+                message: model.t("bleConflictingInstanceCount", ble.conflictingInstanceCount)
+            )
+        }
+    }
+
+    private func inlineWarning(icon: String, title: String, message: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: icon)
+                .font(.subheadline).foregroundStyle(.orange)
+            Text(message).font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.orange.opacity(0.35)))
     }
 
     @ViewBuilder private var accessibilityHint: some View {

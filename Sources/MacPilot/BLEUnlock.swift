@@ -416,6 +416,46 @@ struct BLEMonitoringRecoveryPlan: Equatable {
     }
 }
 
+/// Detects the failure mode where CoreBluetooth keeps reporting a powered-on
+/// radio and an "active" scan, but stops delivering advertisements to the
+/// process entirely.
+///
+/// The September 2026 proximity-unlock wedge looked exactly like a healthy
+/// scan from inside the app — state poweredOn, `scanForPeripherals` accepted,
+/// recovery restarts running — while an unfiltered scan from another process
+/// received hundreds of advertisements per second, including the monitored
+/// device a metre away. That state survives central manager recreation and
+/// app relaunch, so detection cannot live inside the callback machinery: the
+/// only observable signature is that an unfiltered scan hears *nothing at
+/// all* — not even unrelated neighbours — for far longer than any real radio
+/// environment stays quiet.
+struct BLEAdvertisementLiveness: Equatable {
+    let silenceThreshold: TimeInterval
+    private(set) var lastActivityAt: Date
+
+    init(silenceThreshold: TimeInterval = 600, now: Date = Date()) {
+        self.silenceThreshold = silenceThreshold
+        self.lastActivityAt = now
+    }
+
+    mutating func noteActivity(now: Date = Date()) {
+        lastActivityAt = now
+    }
+
+    /// Returns true when the process should be receiving advertisement
+    /// callbacks but has received none for `silenceThreshold`. While
+    /// monitoring is not expected to produce callbacks — feature off, display
+    /// or system asleep, no scan and no connected device — the baseline is
+    /// kept fresh so re-arming cannot trip on stale history.
+    mutating func evaluate(now: Date, monitoringActive: Bool) -> Bool {
+        guard monitoringActive else {
+            lastActivityAt = now
+            return false
+        }
+        return now.timeIntervalSince(lastActivityAt) >= silenceThreshold
+    }
+}
+
 /// Gives the lock screen time to become interactive after the display wakes.
 /// The first attempt is intentionally delayed; later attempts cover both a
 /// slow wake and a missed `screensDidWake` notification without running
@@ -694,6 +734,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     @Published private(set) var bluetoothPoweredOn = false
     @Published private(set) var bluetoothPowerWarned = false
     @Published private(set) var isScanning = false
+    /// True when monitoring should be producing CoreBluetooth callbacks but
+    /// none have arrived for a long window — the signature of the system
+    /// stopping advertisement delivery to this process.
+    @Published private(set) var advertisementStreamStalled = false
+    /// Other running copies of this executable, usually MacPilot launched in
+    /// another user's fast-switched session.
+    @Published private(set) var conflictingInstanceCount = 0
 
     var settings = BLEUnlockSettings()
 
@@ -702,6 +749,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
     private var deviceRefreshBatcher = BLEDeviceListRefreshBatcher()
     private var deviceRefreshTask: Task<Void, Never>?
     private var scanCleanupTimer: Timer?
+    private var livenessTimer: Timer?
+    private var advertisementLiveness = BLEAdvertisementLiveness()
     var monitoredUUID: UUID?
     var secondaryMonitoredUUID: UUID?
     private var monitoredRuntimes: [UUID: BLEMonitoredDeviceRuntime] = [:]
@@ -857,6 +906,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
             relation: settings.deviceRelation
         )
         refreshPublishedMonitoringState()
+        advertisementLiveness.noteActivity()
+        startLivenessTimer()
         scanForPeripherals()
         logSettings("monitoring started")
     }
@@ -1085,6 +1136,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         connected = false
         activeMode = false
         recoveringFromSystemSleep = false
+        stopLivenessTimer()
+        advertisementStreamStalled = false
+        conflictingInstanceCount = 0
         // Drop the CoreBluetooth central too: holding it keeps a Bluetooth XPC
         // session (and its delegate graph) alive for nothing while the feature
         // is off. `ensureCentralManager()` recreates it on the next enable.
@@ -1177,6 +1231,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
     private func updateMonitoredPeripheral(_ rssi: Int, for uuid: UUID) {
         guard let runtime = runtime(for: uuid) else { return }
+        noteAdvertisementActivity()
         let unlockThreshold = settings.unlockRSSI == Self.unlockDisabled ? settings.lockRSSI : settings.unlockRSSI
         if rssi >= unlockThreshold && !runtime.presence {
             log("RSSI crossed unlock threshold raw=\(rssi) threshold=\(unlockThreshold) previousPresence=false")
@@ -1355,6 +1410,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         let rssi = RSSI.intValue > 0 ? 0 : RSSI.intValue
+        noteAdvertisementActivity()
 
         if settings.isEnabled,
            let uuid = monitoredUUIDs.first(where: { $0 == peripheral.identifier }) {
@@ -2069,6 +2125,59 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         monitoringRecoveryTask?.cancel()
         monitoringRecoveryTask = nil
         log("monitoring recovery cancelled reason=\(reason)")
+    }
+
+    // MARK: Advertisement liveness watchdog
+
+    /// Any advertisement callback — monitored or not — proves the system is
+    /// still delivering Bluetooth data to this process.
+    private func noteAdvertisementActivity() {
+        advertisementLiveness.noteActivity()
+        if advertisementStreamStalled {
+            advertisementStreamStalled = false
+            log("advertisement stream recovered")
+        }
+    }
+
+    private func startLivenessTimer() {
+        guard livenessTimer == nil else { return }
+        livenessTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.evaluateAdvertisementLiveness() }
+        }
+        if let timer = livenessTimer { RunLoop.main.add(timer, forMode: .common) }
+    }
+
+    private func stopLivenessTimer() {
+        livenessTimer?.invalidate()
+        livenessTimer = nil
+    }
+
+    private func evaluateAdvertisementLiveness() {
+        let monitoringActive = settings.isEnabled
+            && hasMonitoredDevice
+            && bluetoothPoweredOn
+            && !displaySleep
+            && !systemSleep
+            && (isScanning || monitoredRuntimes.values.contains { $0.activeModeTimer != nil })
+        let silent = advertisementLiveness.evaluate(now: Date(), monitoringActive: monitoringActive)
+        if silent, !advertisementStreamStalled {
+            advertisementStreamStalled = true
+            log("advertisement stream stalled reason=noCallbacksWhileMonitoringActive threshold=\(Int(advertisementLiveness.silenceThreshold))s; attempting monitoring recovery")
+            // In-process recovery cannot fix every cause (the 2026-09 wedge
+            // survived it), but it is free to try and the published flag is
+            // what tells the user something the callbacks never will.
+            startMonitoringRecovery(reason: "advertisementSilence", restartImmediately: true)
+        }
+        checkConflictingInstances()
+    }
+
+    private func checkConflictingInstances() {
+        let count = DuplicateInstanceDetector.conflictingInstanceCount()
+        guard count != conflictingInstanceCount else { return }
+        if count > conflictingInstanceCount {
+            log("conflicting instances detected count=\(count) hint=same-bundle instances in other sessions can wedge BLE advertisement delivery")
+        }
+        conflictingInstanceCount = count
     }
 
     private var monitoringNeedsWakeRestart: Bool {

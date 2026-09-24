@@ -35,6 +35,27 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     /// a stalled step would otherwise leave the fallback silently dead.
     private let attemptTimeout: TimeInterval = 12
 
+    /// Consecutive attempts that timed out without even discovering the phone.
+    /// Drives the exponential backoff so a wedged radio or an absent phone
+    /// cannot turn the fallback into a permanent twelve-second restart churn.
+    private var consecutiveStalls = 0
+
+    /// Backoff series for stalled attempts: the base timeout doubles with each
+    /// consecutive stall and is capped so a long outage still retries, just
+    /// quietly. Any progress (discovery, connection, channel) resets the count.
+    nonisolated static func backoffTimeout(base: TimeInterval, stallCount: Int, cap: TimeInterval = 300) -> TimeInterval {
+        guard stallCount > 0 else { return base }
+        // The phone only advertises when it wants the fallback, so an idle
+        // miss is the normal case and the very first retry must already slow
+        // down; only a fresh attempt after progress earns the base timeout.
+        let exponent = min(stallCount, 8)
+        return min(base * pow(2.0, Double(exponent)), cap)
+    }
+
+    private var currentAttemptTimeout: TimeInterval {
+        Self.backoffTimeout(base: attemptTimeout, stallCount: consecutiveStalls)
+    }
+
     // MARK: - Lifecycle
 
     func start() {
@@ -53,6 +74,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
 
     func stop() {
         wantsToRun = false
+        consecutiveStalls = 0
         attemptWatchdog?.cancel()
         attemptWatchdog = nil
         isScanning = false
@@ -99,9 +121,10 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     private func armWatchdog() {
         attemptWatchdog?.cancel()
         attemptWatchdog = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(self?.attemptTimeout ?? 12))
+            try? await Task.sleep(for: .seconds(self?.currentAttemptTimeout ?? 12))
             guard let self, !Task.isCancelled, self.wantsToRun else { return }
-            self.onLog?("BLE attempt stalled; restarting discovery")
+            self.consecutiveStalls += 1
+            self.onLog?("BLE attempt stalled; restarting discovery timeout=\(Int(self.currentAttemptTimeout))s stalls=\(self.consecutiveStalls)")
             self.resetAttempt()
         }
     }
@@ -145,6 +168,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         rssi RSSI: NSNumber
     ) {
         guard wantsToRun, self.peripheral == nil else { return }
+        consecutiveStalls = 0
         self.peripheral = peripheral
         peripheral.delegate = self
         central.stopScan()
