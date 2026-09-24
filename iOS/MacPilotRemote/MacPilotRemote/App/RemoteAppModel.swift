@@ -187,7 +187,11 @@ final class RemoteAppModel: ObservableObject {
         discoveryStartedAt = Date()
         discovery.start()
 
-        ble.onLog = { [weak self] message in self?.bleLog(message) }
+        ble.onLog = { [weak self] message in
+            guard let self else { return }
+            self.bleLog(message)
+            self.bleFallbackAdvertising = self.ble.isAdvertising
+        }
         ble.onChannel = { [weak self] channel in self?.adoptBLEChannel(channel) }
 
         if let preferred = store.preferredMac {
@@ -388,7 +392,7 @@ final class RemoteAppModel: ObservableObject {
     /// and refusing to dial here would make the fastest path conditional on the
     /// slowest one.
     private func adoptBLEChannel(_ channel: CBL2CAPChannel) {
-        bleFallbackAdvertising = false
+        bleFallbackAdvertising = ble.isAdvertising
         guard !connectionState.isConnected else {
             close(channel)
             return

@@ -204,11 +204,13 @@ final class RemoteConnectionManager {
             transportReadyAt = Date()
             captureResolvedEndpoint()
             startHandshake()
-        case .connecting, .waiting:
-            // Bonjour resolution, BLE channel setup and Wi-Fi settling can park
-            // the link here for a moment; stay in `connecting` instead of
-            // alarming the user.
+        case .connecting:
             break
+        case .waiting:
+            // A dial may wait for Wi-Fi to settle, but a link that was already
+            // ready has lost its path. End it so the app can advertise BLE and
+            // race the available paths instead of remaining "connected" forever.
+            if transportKind == .network, isTransportReady { disconnect() }
         case .failed, .closed:
             disconnect()
         }
@@ -448,9 +450,16 @@ final class RemoteConnectionManager {
                 try? await Task.sleep(for: .seconds(15))
                 guard let self, self.phase == .ready else { return }
                 let started = Date()
-                if let response = try? await self.send(.ping, timeout: 5), response.success {
+                let response = try? await self.send(.ping, timeout: 5)
+                guard self.phase == .ready else { return }
+                if response?.success == true {
                     let milliseconds = Int(Date().timeIntervalSince(started) * 1000)
                     self.onLatency?(milliseconds)
+                } else {
+                    // A silent TCP path can stay in NWConnection.ready after
+                    // Wi-Fi disappears. A failed heartbeat must start failover.
+                    self.disconnect()
+                    return
                 }
             }
         }
