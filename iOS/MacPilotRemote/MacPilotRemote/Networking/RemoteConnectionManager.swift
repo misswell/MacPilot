@@ -69,6 +69,7 @@ final class RemoteConnectionManager {
     private var resolvedEndpoint = ResolvedEndpoint()
 
     private var pingTask: Task<Void, Never>?
+    private var pairConfirmationTask: Task<Void, Never>?
     private var didReportDisconnect = false
     private var connectStartedAt: Date?
     private var transportReadyAt: Date?
@@ -115,6 +116,8 @@ final class RemoteConnectionManager {
 
     func disconnect(report: Bool = true) {
         cancelPing()
+        pairConfirmationTask?.cancel()
+        pairConfirmationTask = nil
         failPendingRequests(RemoteConnectionError.network("disconnected"))
         transport?.onStateChange = nil
         transport?.onReceive = nil
@@ -139,13 +142,32 @@ final class RemoteConnectionManager {
 
     /// Sends the code the user read off the Mac.
     func submitPairCode(_ code: String) {
-        guard phase == .pairing else { return }
+        guard phase == .pairing, let transport else {
+            onFailure?(.network("pairing connection is no longer active"))
+            return
+        }
         let normalized = RemotePairingCode.normalize(code)
         guard RemotePairingCode.isValid(normalized) else {
             onFailure?(.invalidPairCode)
             return
         }
-        try? sendPlain(RemoteHandshakeMessage(kind: .pairConfirm, pairCode: normalized))
+        do {
+            let frame = try RemoteFrameCodec.encodePlain(
+                RemoteHandshakeMessage(kind: .pairConfirm, pairCode: normalized)
+            )
+            transport.send(frame) { [weak self] error in
+                guard let self, self.transport === transport, error != nil else { return }
+                self.fail(.network("could not send pairing confirmation"))
+            }
+            pairConfirmationTask?.cancel()
+            pairConfirmationTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled, let self, self.phase == .pairing else { return }
+                self.fail(.network("pairing confirmation timed out"))
+            }
+        } catch {
+            fail(.network("could not encode pairing confirmation"))
+        }
     }
 
     func cancelPairing() {
@@ -276,6 +298,8 @@ final class RemoteConnectionManager {
     }
 
     private func handlePairResult(_ message: RemoteHandshakeMessage) {
+        pairConfirmationTask?.cancel()
+        pairConfirmationTask = nil
         if let errorCode = message.errorCode {
             switch errorCode {
             case .pairingRequired:

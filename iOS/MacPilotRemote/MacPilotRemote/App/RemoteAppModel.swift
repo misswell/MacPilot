@@ -23,7 +23,7 @@ import UIKit
 @MainActor
 final class RemoteAppModel: ObservableObject {
     struct PairingPrompt: Identifiable, Equatable {
-        let id: UUID
+        let id = UUID()
         let name: String
     }
 
@@ -268,7 +268,7 @@ final class RemoteAppModel: ObservableObject {
             guard let self, let manager, self.isCurrent(manager) else { return }
             self.macState = state
         }
-        manager.onPairingPrompt = { [weak self, weak manager] deviceID, name in
+        manager.onPairingPrompt = { [weak self, weak manager] _, name in
             guard let self, let manager else { return }
             if !self.isCurrent(manager) {
                 guard self.candidates.contains(where: { $0.manager === manager }) else { return }
@@ -279,7 +279,7 @@ final class RemoteAppModel: ObservableObject {
                 self.promote(manager)
                 self.connectionState = .pairing
             }
-            self.pairingPrompt = PairingPrompt(id: deviceID, name: name)
+            self.pairingPrompt = PairingPrompt(name: name)
         }
         manager.onLatency = { [weak self, weak manager] milliseconds in
             guard let self, let manager, self.isCurrent(manager) else { return }
@@ -295,6 +295,10 @@ final class RemoteAppModel: ObservableObject {
             }
             self.errorKey = error.messageKey
             self.connectionState = .failed(self.text(error.messageKey))
+            if self.pairingTarget != nil {
+                self.pairingPrompt = nil
+                self.stopConnectSupervisor()
+            }
         }
         manager.onDisconnected = { [weak self, weak manager] in
             guard let self, let manager else { return }
@@ -703,6 +707,7 @@ final class RemoteAppModel: ObservableObject {
         guard !connectionState.isConnected,
               connectionState != .pairing,
               connectionState != .authenticating else { return }
+        if pairingTarget != nil, errorKey != nil { return }
 
         // Discovery updates must only add a path to the selected Mac. Otherwise
         // a second nearby Mac can silently take over during a reconnect.
@@ -769,6 +774,13 @@ final class RemoteAppModel: ObservableObject {
 
     private func handleDisconnected() {
         guard connectionState != .idle else { return }
+        if pairingTarget != nil {
+            pairingPrompt = nil
+            errorKey = "errorNetwork"
+            connectionState = .failed(text("errorNetwork"))
+            stopConnectSupervisor()
+            return
+        }
         connectionState = hasEverConnected ? .reconnecting : .failed(text("errorNetwork"))
         refreshTransportDescription()
         startBLEFallback()
@@ -784,6 +796,8 @@ final class RemoteAppModel: ObservableObject {
         startBLEFallback()
         startConnectSupervisor()
     }
+
+    var pairingTargetID: UUID? { pairingTarget?.id }
 
     func connect(to mac: PairedMac) {
         guard mac.deviceID != nil else { return }
@@ -835,6 +849,11 @@ final class RemoteAppModel: ObservableObject {
     // MARK: - Pairing
 
     func submitPairCode(_ code: String) {
+        guard connection.isPairing else {
+            errorKey = "errorNetwork"
+            return
+        }
+        errorKey = nil
         connection.submitPairCode(code)
     }
 

@@ -109,11 +109,28 @@ struct DevicesView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 0)
-                        Button(appModel.text("pairingConfirm")) { appModel.pair(with: mac) }
+                        if appModel.pairingTargetID == mac.id, appModel.errorKey == nil {
+                            ProgressView()
+                                .accessibilityLabel(appModel.text("pairingConnecting"))
+                        } else {
+                            Button(appModel.text(appModel.pairingTargetID == mac.id ? "retry" : "pairDevice")) {
+                                appModel.pair(with: mac)
+                            }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
+                        }
                     }
                 }
+            }
+            if appModel.pairingTargetID != nil {
+                if let errorKey = appModel.errorKey {
+                    Text(appModel.text(errorKey))
+                        .foregroundStyle(.orange)
+                } else {
+                    Text(appModel.text("pairingConnecting"))
+                        .foregroundStyle(.secondary)
+                }
+                Button(appModel.text("pairingCancel")) { appModel.cancelPairing() }
             }
         }
     }

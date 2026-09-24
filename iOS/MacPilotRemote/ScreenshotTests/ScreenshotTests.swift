@@ -48,8 +48,8 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(tabBar.waitForExistence(timeout: 10))
         tabBar.buttons.element(boundBy: 1).tap()
         sleep(2)
-        // The discovered row's pair button: 确认配对 (zh-Hans) / Pair (en).
-        let pairZH = app.buttons["确认配对"].firstMatch
+        // The discovered row's pair button: 配对 (zh-Hans) / Pair (en).
+        let pairZH = app.buttons["配对"].firstMatch
         let pairEN = app.buttons["Pair"].firstMatch
         let pair = pairZH.exists ? pairZH : pairEN
         guard pair.exists else {
