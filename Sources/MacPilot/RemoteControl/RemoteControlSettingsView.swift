@@ -12,6 +12,8 @@ struct RemoteControlSettingsView: View {
 
     @State private var deviceNameDraft = ""
     @State private var nameMessage: String?
+    @State private var showingPassword = false
+    @State private var passwordEntry = ""
 
     var body: some View {
         ScrollView {
@@ -28,6 +30,7 @@ struct RemoteControlSettingsView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { deviceNameDraft = deviceStore.deviceName }
+        .sheet(isPresented: $showingPassword) { passwordSheet }
         .alert("MacPilot", isPresented: Binding(get: { nameMessage != nil }, set: { if !$0 { nameMessage = nil } })) {
             Button("OK", role: .cancel) { nameMessage = nil }
         } message: {
@@ -155,6 +158,11 @@ struct RemoteControlSettingsView: View {
                 value: server.screenControl.hasCredential ? t("remoteConfigured") : t("remoteNotConfigured"),
                 tint: server.screenControl.hasCredential ? .green : .orange
             )
+            Button(t("bleSetPassword")) {
+                passwordEntry = ""
+                showingPassword = true
+            }
+            .macPilotProminentButtonStyle()
             statusRow(
                 t("remoteLocalNetwork"),
                 value: server.status.isRunning ? t("remoteAvailable") : t("remoteUnavailable"),
@@ -175,6 +183,28 @@ struct RemoteControlSettingsView: View {
             Text(value).foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
+    }
+
+    private var passwordSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(t("bleEnterPassword")).font(.headline)
+            Text(t("blePasswordInfo")).font(.subheadline).foregroundStyle(.secondary)
+            SecureField(t("bleEnterPassword"), text: $passwordEntry)
+            HStack {
+                Spacer()
+                Button(t("cancel")) { showingPassword = false }.keyboardShortcut(.cancelAction)
+                Button(t("save")) {
+                    nameMessage = model.ble.storePassword(passwordEntry)
+                        ? t("blePasswordStored") : t("blePasswordFailed", "Keychain")
+                    passwordEntry = ""
+                    showingPassword = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(passwordEntry.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
     }
 
     // MARK: - Helpers

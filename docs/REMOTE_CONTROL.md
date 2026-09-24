@@ -212,8 +212,11 @@ deep link to jump to, so it links to the download page instead.
    control.
 2. Grant Accessibility permission (needed for the lock shortcut and key events)
    if it is not already granted.
-3. Make sure the unlock password is saved, otherwise unlock commands return
-   `.credentialNotConfigured`.
+3. Set the unlock password on the Remote Control page if it is not already
+   saved. Remote Control and BLE Unlock share the same Mac Keychain credential,
+   so either page shows it as configured after saving it on the other. BLE
+   Unlock does not need to be enabled. Without a saved password, unlock commands
+   return `.credentialNotConfigured`.
 4. Click **Start pairing** to open the 120 second pairing window.
 5. In the iPhone app, open **Devices**, tap the discovered Mac, and type the code
    shown on the Mac.
