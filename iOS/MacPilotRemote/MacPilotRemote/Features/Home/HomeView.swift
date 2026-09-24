@@ -16,6 +16,7 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
+                    deviceSwitcher
                     statusHeader
                     actionGrid
                     levelsPanel
@@ -29,12 +30,69 @@ struct HomeView: View {
                 .padding(.bottom, 28)
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle(appModel.activeMacName)
+            .navigationTitle(appModel.text("tabHome"))
             .navigationBarTitleDisplayMode(.inline)
         }
     }
 
     // MARK: - Header
+
+    private var deviceSwitcher: some View {
+        Menu {
+            ForEach(appModel.pairedMacs) { mac in
+                Button {
+                    appModel.connect(to: mac)
+                } label: {
+                    Label(
+                        "\(mac.name) · \(presenceLabel(for: mac))",
+                        systemImage: appModel.selectedMacID == mac.id ? "checkmark.circle.fill" : "desktopcomputer"
+                    )
+                }
+            }
+            if !appModel.pairedMacs.isEmpty { Divider() }
+            Button {
+                selectedTab = .devices
+            } label: {
+                Label(appModel.text("manageMacs"), systemImage: "plus.circle")
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "desktopcomputer")
+                    .font(.title3)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(appModel.text("controllingMac"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(appModel.pairedMacs.isEmpty ? appModel.text("chooseMac") : appModel.activeMacName)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                }
+                Spacer(minLength: 8)
+                Text(appModel.text("switchMac"))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.accentColor)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+            )
+        }
+        .accessibilityLabel(appModel.text("switchMacAccessibility", appModel.activeMacName))
+    }
+
+    private func presenceLabel(for mac: PairedMac) -> String {
+        switch appModel.status(for: mac) {
+        case .connected: appModel.text("connectedLabel")
+        case .online: appModel.text("online")
+        case .offline: appModel.text("offline")
+        }
+    }
 
     private var statusHeader: some View {
         HStack(spacing: 10) {
@@ -269,15 +327,6 @@ struct HomeView: View {
 }
 
 extension RemoteAppModel {
-    /// Title shown on the home screen.
-    var activeMacName: String {
-        activeMacName(store.preferredMac)
-    }
-
-    private func activeMacName(_ mac: PairedMac?) -> String {
-        mac?.name ?? "MacPilot"
-    }
-
     /// `nil` when this Mac has no mute control at all, as opposed to a device
     /// that is simply not muted.
     var volumeMuted: Bool? { macState?.volumeMuted?.boolValue }

@@ -33,6 +33,11 @@ enum RemoteText {
         "tabHome": "控制",
         "tabDevices": "设备",
         "tabSettings": "设置",
+        "controllingMac": "当前控制的 Mac",
+        "chooseMac": "选择 Mac",
+        "switchMac": "切换",
+        "switchMacAccessibility": "当前控制 %@，切换 Mac",
+        "manageMacs": "管理设备",
 
         "stateIdle": "未连接",
         "stateDiscovering": "正在查找 Mac…",
@@ -162,6 +167,11 @@ enum RemoteText {
         "tabHome": "Control",
         "tabDevices": "Devices",
         "tabSettings": "Settings",
+        "controllingMac": "Controlling Mac",
+        "chooseMac": "Choose a Mac",
+        "switchMac": "Switch",
+        "switchMacAccessibility": "Controlling %@, switch Mac",
+        "manageMacs": "Manage devices",
 
         "stateIdle": "Not connected",
         "stateDiscovering": "Looking for your Mac…",

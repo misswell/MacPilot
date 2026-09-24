@@ -242,6 +242,12 @@ final class RemoteConnectionManager {
             fail(.network("incomplete server hello"))
             return
         }
+        // A BLE channel can arrive from any nearby Mac. Never let it replace the
+        // device the user selected, even if that Mac has a valid pairing key.
+        if let targetDeviceID, targetDeviceID != deviceID {
+            fail(.authenticationFailed)
+            return
+        }
         serverNonce = nonce
         targetDeviceID = deviceID
         if let name = message.deviceName, !name.isEmpty { targetName = name }

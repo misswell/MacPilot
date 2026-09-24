@@ -222,6 +222,11 @@ The Mac listens on `_macpilot._tcp` and prefers port 43847, falling back to a
 dynamic port if that one is taken. macOS asks for Local Network permission the
 first time; both sides need it.
 
+After pairing more than one Mac, the iPhone's **Control** screen has a Mac
+switcher above the remote actions. It shows each paired Mac's connection state
+and remembers the selected Mac for the next launch. If that Mac goes offline,
+the phone keeps trying it rather than silently controlling another nearby Mac.
+
 ## Building the iOS app
 
 Simulator build:

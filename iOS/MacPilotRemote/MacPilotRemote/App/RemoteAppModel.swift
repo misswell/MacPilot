@@ -251,6 +251,7 @@ final class RemoteAppModel: ObservableObject {
                 self.handleConnected(deviceID: deviceID, name: name, endpoint: endpoint)
                 return
             }
+            guard self.candidates.contains(where: { $0.manager === manager }) else { return }
             self.raceLog("race won by \(path.rawValue)")
             self.promote(manager)
             self.handleConnected(deviceID: deviceID, name: name, endpoint: endpoint)
@@ -262,6 +263,7 @@ final class RemoteAppModel: ObservableObject {
         manager.onPairingPrompt = { [weak self, weak manager] deviceID, name in
             guard let self, let manager else { return }
             if !self.isCurrent(manager) {
+                guard self.candidates.contains(where: { $0.manager === manager }) else { return }
                 // Two candidates can reach the pairing exchange, but the Mac
                 // shows exactly one code, so only one link may carry it.
                 // Whichever asks first gets to be that link.
@@ -351,12 +353,6 @@ final class RemoteAppModel: ObservableObject {
 
     // MARK: - Bluetooth path
 
-    /// Name to show while the Mac is still unidentified; the handshake replaces
-    /// it with the real one.
-    private var blePeerName: String {
-        pairingTarget?.name ?? activeMac?.name ?? store.preferredMac?.name ?? "Mac"
-    }
-
     /// Advertising runs whenever the app is in the foreground and not connected.
     ///
     /// It deliberately no longer waits for the network to fail: Bluetooth is one
@@ -385,6 +381,10 @@ final class RemoteAppModel: ObservableObject {
             close(channel)
             return
         }
+        guard let target = raceTarget else {
+            close(channel)
+            return
+        }
         // A pairing exchange must stay on a single link (see `isRacingFirstPairing`):
         // the Mac shows one code and a second link would derive its own.
         if connectionState == .pairing {
@@ -404,8 +404,8 @@ final class RemoteAppModel: ObservableObject {
         addCandidate(
             path: .bluetooth,
             transport: makeBLETransport(channel),
-            deviceID: nil,
-            name: blePeerName
+            deviceID: target.deviceID,
+            name: target.name
         )
     }
 
@@ -564,14 +564,13 @@ final class RemoteAppModel: ObservableObject {
         guard candidates.isEmpty, !isBLEDiagnosticRun else { return }
         errorKey = nil
         if !discovery.isBrowsing { discovery.start() }
-        // The Bluetooth path takes part from the first attempt; it is the only
-        // one that works with no shared network at all.
-        startBLEFallback()
-
         guard let target = raceTarget else {
             connectionState = .discovering
             return
         }
+        // The Bluetooth path takes part from the first attempt; it is the only
+        // one that works with no shared network at all.
+        startBLEFallback()
 
         // A first pairing is deliberately single-path; `isRacingFirstPairing`
         // explains why. Everything else goes out in parallel.
@@ -697,20 +696,11 @@ final class RemoteAppModel: ObservableObject {
               connectionState != .pairing,
               connectionState != .authenticating else { return }
 
-        // Prefer the default Mac, then any other paired Mac. Unpaired Macs are
-        // only connected when the user explicitly asks to pair.
-        let pairedTarget = macs.first { discovered in
-            store.isPaired(id: discovered.id)
-                && (store.preferredMacID == discovered.id.uuidString || store.preferredMacID == nil)
-        } ?? macs.first { store.isPaired(id: $0.id) }
-
-        guard let target = pairedTarget else {
-            // Keep a real failure visible instead of silently flipping back.
-            if case .failed = connectionState { return }
-            connectionState = .discovering
-            return
-        }
-        activeMac = store.mac(id: target.id)
+        // Discovery updates must only add a path to the selected Mac. Otherwise
+        // a second nearby Mac can silently take over during a reconnect.
+        guard let selectedID = pairingTarget?.id ?? activeMac?.deviceID ?? store.preferredMac?.deviceID,
+              let target = macs.first(where: { $0.id == selectedID }) else { return }
+        if pairingTarget == nil { activeMac = store.mac(id: target.id) }
 
         // The supervisor owns dialling. A race that is already in flight gets the
         // freshly resolved address added to it: a remembered address can be
@@ -729,6 +719,7 @@ final class RemoteAppModel: ObservableObject {
     }
 
     private func handleConnected(deviceID: UUID, name: String, endpoint: RemoteConnectionManager.ResolvedEndpoint) {
+        let wasPairing = pairingTarget != nil
         hasEverConnected = true
         pairingTarget = nil
         stopConnectSupervisor()
@@ -764,41 +755,63 @@ final class RemoteAppModel: ObservableObject {
             ),
             name: name
         )
+        if wasPairing { store.preferredMacID = deviceID.uuidString }
         activeMac = store.mac(id: deviceID)
     }
 
     private func handleDisconnected() {
         guard connectionState != .idle else { return }
-        refreshTransportDescription()
         connectionState = hasEverConnected ? .reconnecting : .failed(text("errorNetwork"))
+        refreshTransportDescription()
         startBLEFallback()
         startConnectSupervisor()
     }
 
     /// User driven connect from the Devices tab, used for first-time pairing.
     func pair(with mac: DiscoveredMac) {
+        resetConnectionForTarget()
         pairingTarget = mac
         activeMac = store.mac(id: mac.id)
-        errorKey = nil
-        // A first pairing runs on a single link (`isRacingFirstPairing`). A
-        // Bluetooth channel the Mac already opened is a legitimate carrier — it
-        // is the only link that works with no shared network — so it is kept
-        // rather than replaced by a second, competing exchange.
-        if !candidates.contains(where: { $0.path == .bluetooth }) {
-            cancelCandidates()
-            connection.disconnect(report: false)
-        }
-        restartConnectSupervisor()
+        connectionState = .connecting
+        startBLEFallback()
+        startConnectSupervisor()
     }
 
     func connect(to mac: PairedMac) {
         guard mac.deviceID != nil else { return }
+        if activeMac?.id == mac.id, connectionState.isConnected { return }
+        resetConnectionForTarget()
         pairingTarget = nil
         activeMac = mac
         store.preferredMacID = mac.id
+        connectionState = .connecting
+        startBLEFallback()
+        startConnectSupervisor()
+    }
+
+    private func resetConnectionForTarget() {
+        stopConnectSupervisor()
+        stopBLEFallback()
         cancelCandidates()
         connection.disconnect(report: false)
-        restartConnectSupervisor()
+        // A fresh manager makes late callbacks from the previous Mac irrelevant.
+        connection = RemoteConnectionManager()
+        macState = nil
+        latencyMs = nil
+        errorKey = nil
+        infoKey = nil
+        runningCommand = nil
+        pendingLevel = nil
+        isSendingLevel = false
+        isRefreshingState = false
+        hasEverConnected = false
+        pendingMetrics = nil
+        metrics.connectLatencyMs = nil
+        metrics.handshakeLatencyMs = nil
+        metrics.commandRTTMs = nil
+        metrics.executionLatencyMs = nil
+        transportDescription = "—"
+        pairingPrompt = nil
     }
 
     func retry() {
@@ -818,14 +831,25 @@ final class RemoteAppModel: ObservableObject {
     }
 
     func cancelPairing() {
-        pairingPrompt = nil
-        connection.cancelPairing()
-        connectionState = .discovering
+        resetConnectionForTarget()
+        pairingTarget = nil
+        activeMac = store.preferredMac
+        connectionState = activeMac == nil ? .discovering : .connecting
+        if activeMac != nil {
+            startBLEFallback()
+            startConnectSupervisor()
+        }
     }
 
     // MARK: - Devices
 
     var pairedMacs: [PairedMac] { store.pairedMacs }
+
+    var selectedMacID: String? { activeMac?.id ?? store.preferredMac?.id }
+
+    var activeMacName: String {
+        pairingTarget?.name ?? activeMac?.name ?? store.preferredMac?.name ?? "MacPilot"
+    }
 
     func isDefault(_ mac: PairedMac) -> Bool { store.preferredMacID == mac.id }
 
@@ -837,24 +861,21 @@ final class RemoteAppModel: ObservableObject {
         let wasActive = activeMac?.id == mac.id
         store.remove(id: UUID(uuidString: mac.id) ?? UUID())
         if wasActive {
-            stopConnectSupervisor()
-            stopBLEFallback()
-            cancelCandidates()
-            connection.disconnect(report: false)
-            activeMac = nil
-            connectionState = .discovering
+            if let next = store.preferredMac {
+                connect(to: next)
+            } else {
+                resetConnectionForTarget()
+                activeMac = nil
+                connectionState = .discovering
+            }
         }
     }
 
     func removeAllPairings() {
-        stopConnectSupervisor()
-        stopBLEFallback()
-        cancelCandidates()
-        connection.disconnect(report: false)
+        resetConnectionForTarget()
         store.removeAll()
         activeMac = nil
         pairingTarget = nil
-        macState = nil
         connectionState = .discovering
     }
 
@@ -877,12 +898,14 @@ final class RemoteAppModel: ObservableObject {
             errorKey = "errorNotPaired"
             return
         }
+        let manager = connection
         runningCommand = command
-        defer { runningCommand = nil }
+        defer { if isCurrent(manager) { runningCommand = nil } }
 
         let started = Date()
         do {
-            let response = try await connection.send(command)
+            let response = try await manager.send(command)
+            guard isCurrent(manager) else { return }
             metrics.executionLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
             if let state = response.state { macState = state }
             if response.success {
@@ -899,9 +922,11 @@ final class RemoteAppModel: ObservableObject {
                 Haptics.warning()
             }
         } catch let error as RemoteConnectionError {
+            guard isCurrent(manager) else { return }
             errorKey = error.messageKey
             Haptics.warning()
         } catch {
+            guard isCurrent(manager) else { return }
             errorKey = "errorNetwork"
             Haptics.warning()
         }
@@ -935,7 +960,8 @@ final class RemoteAppModel: ObservableObject {
         pendingLevel = PendingLevel(kind: kind, value: min(max(value, 0), 1), muted: muted)
         guard !isSendingLevel else { return }
         isSendingLevel = true
-        Task { await drainPendingLevels() }
+        let manager = connection
+        Task { await drainPendingLevels(using: manager) }
     }
 
     /// Asks the Mac for a fresh state. The panel reads brightness and volume
@@ -947,34 +973,38 @@ final class RemoteAppModel: ObservableObject {
         // open; one is enough.
         guard connection.isReady, !isRefreshingState else { return }
         isRefreshingState = true
+        let manager = connection
         Task { [weak self] in
             guard let self else { return }
-            defer { self.isRefreshingState = false }
-            guard let response = try? await self.connection.send(.getState) else { return }
+            defer { if self.isCurrent(manager) { self.isRefreshingState = false } }
+            guard let response = try? await manager.send(.getState), self.isCurrent(manager) else { return }
             if let state = response.state { self.macState = state }
         }
     }
 
-    private func drainPendingLevels() async {
-        while let next = pendingLevel {
+    private func drainPendingLevels(using manager: RemoteConnectionManager) async {
+        while isCurrent(manager), let next = pendingLevel {
             pendingLevel = nil
             do {
                 let payload = try RemoteLevelRequest(value: next.value, muted: next.muted).encoded()
-                let response = try await connection.send(next.kind.command, payload: payload)
+                let response = try await manager.send(next.kind.command, payload: payload)
+                guard isCurrent(manager) else { return }
                 if let state = response.state { macState = state }
                 if !response.success, let code = response.error?.code {
                     errorKey = code.messageKey
                     Haptics.warning()
                 }
             } catch let error as RemoteConnectionError {
+                guard isCurrent(manager) else { return }
                 errorKey = error.messageKey
                 Haptics.warning()
             } catch {
+                guard isCurrent(manager) else { return }
                 errorKey = "errorNetwork"
                 Haptics.warning()
             }
         }
-        isSendingLevel = false
+        if isCurrent(manager) { isSendingLevel = false }
     }
 
     func clearMessages() {
