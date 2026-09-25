@@ -61,8 +61,8 @@ public final class RightClickMenuCoordinator {
             forName: .menuConfigShouldUpdate,
             object: nil,
             queue: .main
-        ) { _ in
-            Task { @MainActor [weak self] in
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
                 self?.sendMenuConfigurationUpdate()
             }
         }

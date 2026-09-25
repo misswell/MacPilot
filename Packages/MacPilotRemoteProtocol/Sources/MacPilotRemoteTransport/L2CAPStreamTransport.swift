@@ -44,23 +44,23 @@ public final class L2CAPStreamTransport: RemoteTransport {
     public func start() {
         guard !didStart, !didCancel else { return }
         didStart = true
-        pump.onChunk = { data in
-            DispatchQueue.main.async { [weak self] in
+        pump.onChunk = { [weak self] data in
+            DispatchQueue.main.async {
                 guard let self, !self.didCancel, !self.didFinish else { return }
                 self.onReceive?(data)
             }
         }
-        pump.onReady = {
-            DispatchQueue.main.async { [weak self] in
+        pump.onReady = { [weak self] in
+            DispatchQueue.main.async {
                 guard let self, !self.didCancel, !self.didFinish else { return }
                 self.onStateChange?(.ready)
             }
         }
-        pump.onDiagnostic = { message in
-            DispatchQueue.main.async { [weak self] in self?.onDiagnostic?(message) }
+        pump.onDiagnostic = { [weak self] message in
+            DispatchQueue.main.async { self?.onDiagnostic?(message) }
         }
-        pump.onClosed = { reason in
-            DispatchQueue.main.async { [weak self] in
+        pump.onClosed = { [weak self] reason in
+            DispatchQueue.main.async {
                 guard let self, !self.didCancel else { return }
                 self.didFinish = true
                 self.onStateChange?(reason.map { .failed($0) } ?? .closed)
