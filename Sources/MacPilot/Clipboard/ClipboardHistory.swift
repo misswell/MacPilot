@@ -63,6 +63,7 @@ final class ClipboardHistory: ObservableObject {
         // 旧版历史里图片/大数据是内联存进 JSON 的，加载时迁移到磁盘，
         // 之后内存只保留文件引用，彻底释放旧数据占用的内存。
         let migrated = migrateInlineContentToDisk()
+        let countBeforeTrim = allItems.count
         trimToLimit()
         // 仅默认存储位置才回收孤儿文件，避免测试目录误删真实内容文件。
         if storage.isDefaultStorage {
@@ -71,7 +72,7 @@ final class ClipboardHistory: ObservableObject {
             })
             ClipboardContentStore.deleteUnreferencedFiles(referencedFileNames: referencedFiles)
         }
-        if migrated { save() }
+        if migrated || allItems.count != countBeforeTrim { save() }
         updateFilteredItems()
     }
 
@@ -226,16 +227,12 @@ final class ClipboardHistory: ObservableObject {
     }
 
     private func trimToLimit() {
-        let unpinned = allItems.filter { !$0.isPinned }
-        let pinned = allItems.filter(\.isPinned)
-        if unpinned.count >= storageLimit {
-            let kept = pinned + unpinned.prefix(max(0, storageLimit - pinned.count))
-            let keptIDs = Set(kept.map(\.id))
-            for item in allItems where !keptIDs.contains(item.id) {
-                ClipboardContentStore.delete(itemID: item.id)
-            }
-            allItems = kept
+        let keptIDs = ClipboardRetentionPolicy.retainedIDs(from: allItems, countLimit: storageLimit)
+        guard keptIDs.count < allItems.count else { return }
+        for item in allItems where !keptIDs.contains(item.id) {
+            ClipboardContentStore.delete(itemID: item.id)
         }
+        allItems.removeAll { !keptIDs.contains($0.id) }
     }
 
     private func updateFilteredItems() {
