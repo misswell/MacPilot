@@ -716,6 +716,10 @@ enum AppText {
         "pipMediaPaused": "媒体已暂停", "pipBack5Seconds": "后退 5 秒", "pipForward5Seconds": "快进 5 秒", "pipToggleCaptions": "切换字幕", "pipPause": "暂停", "pipPlay": "播放",
         "pipAccessibilityRequired": "需要辅助功能权限才能在其他 App 中拦截全局快捷键。", "pipGrantAccessibility": "授权辅助功能…", "pipOpenAccessibility": "打开辅助功能设置",
         "windowSwitcher": "窗口切换", "windowSwitcherTitle": "窗口切换器", "windowSwitcherSubtitle": "使用 ⌥Tab 在所有应用窗口之间快速切换。按住 Option 连续切换，松开后聚焦选中的窗口。",
+        "diagnostics": "诊断", "resourceMonitor": "资源监控", "resourceRefresh": "刷新采样",
+        "resourceMemory": "内存：%@ MB", "resourceCPU": "CPU：%@%%",
+        "resourceActiveFeatures": "已纳管功能：%@", "resourceTasks": "已纳管任务：%d", "resourceObservers": "已跟踪观察者：%d",
+        "resourceUnavailable": "—", "resourceNone": "无",
         "windowSwitcherShortcut": "⌥Tab",
         "windowSwitcherIncludeMinimized": "显示最小化窗口", "windowSwitcherIncludeHidden": "显示已隐藏应用的窗口",
         "windowSwitcherShowThumbnails": "显示窗口缩略图（需要屏幕录制权限）", "windowSwitcherShowTitles": "显示窗口标题",
@@ -1633,7 +1637,11 @@ enum AppText {
             "pipPermissionRequired": "Screen Recording permission is required to create a Picture-in-Picture window.", "pipGrantPermission": "Grant Screen Recording…", "pipOpenSettings": "Open Settings",
             "pipMediaPaused": "Media paused", "pipBack5Seconds": "Back 5 seconds", "pipForward5Seconds": "Forward 5 seconds", "pipToggleCaptions": "Toggle captions", "pipPause": "Pause", "pipPlay": "Play",
             "pipAccessibilityRequired": "Accessibility permission is required to intercept the global shortcut in other apps.", "pipGrantAccessibility": "Grant Accessibility…", "pipOpenAccessibility": "Open Accessibility Settings",
-            "windowSwitcher": "Window Switcher", "windowSwitcherTitle": "Window Switcher", "windowSwitcherSubtitle": "Quickly switch between windows across applications with ⌥Tab. Hold Option to keep cycling, then release it to focus the selected window.",
+        "windowSwitcher": "Window Switcher", "windowSwitcherTitle": "Window Switcher", "windowSwitcherSubtitle": "Quickly switch between windows across applications with ⌥Tab. Hold Option to keep cycling, then release it to focus the selected window.",
+        "diagnostics": "Diagnostics", "resourceMonitor": "Resource Monitor", "resourceRefresh": "Refresh Sample",
+        "resourceMemory": "Memory: %@ MB", "resourceCPU": "CPU: %@%%",
+        "resourceActiveFeatures": "Managed features: %@", "resourceTasks": "Managed tasks: %d", "resourceObservers": "Tracked observers: %d",
+        "resourceUnavailable": "—", "resourceNone": "None",
             "windowSwitcherShortcut": "⌥Tab",
             "windowSwitcherIncludeMinimized": "Show minimized windows", "windowSwitcherIncludeHidden": "Show windows from hidden applications",
             "windowSwitcherShowThumbnails": "Show window thumbnails (requires Screen Recording)", "windowSwitcherShowTitles": "Show window titles",
@@ -1962,6 +1970,7 @@ final class MacPilotModel: ObservableObject {
     private var safetyCheckTask: Task<Void, Never>?
     private var inputSourceSaveTask: Task<Void, Never>?
     private var workspaceObservers: [NSObjectProtocol] = []
+    var trackedObserverCount: Int { workspaceObservers.count + lifetimeObservers.count }
     /// Tokens for observers that live as long as the app (termination, deep
     /// links). Stored so `shutdown()` can remove them deterministically.
     private var lifetimeObservers: [NSObjectProtocol] = []
@@ -1969,10 +1978,7 @@ final class MacPilotModel: ObservableObject {
     private var lastScheduledBootSession: String?
     private var isLoading = false
     private let configurationURL: URL
-    private let configurationWriteQueue = DispatchQueue(
-        label: "com.misswell.macpilot.configuration-write",
-        qos: .utility
-    )
+    private let configurationStore: ConfigStore
 
     init() {
         featureLifecycle.register(clipboard)
@@ -1990,6 +1996,11 @@ final class MacPilotModel: ObservableObject {
         // user opts into the feature.
         awakeTriggers = AwakeTriggerEngine(sessionManager: awake, activateImmediately: false)
         configurationURL = Self.defaultConfigurationURL()
+        configurationStore = ConfigStore(url: configurationURL)
+        configurationStore.onError = { [weak self] error in
+            guard let self else { return }
+            self.showAlert(self.t("configSaveError", error.localizedDescription))
+        }
         isLoading = true
         load()
         isLoading = false
@@ -2832,6 +2843,7 @@ final class MacPilotModel: ObservableObject {
     func shutdown() {
         guard !hasShutdown else { return }
         hasShutdown = true
+        configurationStore.finish()
         stopSafetyChecks()
         cancelAllQuitTasks(resetRuntime: true)
         for task in launchTasks.values { task.cancel() }
@@ -3003,20 +3015,7 @@ final class MacPilotModel: ObservableObject {
             return
         }
 
-        let configurationURL = self.configurationURL
-        configurationWriteQueue.async { [weak self] in
-            do {
-                let directory = configurationURL.deletingLastPathComponent()
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                try data.write(to: configurationURL, options: .atomic)
-            } catch {
-                let errorDescription = error.localizedDescription
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    self.showAlert(self.t("configSaveError", errorDescription))
-                }
-            }
-        }
+        configurationStore.markDirty(data)
     }
 
     private func saveIfReady() {
@@ -5160,6 +5159,7 @@ private struct CPUMonitorMenuSection: View {
 struct MenuBarView: View {
     @EnvironmentObject private var model: MacPilotModel
     @Environment(\.openWindow) private var openWindow
+    @StateObject private var resources = ResourceMonitor()
     @ObservedObject var awake: AwakeSessionManager
     @ObservedObject var pictureInPicture: PictureInPictureModel
     @ObservedObject var screenRecording: ScreenRecordingModel
@@ -5287,6 +5287,9 @@ struct MenuBarView: View {
             model.requestSection(.settings)
             showMainWindow()
         }
+        Menu(model.t("diagnostics")) {
+            ResourceMonitorMenu(monitor: resources)
+        }
         Button(model.t("settings")) { model.requestSection(.settings); showMainWindow() }
         Button(model.t("showApp"), action: showMainWindow)
         Button(model.t("quitApp")) { NSApp.terminate(nil) }
@@ -5319,6 +5322,42 @@ struct MenuBarView: View {
         NSApp.activate(ignoringOtherApps: true)
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
+    }
+}
+
+private struct ResourceMonitorMenu: View {
+    @EnvironmentObject private var model: MacPilotModel
+    @ObservedObject var monitor: ResourceMonitor
+
+    var body: some View {
+        let sample = monitor.snapshot
+        let memory = sample.memoryBytes.map { String(format: "%.1f", Double($0) / 1_048_576) }
+            ?? model.t("resourceUnavailable")
+        let cpu = sample.cpuPercent.map { String(format: "%.2f", $0) }
+            ?? model.t("resourceUnavailable")
+        let features = sample.activeFeatures.isEmpty
+            ? model.t("resourceNone")
+            : sample.activeFeatures.joined(separator: ", ")
+        Group {
+            Text(model.t("resourceMemory", memory))
+            Text(model.t("resourceCPU", cpu))
+            Text(model.t("resourceActiveFeatures", features))
+            Text(model.t("resourceTasks", sample.managedTasks))
+            Text(model.t("resourceObservers", sample.trackedObservers))
+            Divider()
+            Button(model.t("resourceRefresh")) {
+                monitor.refresh(
+                    lifecycle: model.featureLifecycle,
+                    trackedObservers: model.trackedObserverCount
+                )
+            }
+        }
+        .onAppear {
+            monitor.refresh(
+                lifecycle: model.featureLifecycle,
+                trackedObservers: model.trackedObserverCount
+            )
+        }
     }
 }
 
