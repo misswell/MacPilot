@@ -1240,7 +1240,11 @@ private enum WindowSwitcherFocusedWindowResolver {
 }
 
 @MainActor
-final class WindowSwitcherModel: ObservableObject {
+final class WindowSwitcherModel: ObservableObject, ManagedFeature {
+    let identifier = "windowSwitcher"
+    var isRunning: Bool { isRuntimeActive }
+    func start() { activateFromConfiguration() }
+    func stop() { shutdown() }
     private static let inventoryRefreshDebounce = Duration.milliseconds(200)
     // Previews are session-scoped. Capture at most thirty items in the visible
     // snapshot; never prewarm a hidden process-wide image cache.

@@ -1984,6 +1984,14 @@ final class MacPilotModel: ObservableObject {
         featureLifecycle.register(clipboard)
         featureLifecycle.register(memoryMonitor)
         featureLifecycle.register(cpuMonitor)
+        featureLifecycle.register(ble)
+        featureLifecycle.register(fileCompression)
+        featureLifecycle.register(screenCapture)
+        featureLifecycle.register(pictureInPicture)
+        featureLifecycle.register(inputSources)
+        featureLifecycle.register(windowSwitcher)
+        featureLifecycle.register(smoothScrolling)
+        featureLifecycle.register(dockGroups)
         // A previous session may have died while holding a blank screen; replay
         // its saved backlight levels before anything else touches a display.
         DisplayBlankRecovery.recover(store: .standard)
@@ -2851,15 +2859,9 @@ final class MacPilotModel: ObservableObject {
         inputSourceSaveTask?.cancel()
         inputSourceSaveTask = nil
 
-        ble.shutdown()
-        fileCompression.shutdown()
-        screenCapture.shutdown()
-        screenRecording.shutdown()
-        pictureInPicture.shutdown()
-        inputSources.shutdown()
-        windowSwitcher.shutdown()
-        smoothScrolling.shutdown()
         featureLifecycle.stopAll()
+        ble.shutdown()
+        screenRecording.shutdown()
         remoteControl.stop()
         DisplayPower.shutdown()
         rightClickMenu.stop()
@@ -2869,7 +2871,6 @@ final class MacPilotModel: ObservableObject {
         awakeTriggers.shutdown()
         // Dock Groups：停掉运行状态轮询与 Workspace 监听。
         // 生成的 Helper App 保持原样，下次启动可以直接继续用。
-        dockGroups.shutdown()
         localPorts.shutdown()
 
         for observer in lifetimeObservers { NotificationCenter.default.removeObserver(observer) }
@@ -3311,29 +3312,29 @@ extension MacPilotModel {
             awake.activateFromConfiguration()
             awakeTriggers.setFeatureEnabled(awake.settings.isEnabled)
         case .ble:
-            ble.activateFromConfiguration()
+            featureLifecycle.start(ble.identifier)
         case .remoteControl:
             if remoteDeviceStore.settings.isEnabled { remoteControl.start() }
         case .inputSources:
-            inputSources.activateFromConfiguration()
+            featureLifecycle.start(inputSources.identifier)
         case .compression:
-            fileCompression.activateFromConfiguration()
+            featureLifecycle.start(fileCompression.identifier)
         case .capture:
-            screenCapture.activateFromConfiguration()
+            featureLifecycle.start(screenCapture.identifier)
         case .screenRecording:
             screenRecording.activateFromConfiguration()
         case .pictureInPicture:
-            pictureInPicture.activateFromConfiguration()
+            featureLifecycle.start(pictureInPicture.identifier)
         case .windowSwitcher:
-            windowSwitcher.activateFromConfiguration()
+            featureLifecycle.start(windowSwitcher.identifier)
         case .smoothScrolling:
-            smoothScrolling.activateFromConfiguration()
+            featureLifecycle.start(smoothScrolling.identifier)
         case .clipboard:
             if clipboard.settings.isEnabled { featureLifecycle.start(clipboard.identifier) }
         case .rightClick:
             startRightClickMenu()
         case .dockGroups:
-            dockGroups.activateFromConfiguration()
+            featureLifecycle.start(dockGroups.identifier)
         case .memoryMonitor, .cpuMonitor, .localPorts:
             break
         }
@@ -3354,29 +3355,29 @@ extension MacPilotModel {
             awake.deactivateFromConfiguration()
             awakeTriggers.setFeatureEnabled(false)
         case .ble:
-            ble.deactivateFromConfiguration()
+            featureLifecycle.stop(ble.identifier)
         case .remoteControl:
             remoteControl.stop()
         case .inputSources:
-            inputSources.shutdown()
+            featureLifecycle.stop(inputSources.identifier)
         case .compression:
-            fileCompression.deactivateFromConfiguration()
+            featureLifecycle.stop(fileCompression.identifier)
         case .capture:
-            screenCapture.shutdown()
+            featureLifecycle.stop(screenCapture.identifier)
         case .screenRecording:
             screenRecording.shutdown()
         case .pictureInPicture:
-            pictureInPicture.shutdown()
+            featureLifecycle.stop(pictureInPicture.identifier)
         case .windowSwitcher:
-            windowSwitcher.shutdown()
+            featureLifecycle.stop(windowSwitcher.identifier)
         case .smoothScrolling:
-            smoothScrolling.deactivateFromConfiguration()
+            featureLifecycle.stop(smoothScrolling.identifier)
         case .clipboard:
             featureLifecycle.stop(clipboard.identifier)
         case .rightClick:
             rightClickMenu.stop()
         case .dockGroups:
-            dockGroups.shutdown()
+            featureLifecycle.stop(dockGroups.identifier)
         case .memoryMonitor:
             featureLifecycle.stop(memoryMonitor.identifier)
             MemoryMonitorModel.clearMenuCache()

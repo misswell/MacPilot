@@ -1937,7 +1937,11 @@ enum PictureInPictureError: LocalizedError {
 }
 
 @MainActor
-final class PictureInPictureModel: ObservableObject {
+final class PictureInPictureModel: ObservableObject, ManagedFeature {
+    let identifier = "pictureInPicture"
+    var isRunning: Bool { isMonitoring }
+    func start() { activateFromConfiguration() }
+    func stop() { shutdown() }
     @Published private(set) var settings = PictureInPictureSettings()
     @Published private(set) var summaries: [PiPSessionSummary] = []
     @Published private(set) var hasScreenPermission = false

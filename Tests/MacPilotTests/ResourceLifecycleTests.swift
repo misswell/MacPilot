@@ -36,6 +36,14 @@ struct ResourceLifecycleTests {
         #expect(manager.activeIdentifiers.isEmpty)
     }
 
+    @Test func stopAlsoReleasesAFeatureWithoutAnActiveRuntime() {
+        let manager = FeatureLifecycleManager()
+        let feature = StubManagedFeature()
+        manager.register(feature)
+        manager.stop(feature.identifier)
+        #expect(feature.stops == 1)
+    }
+
     @Test func cancelledBackgroundTaskNeverRunsItsAction() async throws {
         let baseline = BackgroundTask.activeCount
         let polling = BackgroundTask()

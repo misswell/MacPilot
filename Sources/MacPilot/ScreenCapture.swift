@@ -500,7 +500,11 @@ enum ScreenCaptureResetExecution: Sendable {
 // MARK: - Model
 
 @MainActor
-final class ScreenCaptureModel: ObservableObject {
+final class ScreenCaptureModel: ObservableObject, ManagedFeature {
+    let identifier = "capture"
+    var isRunning: Bool { smartCapture != nil || isLoopRunning }
+    func start() { activateFromConfiguration() }
+    func stop() { shutdown() }
     private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     @Published private(set) var settings = ScreenCaptureSettings()
     @Published private(set) var isCapturing = false

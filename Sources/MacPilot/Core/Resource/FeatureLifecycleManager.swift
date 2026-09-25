@@ -26,12 +26,11 @@ final class FeatureLifecycleManager {
     }
 
     func stop(_ identifier: String) {
-        guard let feature = features[identifier], feature.isRunning else { return }
-        feature.stop()
+        features[identifier]?.stop()
     }
 
     func stopAll() {
-        for feature in features.values where feature.isRunning {
+        for feature in features.values {
             feature.stop()
         }
     }

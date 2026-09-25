@@ -687,7 +687,11 @@ enum BLEScanPolicy {
 // MARK: - Model
 
 @MainActor
-final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate {
+final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate {
+    let identifier = "ble"
+    var isRunning: Bool { !observers.isEmpty }
+    func start() { activateFromConfiguration() }
+    func stop() { deactivateFromConfiguration() }
     static let unlockDisabled = 1
     static let lockDisabled = -100
     private static let maximumVisibleDevices = 100

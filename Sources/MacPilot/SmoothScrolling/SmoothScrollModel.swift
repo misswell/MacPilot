@@ -3,7 +3,11 @@ import Foundation
 import SwiftUI
 
 @MainActor
-final class SmoothScrollModel: ObservableObject {
+final class SmoothScrollModel: ObservableObject, ManagedFeature {
+    let identifier = "smoothScrolling"
+    var isRunning: Bool { isActive && settings.isEnabled }
+    func start() { activateFromConfiguration() }
+    func stop() { deactivateFromConfiguration() }
     @Published private(set) var settings = SmoothScrollSettings()
     @Published private(set) var hasAccessibilityPermission = false
 

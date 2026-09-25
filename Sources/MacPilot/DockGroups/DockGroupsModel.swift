@@ -18,7 +18,11 @@ import MacPilotDockGroupsCore
 import OSLog
 
 @MainActor
-final class DockGroupsModel: ObservableObject {
+final class DockGroupsModel: ObservableObject, ManagedFeature {
+    let identifier = "dockGroups"
+    var isRunning: Bool { isActive }
+    func start() { activateFromConfiguration() }
+    func stop() { shutdown() }
     private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "DockGroups")
 
     @Published private(set) var settings = DockGroupsSettings()

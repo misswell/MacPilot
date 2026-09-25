@@ -732,7 +732,11 @@ private struct MacPilotInputSourceIndicatorView: View {
 // MARK: - Runtime model
 
 @MainActor
-final class InputSourceModel: ObservableObject {
+final class InputSourceModel: ObservableObject, ManagedFeature {
+    let identifier = "inputSources"
+    var isRunning: Bool { isActive && settings.isEnabled }
+    func start() { activateFromConfiguration() }
+    func stop() { shutdown() }
     @Published private(set) var settings = InputSourceSettings()
     @Published private(set) var availableSources: [MacPilotInputSource] = []
     @Published private(set) var currentSource: MacPilotInputSource?

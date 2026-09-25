@@ -1036,7 +1036,11 @@ struct AppleFileCompressionEngine: Sendable {
 }
 
 @MainActor
-final class FolderCompressionModel: ObservableObject {
+final class FolderCompressionModel: ObservableObject, ManagedFeature {
+    let identifier = "compression"
+    var isRunning: Bool { isActive }
+    func start() { activateFromConfiguration() }
+    func stop() { deactivateFromConfiguration() }
     private enum AutomaticScanScope: Sendable {
         case allFolders
         case folders(Set<String>)
