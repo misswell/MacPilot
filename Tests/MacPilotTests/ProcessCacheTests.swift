@@ -4,6 +4,26 @@ import Testing
 
 @Suite
 struct ProcessCacheTests {
+    @Test func collectorSharesShortLivedInventoryAndCanReleaseIt() {
+        final class ReadCount: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func increment() { lock.lock(); value += 1; lock.unlock() }
+            var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+        }
+        let reads = ReadCount()
+        let collector = ProcessCollector(reader: {
+            reads.increment()
+            return [RunningProcessInfo(pid: 42, name: "test", executablePath: nil, startedAt: nil)]
+        })
+        #expect(collector.sample(maxAge: 10).count == 1)
+        #expect(collector.sample(maxAge: 10).count == 1)
+        #expect(reads.count == 1)
+        collector.clear()
+        #expect(collector.sample(maxAge: 10).count == 1)
+        #expect(reads.count == 2)
+    }
+
     @Test func processPathIsReadOncePerPIDAndStartTime() {
         let cache = ProcessCache()
         let startedAt = Date(timeIntervalSince1970: 1_000)

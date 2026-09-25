@@ -148,7 +148,7 @@ final class CPUUsageSampler: @unchecked Sendable {
         }
 
         let logicalCoreCount = max(1, ProcessInfo.processInfo.processorCount)
-        let processInfos = RunningProcessReader.sample()
+        let processInfos = ProcessCollector.shared.sample()
         var currentProcessCounters: [pid_t: ProcessCounter] = [:]
         currentProcessCounters.reserveCapacity(processInfos.count)
         var processSamples: [ProcessCPUSample] = []

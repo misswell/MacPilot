@@ -1933,9 +1933,17 @@ final class MacPilotModel: ObservableObject {
     /// first turns on "keep running with lid closed".
     let awake: AwakeSessionManager
     let awakeTriggers: AwakeTriggerEngine
-    let memoryMonitor = MemoryMonitorModel()
-    let cpuMonitor = CPUMonitorModel()
     let featureLifecycle = FeatureLifecycleManager()
+    lazy var memoryMonitor: MemoryMonitorModel = {
+        let monitor = MemoryMonitorModel()
+        featureLifecycle.register(monitor)
+        return monitor
+    }()
+    lazy var cpuMonitor: CPUMonitorModel = {
+        let monitor = CPUMonitorModel()
+        featureLifecycle.register(monitor)
+        return monitor
+    }()
     /// iPhone remote control. Lazily created so it can reference `self` for
     /// persistence and share the BLE model's screen control service.
     lazy var remoteDeviceStore = RemoteDeviceStore(persist: { [weak self] in self?.saveIfReady() })
@@ -1982,8 +1990,6 @@ final class MacPilotModel: ObservableObject {
 
     init() {
         featureLifecycle.register(clipboard)
-        featureLifecycle.register(memoryMonitor)
-        featureLifecycle.register(cpuMonitor)
         featureLifecycle.register(ble)
         featureLifecycle.register(fileCompression)
         featureLifecycle.register(screenCapture)
@@ -3379,10 +3385,10 @@ extension MacPilotModel {
         case .dockGroups:
             featureLifecycle.stop(dockGroups.identifier)
         case .memoryMonitor:
-            featureLifecycle.stop(memoryMonitor.identifier)
+            featureLifecycle.stop("memoryMonitor")
             MemoryMonitorModel.clearMenuCache()
         case .cpuMonitor:
-            featureLifecycle.stop(cpuMonitor.identifier)
+            featureLifecycle.stop("cpuMonitor")
             CPUMonitorModel.clearMenuCache()
         case .localPorts:
             localPorts.shutdown()

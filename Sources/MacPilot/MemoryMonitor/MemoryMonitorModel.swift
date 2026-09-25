@@ -42,6 +42,7 @@ final class MemoryMonitorModel: ObservableObject, ManagedFeature {
 
     func stopAutoRefresh() {
         refreshLoop.stop()
+        ProcessCollector.shared.clear()
     }
 
     func start() { startAutoRefresh() }

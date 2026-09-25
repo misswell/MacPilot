@@ -77,7 +77,7 @@ enum ProcessMemorySampler {
     static func ownFootprint() -> UInt64? { physicalFootprint(of: getpid()) }
 
     static func sample() -> [ProcessMemorySample] {
-        RunningProcessReader.sample().compactMap { process in
+        ProcessCollector.shared.sample().compactMap { process in
             guard let footprint = physicalFootprint(of: process.pid) else { return nil }
             return ProcessMemorySample(
                 pid: process.pid,
