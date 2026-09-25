@@ -102,14 +102,14 @@ struct WindowSwitcherTests {
         ) == ["window-current"])
     }
 
-    @Test func thumbnailCacheIsBoundedToThirtyWindows() {
-        let currentIDs = (0..<40).map { "window-\($0)" }
+    @Test func thumbnailCacheIsBoundedToFiftyWindows() {
+        let currentIDs = (0..<60).map { "window-\($0)" }
         let cachedIDs = Set(currentIDs)
 
         #expect(WindowSwitcherThumbnailCachePolicy.retainedIDs(
             currentIDs: currentIDs,
             cachedIDs: cachedIDs
-        ).count == 30)
+        ).count == 50)
     }
 
     @Test func thumbnailTaskIsReusedForTheSameWindowSetRegardlessOfOrder() {

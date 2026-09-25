@@ -83,10 +83,7 @@ enum WindowSwitcherThumbnailCommitPolicy {
 }
 
 enum WindowSwitcherThumbnailCachePolicy {
-    /// Each 256×160 RGBA preview costs at most 160 KiB. Thirty previews stay
-    /// under a 5 MiB pixel budget, below the requested 50-entry ceiling.
-    static let maximumCount = 30
-    static let maximumPixelBytes = maximumCount * 256 * 160 * 4
+    static let maximumCount = 50
 
     static func retainedIDs(
         currentIDs: [String],
@@ -1302,7 +1299,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature {
     /// changed; this cache is pruned whenever the inventory changes. The
     /// highlighted tile is the exception: selection changes always re-capture
     /// it so the tile the user is about to activate shows current content.
-    private var thumbnailCache: [String: NSImage] = [:]
+    private let thumbnailCache = ThumbnailCache()
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
     private var eventTapContext: WindowSwitcherEventTapContext?
@@ -2340,7 +2337,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature {
     private func restoreCachedPreviews(to items: [WindowSwitcherItem]) {
         pruneThumbnailCache(to: items)
         for item in items {
-            if let cached = thumbnailCache[item.id] {
+            if let cached = thumbnailCache.image(for: item.id) {
                 if item.preview == nil { item.updatePreview(cached) }
             } else if item.preview != nil {
                 item.updatePreview(nil)
@@ -2380,7 +2377,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature {
             let item = items[index]
             guard item.windowID != nil,
                   item.canCapturePreview,
-                  thumbnailCache[item.id] == nil else { return nil }
+                  !thumbnailCache.contains(item.id) else { return nil }
             return item
         }
         guard !captureItems.isEmpty else { return }
@@ -2395,7 +2392,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature {
             catch { return }
             guard !Task.isCancelled else { return }
             let cacheHits = indices.reduce(into: 0) { count, index in
-                guard items.indices.contains(index), thumbnailCache[items[index].id] != nil else { return }
+                guard items.indices.contains(index), thumbnailCache.contains(items[index].id) else { return }
                 count += 1
             }
             let captureWindowIDs = captureItems.compactMap(\.windowID)
@@ -2520,7 +2517,9 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature {
     /// every live copy of the item (session panel + hidden inventory) must
     /// agree, otherwise a later prune or restore can resurrect stale pixels.
     private func commitThumbnail(_ image: NSImage, for itemID: String) {
-        thumbnailCache[itemID] = image
+        let evictedIDs = thumbnailCache.insert(image, for: itemID)
+        if !evictedIDs.isEmpty { clearPreview(for: evictedIDs) }
+        guard thumbnailCache.contains(itemID) else { return }
         var visited = Set<ObjectIdentifier>()
         for item in windows + cachedWindows where item.id == itemID {
             guard visited.insert(ObjectIdentifier(item)).inserted else { continue }
@@ -2529,20 +2528,19 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature {
     }
 
     private func clearThumbnailCache() {
-        thumbnailCache.removeAll(keepingCapacity: false)
+        thumbnailCache.clear()
         clearPreview(for: nil)
     }
 
     private func pruneThumbnailCache(to items: [WindowSwitcherItem]) {
-        let retainedIDs = WindowSwitcherThumbnailCachePolicy.retainedIDs(
-            currentIDs: items.map(\.id),
-            cachedIDs: Set(thumbnailCache.keys)
-        )
-        let removedIDs = Set(thumbnailCache.keys).subtracting(retainedIDs)
-        thumbnailCache = thumbnailCache.filter { retainedIDs.contains($0.key) }
+        let removedIDs = thumbnailCache.retain(Set(items.map(\.id)))
         guard !removedIDs.isEmpty else { return }
+        clearPreview(for: removedIDs)
+    }
+
+    private func clearPreview(for itemIDs: Set<String>) {
         var visited = Set<ObjectIdentifier>()
-        for item in cachedWindows + windows where removedIDs.contains(item.id) {
+        for item in cachedWindows + windows where itemIDs.contains(item.id) {
             guard visited.insert(ObjectIdentifier(item)).inserted else { continue }
             item.updatePreview(nil)
         }
