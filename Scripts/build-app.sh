@@ -136,6 +136,16 @@ else
     else
         LOCAL_DEVELOPER_ID=""
     fi
+    # Apple Distribution is one of the four sanctioned signing paths (see
+    # Scripts/signing-requirement.sh): same team, same embedded requirement, so
+    # the result is TCC/update-interchangeable with a release build. It just is
+    # not notarized, so it still cannot be published. Preferred over the
+    # ad-hoc/Apple Development fallbacks whenever it is available.
+    LOCAL_DISTRIBUTION_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n 's/.*"\(Apple Distribution:[^"]*\)".*/\1/p' \
+        | sort -u \
+        | grep -F "U8U443D7ZL" \
+        | head -1 || true)"
     LOCAL_DEVELOPMENT_ID="$(security find-identity -v -p codesigning 2>/dev/null \
         | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' \
         | head -1)"
@@ -147,6 +157,11 @@ else
         fi
         SIGNING_IDENTITY="$LOCAL_DEVELOPER_ID"
         echo "Using production-matched Developer ID identity: $LOCAL_DEVELOPER_ID"
+    elif [[ -n "$LOCAL_DISTRIBUTION_ID" ]]; then
+        SIGNING_IDENTITY="$LOCAL_DISTRIBUTION_ID"
+        echo "Using production-team Apple Distribution identity: $LOCAL_DISTRIBUTION_ID"
+        echo "Same designated requirement, so TCC grants and update recognition carry over."
+        echo "Not notarized: this build must never be published as a release asset."
     elif [[ "${MACPILOT_ALLOW_UNSTABLE_SIGNING:-0}" == "1" && -n "$LOCAL_DEVELOPMENT_ID" ]]; then
         SIGNING_IDENTITY="$LOCAL_DEVELOPMENT_ID"
         echo "WARNING: Developer ID identity unavailable; using local development identity: $LOCAL_DEVELOPMENT_ID"
