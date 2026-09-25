@@ -83,9 +83,10 @@ enum WindowSwitcherThumbnailCommitPolicy {
 }
 
 enum WindowSwitcherThumbnailCachePolicy {
-    /// A preview is captured at most 256×160 px, so this count also bounds the
-    /// bytes held (~5 MB of bitmap) without per-entry cost accounting.
+    /// Each 256×160 RGBA preview costs at most 160 KiB. Thirty previews stay
+    /// under a 5 MiB pixel budget, below the requested 50-entry ceiling.
     static let maximumCount = 30
+    static let maximumPixelBytes = maximumCount * 256 * 160 * 4
 
     static func retainedIDs(
         currentIDs: [String],
@@ -412,7 +413,7 @@ enum WindowSwitcherThumbnailPriority {
     // A preview is downscaled to at most 256x160 before it reaches NSImage.
     // Keep the capture batch bounded so switching remains responsive even
     // when the inventory contains many windows.
-    static let maximumPrefetchCount = 30
+    static let maximumPrefetchCount = 8
 
     static func orderedIndices(count: Int, selectedIndex: Int) -> [Int] {
         guard count > 0 else { return [] }
@@ -1246,8 +1247,9 @@ final class WindowSwitcherModel: ObservableObject {
     private static let thumbnailMaximumPixelSize = CGSize(width: 256, height: 160)
     // Rapid Tab cycling re-enters this path on every key repeat; the debounce
     // collapses the burst into one capture once the selection stops moving.
-    private static let selectedThumbnailRefreshDebounce = Duration.milliseconds(50)
+    private static let selectedThumbnailRefreshDebounce = Duration.milliseconds(100)
     private static let thumbnailCaptureQueue = WindowSwitcherPreviewCaptureQueue()
+    private static let selectedThumbnailCaptureQueue = WindowSwitcherPreviewCaptureQueue()
     private static let mouseSelectionDistanceThreshold: CGFloat = 24
     private static let performanceLogger = Logger(
         subsystem: "com.misswell.macpilot",
@@ -2383,6 +2385,11 @@ final class WindowSwitcherModel: ObservableObject {
         let maximumPixelSize = Self.thumbnailMaximumPixelSize
         thumbnailTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            // Let a quick Option-Tab finish without opening a ScreenCaptureKit
+            // session or transferring eight previews that will never be seen.
+            do { try await Task.sleep(for: .milliseconds(100)) }
+            catch { return }
+            guard !Task.isCancelled else { return }
             let cacheHits = indices.reduce(into: 0) { count, index in
                 guard items.indices.contains(index), thumbnailCache[items[index].id] != nil else { return }
                 count += 1
@@ -2486,7 +2493,7 @@ final class WindowSwitcherModel: ObservableObject {
             }
         }
         let maximumPixelSize = Self.thumbnailMaximumPixelSize
-        let captured = await WindowSwitcherPreviewCapture.captureBatch(
+        let captured = await Self.selectedThumbnailCaptureQueue.capture(
             windowIDs: [windowID],
             maximumPixelSize: maximumPixelSize
         ).first
