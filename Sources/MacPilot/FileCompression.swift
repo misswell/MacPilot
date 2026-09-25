@@ -194,6 +194,12 @@ struct FileCompressionScan: Equatable, Sendable {
     var compressedAllocatedBytes: Int64 { compressedFiles.reduce(0) { $0 + $1.allocatedSize } }
 }
 
+enum FileCompressionScanEvent: Sendable {
+    case candidate(FileCompressionCandidate)
+    case compressed(FileCompressionCandidate)
+    case folderIssue(FileCompressionFolderIssue)
+}
+
 struct FileCompressionOperationResult: Equatable, Sendable {
     var compressedCount = 0
     var restoredCount = 0
@@ -306,14 +312,54 @@ struct AppleFileCompressionEngine: Sendable {
     ]
 
     func scan(settings: FolderCompressionSettings, now: Date = Date()) throws -> FileCompressionScan {
+        var candidates: [FileCompressionCandidate] = []
+        var compressedFiles: [FileCompressionCandidate] = []
+        var folderIssues: [FileCompressionFolderIssue] = []
+        let folderURLs = try scanEach(settings: settings, now: now) { event in
+            switch event {
+            case .candidate(let file): candidates.append(file)
+            case .compressed(let file): compressedFiles.append(file)
+            case .folderIssue(let issue): folderIssues.append(issue)
+            }
+        }
+        return FileCompressionScan(
+            folderURLs: folderURLs,
+            folderIssues: folderIssues,
+            candidates: candidates.sorted { $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending },
+            compressedFiles: compressedFiles.sorted { $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending }
+        )
+    }
+
+    func scanStream(
+        settings: FolderCompressionSettings,
+        now: Date = Date()
+    ) -> AsyncThrowingStream<FileCompressionScanEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let producer = Task.detached(priority: .userInitiated) {
+                do {
+                    _ = try scanEach(settings: settings, now: now) { event in
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in producer.cancel() }
+        }
+    }
+
+    @discardableResult
+    private func scanEach(
+        settings: FolderCompressionSettings,
+        now: Date,
+        emit: (FileCompressionScanEvent) -> Void
+    ) throws -> [URL] {
         guard !settings.folderPaths.isEmpty else { throw AppleFileCompressionError.folderNotSelected }
         let folderURLs = settings.folderPaths.map {
             URL(fileURLWithPath: FileCompressionPath.canonical($0), isDirectory: true)
         }
         let policy = FileCompressionPolicy(settings: settings)
-        var candidates: [FileCompressionCandidate] = []
-        var compressedFiles: [FileCompressionCandidate] = []
-        var folderIssues: [FileCompressionFolderIssue] = []
         var seenFiles = Set<FileIdentity>()
 
         for folderURL in folderURLs {
@@ -334,9 +380,9 @@ struct AppleFileCompressionEngine: Sendable {
                         guard seenFiles.insert(identity).inserted else { continue }
                         switch scannedFile {
                         case .candidate:
-                            candidates.append(candidate)
+                            emit(.candidate(candidate))
                         case .compressed:
-                            compressedFiles.append(candidate)
+                            emit(.compressed(candidate))
                         }
                     } catch is CancellationError {
                         throw CancellationError()
@@ -345,23 +391,17 @@ struct AppleFileCompressionEngine: Sendable {
                     }
                 }
                 if let message = issueCollector.message {
-                    folderIssues.append(FileCompressionFolderIssue(folderURL: folderURL, error: .scanFailed(message)))
+                    emit(.folderIssue(FileCompressionFolderIssue(folderURL: folderURL, error: .scanFailed(message))))
                 }
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as AppleFileCompressionError {
-                folderIssues.append(FileCompressionFolderIssue(folderURL: folderURL, error: error))
+                emit(.folderIssue(FileCompressionFolderIssue(folderURL: folderURL, error: error)))
             } catch {
-                folderIssues.append(FileCompressionFolderIssue(folderURL: folderURL, error: .scanFailed(error.localizedDescription)))
+                emit(.folderIssue(FileCompressionFolderIssue(folderURL: folderURL, error: .scanFailed(error.localizedDescription))))
             }
         }
-
-        return FileCompressionScan(
-            folderURLs: folderURLs,
-            folderIssues: folderIssues,
-            candidates: candidates.sorted { $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending },
-            compressedFiles: compressedFiles.sorted { $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending }
-        )
+        return folderURLs
     }
 
     func scanChangedPaths(
@@ -1072,7 +1112,7 @@ final class FolderCompressionModel: ObservableObject, ManagedFeature {
     private var pendingChanges = FileCompressionPendingChanges()
     private var pendingDeadlineTask: Task<Void, Never>?
     private var initialScanTask: Task<Void, Never>?
-    private var manualScanTask: Task<FileCompressionScan, Error>?
+    private var manualScanTask: Task<Void, Never>?
     private var reconciliationTask: Task<Void, Never>?
     private var monitoringGeneration = UUID()
     private var retryBackoff = FileCompressionRetryBackoff()
@@ -1179,30 +1219,60 @@ final class FolderCompressionModel: ObservableObject, ManagedFeature {
         isScanning = true
         error = nil
         let currentSettings = settings
-        let task = Task.detached(priority: .userInitiated) { [engine] in
-            try engine.scan(settings: currentSettings)
+        scan = nil
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.isScanning = false
+                self.manualScanTask = nil
+            }
+            let folders = currentSettings.folderPaths.map {
+                URL(fileURLWithPath: FileCompressionPath.canonical($0), isDirectory: true)
+            }
+            var candidates: [FileCompressionCandidate] = []
+            var compressedFiles: [FileCompressionCandidate] = []
+            var folderIssues: [FileCompressionFolderIssue] = []
+            var lastPublished = Date.distantPast
+            do {
+                for try await event in self.engine.scanStream(settings: currentSettings) {
+                    guard !Task.isCancelled else { return }
+                    switch event {
+                    case .candidate(let file): candidates.append(file)
+                    case .compressed(let file): compressedFiles.append(file)
+                    case .folderIssue(let issue): folderIssues.append(issue)
+                    }
+                    if Date().timeIntervalSince(lastPublished) >= 0.2 {
+                        self.scan = FileCompressionScan(
+                            folderURLs: folders,
+                            folderIssues: folderIssues,
+                            candidates: candidates,
+                            compressedFiles: compressedFiles
+                        )
+                        lastPublished = Date()
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                self.scan = FileCompressionScan(
+                    folderURLs: folders,
+                    folderIssues: folderIssues,
+                    candidates: candidates.sorted { $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending },
+                    compressedFiles: compressedFiles.sorted { $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending }
+                )
+            } catch is CancellationError {
+                self.scan = nil
+            } catch let compressionError as AppleFileCompressionError {
+                self.scan = nil
+                self.error = compressionError
+            } catch {
+                self.scan = nil
+                self.error = .scanFailed(error.localizedDescription)
+            }
         }
         manualScanTask = task
-        defer {
-            manualScanTask = nil
-            isScanning = false
-        }
-        do {
-            let result = try await withTaskCancellationHandler {
-                try await task.value
-            } onCancel: {
-                task.cancel()
-            }
-            guard !task.isCancelled else { return }
-            scan = result
-        } catch is CancellationError {
-            scan = nil
-        } catch let compressionError as AppleFileCompressionError {
-            scan = nil
-            error = compressionError
-        } catch {
-            scan = nil
-            self.error = .scanFailed(error.localizedDescription)
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
         }
     }
 
@@ -1909,14 +1979,14 @@ struct FileCompressionView: View {
                 Label(t("compressionCompressFiles", scan.candidates.count), systemImage: "arrow.down.right.and.arrow.up.left")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(scan.candidates.isEmpty || compression.isProcessing)
+            .disabled(scan.candidates.isEmpty || compression.isProcessing || compression.isScanning)
 
             Button {
                 Task { await compression.restoreCompressedFiles() }
             } label: {
                 Label(t("compressionRestoreFiles", scan.compressedFiles.count), systemImage: "arrow.uturn.backward")
             }
-            .disabled(scan.compressedFiles.isEmpty || compression.isProcessing)
+            .disabled(scan.compressedFiles.isEmpty || compression.isProcessing || compression.isScanning)
             Spacer()
         }
     }

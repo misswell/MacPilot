@@ -3,6 +3,26 @@ import Testing
 @testable import MacPilot
 
 struct FileCompressionTests {
+    @Test func streamingScanYieldsEachCandidate() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacPilotCompressionStream-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        for name in ["first.log", "second.log"] {
+            try Data(repeating: 65, count: 4_096).write(to: root.appendingPathComponent(name))
+        }
+        let settings = FolderCompressionSettings(
+            folderPaths: [root.path], fileExtensions: ["log"],
+            minimumFileSize: 1, stableSeconds: 0, minimumSavingsPercent: 10
+        )
+        let engine = AppleFileCompressionEngine()
+        var streamed: [String] = []
+        for try await event in engine.scanStream(settings: settings) {
+            if case .candidate(let file) = event { streamed.append(file.url.lastPathComponent) }
+        }
+        #expect(Set(streamed) == ["first.log", "second.log"])
+    }
+
     @Test func migratesLegacySingleFolderCompressionSettings() throws {
         let json = """
         {
