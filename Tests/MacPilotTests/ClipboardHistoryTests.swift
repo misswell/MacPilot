@@ -88,6 +88,20 @@ struct ClipboardHistoryTests {
         #expect(history.allItems.contains { $0.pin == "a" })
     }
 
+    @Test func retentionCanExpireHistoryWithoutAnotherCopy() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipboard-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
+
+        let history = makeHistory(url: url)
+        history.add(makeItem("old", date: Date().addingTimeInterval(-29 * 24 * 60 * 60)))
+        #expect(history.allItems.count == 1)
+        history.pruneExpiredContent(now: Date().addingTimeInterval(2 * 24 * 60 * 60))
+        #expect(history.allItems.isEmpty)
+    }
+
     @Test func searchFiltersItemsCaseInsensitively() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipboard-\(UUID().uuidString).json")

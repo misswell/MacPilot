@@ -66,6 +66,7 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
     /// 悬停详情列的状态机。视图通过本模型观察它（见 `observations`）。
     let preview = ClipboardPreviewController()
     private let monitor = ClipboardMonitor()
+    private let retentionTask = BackgroundTask()
     private lazy var hotKeyCenter = ClipboardHotKeyCenter()
 
     var persist: (() -> Void)?
@@ -108,6 +109,7 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
 
     func shutdown() {
         isRunning = false
+        retentionTask.stop()
         monitor.stop()
         hotKeyCenter.stop()
         closePanel()
@@ -121,7 +123,11 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        history.pruneExpiredContent()
         monitor.start()
+        retentionTask.start(interval: .seconds(60 * 60)) { [weak self] in
+            self?.historyStorage?.pruneExpiredContent()
+        }
         hotKeyCenter.updateBinding(settings.hotkey)
     }
 

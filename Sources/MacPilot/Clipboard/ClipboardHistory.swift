@@ -97,6 +97,14 @@ final class ClipboardHistory: ObservableObject {
         storage.flush(allItems)
     }
 
+    func pruneExpiredContent(now: Date = .now) {
+        let previousCount = allItems.count
+        trimToLimit(now: now)
+        guard allItems.count != previousCount else { return }
+        updateFilteredItems()
+        save()
+    }
+
     // MARK: - Mutations
 
     /// 新增一条历史记录（自动去重合并、按需裁剪、持久化）。
@@ -226,8 +234,8 @@ final class ClipboardHistory: ObservableObject {
         scrollFollowItemID = selectedItem?.id
     }
 
-    private func trimToLimit() {
-        let keptIDs = ClipboardRetentionPolicy.retainedIDs(from: allItems, countLimit: storageLimit)
+    private func trimToLimit(now: Date = .now) {
+        let keptIDs = ClipboardRetentionPolicy.retainedIDs(from: allItems, countLimit: storageLimit, now: now)
         guard keptIDs.count < allItems.count else { return }
         for item in allItems where !keptIDs.contains(item.id) {
             ClipboardContentStore.delete(itemID: item.id)
