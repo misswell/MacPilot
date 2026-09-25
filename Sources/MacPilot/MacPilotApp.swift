@@ -2919,7 +2919,7 @@ final class MacPilotModel: ObservableObject {
     }
 
     private func load() {
-        if let data = try? Data(contentsOf: configurationURL),
+        if let data = configurationStore.load(),
            let configuration = try? JSONDecoder().decode(StoredConfiguration.self, from: data) {
             apply(configuration)
             return
