@@ -1947,3 +1947,5 @@ Scripts/measure-memory.sh --diff a.json b.json         # 按角色列 delta
 - `L2CAPStreamTransport.start`：四个 `pump.on*` 回调全部把捕获列表提到外层，同时斩断 pump→transport 的持有环。
 
 另外给 `build-app.sh` 补上**Apple Distribution 签名分支**：本机钥匙串里没有 Developer ID Application 证书，而 `signing-requirement.sh` 的注释本来就列了四条合法路径（Developer ID、Apple Distribution、Apple Development、ad-hoc），脚本却只实现了三条——Apple Development 证书还是别的团队（W445UUCQV9），过不了团队校验，于是这台机器上连本地验证构建都出不来。现在 Developer ID 缺席时自动落 Apple Distribution（同团队、同一串 DR 字节，`verify-signing-requirement.sh` 照常把关），只是不得发布：发布仍由 CI 的 dist job 用 Developer ID + 公证完成。
+
+补一笔打脸：`handleOCRCapture` 我第一版把 `[weak self]` 提到 `Task.detached` 外层、内层隐式继承弱绑定——本机 Xcode 27 工具链全绿，CI 的 Xcode 26.3 却报 `sending 'self' risks causing data races`。弱绑定是在非隔离的 detached 任务里做的，跨进 `@MainActor` 任务时按 region 隔离判定为发送风险。最终形状回到 CI 验证过的样子：外层显式 `[self]`（这正是 ImplicitStrongCapture 诊断备注给的字面修法），内层保留 `[weak self]`。教训照旧：并发诊断两个工具链宽严不一，本机全绿只代表一半真相，`-warnings-as-errors` 门禁的最终裁判在 CI。

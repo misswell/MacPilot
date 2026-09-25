@@ -1549,7 +1549,7 @@ final class ScreenCaptureModel: ObservableObject {
     private func handleOCRCapture(_ image: CGImage) {
         let sendableImage = SendableScreenCaptureImage(value: image)
         let language = self.language
-        Task.detached(priority: .userInitiated) { [weak self] in
+        Task.detached(priority: .userInitiated) { [self] in
             do {
                 let request = VNRecognizeTextRequest()
                 request.recognitionLevel = .accurate
@@ -1574,7 +1574,7 @@ final class ScreenCaptureModel: ObservableObject {
                     SmartCaptureToast.shared.showOCRCopied(text: copied, language: language)
                 }
             } catch {
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     Self.logger.error(
                         "OCR recognition failed: \(error.localizedDescription, privacy: .public)"
                     )
