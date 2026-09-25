@@ -708,7 +708,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         screenControl.willLock = { [weak self] source in
             guard let self else { return }
             self.pendingLockSource = source.historySource
-            self.pendingLockSourceExpiresAt = Date().addingTimeInterval(15)
+            self.pendingLockSourceExpiresAt = Date().addingTimeInterval(
+                MacScreenControlService.lockAttributionWindow
+            )
             // A remote or manual lock outranks the proximity auto-unlock: the
             // paired iPhone may still be sitting right next to the Mac.
             if ScreenControlSuppressionPolicy.suppressesAutomaticUnlock(source: source) {

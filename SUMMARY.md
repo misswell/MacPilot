@@ -1949,3 +1949,32 @@ Scripts/measure-memory.sh --diff a.json b.json         # 按角色列 delta
 另外给 `build-app.sh` 补上**Apple Distribution 签名分支**：本机钥匙串里没有 Developer ID Application 证书，而 `signing-requirement.sh` 的注释本来就列了四条合法路径（Developer ID、Apple Distribution、Apple Development、ad-hoc），脚本却只实现了三条——Apple Development 证书还是别的团队（W445UUCQV9），过不了团队校验，于是这台机器上连本地验证构建都出不来。现在 Developer ID 缺席时自动落 Apple Distribution（同团队、同一串 DR 字节，`verify-signing-requirement.sh` 照常把关），只是不得发布：发布仍由 CI 的 dist job 用 Developer ID + 公证完成。
 
 补一笔打脸：`handleOCRCapture` 我第一版把 `[weak self]` 提到 `Task.detached` 外层、内层隐式继承弱绑定——本机 Xcode 27 工具链全绿，CI 的 Xcode 26.3 却报 `sending 'self' risks causing data races`。弱绑定是在非隔离的 detached 任务里做的，跨进 `@MainActor` 任务时按 region 隔离判定为发送风险。最终形状回到 CI 验证过的样子：外层显式 `[self]`（这正是 ImplicitStrongCapture 诊断备注给的字面修法），内层保留 `[weak self]`。教训照旧：并发诊断两个工具链宽严不一，本机全绿只代表一半真相，`-warnings-as-errors` 门禁的最终裁判在 CI。
+
+## 六十七、亮屏后锁屏失效：合成按键被 loginwindow 吞掉，重试日程把「等一会儿再点」自动化（v1.1.416）
+
+用户报：新版在 iPhone 远程里点「亮屏」后再点「锁屏」，锁屏没反应，要等一会儿再点才成功。
+
+### 一、诊断日志直接给出了答案
+
+`MacScreenControlService` 的每条路径都落盘到 `~/Library/Logs/MacPilot/Diagnostics.log`，用户测试完立刻拉取，22:03-22:04 的失败现场一目了然：
+
+- 22:03:45.5 `display unblank requested`（亮屏，14ms 完成）
+- 22:03:47.4 `lock requested` → 3 秒后 `lock failed reason=stateDidNotChange`；用户手点重试两次同样失败
+- 22:04:11.4 第四次点击 → `lock confirmed`（367ms）
+
+关键旁证是 WindowSwitcher 的日志：**每次成功的锁屏都有一条 `App activated: loginwindow`**（锁屏 UI 真的弹出来了，最快 117ms 确认），而 8 次失败的尝试一条都没有——session 根本没锁，不是「锁了但状态读取慢」。结论：**亮屏后的一段时间窗内，loginwindow 会静默丢弃合成的 Ctrl+Command+Q**，同样的按键在窗口过后恢复正常。实测这个窗口最长到 15-26 秒，而且间歇出现（同期五组同样的「黑屏→亮屏→2 秒后锁屏」流程一发即中）。
+
+### 二、修法：把「用户等一会儿再点一次」变成命令自己的重试日程
+
+- `lockScreen` 不再单发一次等 3 秒，而是按 `lockShortcutDelays = [0, 0.8, 0.8, 1.0, 1.4, 2, 3, 4, 5, 6]`（累计 24 秒，10 次以内）边等边重发；**每次重发前先轮询 `CGSSessionScreenIsLocked`**，锁上立刻返回——常规会话第一条按键几百毫秒内生效，行为与之前完全一致，只有被吞的场景才会走进重试尾部。失败上报最迟 26.5 秒。
+- `willLock` 的归属窗口从 15 秒放宽到 30 秒（`lockAttributionWindow`），否则慢落地的锁会在历史里被误归类为「手动」。测试钉住「归属窗口 ≥ 重试日程」这条关系。
+- 没有去动 BLE 路径的 `performLockShortcut`：它的单发语义由在场策略决定，重试是远程命令的职责。
+
+### 三、为什么不做别的
+
+考虑过换锁定机制（屏保启动等），但它们依赖「屏保后要求密码」策略，违背远程锁屏「无论策略一律锁」的契约；也考虑过换 CGEvent 的 source/tap，但没有证据表明哪个变体能躲过吞键窗口——重试日程是唯一被实测证据支撑的修法。真正的根因在 loginwindow 对合成 HID 事件的唤醒期门控，App 侧无法也不应绕过它，只能等它放行后立刻补上那一发。
+
+### 验证
+
+- 新增 `lockShortcutScheduleSpansTheSwallowWindow`：首条立即发送、间隔有界、累计 ≥18 秒覆盖实测窗口、总时长 ≤30 秒、归属窗口盖住全程。ScreenControl 相关 14 条全绿。
+- 全量 `swift test` 828 条：仍是已知的 3 条并行负载偶发（单跑全绿），无新增失败。

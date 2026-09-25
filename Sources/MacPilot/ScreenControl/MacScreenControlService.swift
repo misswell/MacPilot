@@ -185,8 +185,35 @@ final class MacScreenControlService: ObservableObject {
         executor.lockScreenShortcut()
     }
 
+    /// Delays **between** postings of the lock shortcut, in seconds. The first
+    /// entry posts immediately; every later entry is the wait since the
+    /// previous post before the shortcut is sent again.
+    ///
+    /// The schedule exists because loginwindow intermittently ignores a
+    /// synthetic Control-Command-Q posted shortly after a display wake. Real
+    /// device logs (2026-09-25): after 黑屏→亮屏, identical keystrokes failed
+    /// to lock for 15-26 s and then worked on the first later attempt — the
+    /// same keystroke confirmed in 117-400 ms outside that window. One post
+    /// plus a 3 s confirmation turned "lock" into "the user must manually wait
+    /// and tap again". The gaps are front-loaded so a settled session still
+    /// confirms on the first keystroke, and the tail reaches past the measured
+    /// swallow window so the recovery is automatic.
+    nonisolated static let lockShortcutDelays: [TimeInterval] = [0, 0.8, 0.8, 1.0, 1.4, 2, 3, 4, 5, 6]
+    /// Last chance for the final post to land before reporting failure.
+    nonisolated static let lockConfirmationWindow: TimeInterval = 2.5
+    /// How long a `willLock` attribution stays valid. Must cover the whole
+    /// retry schedule: a lock that lands after the late reposts would else be
+    /// misclassified as a manual lock in the history.
+    nonisolated static let lockAttributionWindow: TimeInterval = 30
+
     /// Locks the screen and confirms the session actually became locked before
     /// reporting success.
+    ///
+    /// The shortcut is (re-)posted on `lockShortcutDelays` for as long as the
+    /// session reports unlocked. The wait between posts doubles as the
+    /// confirmation poll, so a settled session — where the very first
+    /// keystroke locks in a few hundred milliseconds — returns after a single
+    /// post exactly as before.
     func lockScreen(source: ScreenControlSource) async -> ScreenControlResult {
         let initial = currentState()
         guard initial.screenLocked != .yes else {
@@ -197,16 +224,32 @@ final class MacScreenControlService: ObservableObject {
         log("lock requested source=\(source.rawValue)")
         prepareForLock()
         willLock?(source)
-        executor.lockScreenShortcut()
 
-        let locked = await waitUntil(timeout: 3) { ScreenLockStateReader.current() == .locked }
-        let state = currentState()
-        guard locked else {
-            log("lock failed reason=stateDidNotChange source=\(source.rawValue)")
-            return .failure(.lockFailed, state: state)
+        executor.lockScreenShortcut()
+        var attempts = 1
+        for gap in Self.lockShortcutDelays.dropFirst() {
+            // The wait doubles as the confirmation poll: the moment the
+            // session reports locked, no further keystroke is posted.
+            let locked = await waitUntil(timeout: gap) {
+                ScreenLockStateReader.current() == .locked
+            }
+            if locked {
+                log("lock confirmed attempts=\(attempts) source=\(source.rawValue)")
+                return .success(currentState())
+            }
+            attempts += 1
+            log("lock reposted attempts=\(attempts) reason=sessionStillUnlocked source=\(source.rawValue)")
+            executor.lockScreenShortcut()
         }
-        log("lock confirmed source=\(source.rawValue)")
-        return .success(state)
+        let locked = await waitUntil(timeout: Self.lockConfirmationWindow) {
+            ScreenLockStateReader.current() == .locked
+        }
+        guard locked else {
+            log("lock failed reason=stateDidNotChange attempts=\(attempts) source=\(source.rawValue)")
+            return .failure(.lockFailed, state: currentState())
+        }
+        log("lock confirmed attempts=\(attempts) source=\(source.rawValue)")
+        return .success(currentState())
     }
 
     // MARK: - Display power

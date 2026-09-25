@@ -56,6 +56,35 @@ struct ScreenControlModelTests {
         // Crucially it must not block for a fixed five seconds before acting.
         #expect(firstRemote < 1)
     }
+
+    /// A just-woken loginwindow intermittently ignores the synthetic
+    /// Control-Command-Q for 15-26 s (real-device logs, 2026-09-25); the lock
+    /// schedule is what turns that swallow window into an automatic recovery
+    /// instead of a failed command the user must retry by hand.
+    @Test("the lock shortcut schedule spans the measured keystroke swallow window")
+    func lockShortcutScheduleSpansTheSwallowWindow() {
+        let delays = MacScreenControlService.lockShortcutDelays
+        // The first keystroke goes out immediately: a settled session must not
+        // pay for the wake-settling problem it does not have.
+        #expect(delays.first == 0)
+        #expect(delays.count >= 6)
+        // Later gaps are positive and individually bounded, so a command that
+        // will never succeed still reports failure within half a minute.
+        #expect(delays.dropFirst().allSatisfy { $0 > 0 && $0 <= 6 })
+
+        var cumulative: TimeInterval = delays.first ?? 0
+        for gap in delays.dropFirst() { cumulative += gap }
+        // The last repost must land past the observed recovery point (~16-26 s)
+        // instead of giving up inside the swallow window.
+        #expect(cumulative >= 18)
+        #expect(cumulative + MacScreenControlService.lockConfirmationWindow <= 30)
+        // The lock-history attribution window must cover the whole schedule,
+        // or a slow-landing lock is misclassified as a manual one.
+        #expect(
+            cumulative + MacScreenControlService.lockConfirmationWindow
+                <= MacScreenControlService.lockAttributionWindow
+        )
+    }
 }
 
 @Suite("Remote command router")
