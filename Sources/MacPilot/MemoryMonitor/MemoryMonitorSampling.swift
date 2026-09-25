@@ -12,18 +12,24 @@ struct RunningProcessInfo: Sendable {
 /// 两次调用之间进程数可能增长，缓冲区按 10% 余量放大。
 enum RunningProcessReader {
     static func sample() -> [RunningProcessInfo] {
-        processEntries().compactMap { entry in
+        let entries = processEntries()
+        let processes = entries.compactMap { entry -> RunningProcessInfo? in
             let pid = entry.kp_proc.p_pid
             guard pid > 0 else { return nil }
-            let path = executablePath(of: pid)
+            let startedAt = date(from: entry.kp_proc.p_starttime)
+            let path = ProcessCache.shared.path(for: pid, startedAt: startedAt) {
+                executablePath(of: pid)
+            }
             let name = path.map { ($0 as NSString).lastPathComponent } ?? commandName(of: entry)
             return RunningProcessInfo(
                 pid: pid,
                 name: name.isEmpty ? "\(pid)" : name,
                 executablePath: path,
-                startedAt: date(from: entry.kp_proc.p_starttime)
+                startedAt: startedAt
             )
         }
+        ProcessCache.shared.retain(Set(processes.map(\.pid)))
+        return processes
     }
 
     /// 一次 sysctl 拿到全部进程的 pid、命令名与启动时间。

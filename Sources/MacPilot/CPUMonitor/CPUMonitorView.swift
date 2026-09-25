@@ -223,7 +223,7 @@ private struct AppCPUUsageRow: View {
     @ViewBuilder
     private var appIcon: some View {
         if let path = app.bundlePath {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+            Image(nsImage: AppIconCache.shared.icon(for: path))
                 .resizable()
                 .frame(width: 26, height: 26)
         } else {

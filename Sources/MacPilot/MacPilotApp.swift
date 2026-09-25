@@ -3898,27 +3898,6 @@ struct QuitCountdownBadge: View {
     }
 }
 
-@MainActor
-private final class AppIconCache {
-    static let shared = AppIconCache()
-    private let cache: NSCache<NSString, NSImage> = {
-        let cache = NSCache<NSString, NSImage>()
-        // Bounded like IconCache: an unbounded icon cache is a slow leak in a
-        // menu-bar app that stays resident for weeks.
-        cache.countLimit = 256
-        cache.totalCostLimit = 8 * 1024 * 1024
-        return cache
-    }()
-
-    func icon(for path: String) -> NSImage {
-        let key = path as NSString
-        if let cached = cache.object(forKey: key) { return cached }
-        let image = NSWorkspace.shared.icon(forFile: path)
-        cache.setObject(image, forKey: key)
-        return image
-    }
-}
-
 struct AppIcon: View {
     var path: String?
     var body: some View {
