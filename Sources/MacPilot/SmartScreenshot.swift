@@ -4488,7 +4488,7 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     private let onDelete: ((URL?) -> Void)?
     private var panel: NSPanel?
     private var annotationHostView: NSView?
-    private var countdownTimer: Timer?
+    private var countdownTimer: BackgroundTask?
     private var isHovered = false
     private var countdownPaused = false
     @Published private(set) var remainingTime = SmartQuickAccessWindowController.autoDismissDelay
@@ -4537,7 +4537,7 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     }
 
     func close() {
-        countdownTimer?.invalidate()
+        countdownTimer?.stop()
         countdownTimer = nil
         panel?.close()
         panel = nil
@@ -4569,7 +4569,7 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     }
 
     func windowWillClose(_ notification: Notification) {
-        countdownTimer?.invalidate()
+        countdownTimer?.stop()
         countdownTimer = nil
         annotationHostView = nil
         panel?.contentView = nil
@@ -4593,12 +4593,10 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     }
 
     private func startCountdown() {
-        countdownTimer?.invalidate()
+        countdownTimer?.stop()
         remainingTime = Self.autoDismissDelay
-        countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.advanceCountdown()
-            }
+        countdownTimer = BackgroundTask.repeating(every: 0.1) { [weak self] in
+            self?.advanceCountdown()
         }
     }
 
@@ -4760,7 +4758,7 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
     private let onDelete: (() -> Void)?
     private let onClose: () -> Void
     private var panel: NSPanel?
-    private var countdownTimer: Timer?
+    private var countdownTimer: BackgroundTask?
     private var isHovered = false
     private var countdownPaused = false
     @Published private(set) var remainingTime = SmartMediaQuickAccessWindowController.autoDismissDelay
@@ -4809,7 +4807,7 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
     }
 
     func close() {
-        countdownTimer?.invalidate()
+        countdownTimer?.stop()
         countdownTimer = nil
         panel?.close()
         panel = nil
@@ -4841,7 +4839,7 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
     }
 
     func windowWillClose(_ notification: Notification) {
-        countdownTimer?.invalidate()
+        countdownTimer?.stop()
         countdownTimer = nil
         panel?.contentView = nil
         panel = nil
@@ -4849,12 +4847,10 @@ private final class SmartMediaQuickAccessWindowController: NSObject, NSWindowDel
     }
 
     private func startCountdown() {
-        countdownTimer?.invalidate()
+        countdownTimer?.stop()
         remainingTime = Self.autoDismissDelay
-        countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.advanceCountdown()
-            }
+        countdownTimer = BackgroundTask.repeating(every: 0.1) { [weak self] in
+            self?.advanceCountdown()
         }
     }
 

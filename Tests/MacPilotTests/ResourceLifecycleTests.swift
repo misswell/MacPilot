@@ -19,7 +19,7 @@ private final class StubManagedFeature: ManagedFeature {
     }
 }
 
-@Suite @MainActor
+@Suite(.serialized) @MainActor
 struct ResourceLifecycleTests {
     @Test func lifecycleStartsOnceAndStopsOnUnregister() {
         let manager = FeatureLifecycleManager()
@@ -53,6 +53,17 @@ struct ResourceLifecycleTests {
         polling.stop()
         try await Task.sleep(for: .milliseconds(100))
         #expect(actions == 0)
+        #expect(BackgroundTask.activeCount == baseline)
+    }
+
+    @Test func oneShotTaskReleasesItsSlotAfterFiring() async throws {
+        let baseline = BackgroundTask.activeCount
+        var fired = false
+        let timer = BackgroundTask.once(after: 0.01) { fired = true }
+        #expect(timer.isRunning)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(fired)
+        #expect(!timer.isRunning)
         #expect(BackgroundTask.activeCount == baseline)
     }
 }

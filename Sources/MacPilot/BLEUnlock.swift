@@ -578,6 +578,7 @@ struct BLEUnlockAttemptProgress {
     }
 }
 
+@MainActor
 private final class BLEMonitoredDeviceRuntime {
     let uuid: UUID
     var peripheral: CBPeripheral?
@@ -587,26 +588,26 @@ private final class BLEMonitoredDeviceRuntime {
     var latestRSSIs: [Double] = []
     var rssiReadGate = BLERequestGate()
     var connectionRetryGate = BLEConnectionRetryGate()
-    var proximityTimer: Timer?
-    var signalTimer: Timer?
-    var activeModeTimer: Timer?
-    var connectionTimer: Timer?
-    var rssiRequestTimeoutTimer: Timer?
+    var proximityTimer: BackgroundTask?
+    var signalTimer: BackgroundTask?
+    var activeModeTimer: BackgroundTask?
+    var connectionTimer: BackgroundTask?
+    var rssiRequestTimeoutTimer: BackgroundTask?
 
     init(uuid: UUID) {
         self.uuid = uuid
     }
 
     func invalidateTimers() {
-        proximityTimer?.invalidate()
+        proximityTimer?.stop()
         proximityTimer = nil
-        signalTimer?.invalidate()
+        signalTimer?.stop()
         signalTimer = nil
-        activeModeTimer?.invalidate()
+        activeModeTimer?.stop()
         activeModeTimer = nil
-        connectionTimer?.invalidate()
+        connectionTimer?.stop()
         connectionTimer = nil
-        rssiRequestTimeoutTimer?.invalidate()
+        rssiRequestTimeoutTimer?.stop()
         rssiRequestTimeoutTimer = nil
         rssiReadGate.reset()
         connectionRetryGate.reset()
@@ -754,8 +755,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
     private var deviceMap: [UUID: BLEUnlockDevice] = [:]
     private var deviceRefreshBatcher = BLEDeviceListRefreshBatcher()
     private var deviceRefreshTask: Task<Void, Never>?
-    private var scanCleanupTimer: Timer?
-    private var livenessTimer: Timer?
+    private var scanCleanupTimer: BackgroundTask?
+    private var livenessTimer: BackgroundTask?
     private var advertisementLiveness = BLEAdvertisementLiveness()
     var monitoredUUID: UUID?
     var secondaryMonitoredUUID: UUID?
@@ -1113,7 +1114,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
     func stopScanning() {
         log("stopScanning devices=\(deviceMap.count) monitored=\(monitoredUUIDs.count)")
         isScanning = false
-        scanCleanupTimer?.invalidate()
+        scanCleanupTimer?.stop()
         scanCleanupTimer = nil
         clearDiscoveredDevices()
         if !hasMonitoredDevice && !activeMode { centralMgr?.stopScan() }
@@ -1122,7 +1123,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
     private func stopMonitoring() {
         log("stopMonitoring")
         isScanning = false
-        scanCleanupTimer?.invalidate(); scanCleanupTimer = nil
+        scanCleanupTimer?.stop(); scanCleanupTimer = nil
         deviceRefreshTask?.cancel(); deviceRefreshTask = nil
         wakeRetryTask?.cancel(); wakeRetryTask = nil
         systemWakeRecoveryTask?.cancel(); systemWakeRecoveryTask = nil
@@ -1184,7 +1185,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
     private func applyPassiveMode() {
         for runtime in monitoredRuntimes.values {
             if settings.passiveMode {
-                runtime.activeModeTimer?.invalidate()
+                runtime.activeModeTimer?.stop()
                 runtime.activeModeTimer = nil
                 runtime.activeMode = false
                 if let peripheral = runtime.peripheral {
@@ -1206,25 +1207,20 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
 
     private func resetSignalTimer(for uuid: UUID) {
         guard let runtime = runtime(for: uuid) else { return }
-        runtime.signalTimer?.invalidate()
-        runtime.signalTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(settings.signalTimeout), repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let runtime = self.runtime(for: uuid) else { return }
-                self.log("signal timeout fired uuid=\(uuid.uuidString) timeout=\(self.settings.signalTimeout) devicePresence=\(runtime.presence)")
-                runtime.signalTimer = nil
-                runtime.lastRSSI = nil
-                runtime.activeMode = false
-                if runtime.presence {
-                    runtime.presence = false
-                    self.recomputePresence(reason: "lost")
-                } else {
-                    self.refreshPublishedMonitoringState()
-                }
-                self.startMonitoringRecovery(reason: "signalTimeout", restartImmediately: true)
+        runtime.signalTimer?.stop()
+        runtime.signalTimer = BackgroundTask.once(after: TimeInterval(settings.signalTimeout)) { [weak self] in
+            guard let self, let runtime = self.runtime(for: uuid) else { return }
+            self.log("signal timeout fired uuid=\(uuid.uuidString) timeout=\(self.settings.signalTimeout) devicePresence=\(runtime.presence)")
+            runtime.signalTimer = nil
+            runtime.lastRSSI = nil
+            runtime.activeMode = false
+            if runtime.presence {
+                runtime.presence = false
+                self.recomputePresence(reason: "lost")
+            } else {
+                self.refreshPublishedMonitoringState()
             }
-        }
-        if let timer = runtime.signalTimer {
-            RunLoop.main.add(timer, forMode: .common)
+            self.startMonitoringRecovery(reason: "signalTimeout", restartImmediately: true)
         }
     }
 
@@ -1258,21 +1254,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
             if runtime.proximityTimer != nil {
                 log("RSSI recovered above lock threshold estimated=\(estimated) threshold=\(lockThreshold); cancelling away timer")
             }
-            runtime.proximityTimer?.invalidate()
+            runtime.proximityTimer?.stop()
             runtime.proximityTimer = nil
         } else if runtime.presence && runtime.proximityTimer == nil {
             log("RSSI below lock threshold estimated=\(estimated) threshold=\(lockThreshold); scheduling away timer seconds=\(settings.proximityTimeout)")
-            runtime.proximityTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(settings.proximityTimeout), repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self, let runtime = self.runtime(for: uuid) else { return }
-                    self.log("away timer fired uuid=\(uuid.uuidString) estimatedRSSI=\(runtime.lastRSSI.map(String.init) ?? "none")")
-                    runtime.presence = false
-                    runtime.proximityTimer = nil
-                    self.recomputePresence(reason: "away")
-                }
-            }
-            if let timer = runtime.proximityTimer {
-                RunLoop.main.add(timer, forMode: .common)
+            runtime.proximityTimer = BackgroundTask.once(after: TimeInterval(settings.proximityTimeout)) { [weak self] in
+                guard let self, let runtime = self.runtime(for: uuid) else { return }
+                self.log("away timer fired uuid=\(uuid.uuidString) estimatedRSSI=\(runtime.lastRSSI.map(String.init) ?? "none")")
+                runtime.presence = false
+                runtime.proximityTimer = nil
+                self.recomputePresence(reason: "away")
             }
         }
         resetSignalTimer(for: uuid)
@@ -1280,10 +1271,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
 
     private func startScanCleanupTimer() {
         guard scanCleanupTimer == nil else { return }
-        scanCleanupTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.removeStaleDevices() }
+        scanCleanupTimer = BackgroundTask.repeating(every: 5) { [weak self] in
+            self?.removeStaleDevices()
         }
-        if let timer = scanCleanupTimer { RunLoop.main.add(timer, forMode: .common) }
     }
 
     private func removeStaleDevices() {
@@ -1337,16 +1327,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
 
         log("connect monitored peripheral uuid=\(uuid.uuidString) state=\(String(describing: peripheral.state)) passive=\(settings.passiveMode)")
         centralMgr?.connect(peripheral, options: nil)
-        runtime.connectionTimer?.invalidate()
-        runtime.connectionTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let runtime = self.runtime(for: uuid),
-                      let peripheral = runtime.peripheral, peripheral.state == .connecting else { return }
-                self.centralMgr?.cancelPeripheralConnection(peripheral)
-                runtime.connectionTimer = nil
-            }
+        runtime.connectionTimer?.stop()
+        runtime.connectionTimer = BackgroundTask.once(after: 60) { [weak self] in
+            guard let self, let runtime = self.runtime(for: uuid),
+                  let peripheral = runtime.peripheral, peripheral.state == .connecting else { return }
+            self.centralMgr?.cancelPeripheralConnection(peripheral)
+            runtime.connectionTimer = nil
         }
-        if let timer = runtime.connectionTimer { RunLoop.main.add(timer, forMode: .common) }
     }
 
     private func requestRSSIRead(for runtime: BLEMonitoredDeviceRuntime) {
@@ -1358,22 +1345,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
     }
 
     private func scheduleRSSIRequestTimeout(for runtime: BLEMonitoredDeviceRuntime) {
-        runtime.rssiRequestTimeoutTimer?.invalidate()
+        runtime.rssiRequestTimeoutTimer?.stop()
         let uuid = runtime.uuid
-        runtime.rssiRequestTimeoutTimer = Timer.scheduledTimer(
-            withTimeInterval: BLERequestGate.requestTimeout,
-            repeats: false
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let currentRuntime = self.runtime(for: uuid) else { return }
-                currentRuntime.rssiRequestTimeoutTimer = nil
-                guard currentRuntime.rssiReadGate.hasTimedOut(at: Date()) else { return }
-                self.log("RSSI request timed out uuid=\(currentRuntime.uuid.uuidString) timeout=\(BLERequestGate.requestTimeout)")
-                self.startMonitoringRecovery(reason: "rssiRequestTimeout", restartImmediately: true)
-            }
-        }
-        if let timer = runtime.rssiRequestTimeoutTimer {
-            RunLoop.main.add(timer, forMode: .common)
+        runtime.rssiRequestTimeoutTimer = BackgroundTask.once(after: BLERequestGate.requestTimeout) { [weak self] in
+            guard let self, let currentRuntime = self.runtime(for: uuid) else { return }
+            currentRuntime.rssiRequestTimeoutTimer = nil
+            guard currentRuntime.rssiReadGate.hasTimedOut(at: Date()) else { return }
+            self.log("RSSI request timed out uuid=\(currentRuntime.uuid.uuidString) timeout=\(BLERequestGate.requestTimeout)")
+            self.startMonitoringRecovery(reason: "rssiRequestTimeout", restartImmediately: true)
         }
     }
 
@@ -1476,7 +1455,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
         peripheral.delegate = self
         if isScanning { peripheral.discoverServices([deviceInformationUUID]) }
         if isMonitored, !settings.passiveMode, let monitoredRuntime {
-            monitoredRuntime.connectionTimer?.invalidate()
+            monitoredRuntime.connectionTimer?.stop()
             monitoredRuntime.connectionTimer = nil
             monitoredRuntime.connectionRetryGate.reset()
             requestRSSIRead(for: monitoredRuntime)
@@ -1486,9 +1465,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         log("peripheral connection failed monitored=\(runtime(for: peripheral.identifier) != nil) error=\(error?.localizedDescription ?? "unknown")")
         if let runtime = runtime(for: peripheral.identifier) {
-            runtime.connectionTimer?.invalidate()
+            runtime.connectionTimer?.stop()
             runtime.connectionTimer = nil
-            runtime.rssiRequestTimeoutTimer?.invalidate()
+            runtime.rssiRequestTimeoutTimer?.stop()
             runtime.rssiRequestTimeoutTimer = nil
             runtime.rssiReadGate.reset()
         }
@@ -1497,9 +1476,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         log("peripheral disconnected monitored=\(runtime(for: peripheral.identifier) != nil) error=\(error?.localizedDescription ?? "none")")
         if let runtime = runtime(for: peripheral.identifier) {
-            runtime.connectionTimer?.invalidate()
+            runtime.connectionTimer?.stop()
             runtime.connectionTimer = nil
-            runtime.rssiRequestTimeoutTimer?.invalidate()
+            runtime.rssiRequestTimeoutTimer?.stop()
             runtime.rssiRequestTimeoutTimer = nil
             runtime.rssiReadGate.reset()
             runtime.activeMode = runtime.activeModeTimer != nil
@@ -1511,7 +1490,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
 
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
         guard let runtime = runtime(for: peripheral.identifier) else { return }
-        runtime.rssiRequestTimeoutTimer?.invalidate()
+        runtime.rssiRequestTimeoutTimer?.stop()
         runtime.rssiRequestTimeoutTimer = nil
         runtime.rssiReadGate.finish()
         if let error {
@@ -1528,18 +1507,15 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
             }
             if !isScanning && !anotherDeviceNeedsScan { centralMgr?.stopScan() }
             let runtimeUUID = runtime.uuid
-            runtime.activeModeTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self, let runtime = self.runtime(for: runtimeUUID),
-                          let peripheral = runtime.peripheral else { return }
-                    if peripheral.state == .connected {
-                        self.requestRSSIRead(for: runtime)
-                    } else {
-                        self.connectMonitoredPeripheral(for: runtime.uuid)
-                    }
+            runtime.activeModeTimer = BackgroundTask.repeating(every: 2) { [weak self] in
+                guard let self, let runtime = self.runtime(for: runtimeUUID),
+                      let peripheral = runtime.peripheral else { return }
+                if peripheral.state == .connected {
+                    self.requestRSSIRead(for: runtime)
+                } else {
+                    self.connectMonitoredPeripheral(for: runtime.uuid)
                 }
             }
-            if let timer = runtime.activeModeTimer { RunLoop.main.add(timer, forMode: .common) }
             runtime.activeMode = true
             refreshPublishedMonitoringState()
         }
@@ -2147,14 +2123,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
 
     private func startLivenessTimer() {
         guard livenessTimer == nil else { return }
-        livenessTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.evaluateAdvertisementLiveness() }
+        livenessTimer = BackgroundTask.repeating(every: 60) { [weak self] in
+            self?.evaluateAdvertisementLiveness()
         }
-        if let timer = livenessTimer { RunLoop.main.add(timer, forMode: .common) }
     }
 
     private func stopLivenessTimer() {
-        livenessTimer?.invalidate()
+        livenessTimer?.stop()
         livenessTimer = nil
     }
 
