@@ -1927,6 +1927,7 @@ final class MacPilotModel: ObservableObject {
     let awakeTriggers: AwakeTriggerEngine
     let memoryMonitor = MemoryMonitorModel()
     let cpuMonitor = CPUMonitorModel()
+    let featureLifecycle = FeatureLifecycleManager()
     /// iPhone remote control. Lazily created so it can reference `self` for
     /// persistence and share the BLE model's screen control service.
     lazy var remoteDeviceStore = RemoteDeviceStore(persist: { [weak self] in self?.saveIfReady() })
@@ -1974,6 +1975,9 @@ final class MacPilotModel: ObservableObject {
     )
 
     init() {
+        featureLifecycle.register(clipboard)
+        featureLifecycle.register(memoryMonitor)
+        featureLifecycle.register(cpuMonitor)
         // A previous session may have died while holding a blank screen; replay
         // its saved backlight levels before anything else touches a display.
         DisplayBlankRecovery.recover(store: .standard)
@@ -2843,13 +2847,11 @@ final class MacPilotModel: ObservableObject {
         inputSources.shutdown()
         windowSwitcher.shutdown()
         smoothScrolling.shutdown()
-        clipboard.shutdown()
+        featureLifecycle.stopAll()
         remoteControl.stop()
         DisplayPower.shutdown()
         rightClickMenu.stop()
-        memoryMonitor.stopAutoRefresh()
         MemoryMonitorModel.clearMenuCache()
-        cpuMonitor.stopAutoRefresh()
         CPUMonitorModel.clearMenuCache()
         awake.shutdown()
         awakeTriggers.shutdown()
@@ -3328,7 +3330,7 @@ extension MacPilotModel {
         case .smoothScrolling:
             smoothScrolling.activateFromConfiguration()
         case .clipboard:
-            clipboard.activateFromConfiguration()
+            if clipboard.settings.isEnabled { featureLifecycle.start(clipboard.identifier) }
         case .rightClick:
             startRightClickMenu()
         case .dockGroups:
@@ -3371,16 +3373,16 @@ extension MacPilotModel {
         case .smoothScrolling:
             smoothScrolling.deactivateFromConfiguration()
         case .clipboard:
-            clipboard.shutdown()
+            featureLifecycle.stop(clipboard.identifier)
         case .rightClick:
             rightClickMenu.stop()
         case .dockGroups:
             dockGroups.shutdown()
         case .memoryMonitor:
-            memoryMonitor.stopAutoRefresh()
+            featureLifecycle.stop(memoryMonitor.identifier)
             MemoryMonitorModel.clearMenuCache()
         case .cpuMonitor:
-            cpuMonitor.stopAutoRefresh()
+            featureLifecycle.stop(cpuMonitor.identifier)
             CPUMonitorModel.clearMenuCache()
         case .localPorts:
             localPorts.shutdown()

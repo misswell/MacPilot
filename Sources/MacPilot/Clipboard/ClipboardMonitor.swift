@@ -22,7 +22,7 @@ final class ClipboardMonitor {
     private var changeCount: Int
 
     private let pasteboard = NSPasteboard.general
-    private var timer: Timer?
+    private let pollingTask = BackgroundTask()
 
     /// 打开面板期间暂停记录（避免粘贴自身被再次记录）。
     var isSuspended = false {
@@ -53,23 +53,13 @@ final class ClipboardMonitor {
     }
 
     func start() {
-        guard timer == nil else { return }
-        let newTimer = Timer.scheduledTimer(
-            timeInterval: Self.pollingInterval,
-            target: self,
-            selector: #selector(checkForChangesInPasteboard),
-            userInfo: nil,
-            repeats: true
-        )
-        // .common 让菜单跟踪、滚动条拖动等模态期间照常轮询
-        // （仅 .default 模式时这些场景下轮询会暂停）。
-        RunLoop.main.add(newTimer, forMode: .common)
-        timer = newTimer
+        pollingTask.start(interval: .seconds(Self.pollingInterval)) { [weak self] in
+            self?.checkForChangesInPasteboard()
+        }
     }
 
     func stop() {
-        timer?.invalidate()
-        timer = nil
+        pollingTask.stop()
     }
 
     /// 从面板复制纯文本（把搜索词写入系统剪贴板）。

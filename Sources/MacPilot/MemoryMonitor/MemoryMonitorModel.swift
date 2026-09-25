@@ -3,7 +3,9 @@ import SwiftUI
 
 /// 内存监控的运行时状态：定时采样进程与系统内存，供监控页展示。
 @MainActor
-final class MemoryMonitorModel: ObservableObject {
+final class MemoryMonitorModel: ObservableObject, ManagedFeature {
+    let identifier = "memoryMonitor"
+    var isRunning: Bool { refreshLoop.isRunning }
     /// 自动刷新间隔：足够跟随变化，又不会带来可感知的开销。
     static let refreshInterval: TimeInterval = 3
 
@@ -15,7 +17,7 @@ final class MemoryMonitorModel: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastUpdated: Date?
 
-    private var refreshLoop: Task<Void, Never>?
+    private let refreshLoop = BackgroundTask()
 
     /// 菜单栏「内存监控」子菜单使用：同步采样一次（毫秒级），
     /// 短时间内重复调用（如菜单反复开合）共享缓存结果。
@@ -31,20 +33,19 @@ final class MemoryMonitorModel: ObservableObject {
     }
 
     func startAutoRefresh() {
-        guard refreshLoop == nil else { return }
+        guard !refreshLoop.isRunning else { return }
         refresh()
-        refreshLoop = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(Self.refreshInterval))
-                self?.refresh()
-            }
+        refreshLoop.start(interval: .seconds(Self.refreshInterval)) { [weak self] in
+            self?.refresh()
         }
     }
 
     func stopAutoRefresh() {
-        refreshLoop?.cancel()
-        refreshLoop = nil
+        refreshLoop.stop()
     }
+
+    func start() { startAutoRefresh() }
+    func stop() { stopAutoRefresh() }
 
     /// Drops the process-wide menu snapshot so a terminated app does not keep
     /// the cached `[AppMemoryUsage]` array alive.

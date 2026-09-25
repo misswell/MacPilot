@@ -39,7 +39,9 @@ enum ClipboardAction {
 }
 
 @MainActor
-final class ClipboardModel: ObservableObject {
+final class ClipboardModel: ObservableObject, ManagedFeature {
+    let identifier = "clipboard"
+    private(set) var isRunning = false
     private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "Clipboard")
 
     @Published private(set) var settings = ClipboardSettings()
@@ -95,6 +97,7 @@ final class ClipboardModel: ObservableObject {
     }
 
     func shutdown() {
+        isRunning = false
         monitor.stop()
         hotKeyCenter.stop()
         closePanel()
@@ -105,10 +108,14 @@ final class ClipboardModel: ObservableObject {
         AppText.value(key, language: language, arguments: arguments)
     }
 
-    private func start() {
+    func start() {
+        guard !isRunning else { return }
+        isRunning = true
         monitor.start()
         hotKeyCenter.updateBinding(settings.hotkey)
     }
+
+    func stop() { shutdown() }
 
     // MARK: - Settings setters
 

@@ -1,0 +1,50 @@
+import Testing
+@testable import MacPilot
+
+@MainActor
+private final class StubManagedFeature: ManagedFeature {
+    let identifier = "stub"
+    private(set) var isRunning = false
+    private(set) var starts = 0
+    private(set) var stops = 0
+
+    func start() {
+        isRunning = true
+        starts += 1
+    }
+
+    func stop() {
+        isRunning = false
+        stops += 1
+    }
+}
+
+@Suite @MainActor
+struct ResourceLifecycleTests {
+    @Test func lifecycleStartsOnceAndStopsOnUnregister() {
+        let manager = FeatureLifecycleManager()
+        let feature = StubManagedFeature()
+        manager.register(feature)
+
+        manager.start(feature.identifier)
+        manager.start(feature.identifier)
+        #expect(feature.starts == 1)
+        #expect(manager.activeIdentifiers == [feature.identifier])
+
+        manager.unregister(feature.identifier)
+        #expect(feature.stops == 1)
+        #expect(manager.activeIdentifiers.isEmpty)
+    }
+
+    @Test func cancelledBackgroundTaskNeverRunsItsAction() async throws {
+        let baseline = BackgroundTask.activeCount
+        let polling = BackgroundTask()
+        var actions = 0
+        polling.start(interval: .milliseconds(50)) { actions += 1 }
+        #expect(BackgroundTask.activeCount == baseline + 1)
+        polling.stop()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(actions == 0)
+        #expect(BackgroundTask.activeCount == baseline)
+    }
+}

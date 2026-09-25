@@ -3,7 +3,9 @@ import SwiftUI
 
 /// CPU 监控的运行时状态：定时采样进程与系统 CPU，供监控页和菜单栏使用。
 @MainActor
-final class CPUMonitorModel: ObservableObject {
+final class CPUMonitorModel: ObservableObject, ManagedFeature {
+    let identifier = "cpuMonitor"
+    var isRunning: Bool { refreshLoop.isRunning }
     static let refreshInterval: TimeInterval = 3
 
     private static let menuSampler = CPUUsageSampler()
@@ -15,7 +17,7 @@ final class CPUMonitorModel: ObservableObject {
     @Published private(set) var lastUpdated: Date?
 
     private let sampler = CPUUsageSampler()
-    private var refreshLoop: Task<Void, Never>?
+    private let refreshLoop = BackgroundTask()
 
     static func menuSnapshot(maxAge: TimeInterval = 2) -> (
         apps: [AppCPUUsage],
@@ -30,21 +32,20 @@ final class CPUMonitorModel: ObservableObject {
     }
 
     func startAutoRefresh() {
-        guard refreshLoop == nil else { return }
+        guard !refreshLoop.isRunning else { return }
         sampler.reset()
         refresh()
-        refreshLoop = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(Self.refreshInterval))
-                self?.refresh()
-            }
+        refreshLoop.start(interval: .seconds(Self.refreshInterval)) { [weak self] in
+            self?.refresh()
         }
     }
 
     func stopAutoRefresh() {
-        refreshLoop?.cancel()
-        refreshLoop = nil
+        refreshLoop.stop()
     }
+
+    func start() { startAutoRefresh() }
+    func stop() { stopAutoRefresh() }
 
     static func clearMenuCache() {
         cachedMenuSample = nil
