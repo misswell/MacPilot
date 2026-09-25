@@ -50,7 +50,19 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
     /// 界面语言（由 MacPilotModel 同步），用于面板内文案。
     var language: AppLanguage = .system
 
-    let history: ClipboardHistory
+    private var historyStorage: ClipboardHistory?
+    var history: ClipboardHistory {
+        if let historyStorage { return historyStorage }
+        let loaded = ClipboardHistory()
+        loaded.storageLimit = settings.storageLimit
+        loaded.pinsAtTop = settings.pinsAtTop
+        observations.append(loaded.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        })
+        historyStorage = loaded
+        return loaded
+    }
+    var hasLoadedHistory: Bool { historyStorage != nil }
     /// 悬停详情列的状态机。视图通过本模型观察它（见 `observations`）。
     let preview = ClipboardPreviewController()
     private let monitor = ClipboardMonitor()
@@ -61,14 +73,12 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
     private var panel: ClipboardPanel?
     private var observations: [AnyCancellable] = []
 
-    init(history: ClipboardHistory = ClipboardHistory()) {
-        self.history = history
-        // history 与 preview 是独立的 ObservableObject，视图只观察本模型；
-        // 不桥接的话，选中移动、搜索过滤、条目增删、详情展开都不会触发界面刷新。
-        observations = [
-            history.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() },
-            preview.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() },
-        ]
+    init() {
+        // The history JSON and image references are loaded on first use, not
+        // every time a menu-bar process launches with Clipboard disabled.
+        observations = [preview.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }]
         monitor.settingsProvider = { [weak self] in self?.settings ?? ClipboardSettings() }
         monitor.onNewCopy { [weak self] item in
             self?.history.add(item)
@@ -83,8 +93,8 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
 
     func applyLoadedSettings(_ loaded: ClipboardSettings, activate: Bool = true) {
         settings = loaded
-        history.storageLimit = loaded.storageLimit
-        history.pinsAtTop = loaded.pinsAtTop
+        historyStorage?.storageLimit = loaded.storageLimit
+        historyStorage?.pinsAtTop = loaded.pinsAtTop
         refreshPermissionStatus()
         if activate && settings.isEnabled {
             start()
@@ -101,7 +111,7 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
         monitor.stop()
         hotKeyCenter.stop()
         closePanel()
-        history.flush()
+        historyStorage?.flush()
     }
 
     func t(_ key: String, _ arguments: CVarArg...) -> String {
