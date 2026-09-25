@@ -797,7 +797,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, @preconcurrency CBCentra
         guard changedEnough || now.timeIntervalSince(lastLoggedRSSIAt) >= 5 else { return }
         lastLoggedRSSIAt = now
         lastLoggedRSSI = estimated
-        log("RSSI sample raw=\(raw) estimated=\(estimated) presence=\(presence) active=\(activeMode) connected=\(connected) displaySleep=\(displaySleep) systemSleep=\(systemSleep)")
+        DiagnosticLog.write("BLEUnlock", "RSSI sample raw=\(raw) estimated=\(estimated) presence=\(presence) active=\(activeMode) connected=\(connected) displaySleep=\(displaySleep) systemSleep=\(systemSleep)", level: .debug)
     }
 
     private func logRSSIError(_ error: Error?) {

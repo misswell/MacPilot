@@ -20,6 +20,13 @@ private final class DiagnosticLogWriteProbe: @unchecked Sendable {
 }
 
 struct DiagnosticLogTests {
+    @Test func logLevelFiltersVerboseMessages() {
+        #expect(LogLevel.warning.allows(.error))
+        #expect(LogLevel.warning.allows(.warning))
+        #expect(!LogLevel.warning.allows(.info))
+        #expect(!LogLevel.none.allows(.error))
+    }
+
     @Test func diagnosticLogWritesAreQueuedOffTheCallingThread() {
         let queue = DispatchQueue(label: "com.misswell.macpilot.tests.diagnostic-log")
         let probe = DiagnosticLogWriteProbe()

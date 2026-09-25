@@ -1,6 +1,20 @@
 import Foundation
 import OSLog
 
+enum LogLevel: Int, Comparable, Sendable {
+    case none = 0
+    case error
+    case warning
+    case info
+    case debug
+
+    static func < (lhs: LogLevel, rhs: LogLevel) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    func allows(_ messageLevel: LogLevel) -> Bool {
+        self != .none && messageLevel != .none && messageLevel.rawValue <= rawValue
+    }
+}
+
 /// Keeps diagnostic file I/O out of event taps and other latency-sensitive
 /// callers. The queue is injected in tests so the scheduling contract is
 /// testable without touching the user's diagnostic file.
@@ -20,6 +34,11 @@ enum DiagnosticLogWriteScheduling {
 /// `~/Library/Logs/MacPilot/Diagnostics.log`，并在写入前清理超过 24 小时的旧日志，
 /// 让间歇性蓝牙问题仍有足够的上下文可供排查。
 enum DiagnosticLog {
+    #if DEBUG
+    static let minimumLevel: LogLevel = .info
+    #else
+    static let minimumLevel: LogLevel = .warning
+    #endif
     private static let writeQueue = DispatchQueue(
         label: "com.misswell.macpilot.diagnostic-log-write",
         qos: .utility
@@ -44,16 +63,16 @@ enum DiagnosticLog {
     private static let fileURL = directory.appendingPathComponent("Diagnostics.log")
 
     /// 追加一条日志；`category` 用于区分模块（如 WindowSwitcher / RightClickMenu）。
-    static func write(_ category: String, _ message: String) {
+    static func write(_ category: String, _ message: @autoclosure () -> String, level: LogLevel = .warning) {
         // BLE model tests exercise the same callbacks as the app. Do not let
         // those callbacks append synthetic UUIDs/settings to the user's
         // one-day diagnostic history.
-        guard !isRunningTests else { return }
+        guard !isRunningTests, minimumLevel.allows(level) else { return }
 
         // Evaluating the autoclosure is intentionally the only work performed
         // by the caller. Directory creation, cleanup, timestamp formatting,
         // and file writes all happen on the utility queue.
-        let message = message
+        let message = message()
         DiagnosticLogWriteScheduling.enqueue(on: writeQueue) {
             append(category: category, message: message)
         }

@@ -2131,10 +2131,10 @@ final class WindowSwitcherModel: ObservableObject {
         if !observedIDs.isEmpty {
             if !newIDs.isEmpty, newIDs.count <= 8 {
                 let names = snapshot.filter { newIDs.contains($0.id) }.map(\.appName)
-                DiagnosticLog.write("WindowSwitcher", "Recording newly observed windows after existing recency: \(names.joined(separator: ", "))")
+                DiagnosticLog.write("WindowSwitcher", "Recording newly observed windows after existing recency: \(names.joined(separator: ", "))", level: .info)
                 Self.windowSwitcherLogger.info("Recording newly observed windows after existing recency: \(names.joined(separator: ", "))")
             } else if !newIDs.isEmpty {
-                DiagnosticLog.write("WindowSwitcher", "Recording \(newIDs.count) newly observed windows after existing recency (\(recreatedIDs.count) recreated)")
+                DiagnosticLog.write("WindowSwitcher", "Recording \(newIDs.count) newly observed windows after existing recency (\(recreatedIDs.count) recreated)", level: .info)
                 Self.windowSwitcherLogger.info("Recording \(newIDs.count) newly observed windows after existing recency (\(recreatedIDs.count) recreated)")
             }
             if !recreatedIDs.isEmpty {
