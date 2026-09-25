@@ -4,7 +4,7 @@ import Foundation
 /// are read unchanged and migrate only after all three sidecars are written.
 @MainActor
 final class ConfigStore {
-    private static let splitVersionKey = "splitConfigurationVersion"
+    nonisolated private static let splitVersionKey = "splitConfigurationVersion"
     private static let featureKeys: Set<String> = [
         "enabledFeatures", "bleUnlock", "fileCompression", "screenCapture",
         "screenRecording", "pictureInPicture", "inputSources", "smoothScrolling",
