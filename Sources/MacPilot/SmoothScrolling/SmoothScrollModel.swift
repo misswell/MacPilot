@@ -6,6 +6,7 @@ import SwiftUI
 final class SmoothScrollModel: ObservableObject, ManagedFeature {
     let identifier = "smoothScrolling"
     var isRunning: Bool { isActive && settings.isEnabled }
+    var activeEventTapCount: Int { controller.activeEventTapCount }
     func start() { activateFromConfiguration() }
     func stop() { deactivateFromConfiguration() }
     @Published private(set) var settings = SmoothScrollSettings()

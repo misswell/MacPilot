@@ -37,6 +37,22 @@ final class BackgroundTask {
         }
     }
 
+    /// Serial async polling: the next interval begins only after the current
+    /// sample completes, so a slow external service cannot build a backlog.
+    func startAsync(interval: Duration, action: @escaping @MainActor () async -> Void) {
+        guard task == nil else { return }
+        isRunning = true
+        Self.activeCount += 1
+        task = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: interval) }
+                catch { break }
+                guard !Task.isCancelled, self?.isRunning == true else { break }
+                await action()
+            }
+        }
+    }
+
     func stop() {
         guard isRunning else { return }
         isRunning = false

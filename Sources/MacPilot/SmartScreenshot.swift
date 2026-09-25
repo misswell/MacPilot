@@ -1560,6 +1560,9 @@ private struct SmartCaptureToastView: View {
 
 @MainActor
 final class SmartScreenshotController {
+    var activeEventTapCount: Int {
+        (shortcutEventTap == nil ? 0 : 1) + (selectionEventTap == nil ? 0 : 1)
+    }
     nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     private let language: () -> AppLanguage
     private let onCapture: (CGImage) -> Void

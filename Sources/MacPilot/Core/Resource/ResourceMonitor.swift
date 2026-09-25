@@ -7,6 +7,14 @@ struct ResourceSnapshot: Equatable {
     let activeFeatures: [String]
     let managedTasks: Int
     let trackedObservers: Int
+    let eventTaps: Int
+    let iconCacheEntries: Int
+    let windowCacheEntries: Int
+}
+
+struct ResourceRuntimeCounts {
+    let eventTaps: Int
+    let windowCacheEntries: Int
 }
 
 /// Diagnostics are sampled only while the user opens the menu. There is no
@@ -15,32 +23,30 @@ struct ResourceSnapshot: Equatable {
 final class ResourceMonitor: ObservableObject {
     @Published private(set) var snapshot = ResourceSnapshot(
         memoryBytes: nil, cpuPercent: nil, activeFeatures: [],
-        managedTasks: 0, trackedObservers: 0
+        managedTasks: 0, trackedObservers: 0,
+        eventTaps: 0, iconCacheEntries: 0, windowCacheEntries: 0
     )
 
     private var previousCPU: (uptime: TimeInterval, seconds: Double)?
-    private var sampleTask: Task<Void, Never>?
+    private let sampleTask = BackgroundTask()
 
-    func startSampling(lifecycle: FeatureLifecycleManager, trackedObservers: @escaping @MainActor () -> Int) {
+    func startSampling(
+        lifecycle: FeatureLifecycleManager,
+        runtimeCounts: @escaping @MainActor () -> ResourceRuntimeCounts
+    ) {
         stopSampling()
         previousCPU = nil
-        refresh(lifecycle: lifecycle, trackedObservers: trackedObservers())
-        sampleTask = Task { [weak self] in
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(1)) }
-                catch { return }
-                guard let self, !Task.isCancelled else { return }
-                self.refresh(lifecycle: lifecycle, trackedObservers: trackedObservers())
-            }
+        refresh(lifecycle: lifecycle, runtimeCounts: runtimeCounts())
+        sampleTask.start(interval: .seconds(1)) { [weak self] in
+            self?.refresh(lifecycle: lifecycle, runtimeCounts: runtimeCounts())
         }
     }
 
     func stopSampling() {
-        sampleTask?.cancel()
-        sampleTask = nil
+        sampleTask.stop()
     }
 
-    func refresh(lifecycle: FeatureLifecycleManager, trackedObservers: Int) {
+    func refresh(lifecycle: FeatureLifecycleManager, runtimeCounts: ResourceRuntimeCounts) {
         let uptime = ProcessInfo.processInfo.systemUptime
         let cpuSeconds = Self.cumulativeCPUSeconds()
         let percent: Double?
@@ -55,7 +61,10 @@ final class ResourceMonitor: ObservableObject {
             cpuPercent: percent,
             activeFeatures: lifecycle.activeIdentifiers,
             managedTasks: BackgroundTask.activeCount,
-            trackedObservers: trackedObservers
+            trackedObservers: ObserverBag.activeCount,
+            eventTaps: runtimeCounts.eventTaps,
+            iconCacheEntries: AppIconCache.shared.count,
+            windowCacheEntries: runtimeCounts.windowCacheEntries
         )
     }
 

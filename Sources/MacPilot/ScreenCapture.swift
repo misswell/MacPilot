@@ -503,6 +503,7 @@ enum ScreenCaptureResetExecution: Sendable {
 final class ScreenCaptureModel: ObservableObject, ManagedFeature {
     let identifier = "capture"
     var isRunning: Bool { smartCapture != nil || isLoopRunning }
+    var activeEventTapCount: Int { smartCapture?.activeEventTapCount ?? 0 }
     func start() { activateFromConfiguration() }
     func stop() { shutdown() }
     private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")

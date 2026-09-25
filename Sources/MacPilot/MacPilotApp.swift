@@ -719,6 +719,7 @@ enum AppText {
         "diagnostics": "诊断", "resourceMonitor": "资源监控", "resourceRefresh": "刷新采样",
         "resourceMemory": "内存：%@ MB", "resourceCPU": "CPU：%@%%",
         "resourceActiveFeatures": "已纳管功能：%@", "resourceTasks": "已纳管任务：%d", "resourceObservers": "已跟踪观察者：%d",
+        "resourceEventTaps": "事件监听：%d", "resourceIconCache": "图标缓存：%d", "resourceWindowCache": "窗口缓存：%d",
         "resourceUnavailable": "—", "resourceNone": "无",
         "windowSwitcherShortcut": "⌥Tab",
         "windowSwitcherIncludeMinimized": "显示最小化窗口", "windowSwitcherIncludeHidden": "显示已隐藏应用的窗口",
@@ -1641,6 +1642,7 @@ enum AppText {
             "diagnostics": "Diagnostics", "resourceMonitor": "Resource Monitor", "resourceRefresh": "Refresh Sample",
             "resourceMemory": "Memory: %@ MB", "resourceCPU": "CPU: %@%%",
             "resourceActiveFeatures": "Managed features: %@", "resourceTasks": "Managed tasks: %d", "resourceObservers": "Tracked observers: %d",
+            "resourceEventTaps": "Event taps: %d", "resourceIconCache": "Icon cache: %d", "resourceWindowCache": "Window cache: %d",
             "resourceUnavailable": "—", "resourceNone": "None",
             "windowSwitcherShortcut": "⌥Tab",
             "windowSwitcherIncludeMinimized": "Show minimized windows", "windowSwitcherIncludeHidden": "Show windows from hidden applications",
@@ -1934,16 +1936,8 @@ final class MacPilotModel: ObservableObject {
     let awake: AwakeSessionManager
     let awakeTriggers: AwakeTriggerEngine
     let featureLifecycle = FeatureLifecycleManager()
-    lazy var memoryMonitor: MemoryMonitorModel = {
-        let monitor = MemoryMonitorModel()
-        featureLifecycle.register(monitor)
-        return monitor
-    }()
-    lazy var cpuMonitor: CPUMonitorModel = {
-        let monitor = CPUMonitorModel()
-        featureLifecycle.register(monitor)
-        return monitor
-    }()
+    lazy var memoryMonitor = MemoryMonitorModel()
+    lazy var cpuMonitor = CPUMonitorModel()
     /// iPhone remote control. Lazily created so it can reference `self` for
     /// persistence and share the BLE model's screen control service.
     lazy var remoteDeviceStore = RemoteDeviceStore(persist: { [weak self] in self?.saveIfReady() })
@@ -1975,13 +1969,22 @@ final class MacPilotModel: ObservableObject {
     private var quitRuntimeStates: [UUID: QuitRuntimeState] = [:]
     private var quitTasks: [UUID: Task<Void, Never>] = [:]
     private var quitWakeDeadlines: [UUID: Date] = [:]
-    private var safetyCheckTask: Task<Void, Never>?
+    private let safetyCheckTask = BackgroundTask()
     private var inputSourceSaveTask: Task<Void, Never>?
-    private var workspaceObservers: [NSObjectProtocol] = []
-    var trackedObserverCount: Int { workspaceObservers.count + lifetimeObservers.count }
+    private let workspaceObservers = ObserverBag()
+    var resourceRuntimeCounts: ResourceRuntimeCounts {
+        ResourceRuntimeCounts(
+            eventTaps: screenCapture.activeEventTapCount
+                + pictureInPicture.activeEventTapCount
+                + inputSources.activeEventTapCount
+                + windowSwitcher.activeEventTapCount
+                + smoothScrolling.activeEventTapCount,
+            windowCacheEntries: windowSwitcher.cachedThumbnailCount
+        )
+    }
     /// Tokens for observers that live as long as the app (termination, deep
     /// links). Stored so `shutdown()` can remove them deterministically.
-    private var lifetimeObservers: [NSObjectProtocol] = []
+    private let lifetimeObservers = ObserverBag()
     private var hasShutdown = false
     private var lastScheduledBootSession: String?
     private var isLoading = false
@@ -1989,15 +1992,6 @@ final class MacPilotModel: ObservableObject {
     private let configurationStore: ConfigStore
 
     init() {
-        featureLifecycle.register(clipboard)
-        featureLifecycle.register(ble)
-        featureLifecycle.register(fileCompression)
-        featureLifecycle.register(screenCapture)
-        featureLifecycle.register(pictureInPicture)
-        featureLifecycle.register(inputSources)
-        featureLifecycle.register(windowSwitcher)
-        featureLifecycle.register(smoothScrolling)
-        featureLifecycle.register(dockGroups)
         // A previous session may have died while holding a blank screen; replay
         // its saved backlight levels before anything else touches a display.
         DisplayBlankRecovery.recover(store: .standard)
@@ -2018,6 +2012,7 @@ final class MacPilotModel: ObservableObject {
         isLoading = true
         load()
         isLoading = false
+        FeatureRegistry.shared.registerAll(model: self, in: featureLifecycle)
         save()
         refreshLoginItemApprovalState()
         restoreLoginItemIfNeeded()
@@ -2030,14 +2025,14 @@ final class MacPilotModel: ObservableObject {
         // One observer owns every teardown path. `willTerminate` is delivered
         // synchronously on the main thread, so `shutdown()` must stay
         // synchronous: scheduling it in a `Task` loses the work at exit.
-        lifetimeObservers.append(NotificationCenter.default.addObserver(
+        lifetimeObservers.add(NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.shutdown() }
         })
-        lifetimeObservers.append(NotificationCenter.default.addObserver(
+        lifetimeObservers.add(NotificationCenter.default.addObserver(
             forName: .macPilotDeepLink,
             object: nil,
             queue: .main
@@ -2050,7 +2045,7 @@ final class MacPilotModel: ObservableObject {
         // again in a second should keep its state, while one they closed
         // should give its view graph back. `willClose` is the AppKit hook, and
         // the release waits a turn so the window never blanks mid-animation.
-        lifetimeObservers.append(NotificationCenter.default.addObserver(
+        lifetimeObservers.add(NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: nil,
             queue: .main
@@ -2617,20 +2612,18 @@ final class MacPilotModel: ObservableObject {
             NSWorkspace.didUnhideApplicationNotification,
             NSWorkspace.didWakeNotification
         ]
-        workspaceObservers = names.map { name in
-            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+        for name in names {
+            workspaceObservers.add(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
                 Task { @MainActor in
                     self?.handleWorkspaceNotification(name: name, application: application)
                 }
-            }
+            }, center: center)
         }
     }
 
     private func stopObservingWorkspace() {
-        let center = NSWorkspace.shared.notificationCenter
-        for observer in workspaceObservers { center.removeObserver(observer) }
-        workspaceObservers.removeAll(keepingCapacity: false)
+        workspaceObservers.removeAll()
     }
 
     private func handleWorkspaceNotification(name: Notification.Name, application: NSRunningApplication?) {
@@ -2816,25 +2809,16 @@ final class MacPilotModel: ObservableObject {
     }
 
     private func startSafetyChecks() {
-        guard isFeatureEnabled(.exit), isEnforcing, safetyCheckTask == nil else { return }
-        safetyCheckTask = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    // Workspace notifications and per-rule deadline tasks handle normal operation.
-                    // This slower sweep only recovers from a missed system notification.
-                    try await Task.sleep(for: Self.safetyCheckInterval)
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled, let self else { return }
-                self.rebuildQuitSchedule()
-            }
+        guard isFeatureEnabled(.exit), isEnforcing, !safetyCheckTask.isRunning else { return }
+        // Workspace notifications and per-rule deadlines handle normal
+        // operation. This slower sweep recovers missed notifications.
+        safetyCheckTask.start(interval: Self.safetyCheckInterval) { [weak self] in
+            self?.rebuildQuitSchedule()
         }
     }
 
     private func stopSafetyChecks() {
-        safetyCheckTask?.cancel()
-        safetyCheckTask = nil
+        safetyCheckTask.stop()
     }
 
     /// Keeps the shared screen-saver observers installed only while a feature
@@ -2879,8 +2863,7 @@ final class MacPilotModel: ObservableObject {
         // 生成的 Helper App 保持原样，下次启动可以直接继续用。
         localPorts.shutdown()
 
-        for observer in lifetimeObservers { NotificationCenter.default.removeObserver(observer) }
-        lifetimeObservers.removeAll(keepingCapacity: false)
+        lifetimeObservers.removeAll()
         stopObservingWorkspace()
     }
 
@@ -3391,6 +3374,7 @@ extension MacPilotModel {
             featureLifecycle.stop("cpuMonitor")
             CPUMonitorModel.clearMenuCache()
         case .localPorts:
+            featureLifecycle.stop(localPorts.identifier)
             localPorts.shutdown()
         }
     }
@@ -3624,9 +3608,9 @@ struct ContentView: View {
         case .dockGroups:
             DockGroupsView(dockGroups: model.dockGroups)
         case .memoryMonitor:
-            MemoryMonitorView(monitor: model.memoryMonitor)
+            MemoryMonitorView(monitor: model.memoryMonitor, language: model.language)
         case .cpuMonitor:
-            CPUMonitorView(monitor: model.cpuMonitor)
+            CPUMonitorView(monitor: model.cpuMonitor, language: model.language)
         case .localPorts:
             LocalPortsView(model: model.localPorts)
         case .settings:
@@ -5075,12 +5059,19 @@ struct BLEUnlockView: View {
 /// 每次展开菜单时同步采样（带短缓存），底部入口跳转到监控页。
 private struct MemoryMonitorMenuSection: View {
     @EnvironmentObject private var model: MacPilotModel
+    let monitor: MemoryMonitorModel
+    @ObservedObject var store: MemoryStore
     let openMonitor: () -> Void
 
+    init(monitor: MemoryMonitorModel, openMonitor: @escaping () -> Void) {
+        self.monitor = monitor
+        self.store = monitor.store
+        self.openMonitor = openMonitor
+    }
+
     var body: some View {
-        let snapshot = MemoryMonitorModel.menuSnapshot()
         Menu(model.t("memoryMonitor")) {
-            if let system = snapshot.system {
+            if let system = store.systemMemory {
                 Section(model.t("memoryOverview")) {
                     overviewRow(model.t("physicalMemory"), system.physicalBytes)
                     overviewRow(model.t("usedMemory"), system.usedBytes)
@@ -5096,7 +5087,7 @@ private struct MemoryMonitorMenuSection: View {
             }
             Divider()
             Section(model.t("memoryTopApps")) {
-                let topApps = snapshot.apps.prefix(10)
+                let topApps = store.apps.prefix(10)
                 if topApps.isEmpty {
                     Text(model.t("loadingProcesses"))
                 } else {
@@ -5107,6 +5098,11 @@ private struct MemoryMonitorMenuSection: View {
             }
             Divider()
             Button(model.t("memoryMonitorOpen")) { openMonitor() }
+        }
+        .onAppear {
+            if store.lastUpdated.map({ Date().timeIntervalSince($0) >= 2 }) ?? true {
+                monitor.refresh()
+            }
         }
     }
 
@@ -5119,12 +5115,19 @@ private struct MemoryMonitorMenuSection: View {
 /// 每次展开菜单时同步采样（带短缓存），底部入口跳转到监控页。
 private struct CPUMonitorMenuSection: View {
     @EnvironmentObject private var model: MacPilotModel
+    let monitor: CPUMonitorModel
+    @ObservedObject var store: CPUStore
     let openMonitor: () -> Void
 
+    init(monitor: CPUMonitorModel, openMonitor: @escaping () -> Void) {
+        self.monitor = monitor
+        self.store = monitor.store
+        self.openMonitor = openMonitor
+    }
+
     var body: some View {
-        let snapshot = CPUMonitorModel.menuSnapshot()
         Menu(model.t("cpuMonitor")) {
-            if let system = snapshot.system {
+            if let system = store.systemCPU {
                 Section(model.t("cpuOverview")) {
                     overviewRow(model.t("cpuTotalUsage"), system.totalPercent)
                     overviewRow(model.t("cpuUserUsage"), system.userPercent)
@@ -5139,7 +5142,7 @@ private struct CPUMonitorMenuSection: View {
             }
             Divider()
             Section(model.t("cpuTopApps")) {
-                let topApps = snapshot.apps.prefix(10)
+                let topApps = store.apps.prefix(10)
                 if topApps.isEmpty {
                     Text(model.t("cpuWaitingForSample"))
                 } else {
@@ -5150,6 +5153,11 @@ private struct CPUMonitorMenuSection: View {
             }
             Divider()
             Button(model.t("cpuMonitorOpen")) { openMonitor() }
+        }
+        .onAppear {
+            if store.lastUpdated.map({ Date().timeIntervalSince($0) >= 2 }) ?? true {
+                monitor.refresh()
+            }
         }
     }
 
@@ -5263,14 +5271,14 @@ struct MenuBarView: View {
         }
         if model.isFeatureEnabled(.memoryMonitor) {
             Divider()
-            MemoryMonitorMenuSection {
+            MemoryMonitorMenuSection(monitor: model.memoryMonitor) {
                 model.requestSection(.memoryMonitor)
                 showMainWindow()
             }
         }
         if model.isFeatureEnabled(.cpuMonitor) {
             Divider()
-            CPUMonitorMenuSection {
+            CPUMonitorMenuSection(monitor: model.cpuMonitor) {
                 model.requestSection(.cpuMonitor)
                 showMainWindow()
             }
@@ -5353,17 +5361,20 @@ private struct ResourceMonitorMenu: View {
             Text(model.t("resourceActiveFeatures", features))
             Text(model.t("resourceTasks", sample.managedTasks))
             Text(model.t("resourceObservers", sample.trackedObservers))
+            Text(model.t("resourceEventTaps", sample.eventTaps))
+            Text(model.t("resourceIconCache", sample.iconCacheEntries))
+            Text(model.t("resourceWindowCache", sample.windowCacheEntries))
             Divider()
             Button(model.t("resourceRefresh")) {
                 monitor.refresh(
                     lifecycle: model.featureLifecycle,
-                    trackedObservers: model.trackedObserverCount
+                    runtimeCounts: model.resourceRuntimeCounts
                 )
             }
         }
         .onAppear {
             monitor.startSampling(lifecycle: model.featureLifecycle) {
-                model.trackedObserverCount
+                model.resourceRuntimeCounts
             }
         }
         .onDisappear { monitor.stopSampling() }

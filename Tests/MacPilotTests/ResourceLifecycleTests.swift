@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import MacPilot
 
@@ -21,6 +22,44 @@ private final class StubManagedFeature: ManagedFeature {
 
 @Suite(.serialized) @MainActor
 struct ResourceLifecycleTests {
+    @Test func repeatedStartStopReleasesManagedTasksAndObservers() {
+        final class CyclingFeature: ManagedFeature {
+            let identifier = "cycling"
+            private(set) var isRunning = false
+            let observers = ObserverBag()
+            let task = BackgroundTask()
+            let center = NotificationCenter()
+
+            func start() {
+                guard !isRunning else { return }
+                isRunning = true
+                observers.add(center.addObserver(forName: Notification.Name("tick"), object: nil, queue: nil) { _ in }, center: center)
+                task.start(interval: .seconds(60)) {}
+            }
+
+            func stop() {
+                isRunning = false
+                task.stop()
+                observers.removeAll()
+            }
+        }
+
+        let initialTasks = BackgroundTask.activeCount
+        let initialObservers = ObserverBag.activeCount
+        let manager = FeatureLifecycleManager()
+        let feature = CyclingFeature()
+        manager.register(feature)
+        for _ in 0..<100 {
+            manager.start(feature.identifier)
+            #expect(BackgroundTask.activeCount == initialTasks + 1)
+            #expect(ObserverBag.activeCount == initialObservers + 1)
+            manager.stop(feature.identifier)
+            #expect(BackgroundTask.activeCount == initialTasks)
+            #expect(ObserverBag.activeCount == initialObservers)
+        }
+        #expect(manager.activeIdentifiers.isEmpty)
+    }
+
     @Test func lifecycleStartsOnceAndStopsOnUnregister() {
         let manager = FeatureLifecycleManager()
         let feature = StubManagedFeature()

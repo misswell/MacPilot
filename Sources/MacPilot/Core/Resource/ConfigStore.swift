@@ -8,7 +8,7 @@ final class ConfigStore {
     private static let featureKeys: Set<String> = [
         "enabledFeatures", "bleUnlock", "fileCompression", "screenCapture",
         "screenRecording", "pictureInPicture", "inputSources", "smoothScrolling",
-        "clipboard", "awake", "awakeTriggers", "remoteControl", "dockGroups"
+        "awake", "awakeTriggers", "remoteControl", "dockGroups"
     ]
     private static let shortcutKeys: [String: Set<String>] = [
         "screenCapture": [
@@ -33,7 +33,7 @@ final class ConfigStore {
     init(url: URL) {
         self.url = url
         let core = Self.readObject(at: url)
-        requiresMigration = core?[Self.splitVersionKey] == nil || !Self.sidecarsAreReadable(at: url)
+        requiresMigration = (core?[Self.splitVersionKey] as? Int) != 2 || !Self.sidecarsAreReadable(at: url)
         lastQueuedData = Self.loadMergedData(at: url)
     }
 
@@ -57,7 +57,8 @@ final class ConfigStore {
         pendingTask = nil
         guard let data = pendingData else { return }
         let parts: [String: Data]
-        do { parts = try Self.partition(data) }
+        let migratingFromVersionOne = (Self.readObject(at: url)?[Self.splitVersionKey] as? Int) == 1
+        do { parts = try Self.partition(data, preserveLegacyClipboard: migratingFromVersionOne) }
         catch {
             onError?(error)
             return
@@ -78,7 +79,7 @@ final class ConfigStore {
                 }
                 // The core manifest is last. A crash during migration leaves
                 // the old single-file config valid and ignores any sidecars.
-                for name in ["features.json", "shortcuts.json", "window.json", "config.json"] {
+                for name in ["features.json", "clipboard.json", "shortcuts.json", "window.json", "config.json"] {
                     guard let contents = parts[name] else { continue }
                     let destination = directory.appendingPathComponent(name)
                     if (try? Data(contentsOf: destination)) != contents {
@@ -100,11 +101,12 @@ final class ConfigStore {
         writeQueue.sync {}
     }
 
-    private static func partition(_ data: Data) throws -> [String: Data] {
+    private static func partition(_ data: Data, preserveLegacyClipboard: Bool) throws -> [String: Data] {
         guard var core = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw CocoaError(.fileReadCorruptFile)
         }
         var features: [String: Any] = [:]
+        var clipboard = core.removeValue(forKey: "clipboard") as? [String: Any] ?? [:]
         var shortcuts: [String: Any] = [:]
         var window: [String: Any] = [:]
 
@@ -113,6 +115,14 @@ final class ConfigStore {
         }
         if let value = core.removeValue(forKey: "windowSwitcher") { window["windowSwitcher"] = value }
         for (featureKey, keys) in shortcutKeys {
+            if featureKey == "clipboard" {
+                var extracted: [String: Any] = [:]
+                for key in keys {
+                    if let value = clipboard.removeValue(forKey: key) { extracted[key] = value }
+                }
+                if !extracted.isEmpty { shortcuts[featureKey] = extracted }
+                continue
+            }
             guard var feature = features[featureKey] as? [String: Any] else { continue }
             var extracted: [String: Any] = [:]
             for key in keys {
@@ -121,10 +131,18 @@ final class ConfigStore {
             features[featureKey] = feature
             if !extracted.isEmpty { shortcuts[featureKey] = extracted }
         }
-        core[splitVersionKey] = 1
+        if preserveLegacyClipboard {
+            var legacyClipboard = clipboard
+            if let shortcut = shortcuts["clipboard"] as? [String: Any] {
+                legacyClipboard.merge(shortcut) { _, value in value }
+            }
+            features["clipboard"] = legacyClipboard
+        }
+        core[splitVersionKey] = 2
         return try [
             "config.json": core,
             "features.json": features,
+            "clipboard.json": clipboard,
             "shortcuts.json": shortcuts,
             "window.json": window
         ].mapValues { try JSONSerialization.data(withJSONObject: $0, options: [.prettyPrinted, .sortedKeys]) }
@@ -139,6 +157,13 @@ final class ConfigStore {
                 return try? Data(contentsOf: directory.appendingPathComponent("config-legacy.json"))
             }
             core.merge(fields) { _, sidecar in sidecar }
+        }
+        if (core[splitVersionKey] as? Int) ?? 0 >= 2 {
+            if let clipboard = readObject(at: directory.appendingPathComponent("clipboard.json")) {
+                core["clipboard"] = clipboard
+            } else if core["clipboard"] == nil {
+                return try? Data(contentsOf: directory.appendingPathComponent("config-legacy.json"))
+            }
         }
         guard let shortcuts = readObject(at: directory.appendingPathComponent("shortcuts.json")) else {
             return try? Data(contentsOf: directory.appendingPathComponent("config-legacy.json"))
@@ -160,7 +185,10 @@ final class ConfigStore {
 
     private static func sidecarsAreReadable(at url: URL) -> Bool {
         let directory = url.deletingLastPathComponent()
-        return ["features.json", "shortcuts.json", "window.json"].allSatisfy {
+        let version = readObject(at: url)?[splitVersionKey] as? Int ?? 0
+        let names = ["features.json", "shortcuts.json", "window.json"]
+            + (version >= 2 ? ["clipboard.json"] : [])
+        return names.allSatisfy {
             readObject(at: directory.appendingPathComponent($0)) != nil
         }
     }

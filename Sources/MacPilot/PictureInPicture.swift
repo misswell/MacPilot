@@ -1940,6 +1940,7 @@ enum PictureInPictureError: LocalizedError {
 final class PictureInPictureModel: ObservableObject, ManagedFeature {
     let identifier = "pictureInPicture"
     var isRunning: Bool { isMonitoring }
+    var activeEventTapCount: Int { eventTap == nil ? 0 : 1 }
     func start() { activateFromConfiguration() }
     func stop() { shutdown() }
     @Published private(set) var settings = PictureInPictureSettings()
@@ -1952,7 +1953,7 @@ final class PictureInPictureModel: ObservableObject, ManagedFeature {
     var persist: (() -> Void)?
     private var sessions: [UUID: PiPSession] = [:]
     private let mediaRemote = PiPMediaRemoteBridge()
-    private var mediaPollingTask: Task<Void, Never>?
+    private let mediaPollingTask = BackgroundTask()
     private var keyMonitor: Any?
     private var localKeyMonitor: Any?
     private var keyUpMonitor: Any?
@@ -1962,7 +1963,7 @@ final class PictureInPictureModel: ObservableObject, ManagedFeature {
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
     private var eventTapContext: PiPEventTapContext?
-    private var activationObserver: NSObjectProtocol?
+    private let activationObservers = ObserverBag()
     private var focusObservers: [pid_t: AXObserver] = [:]
     private var selectionPanel: PiPRegionSelectionPanel?
     private var quickLookPanel: PiPQuickLookPanel?
@@ -2207,21 +2208,17 @@ final class PictureInPictureModel: ObservableObject, ManagedFeature {
         guard settings.mediaControls,
               !sessions.isEmpty,
               mediaRemote.isAvailable,
-              mediaPollingTask == nil else { return }
-        mediaPollingTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                let snapshots = await self.mediaRemote.snapshots()
-                guard !Task.isCancelled else { return }
-                self.applyMediaSnapshots(snapshots)
-                try? await Task.sleep(for: .seconds(1))
-            }
+              !mediaPollingTask.isRunning else { return }
+        mediaPollingTask.startAsync(interval: .seconds(1)) { [weak self] in
+            guard let self else { return }
+            let snapshots = await self.mediaRemote.snapshots()
+            guard !Task.isCancelled else { return }
+            self.applyMediaSnapshots(snapshots)
         }
     }
 
     private func stopMediaPolling() {
-        mediaPollingTask?.cancel()
-        mediaPollingTask = nil
+        mediaPollingTask.stop()
         for session in sessions.values { session.updateMediaSnapshot(nil) }
     }
 
@@ -2249,7 +2246,8 @@ final class PictureInPictureModel: ObservableObject, ManagedFeature {
             installKeyboardFallbackMonitors()
         }
         updateMouseMonitoring()
-        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+        let center = NSWorkspace.shared.notificationCenter
+        activationObservers.add(center.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
@@ -2259,7 +2257,7 @@ final class PictureInPictureModel: ObservableObject, ManagedFeature {
             Task { @MainActor [weak self] in
                 self?.handleSourceApplicationActivation(processID)
             }
-        }
+        }, center: center)
     }
 
     private func installKeyboardFallbackMonitors() {
@@ -2284,8 +2282,7 @@ final class PictureInPictureModel: ObservableObject, ManagedFeature {
         removeKeyboardFallbackMonitors()
         stopMouseMonitoring()
         removeEventTap()
-        if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
-        activationObserver = nil
+        activationObservers.removeAll()
         removeFocusObservers()
         threeFingerGestureActive = false
     }

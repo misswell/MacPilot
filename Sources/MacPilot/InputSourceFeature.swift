@@ -735,6 +735,7 @@ private struct MacPilotInputSourceIndicatorView: View {
 final class InputSourceModel: ObservableObject, ManagedFeature {
     let identifier = "inputSources"
     var isRunning: Bool { isActive && settings.isEnabled }
+    var activeEventTapCount: Int { eventTap == nil ? 0 : 1 }
     func start() { activateFromConfiguration() }
     func stop() { shutdown() }
     @Published private(set) var settings = InputSourceSettings()
@@ -747,8 +748,8 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
 
     var persist: (() -> Void)?
 
-    private var observers: [NSObjectProtocol] = []
-    private var browserPollingTask: Task<Void, Never>?
+    private let observers = ObserverBag()
+    private let browserPollingTask = BackgroundTask()
     private var lastBrowserPollingSignature: String?
     private var isActive = false
     private var originalFunctionKeyMode: InputSourceFunctionKeyMode?
@@ -1033,7 +1034,7 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
             NSWorkspace.didWakeNotification
         ]
         for name in applicationNames {
-            observers.append(workspaceCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+            observers.add(workspaceCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
                 Task { @MainActor in
                     guard let self else { return }
@@ -1042,21 +1043,18 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
                     }
                     self.handleApplicationNotification(application)
                 }
-            })
+            }, center: workspaceCenter)
         }
 
         let inputSourceNotification = Notification.Name(rawValue: kTISNotifySelectedKeyboardInputSourceChanged as String)
-        observers.append(DistributedNotificationCenter.default().addObserver(forName: inputSourceNotification, object: nil, queue: .main) { [weak self] _ in
+        let distributedCenter = DistributedNotificationCenter.default()
+        observers.add(distributedCenter.addObserver(forName: inputSourceNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.handleSelectedInputSourceChanged() }
-        })
+        }, center: distributedCenter)
     }
 
     private func removeObservers() {
-        for observer in observers {
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
-            DistributedNotificationCenter.default().removeObserver(observer)
-        }
-        observers.removeAll(keepingCapacity: false)
+        observers.removeAll()
     }
 
     private func refreshBrowserPolling() {
@@ -1068,45 +1066,36 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
     }
 
     private func startBrowserPolling() {
-        guard browserPollingTask == nil else { return }
+        guard !browserPollingTask.isRunning else { return }
         lastBrowserPollingSignature = nil
-        browserPollingTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(1))
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled else { return }
-                guard let self else { return }
-                guard self.isActive, self.settings.isEnabled, self.hasEnabledBrowserRules,
-                      let application = NSWorkspace.shared.frontmostApplication,
-                      let bundleIdentifier = application.bundleIdentifier,
-                      MacPilotBrowserURLResolver.browserBundleIdentifiers.contains(bundleIdentifier)
-                else { continue }
+        browserPollingTask.startAsync(interval: .seconds(1)) { [weak self] in
+            guard let self,
+                  self.isActive, self.settings.isEnabled, self.hasEnabledBrowserRules,
+                  let application = NSWorkspace.shared.frontmostApplication,
+                  let bundleIdentifier = application.bundleIdentifier,
+                  MacPilotBrowserURLResolver.browserBundleIdentifiers.contains(bundleIdentifier)
+            else { return }
 
-                let processIdentifier = application.processIdentifier
-                let url = await Task.detached(priority: .utility) {
-                    MacPilotBrowserURLResolver.currentURL(
-                        processIdentifier: processIdentifier,
-                        bundleIdentifier: bundleIdentifier
-                    )
-                }.value
-                guard !Task.isCancelled else { return }
-                let signature = "\(bundleIdentifier)|\(url?.absoluteString ?? "")"
-                let needsEventTap = self.settings.globalShortcutEnabled
-                    || !self.settings.shortcuts.isEmpty
-                    || self.settings.appRules.contains(where: { $0.forceEnglishPunctuation })
-                guard signature != self.lastBrowserPollingSignature || (needsEventTap && self.eventTap == nil) else { continue }
-                self.lastBrowserPollingSignature = signature
-                self.evaluateApplication(application, knownBrowserURL: url, browserURLWasResolved: true)
-            }
+            let processIdentifier = application.processIdentifier
+            let url = await Task.detached(priority: .utility) {
+                MacPilotBrowserURLResolver.currentURL(
+                    processIdentifier: processIdentifier,
+                    bundleIdentifier: bundleIdentifier
+                )
+            }.value
+            guard !Task.isCancelled else { return }
+            let signature = "\(bundleIdentifier)|\(url?.absoluteString ?? "")"
+            let needsEventTap = self.settings.globalShortcutEnabled
+                || !self.settings.shortcuts.isEmpty
+                || self.settings.appRules.contains(where: { $0.forceEnglishPunctuation })
+            guard signature != self.lastBrowserPollingSignature || (needsEventTap && self.eventTap == nil) else { return }
+            self.lastBrowserPollingSignature = signature
+            self.evaluateApplication(application, knownBrowserURL: url, browserURLWasResolved: true)
         }
     }
 
     private func stopBrowserPolling() {
-        browserPollingTask?.cancel()
-        browserPollingTask = nil
+        browserPollingTask.stop()
         lastBrowserPollingSignature = nil
     }
 

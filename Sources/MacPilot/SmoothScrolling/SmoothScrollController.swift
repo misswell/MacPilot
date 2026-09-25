@@ -11,6 +11,7 @@ import Foundation
 /// events directly to the original target process.
 @MainActor
 final class SmoothScrollController {
+    var activeEventTapCount: Int { eventTap == nil ? 0 : 1 }
     private let runtime = SmoothScrollRuntime()
     private var activeSettings = SmoothScrollSettings()
     private var eventTap: CFMachPort?
@@ -22,7 +23,7 @@ final class SmoothScrollController {
     private var processBundleIdentifiers: [pid_t: String] = [:]
     private var excludedProcessIDs: Set<pid_t> = []
     private var reversedExcludedProcessIDs: Set<pid_t> = []
-    private var workspaceObservers: [NSObjectProtocol] = []
+    private let workspaceObservers = ObserverBag()
     private(set) var isActive = false
 
     private let eventMask: CGEventMask = CGEventMask(
@@ -278,24 +279,20 @@ final class SmoothScrollController {
             NSWorkspace.didTerminateApplicationNotification,
             NSWorkspace.didActivateApplicationNotification
         ]
-        workspaceObservers = names.map { name in
-            center.addObserver(forName: name, object: nil, queue: nil) { [weak self] notification in
+        for name in names {
+            workspaceObservers.add(center.addObserver(forName: name, object: nil, queue: nil) { [weak self] notification in
                 guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
                     return
                 }
                 Task { @MainActor [weak self] in
                     self?.handleWorkspaceApplicationChange(application, notificationName: name)
                 }
-            }
+            }, center: center)
         }
     }
 
     private func removeWorkspaceObservers() {
-        let center = NSWorkspace.shared.notificationCenter
-        for observer in workspaceObservers {
-            center.removeObserver(observer)
-        }
-        workspaceObservers.removeAll(keepingCapacity: false)
+        workspaceObservers.removeAll()
     }
 
     private func handleWorkspaceApplicationChange(

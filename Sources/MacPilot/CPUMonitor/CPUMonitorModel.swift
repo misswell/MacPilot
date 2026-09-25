@@ -1,9 +1,8 @@
 import Foundation
-import SwiftUI
 
 /// CPU 监控的运行时状态：定时采样进程与系统 CPU，供监控页和菜单栏使用。
 @MainActor
-final class CPUMonitorModel: ObservableObject, ManagedFeature {
+final class CPUMonitorModel: ManagedFeature {
     let identifier = "cpuMonitor"
     var isRunning: Bool { refreshLoop.isRunning }
     static let refreshInterval: TimeInterval = 3
@@ -11,13 +10,12 @@ final class CPUMonitorModel: ObservableObject, ManagedFeature {
     private static let menuSampler = CPUUsageSampler()
     private static var cachedMenuSample: (date: Date, apps: [AppCPUUsage], system: SystemCPUSnapshot?)?
 
-    @Published private(set) var apps: [AppCPUUsage] = []
-    @Published private(set) var systemCPU: SystemCPUSnapshot?
-    @Published private(set) var isRefreshing = false
-    @Published private(set) var lastUpdated: Date?
+    let store = CPUStore()
 
     private let sampler = CPUUsageSampler()
     private let refreshLoop = BackgroundTask()
+    private var samplingTask: Task<Void, Never>?
+    private var sampleRevision = 0
 
     static func menuSnapshot(maxAge: TimeInterval = 2) -> (
         apps: [AppCPUUsage],
@@ -42,6 +40,11 @@ final class CPUMonitorModel: ObservableObject, ManagedFeature {
 
     func stopAutoRefresh() {
         refreshLoop.stop()
+        sampleRevision += 1
+        samplingTask?.cancel()
+        samplingTask = nil
+        sampler.reset()
+        store.clear()
         ProcessCollector.shared.clear()
     }
 
@@ -54,19 +57,21 @@ final class CPUMonitorModel: ObservableObject, ManagedFeature {
     }
 
     func refresh() {
-        guard !isRefreshing else { return }
-        isRefreshing = true
+        guard !store.isRefreshing else { return }
+        store.beginRefresh()
+        sampleRevision += 1
+        let revision = sampleRevision
         let sampler = self.sampler
-        Task.detached(priority: .utility) { [weak self, sampler] in
+        samplingTask = Task.detached(priority: .utility) { [weak self, sampler] in
             let result = sampler.sample()
-            await self?.apply(result)
+            guard !Task.isCancelled else { return }
+            await self?.apply(result, revision: revision)
         }
     }
 
-    private func apply(_ result: CPUUsageSampleResult) {
-        apps = result.apps
-        systemCPU = result.system
-        lastUpdated = Date()
-        isRefreshing = false
+    private func apply(_ result: CPUUsageSampleResult, revision: Int) {
+        guard revision == sampleRevision else { return }
+        samplingTask = nil
+        store.publish(result)
     }
 }

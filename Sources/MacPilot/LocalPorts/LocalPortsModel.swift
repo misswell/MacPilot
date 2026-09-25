@@ -7,7 +7,11 @@ import SwiftUI
 /// The model owns only UI lifecycle state.  Every lsof/ps scan and every
 /// close verification runs in the utility executor through the Core target.
 @MainActor
-final class LocalPortsModel: ObservableObject {
+final class LocalPortsModel: ObservableObject, ManagedFeature {
+    let identifier = "localPorts"
+    var isRunning: Bool { isVisible }
+    func start() { startVisibleSession() }
+    func stop() { stopVisibleSession() }
     /// 菜单栏子菜单的补扫有效期：与页面可见时的自动刷新同频，
     /// 让一次菜单开合最多起一轮 lsof/ps。
     static let menuRefreshInterval: TimeInterval = 10
@@ -28,7 +32,7 @@ final class LocalPortsModel: ObservableObject {
     private var scanWorker: Task<LocalPortSnapshot, Error>?
     private var prepareWorker: Task<LocalPortClosePlan, Error>?
     private var closeWorker: Task<LocalPortCloseResult, Error>?
-    private var autoRefreshTask: Task<Void, Never>?
+    private let autoRefreshTask = BackgroundTask()
     private var generation: UInt64 = 0
     private var isVisible = false
     private let closeEnvironment: LocalPortCloseEnvironment
@@ -43,22 +47,13 @@ final class LocalPortsModel: ObservableObject {
         generation &+= 1
         refresh()
 
-        autoRefreshTask?.cancel()
-        autoRefreshTask = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(10))
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled else { return }
-                self?.refreshIfVisible()
-            }
+        autoRefreshTask.start(interval: .seconds(10)) { [weak self] in
+            self?.refreshIfVisible()
         }
     }
 
     func stopVisibleSession() {
-        guard isVisible || refreshTask != nil || autoRefreshTask != nil else { return }
+        guard isVisible || refreshTask != nil || autoRefreshTask.isRunning else { return }
         isVisible = false
         invalidateVisibleWork()
         Task { await LocalPortFaviconFetcher.shared.clear() }
@@ -73,8 +68,7 @@ final class LocalPortsModel: ObservableObject {
 
     private func invalidateVisibleWork() {
         generation &+= 1
-        autoRefreshTask?.cancel()
-        autoRefreshTask = nil
+        autoRefreshTask.stop()
         refreshTask?.cancel()
         refreshTask = nil
         scanWorker?.cancel()

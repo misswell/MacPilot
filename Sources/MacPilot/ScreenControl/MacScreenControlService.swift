@@ -65,7 +65,7 @@ final class MacScreenControlService: ObservableObject {
     /// would silently break remote unlock whenever BLE is switched off. The app
     /// model installs them only while BLE or the iPhone remote is enabled, so
     /// neither feature pays for them while both are off.
-    private var screensaverObservers: [NSObjectProtocol] = []
+    private let screensaverObservers = ObserverBag()
 
     private let logHandler: (String) -> Void
 
@@ -124,7 +124,7 @@ final class MacScreenControlService: ObservableObject {
         if enabled {
             guard screensaverObservers.isEmpty else { return }
             let center = DistributedNotificationCenter.default()
-            screensaverObservers.append(center.addObserver(
+            screensaverObservers.add(center.addObserver(
                 forName: Notification.Name("com.apple.screensaver.didstart"),
                 object: nil,
                 queue: .main
@@ -134,8 +134,8 @@ final class MacScreenControlService: ObservableObject {
                     self.screensaverActive = true
                     self.log("screensaver started")
                 }
-            })
-            screensaverObservers.append(center.addObserver(
+            }, center: center)
+            screensaverObservers.add(center.addObserver(
                 forName: Notification.Name("com.apple.screensaver.didstop"),
                 object: nil,
                 queue: .main
@@ -145,13 +145,11 @@ final class MacScreenControlService: ObservableObject {
                     self.screensaverActive = false
                     self.log("screensaver stopped")
                 }
-            })
+            }, center: center)
             log("screensaver observation started")
         } else {
             guard !screensaverObservers.isEmpty else { return }
-            let center = DistributedNotificationCenter.default()
-            for observer in screensaverObservers { center.removeObserver(observer) }
-            screensaverObservers.removeAll(keepingCapacity: false)
+            screensaverObservers.removeAll()
             screensaverActive = false
             log("screensaver observation stopped")
         }

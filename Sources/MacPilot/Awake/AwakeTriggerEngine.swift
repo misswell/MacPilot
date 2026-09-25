@@ -30,7 +30,7 @@ final class AwakeTriggerEngine: ObservableObject {
     private var processMonitoring = false
     private var displayMonitoring = false
     private var pendingTasks: [UUID: Task<Void, Never>] = [:]
-    private var observers: [NSObjectProtocol] = []
+    private let observers = ObserverBag()
     private var isShutdown = false
 
     /// Called after a trigger definition changes so it is stored with the
@@ -128,10 +128,6 @@ final class AwakeTriggerEngine: ObservableObject {
 
     /// Removes every process-level observer this engine installed.
     private func removeSystemObservers() {
-        for observer in observers {
-            NotificationCenter.default.removeObserver(observer)
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
-        }
         observers.removeAll()
     }
 
@@ -453,32 +449,32 @@ final class AwakeTriggerEngine: ObservableObject {
     private func installSystemObservers() {
         guard observers.isEmpty, !isShutdown else { return }
         let workspaceCenter = NSWorkspace.shared.notificationCenter
-        observers.append(workspaceCenter.addObserver(
+        observers.add(workspaceCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.refreshAll() }
-        })
-        observers.append(workspaceCenter.addObserver(
+        }, center: workspaceCenter)
+        observers.add(workspaceCenter.addObserver(
             forName: NSWorkspace.willSleepNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.refreshAll() }
-        })
+        }, center: workspaceCenter)
 
         for name in [
             Notification.Name("NSSystemClockDidChangeNotification"),
             Notification.Name("NSSystemTimeZoneDidChangeNotification")
         ] {
-            observers.append(NotificationCenter.default.addObserver(
+            observers.add(NotificationCenter.default.addObserver(
                 forName: name,
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.refreshAll() }
-            })
+            }, center: .default)
         }
     }
 }

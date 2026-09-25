@@ -18,7 +18,7 @@ extension AwakeApplicationStateProviding {
 @MainActor
 final class ApplicationStateProvider: AwakeApplicationStateProviding {
     private(set) var currentState = ApplicationState.unknown
-    private var notificationTokens: [NSObjectProtocol] = []
+    private let notificationTokens = ObserverBag()
     private var handler: (@MainActor () -> Void)?
 
     func startMonitoring(_ handler: @escaping @MainActor () -> Void) {
@@ -30,21 +30,17 @@ final class ApplicationStateProvider: AwakeApplicationStateProviding {
             NSWorkspace.didTerminateApplicationNotification,
             NSWorkspace.didActivateApplicationNotification
         ]
-        notificationTokens = names.map { name in
-            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+        for name in names {
+            notificationTokens.add(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.refreshAndNotify()
                 }
-            }
+            }, center: center)
         }
         refreshAndNotify(force: true)
     }
 
     func stopMonitoring() {
-        let center = NSWorkspace.shared.notificationCenter
-        for token in notificationTokens {
-            center.removeObserver(token)
-        }
         notificationTokens.removeAll()
         handler = nil
     }

@@ -4,20 +4,32 @@ import SwiftUI
 /// 内存监控页：系统内存总览 + 按应用聚合的内存占用列表。
 /// 遵循统一 UI 语言：30pt 页头 + 自适应玻璃卡片 + 原生全高 List。
 struct MemoryMonitorView: View {
-    @ObservedObject var monitor: MemoryMonitorModel
-    @EnvironmentObject private var model: MacPilotModel
+    let monitor: MemoryMonitorModel
+    @ObservedObject var store: MemoryStore
+
+    let language: AppLanguage
+
+    init(monitor: MemoryMonitorModel, language: AppLanguage) {
+        self.monitor = monitor
+        self.store = monitor.store
+        self.language = language
+    }
     @State private var searchText = ""
     @State private var autoRefresh = true
+
+    private func t(_ key: String, _ arguments: CVarArg...) -> String {
+        AppText.value(key, language: language, arguments: arguments)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(model.t("memoryMonitor")).font(.system(size: 30, weight: .bold))
-                Text(model.t("memoryMonitorSubtitle")).foregroundStyle(.secondary)
+                Text(t("memoryMonitor")).font(.system(size: 30, weight: .bold))
+                Text(t("memoryMonitorSubtitle")).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 22)
 
-            if let snapshot = monitor.systemMemory {
+            if let snapshot = store.systemMemory {
                 overviewCard(snapshot)
                     .padding(.horizontal, 36)
                     .padding(.bottom, 16)
@@ -40,47 +52,47 @@ struct MemoryMonitorView: View {
 
     private func overviewCard(_ snapshot: SystemMemorySnapshot) -> some View {
         SettingsCard {
-            Text(model.t("memoryOverview")).font(.headline)
+            Text(t("memoryOverview")).font(.headline)
             LazyVGrid(
                 columns: [GridItem(.flexible(), spacing: 24), GridItem(.flexible())],
                 alignment: .leading,
                 spacing: 12
             ) {
                 overviewValue(
-                    model.t("physicalMemory"),
+                    t("physicalMemory"),
                     MemoryByteFormatter.string(fromBytes: snapshot.physicalBytes)
                 )
                 overviewValue(
-                    model.t("usedMemory"),
+                    t("usedMemory"),
                     MemoryByteFormatter.string(fromBytes: snapshot.usedBytes)
                 )
                 overviewValue(
-                    model.t("appMemory"),
+                    t("appMemory"),
                     MemoryByteFormatter.string(fromBytes: snapshot.appBytes)
                 )
                 overviewValue(
-                    model.t("wiredMemory"),
+                    t("wiredMemory"),
                     MemoryByteFormatter.string(fromBytes: snapshot.wiredBytes)
                 )
                 overviewValue(
-                    model.t("compressedMemory"),
+                    t("compressedMemory"),
                     MemoryByteFormatter.string(fromBytes: snapshot.compressedBytes)
                 )
                 overviewValue(
-                    model.t("cachedFiles"),
+                    t("cachedFiles"),
                     MemoryByteFormatter.string(fromBytes: snapshot.cachedFilesBytes)
                 )
                 overviewValue(
-                    model.t("swapUsed"),
+                    t("swapUsed"),
                     MemoryByteFormatter.string(fromBytes: snapshot.swapUsedBytes)
                 )
                 pressureValue(snapshot.pressure)
                 overviewValue(
-                    model.t("bootedAt"),
+                    t("bootedAt"),
                     snapshot.bootDate.formatted(date: .abbreviated, time: .shortened)
                 )
                 overviewValue(
-                    model.t("uptime"),
+                    t("uptime"),
                     MemoryDurationFormatter.string(fromInterval: snapshot.uptimeInterval)
                 )
             }
@@ -103,14 +115,14 @@ struct MemoryMonitorView: View {
 
     private func pressureValue(_ pressure: SystemMemorySnapshot.PressureLevel) -> some View {
         HStack(spacing: 8) {
-            Text(model.t("memoryPressure"))
+            Text(t("memoryPressure"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 8)
             HStack(spacing: 6) {
                 Circle().fill(color(for: pressure)).frame(width: 8, height: 8)
-                Text(model.t(pressure.labelKey))
+                Text(t(pressure.labelKey))
                     .font(.subheadline.monospacedDigit().weight(.medium))
             }
         }
@@ -130,12 +142,12 @@ struct MemoryMonitorView: View {
     private var listControls: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.t("appMemoryList"))
+                Text(t("appMemoryList"))
                     .font(.headline)
                     .accessibilityAddTraits(.isHeader)
-                if let lastUpdated = monitor.lastUpdated {
+                if let lastUpdated = store.lastUpdated {
                     Text(
-                        model.t(
+                        t(
                             "lastUpdated",
                             lastUpdated.formatted(date: .omitted, time: .standard)
                         )
@@ -145,16 +157,16 @@ struct MemoryMonitorView: View {
                 }
             }
             Spacer(minLength: 16)
-            TextField(model.t("searchApps"), text: $searchText)
+            TextField(t("searchApps"), text: $searchText)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 180)
-            Toggle(model.t("autoRefresh"), isOn: $autoRefresh)
+            Toggle(t("autoRefresh"), isOn: $autoRefresh)
                 .toggleStyle(.switch)
                 .fixedSize()
             Button {
                 monitor.refresh()
             } label: {
-                Label(model.t("refreshNow"), systemImage: "arrow.clockwise")
+                Label(t("refreshNow"), systemImage: "arrow.clockwise")
             }
             .fixedSize()
         }
@@ -166,23 +178,23 @@ struct MemoryMonitorView: View {
 
     private var appList: some View {
         List {
-            if monitor.apps.isEmpty && monitor.isRefreshing {
+            if store.apps.isEmpty && store.isRefreshing {
                 HStack(spacing: 10) {
                     Spacer()
                     ProgressView()
-                    Text(model.t("loadingProcesses")).foregroundStyle(.secondary)
+                    Text(t("loadingProcesses")).foregroundStyle(.secondary)
                     Spacer()
                 }
                 .listRowSeparator(.hidden)
             } else if filteredApps.isEmpty {
-                Text(model.t("noMatchingApps"))
+                Text(t("noMatchingApps"))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .listRowSeparator(.hidden)
             } else {
-                let maxBytes = monitor.apps.first?.footprintBytes ?? 0
+                let maxBytes = store.apps.first?.footprintBytes ?? 0
                 ForEach(filteredApps) { app in
-                    AppMemoryRow(app: app, maxBytes: maxBytes, usedBytes: monitor.systemMemory?.usedBytes)
+                    AppMemoryRow(language: language, app: app, maxBytes: maxBytes, usedBytes: store.systemMemory?.usedBytes)
                         .listRowInsets(EdgeInsets(top: 7, leading: 14, bottom: 7, trailing: 14))
                         .listRowSeparator(.hidden)
                 }
@@ -196,8 +208,8 @@ struct MemoryMonitorView: View {
 
     private var filteredApps: [AppMemoryUsage] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return monitor.apps }
-        return monitor.apps.filter { app in
+        guard !query.isEmpty else { return store.apps }
+        return store.apps.filter { app in
             app.name.lowercased().contains(query)
                 || app.processes.contains { $0.name.lowercased().contains(query) }
         }
@@ -207,11 +219,15 @@ struct MemoryMonitorView: View {
 /// 单个应用的内存行：图标 + 名称与占比条 + 总占用；展开可看每个进程的明细。
 /// 不用 DisclosureGroup：系统箭头的垂直对齐不受控，这里自绘折叠箭头保证居中。
 private struct AppMemoryRow: View {
-    @EnvironmentObject private var model: MacPilotModel
+    let language: AppLanguage
     let app: AppMemoryUsage
     let maxBytes: UInt64
     let usedBytes: UInt64?
     @State private var isExpanded = false
+
+    private func t(_ key: String, _ arguments: CVarArg...) -> String {
+        AppText.value(key, language: language, arguments: arguments)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -250,7 +266,7 @@ private struct AppMemoryRow: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(app.name), \(model.t("processCount", app.processCount)), \(MemoryByteFormatter.string(fromBytes: app.footprintBytes))")
+        .accessibilityLabel("\(app.name), \(t("processCount", app.processCount)), \(MemoryByteFormatter.string(fromBytes: app.footprintBytes))")
     }
 
     /// 明细行左缘对齐名称列（箭头 14 + 间距 10 + 图标 26 + 间距 12 = 62），
@@ -319,11 +335,11 @@ private struct AppMemoryRow: View {
     /// 标题行：应用名 + 进程数 + 运行时长（取家族内最早启动的进程）。
     private var labelText: Text {
         var text = Text(app.name).font(.body.weight(.semibold))
-            + Text("  \(model.t("processCount", app.processCount))")
+            + Text("  \(t("processCount", app.processCount))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         if let interval = app.runningDurationInterval {
-            text = text + Text("  \(model.t("appRunningFor", MemoryDurationFormatter.string(fromInterval: interval)))")
+            text = text + Text("  \(t("appRunningFor", MemoryDurationFormatter.string(fromInterval: interval)))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

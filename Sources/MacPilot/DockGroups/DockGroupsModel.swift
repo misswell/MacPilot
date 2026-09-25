@@ -41,10 +41,10 @@ final class DockGroupsModel: ObservableObject, ManagedFeature {
     private let store: DockGroupStore
 
     private var isActive = false
-    private var runningTask: Task<Void, Never>?
-    private var workspaceObservers: [NSObjectProtocol] = []
+    private let runningTask = BackgroundTask()
+    private let workspaceObservers = ObserverBag()
     /// 系统深浅外观变化（`.icns` 没有外观变体，只能靠重建 Helper 让 Dock 图标跟上）。
-    private var appearanceObserver: NSObjectProtocol?
+    private let appearanceObservers = ObserverBag()
     /// 外观 / Dock 布局变化后的合并刷新，避免连续通知触发多次重建。
     private var dockRefreshTask: Task<Void, Never>?
     /// 读取 Dock 图标位置的最小间隔：Dock 树的读取要跨进程，别被高频通知打满。
@@ -152,20 +152,15 @@ final class DockGroupsModel: ObservableObject, ManagedFeature {
         // 需求第 22 节：功能关闭时不监听 Workspace、不跑轮询。
         guard settings.isEnabled else { return }
         refreshRunningState()
-        guard runningTask == nil else { return }
-        runningTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                guard let self, !Task.isCancelled else { return }
-                self.refreshRunningState()
-            }
+        guard !runningTask.isRunning else { return }
+        runningTask.start(interval: .seconds(3)) { [weak self] in
+            self?.refreshRunningState()
         }
     }
 
     func stopMonitoring() {
         isPageVisible = false
-        runningTask?.cancel()
-        runningTask = nil
+        runningTask.stop()
     }
 
     // MARK: - 读取
@@ -560,31 +555,25 @@ final class DockGroupsModel: ObservableObject, ManagedFeature {
                     self?.scheduleDockRefresh()
                 }
             }
-            workspaceObservers.append(observer)
+            workspaceObservers.add(observer, center: center)
         }
 
-        appearanceObserver = DistributedNotificationCenter.default().addObserver(
+        let appearanceCenter = DistributedNotificationCenter.default()
+        appearanceObservers.add(appearanceCenter.addObserver(
             forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
             object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.scheduleDockRefresh() }
-        }
+        }, center: appearanceCenter)
     }
 
     private func stopObservingWorkspace() {
-        let center = NSWorkspace.shared.notificationCenter
-        for observer in workspaceObservers {
-            center.removeObserver(observer)
-        }
         workspaceObservers.removeAll()
     }
 
     private func stopObservingAppearance() {
-        if let appearanceObserver {
-            DistributedNotificationCenter.default().removeObserver(appearanceObserver)
-        }
-        appearanceObserver = nil
+        appearanceObservers.removeAll()
     }
 
     // MARK: - Dock 图标位置

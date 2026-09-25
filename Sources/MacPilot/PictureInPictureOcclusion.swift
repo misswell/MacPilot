@@ -54,8 +54,7 @@ final class PiPOcclusionController: ObservableObject {
     private var enabledBundleIdentifiers: Set<String> = []
     private var customApplicationPaths: [String: String] = [:]
     private var autoApply = true
-    private var launchObserver: NSObjectProtocol?
-    private var terminateObserver: NSObjectProtocol?
+    private let observers = ObserverBag()
     private var recentRelaunches: [String: Date] = [:]
     private var autoRelaunchTasks: [String: Task<Void, Never>] = [:]
     private var autoRepatchStream: FSEventStreamRef?
@@ -76,9 +75,9 @@ final class PiPOcclusionController: ObservableObject {
     }
 
     func activate() {
-        guard launchObserver == nil else { return }
+        guard observers.isEmpty else { return }
         let center = NSWorkspace.shared.notificationCenter
-        launchObserver = center.addObserver(
+        observers.add(center.addObserver(
             forName: NSWorkspace.didLaunchApplicationNotification,
             object: nil,
             queue: .main
@@ -88,8 +87,8 @@ final class PiPOcclusionController: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.applicationDidLaunch(application)
             }
-        }
-        terminateObserver = center.addObserver(
+        }, center: center)
+        observers.add(center.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification,
             object: nil,
             queue: .main
@@ -97,17 +96,13 @@ final class PiPOcclusionController: ObservableObject {
             guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
                     as? NSRunningApplication else { return }
             Task { @MainActor [weak self] in self?.applicationDidTerminate(application) }
-        }
+        }, center: center)
         restartAutoRepatching()
         refresh()
     }
 
     func shutdown() {
-        let center = NSWorkspace.shared.notificationCenter
-        if let launchObserver { center.removeObserver(launchObserver) }
-        if let terminateObserver { center.removeObserver(terminateObserver) }
-        launchObserver = nil
-        terminateObserver = nil
+        observers.removeAll()
         for task in autoRelaunchTasks.values { task.cancel() }
         autoRelaunchTasks.removeAll()
         stopAutoRepatching()

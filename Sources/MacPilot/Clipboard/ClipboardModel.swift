@@ -56,9 +56,9 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
         let loaded = ClipboardHistory()
         loaded.storageLimit = settings.storageLimit
         loaded.pinsAtTop = settings.pinsAtTop
-        observations.append(loaded.objectWillChange.sink { [weak self] _ in
+        historyObservation = loaded.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
-        })
+        }
         historyStorage = loaded
         return loaded
     }
@@ -73,6 +73,7 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
 
     private var panel: ClipboardPanel?
     private var observations: [AnyCancellable] = []
+    private var historyObservation: AnyCancellable?
 
     init() {
         // The history JSON and image references are loaded on first use, not
@@ -114,6 +115,8 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
         hotKeyCenter.stop()
         closePanel()
         historyStorage?.flush()
+        historyObservation = nil
+        historyStorage = nil
     }
 
     func t(_ key: String, _ arguments: CVarArg...) -> String {
@@ -184,7 +187,7 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
         settings.hotkey = binding.isValid ? binding : ClipboardSettings.defaultHotkey
         // Editing the shortcut while the feature is off must not register a
         // system-wide hot key that swallows the combination for nothing.
-        if settings.isEnabled {
+        if isRunning {
             hotKeyCenter.updateBinding(settings.hotkey)
         } else {
             hotKeyCenter.stop()

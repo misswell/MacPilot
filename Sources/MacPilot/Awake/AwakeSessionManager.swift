@@ -40,7 +40,7 @@ final class AwakeSessionManager: ObservableObject {
     private let sleepDisplay: @MainActor () -> Void
     private let wakeDisplay: () -> Void
     private var maintenanceTask: Task<Void, Never>?
-    private var observers: [NSObjectProtocol] = []
+    private let observers = ObserverBag()
     private var powerMonitoringToken: UUID?
     private var powerReconnectToken: UUID?
     private var lastOnExternalPower: Bool?
@@ -374,10 +374,6 @@ final class AwakeSessionManager: ObservableObject {
     /// Removes every process-level observer this manager installed. Safe to call
     /// repeatedly, and paired with `installSystemObservers()`'s emptiness guard.
     private func removeSystemObservers() {
-        for observer in observers {
-            NotificationCenter.default.removeObserver(observer)
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
-        }
         observers.removeAll()
     }
 
@@ -677,7 +673,7 @@ final class AwakeSessionManager: ObservableObject {
         // turned off, and the observers must not be installed twice.
         guard observers.isEmpty, !isShutdown else { return }
         let workspaceCenter = NSWorkspace.shared.notificationCenter
-        observers.append(workspaceCenter.addObserver(
+        observers.add(workspaceCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
@@ -685,9 +681,9 @@ final class AwakeSessionManager: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.handleSystemWake()
             }
-        })
+        }, center: workspaceCenter)
 
-        observers.append(workspaceCenter.addObserver(
+        observers.add(workspaceCenter.addObserver(
             forName: NSWorkspace.willSleepNotification,
             object: nil,
             queue: .main
@@ -695,9 +691,9 @@ final class AwakeSessionManager: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.handleSystemSleep()
             }
-        })
+        }, center: workspaceCenter)
 
-        observers.append(workspaceCenter.addObserver(
+        observers.add(workspaceCenter.addObserver(
             forName: NSWorkspace.screensDidSleepNotification,
             object: nil,
             queue: .main
@@ -705,9 +701,9 @@ final class AwakeSessionManager: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.handleDisplaysDidSleep()
             }
-        })
+        }, center: workspaceCenter)
 
-        observers.append(workspaceCenter.addObserver(
+        observers.add(workspaceCenter.addObserver(
             forName: NSWorkspace.screensDidWakeNotification,
             object: nil,
             queue: .main
@@ -715,10 +711,10 @@ final class AwakeSessionManager: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.handleDisplaysDidWake()
             }
-        })
+        }, center: workspaceCenter)
 
         let clockChange = Notification.Name("NSSystemClockDidChangeNotification")
-        observers.append(NotificationCenter.default.addObserver(
+        observers.add(NotificationCenter.default.addObserver(
             forName: clockChange,
             object: nil,
             queue: .main
@@ -726,6 +722,6 @@ final class AwakeSessionManager: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.refreshDesiredState()
             }
-        })
+        }, center: .default)
     }
 }
