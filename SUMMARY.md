@@ -1902,3 +1902,48 @@ Scripts/measure-memory.sh --diff a.json b.json         # 按角色列 delta
 `swift build` 干净；`ClipboardPreviewTests` 16 条在完整套件里全绿。面板观感是**在测试里离屏渲染真实视图**（`NSHostingView.cacheDisplay`）逐张看过的：收起态、文本详情、图片详情、文件列表详情各一张，确认列表列没有跟着展开挪位。
 
 > ⚠️ 没验到的部分：真机上的鼠标行为。`setFrame(animate:)` 的实际手感、0.15 秒宽限够不够划过交界处、以及双屏/菜单栏右侧空间不足时预留展开位的表现，都只推自代码，需要人拿鼠标试一遍。
+
+## 六十六、「请使用已签名的正式版本」复活：`.notFound` 从此只是一个未注册的 daemon（v1.1.414）
+
+四十四节修过同一句横幅，当时结论是「快照不刷新」；这次它又出现了，而且刷新也没用——因为那一次只修了表，没修到根。真正的根因从第一天（`67f95eb` 引入合盖功能）就在：**App 在「daemon 未注册」这个状态下永远走不到 `register()`**。
+
+### 一、这次的现场
+
+用户机器（macOS 27.0）上的证据链：
+
+- 运行中的 `/Applications/MacPilot.app` 是 v1.1.413，Developer ID 签名、Team `U8U443D7ZL`、bundle 里 LaunchDaemon plist 齐全——版本完全合法，横幅文案在撒谎。
+- `launchctl print system/com.misswell.macpilot.powerhelper` → 系统域无此服务；`sfltool dumpbtm` → 只有主 App 登录项记录，**daemon 的 BTM 记录不存在**。
+- `config.json` 里 `preventClosedLidSleep = true`——开关开着，App 每次启动都尝试启用、每次都放弃。
+- 时间线：9 月 15 日升级 macOS 27（`softwareupdate --history`），BTM 数据库重估后 daemon 记录没有存活。四十四节时代那次「注册成功」其实来自诊断探针直接调 `register()`，记录一直靠它续命；系统一大版本升级把它清掉，死锁才重新可见。
+
+### 二、根因：两处代码把「未注册」当成了「构建不合法」
+
+1. **映射错误**。探针实测（macOS 26 与 27 各一次）：plist 在 bundle 里但从未注册的 daemon，`SMAppService.status` 返回的是 **`.notFound`**，不是 `.notRegistered`。而 `PrivilegedPowerHelper` 把 `.notFound` 一律映射成 `.unavailable`，UI 渲染成「请使用已签名的正式版本」。
+2. **注册死路**。`ensureRegistration()` 只在 `.notRegistered` 分支调 `register()`，`.unavailable` 走 `break` 什么都不做；`enableIfNeeded()` 随后在 `.unavailable` 分支直接放弃。于是「未注册 → `.notFound` → `.unavailable` → 不注册 → 永远未注册」闭环，任何一次 BTM 记录丢失（系统升级、`resetbtm`、重签）都让功能永久卡死。
+
+另外还有一个就算走到注册也会踩的坑：daemon 的 `register()` 会**一边抛 POSIX 1 "Operation not permitted"、一边把系统记录推进到 `.requiresApproval`**（四十四节的探针表里就写着）。旧代码把 throw 一律当致命错误，状态停在 `.error`，看不到记录已经前进。
+
+### 三、修法
+
+- `PrivilegedPowerHelper`：`.notFound` 不再直接判死刑，改看 **plist 是否还在运行中的 bundle**（`Contents/Library/LaunchDaemons/<name>`）——在，就是「注册丢了，可恢复」，映射成 `.notRegistered` 让既有的注册分支接手；不在（裸 `swift run` 二进制、非 bundle 进程），才是真 `.unavailable`。映射抽成纯函数 `mapRegistrationState(status:plistPresentInBundle:)`，用测试钉住。
+- `ensureRegistration()`：`register()` throw 之后**重读系统状态**，只有记录仍是 `.notRegistered` 才算失败；记录前进到 `.requiresApproval` 就放行，让既有的「打开系统设置」横幅接住。
+- `ClosedLidSleepController.reenableIfPending()`：批准发生在 App 进程之外，没有任何系统回调会告诉 App「批准完成了」。状态刷新（`onAppear`/`didBecomeActive`，四十四节加的那两个入口）发现「desired 还是开、服务已 ready、但没启用」时，把被打断的 enable 补完。没有这条，批准之后横幅消失、开关开着、合盖却照样休眠——静默失效。
+- 顺带抓到一个竞态：`reenableIfPending` 用 cancel 替换 `workTask`，但旧任务若还没到第一个挂起点就会照跑不误，和新任务各发一次 `setSleepDisabled`。`enableIfNeeded`/`releaseIfNeeded` 入口补 `guard !Task.isCancelled`。
+
+修完之后的完整链路：开关开 → 启动时注册（throw 但记录前进）→ `.requiresApproval` 横幅「打开系统设置」→ 用户批准 → 回前台刷新 → `reenableIfPending` 补完 enable → 横幅消失。这是这个功能第一次可以**完全靠自己**从「全新安装」走到「已启用」。
+
+### 四、验证
+
+- `swift test --filter "PowerServiceRegistrationMappingTests|ClosedLidSleepControllerTests|ClosedLidSleepTests|ClosedLidDisplayTests|PowerServiceIdentityTests"`：38 条全绿，含 9 条新增（映射四种状态 × plist 在不在、注册 throw 前进/卡死、批准后重驱动、无 pending 时不动作、manager 刷新接线、plist 路径探测）。
+- 全量 `swift test`：827 条里 3 条负载偶发（`CPUMonitorTests` 计时、`ScreenCaptureTests` 与本套件的 10ms 心跳用例在整包并行跑时被拉爆），单独复跑全部通过——与 SUMMARY 里记载的既有 flaky 同型。
+- 真机判定（本机 macOS 27.0）：最小探针复测「plist 在、未注册」返回 `.notFound`，与映射前提一致；修后的版本装上后，横幅应走「需要批准 → 打开系统设置」路径而不是「请使用正式版本」。
+
+### 五、顺带修掉的三处门禁拦截与一条签名路径
+
+这次重新打包时，`-warnings-as-errors` 在三个既有文件上把 `ImplicitStrongCapture` 诊断升成了错误（CI 选的 Xcode 26.3 与本机工具链对并发诊断的宽严不一致，正是备忘录警告过的那类差异）。三处是同一个模式：**外层闭包隐式强捕获 self，内层却声明 `[weak self]`**——不只是警告，L2CAP 那三处外层闭包存在 `pump` 的属性上、pump 又被 transport 持有，是真实的循环引用：
+
+- `RightClickMenuCoordinator`：通知回调改用仓库既有的 `[weak self]` + `MainActor.assumeIsolated` 写法（`queue: .main` 保证主队列）。
+- `ScreenCapture.handleOCRCapture`：把 `[weak self]` 提到 `Task.detached` 外层，内层 `Task { @MainActor in` 隐式继承弱绑定——OCR 期间不再强持 App 状态。
+- `L2CAPStreamTransport.start`：四个 `pump.on*` 回调全部把捕获列表提到外层，同时斩断 pump→transport 的持有环。
+
+另外给 `build-app.sh` 补上**Apple Distribution 签名分支**：本机钥匙串里没有 Developer ID Application 证书，而 `signing-requirement.sh` 的注释本来就列了四条合法路径（Developer ID、Apple Distribution、Apple Development、ad-hoc），脚本却只实现了三条——Apple Development 证书还是别的团队（W445UUCQV9），过不了团队校验，于是这台机器上连本地验证构建都出不来。现在 Developer ID 缺席时自动落 Apple Distribution（同团队、同一串 DR 字节，`verify-signing-requirement.sh` 照常把关），只是不得发布：发布仍由 CI 的 dist job 用 Developer ID + 公证完成。

@@ -22,6 +22,10 @@ protocol ClosedLidSleepControlling: AnyObject {
     func prepareIfNeeded() async
     func openSystemSettings()
     func setEnabled(_ enabled: Bool)
+    /// Finishes an enable that registration interrupted: the user approves the
+    /// daemon outside the app, so only a later state refresh can notice the
+    /// service became ready while the desired flag stayed on.
+    func reenableIfPending()
     func shutdown()
 }
 
@@ -123,6 +127,10 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
     // MARK: - Enabling
 
     private func enableIfNeeded() async {
+        // `reenableIfPending` and `setEnabled` replace `workTask` with cancel;
+        // a task that has not reached its first suspension would otherwise run
+        // to completion next to its replacement and duplicate the request.
+        guard !Task.isCancelled else { return }
         reconnectAttempt = 0
         await ensureRegistration()
         switch helper.registrationState {
@@ -164,6 +172,7 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
     }
 
     private func releaseIfNeeded() async {
+        guard !Task.isCancelled else { return }
         stopHeartbeat()
         reconnectAttempt = 0
         let result = await helper.setSleepDisabled(false)
@@ -195,16 +204,34 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
                 try helper.register()
                 lastFailure = nil
             } catch {
-                let failure = (error as? ClosedLidSleepFailure)
-                    ?? .registrationFailed(error.localizedDescription)
-                lastFailure = failure
-                serviceState = .error(failure.message)
-                return
+                // A throw does not always mean a dead end: the daemon
+                // registration dance reports POSIX 1 "Operation not permitted"
+                // while the system record still advances to `.requiresApproval`.
+                // Only a record that is still absent afterwards is a real
+                // failure; anything else is progress the state below must pick
+                // up.
+                if case .notRegistered = helper.registrationState {
+                    let failure = (error as? ClosedLidSleepFailure)
+                        ?? .registrationFailed(error.localizedDescription)
+                    lastFailure = failure
+                    serviceState = .error(failure.message)
+                    return
+                }
+                lastFailure = nil
             }
         case .ready, .requiresApproval, .unavailable, .enabling, .enabled, .error:
             break
         }
         serviceState = helper.registrationState
+    }
+
+    func reenableIfPending() {
+        guard desiredEnabled, !isActive, isServiceReady, !isShutdown else { return }
+        workTask?.cancel()
+        workTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.enableIfNeeded()
+        }
     }
 
     // MARK: - Heartbeat

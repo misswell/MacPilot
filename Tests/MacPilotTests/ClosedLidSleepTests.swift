@@ -447,6 +447,105 @@ struct ClosedLidSleepControllerTests {
         #expect(!controller.isActive)
     }
 
+    /// macOS reports POSIX 1 "Operation not permitted" from `register()` while
+    /// the system record still advances to `.requiresApproval`. The throw must
+    /// not be treated as fatal: the state has to follow the record.
+    @Test func registerThrowThatStillAdvancesTheRecordLandsOnRequiresApproval() async {
+        let helper = ClosedLidTestPowerHelper()
+        helper.registrationState = .notRegistered
+        helper.registerError = NSError(domain: NSPOSIXErrorDomain, code: 1)
+        helper.stateAfterFailedRegister = .requiresApproval
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .seconds(60), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        controller.setEnabled(true)
+        await waitUntil { controller.serviceState == .requiresApproval }
+
+        #expect(helper.registerCallCount == 1)
+        #expect(helper.setSleepDisabledCalls.isEmpty)
+        #expect(!controller.isActive)
+        #expect(controller.lastFailure == nil)
+    }
+
+    @Test func registerThrowWithoutProgressSurfacesTheFailure() async {
+        let helper = ClosedLidTestPowerHelper()
+        helper.registrationState = .notRegistered
+        helper.registerError = NSError(
+            domain: "SMAppServiceErrorDomain",
+            code: 108,
+            userInfo: [NSLocalizedDescriptionKey: "Unable to read plist"]
+        )
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .seconds(60), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        controller.setEnabled(true)
+        await waitUntil { helper.registerCallCount == 1 }
+        await waitUntil { controller.lastFailure != nil }
+
+        #expect(!controller.isActive)
+        #expect(controller.lastFailure == .registrationFailed("Unable to read plist"))
+    }
+
+    /// The user approves the daemon in System Settings — outside this process —
+    /// so the only chance to finish the interrupted enable is a later state
+    /// refresh finding the service ready while the desired flag stayed on.
+    @Test func reenableAfterApprovalFinishesTheInterruptedEnable() async {
+        let helper = ClosedLidTestPowerHelper()
+        helper.registrationState = .requiresApproval
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .seconds(60), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        controller.setEnabled(true)
+        await waitUntil { controller.serviceState == .requiresApproval }
+        #expect(helper.setSleepDisabledCalls.isEmpty)
+
+        // The user approves; the app comes back to the foreground and refreshes.
+        helper.registrationState = .ready
+        controller.reenableIfPending()
+        await waitUntil { controller.isActive }
+
+        #expect(helper.setSleepDisabledCalls == [true])
+        #expect(controller.serviceState == .enabled)
+    }
+
+    @Test func reenableIsSkippedWhenNothingIsPending() async {
+        let helper = ClosedLidTestPowerHelper()
+        helper.registrationState = .requiresApproval
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .seconds(60), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        // The feature was never requested: approval alone must not enable it.
+        helper.registrationState = .ready
+        controller.reenableIfPending()
+        #expect(helper.setSleepDisabledCalls.isEmpty)
+
+        // A service that is still waiting for approval is not ready either.
+        helper.registrationState = .requiresApproval
+        controller.setEnabled(true)
+        await waitUntil { controller.serviceState == .requiresApproval }
+        controller.reenableIfPending()
+        #expect(helper.setSleepDisabledCalls.isEmpty)
+    }
+
+    @Test func stateRefreshDrivesThePendingEnableThroughTheManager() async {
+        let controller = ClosedLidTestController()
+        controller.serviceState = .requiresApproval
+        let manager = makeManager(controller: controller)
+        defer { manager.shutdown() }
+
+        _ = manager.startSession(
+            source: .manual,
+            endCondition: .manual,
+            policy: SessionPolicy(preventClosedLidSleep: true)
+        )
+        #expect(controller.reenableIfPendingCallCount == 0)
+
+        // The refresh that runs when the app becomes active again after the
+        // user approved the daemon in System Settings.
+        manager.refreshClosedLidServiceState()
+        #expect(controller.reenableIfPendingCallCount == 1)
+    }
+
     @Test func disableReleasesAndStopsHeartbeats() async {
         let helper = ClosedLidTestPowerHelper()
         let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .seconds(60), reconnectDelays: [])
@@ -527,6 +626,61 @@ struct PowerServiceIdentityTests {
     }
 }
 
+// MARK: - Registration state mapping
+
+/// Pins the macOS quirk the closed-lid service depends on: an **unregistered**
+/// daemon reports `.notFound` (verified with a live probe on macOS 26 and 27),
+/// so only the plist's presence in the running bundle separates a lost
+/// registration — recoverable by registering again — from a build that can
+/// never host the daemon. Before this distinction existed, an OS upgrade that
+/// dropped the BTM record left every install stuck on the "use a signed
+/// release build" banner even though the build was fine.
+@MainActor
+struct PowerServiceRegistrationMappingTests {
+    @Test func unregisteredDaemonWithThePlistShippedIsRecoverableNotUnavailable() {
+        #expect(
+            PrivilegedPowerHelper.mapRegistrationState(status: .notFound, plistPresentInBundle: true)
+                == .notRegistered
+        )
+    }
+
+    @Test func notFoundWithoutThePlistStaysUnavailable() {
+        #expect(
+            PrivilegedPowerHelper.mapRegistrationState(status: .notFound, plistPresentInBundle: false)
+                == .unavailable
+        )
+    }
+
+    @Test func registeredStatesMapDirectlyRegardlessOfThePlist() {
+        for plistPresent in [true, false] {
+            #expect(PrivilegedPowerHelper.mapRegistrationState(status: .enabled, plistPresentInBundle: plistPresent) == .ready)
+            #expect(PrivilegedPowerHelper.mapRegistrationState(status: .notRegistered, plistPresentInBundle: plistPresent) == .notRegistered)
+            #expect(PrivilegedPowerHelper.mapRegistrationState(status: .requiresApproval, plistPresentInBundle: plistPresent) == .requiresApproval)
+        }
+    }
+
+    @Test func plistDetectionLooksInsideContentsLibraryLaunchDaemons() throws {
+        let bundle = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("Probe.app")
+        let daemons = bundle
+            .appendingPathComponent("Contents/Library/LaunchDaemons")
+        try FileManager.default.createDirectory(at: daemons, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bundle.deletingLastPathComponent()) }
+
+        #expect(!PrivilegedPowerHelper.isDaemonPlistPresent(
+            plistName: MacPilotPowerService.daemonPlistName,
+            bundleURL: bundle
+        ))
+
+        try Data("{}".utf8).write(to: daemons.appendingPathComponent(MacPilotPowerService.daemonPlistName))
+        #expect(PrivilegedPowerHelper.isDaemonPlistPresent(
+            plistName: MacPilotPowerService.daemonPlistName,
+            bundleURL: bundle
+        ))
+    }
+}
+
 // MARK: - Test doubles
 
 @MainActor
@@ -571,10 +725,15 @@ private final class ClosedLidTestController: ClosedLidSleepControlling {
 
     private(set) var requestedValues: [Bool] = []
     private(set) var shutdownCalled = false
+    private(set) var reenableIfPendingCallCount = 0
     var enableResult: Result<Bool, ClosedLidSleepFailure> = .success(true)
 
     func prepareIfNeeded() async {}
     func openSystemSettings() {}
+
+    func reenableIfPending() {
+        reenableIfPendingCallCount += 1
+    }
 
     func setEnabled(_ enabled: Bool) {
         requestedValues.append(enabled)
@@ -706,6 +865,9 @@ private final class ClosedLidTestApplicationProvider: AwakeApplicationStateProvi
 private final class ClosedLidTestPowerHelper: PowerHelperServicing {
     var registrationState: ClosedLidSleepServiceState = .ready
     var registerError: (any Error)?
+    /// The system record can advance even when `register()` throws; `nil` keeps
+    /// the state unchanged to simulate a registration that went nowhere.
+    var stateAfterFailedRegister: ClosedLidSleepServiceState?
     private(set) var registerCallCount = 0
     private(set) var openSettingsCallCount = 0
     private(set) var setSleepDisabledCalls: [Bool] = []
@@ -716,7 +878,10 @@ private final class ClosedLidTestPowerHelper: PowerHelperServicing {
 
     func register() throws {
         registerCallCount += 1
-        if let registerError { throw registerError }
+        if let registerError {
+            if let stateAfterFailedRegister { registrationState = stateAfterFailedRegister }
+            throw registerError
+        }
         registrationState = .ready
     }
 

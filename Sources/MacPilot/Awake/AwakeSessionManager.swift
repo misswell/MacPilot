@@ -106,6 +106,7 @@ final class AwakeSessionManager: ObservableObject {
         guard let closedLidSleepController else { return }
         await closedLidSleepController.prepareIfNeeded()
         syncClosedLidServiceState()
+        closedLidSleepController.reenableIfPending()
     }
 
     func openClosedLidServiceSettings() {
@@ -122,8 +123,14 @@ final class AwakeSessionManager: ObservableObject {
     /// read once at startup — a stale "the background power service is
     /// unavailable in this build" banner that never clears, even though the
     /// service is registered and running.
+    ///
+    /// Approval also interrupts the enable itself, not just the banner: the
+    /// controller bails out while the record sits in `.requiresApproval`, and
+    /// nothing inside the process watches for the approval. `reenableIfPending`
+    /// is what finishes the interrupted enable once the service turns up ready.
     func refreshClosedLidServiceState() {
         syncClosedLidServiceState()
+        closedLidSleepController?.reenableIfPending()
     }
 
     func startSession(

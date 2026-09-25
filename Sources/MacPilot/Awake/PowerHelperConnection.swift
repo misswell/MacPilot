@@ -71,20 +71,40 @@ extension PowerHelperServicing {
 @MainActor
 final class PrivilegedPowerHelper: PowerHelperServicing {
     private let logger = Logger(subsystem: "com.misswell.macpilot", category: "Awake.ClosedLid")
+    private let plistName: String
     private let service: SMAppService?
     private let client: PowerHelperClient
 
     init(plistName: String = MacPilotPowerService.daemonPlistName) {
         // `SMAppService.daemon` returns a service even when the plist is
-        // missing; `status` then reports `.notFound`, which we surface as
-        // `.unavailable`.
+        // missing from the bundle; `status` then reports `.notFound`.
+        self.plistName = plistName
         self.service = SMAppService.daemon(plistName: plistName)
         self.client = PowerHelperClient(machServiceName: MacPilotPowerService.machServiceName)
     }
 
     var registrationState: ClosedLidSleepServiceState {
         guard let service else { return .unavailable }
-        switch service.status {
+        return Self.mapRegistrationState(
+            status: service.status,
+            plistPresentInBundle: Self.isDaemonPlistPresent(
+                plistName: plistName,
+                bundleURL: Bundle.main.bundleURL
+            )
+        )
+    }
+
+    /// On current macOS an **unregistered** daemon reports `.notFound`, not
+    /// `.notRegistered` — verified with a probe on macOS 26 and 27. So the plist
+    /// still shipping in the running bundle is what separates "the registration
+    /// record was lost (OS upgrade, BTM reset) and `register()` can restore it"
+    /// from "this is not a real app bundle at all (bare `swift run` binary),
+    /// where registration is genuinely impossible".
+    nonisolated static func mapRegistrationState(
+        status: SMAppService.Status,
+        plistPresentInBundle: Bool
+    ) -> ClosedLidSleepServiceState {
+        switch status {
         case .enabled:
             return .ready
         case .notRegistered:
@@ -92,10 +112,19 @@ final class PrivilegedPowerHelper: PowerHelperServicing {
         case .requiresApproval:
             return .requiresApproval
         case .notFound:
-            return .unavailable
+            return plistPresentInBundle ? .notRegistered : .unavailable
         @unknown default:
             return .unavailable
         }
+    }
+
+    nonisolated static func isDaemonPlistPresent(plistName: String, bundleURL: URL) -> Bool {
+        FileManager.default.fileExists(
+            atPath: bundleURL
+                .appendingPathComponent("Contents/Library/LaunchDaemons")
+                .appendingPathComponent(plistName)
+                .path
+        )
     }
 
     func register() throws {
