@@ -317,9 +317,11 @@ struct AppleFileCompressionEngine: Sendable {
         var seenFiles = Set<FileIdentity>()
 
         for folderURL in folderURLs {
+            try Task.checkCancellation()
             do {
                 let (enumerator, issueCollector) = try fileEnumerator(at: folderURL)
                 for case let url as URL in enumerator {
+                    try Task.checkCancellation()
                     do {
                         guard let scannedFile = try scannedFile(
                             at: url,
@@ -336,6 +338,8 @@ struct AppleFileCompressionEngine: Sendable {
                         case .compressed:
                             compressedFiles.append(candidate)
                         }
+                    } catch is CancellationError {
+                        throw CancellationError()
                     } catch {
                         issueCollector.record(path: url.path, error: error)
                     }
@@ -343,6 +347,8 @@ struct AppleFileCompressionEngine: Sendable {
                 if let message = issueCollector.message {
                     folderIssues.append(FileCompressionFolderIssue(folderURL: folderURL, error: .scanFailed(message)))
                 }
+            } catch is CancellationError {
+                throw CancellationError()
             } catch let error as AppleFileCompressionError {
                 folderIssues.append(FileCompressionFolderIssue(folderURL: folderURL, error: error))
             } catch {
@@ -384,6 +390,7 @@ struct AppleFileCompressionEngine: Sendable {
         }
 
         for path in paths {
+            try Task.checkCancellation()
             let url = URL(fileURLWithPath: FileCompressionPath.canonical(path))
             guard let folderURL = monitoredRoot(containing: url, from: folderURLs) else { continue }
             var isDirectory: ObjCBool = false
@@ -394,8 +401,11 @@ struct AppleFileCompressionEngine: Sendable {
             if isDirectory.boolValue {
                 let (enumerator, issueCollector) = try fileEnumerator(at: url)
                 for case let childURL as URL in enumerator {
+                    try Task.checkCancellation()
                     do {
                         try inspect(childURL, monitoredFolderURL: folderURL)
+                    } catch is CancellationError {
+                        throw CancellationError()
                     } catch {
                         issueCollector.record(path: childURL.path, error: error)
                     }
@@ -1058,6 +1068,7 @@ final class FolderCompressionModel: ObservableObject {
     private var pendingChanges = FileCompressionPendingChanges()
     private var pendingDeadlineTask: Task<Void, Never>?
     private var initialScanTask: Task<Void, Never>?
+    private var manualScanTask: Task<FileCompressionScan, Error>?
     private var reconciliationTask: Task<Void, Never>?
     private var monitoringGeneration = UUID()
     private var retryBackoff = FileCompressionRetryBackoff()
@@ -1067,6 +1078,7 @@ final class FolderCompressionModel: ObservableObject {
         eventMonitor.stop()
         pendingDeadlineTask?.cancel()
         initialScanTask?.cancel()
+        manualScanTask?.cancel()
         reconciliationTask?.cancel()
     }
 
@@ -1083,6 +1095,7 @@ final class FolderCompressionModel: ObservableObject {
 
     func deactivateFromConfiguration() {
         isActive = false
+        manualScanTask?.cancel()
         stopMonitoring()
     }
 
@@ -1090,6 +1103,7 @@ final class FolderCompressionModel: ObservableObject {
     /// cancels every pending scan task.
     func shutdown() {
         isActive = false
+        manualScanTask?.cancel()
         stopMonitoring()
     }
 
@@ -1161,10 +1175,24 @@ final class FolderCompressionModel: ObservableObject {
         isScanning = true
         error = nil
         let currentSettings = settings
+        let task = Task.detached(priority: .userInitiated) { [engine] in
+            try engine.scan(settings: currentSettings)
+        }
+        manualScanTask = task
+        defer {
+            manualScanTask = nil
+            isScanning = false
+        }
         do {
-            scan = try await Task.detached(priority: .userInitiated) { [engine] in
-                try engine.scan(settings: currentSettings)
-            }.value
+            let result = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            guard !task.isCancelled else { return }
+            scan = result
+        } catch is CancellationError {
+            scan = nil
         } catch let compressionError as AppleFileCompressionError {
             scan = nil
             error = compressionError
@@ -1172,7 +1200,6 @@ final class FolderCompressionModel: ObservableObject {
             scan = nil
             self.error = .scanFailed(error.localizedDescription)
         }
-        isScanning = false
     }
 
     func compressCandidates() async {
