@@ -74,6 +74,8 @@ enum RunningProcessReader {
 /// 进程内存采样：通过 libproc 读取全部进程的物理占用。
 /// 读取不到占用（如其他用户或 root 进程）的进程会被跳过。
 enum ProcessMemorySampler {
+    static func ownFootprint() -> UInt64? { physicalFootprint(of: getpid()) }
+
     static func sample() -> [ProcessMemorySample] {
         RunningProcessReader.sample().compactMap { process in
             guard let footprint = physicalFootprint(of: process.pid) else { return nil }
