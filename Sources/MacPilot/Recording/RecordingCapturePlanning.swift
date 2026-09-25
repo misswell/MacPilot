@@ -25,21 +25,22 @@ struct ScreenRecordingWindowProbe: Equatable, Sendable {
 /// Resolves which on-screen window a recording should target.
 enum ScreenRecordingWindowPicker {
     /// Picks the recorded window for application-window mode: the on-screen
-    /// layer-0 window with the largest overlap on the selection, excluding
-    /// the recorder's own application. Windows covering less than half of
-    /// the selection are ignored so a sloppy drag falls back to a crop of
-    /// the display instead of an accidental window recording.
+    /// layer-0 window with the largest overlap on the selection. Probes come
+    /// from ScreenCaptureKit, which never lists the recorder's non-shareable
+    /// capture chrome, so MacPilot's own windows are recordable targets too.
+    /// Windows covering less than half of the selection are ignored so a
+    /// sloppy drag falls back to a crop of the display instead of an accidental
+    /// window recording.
     static func largestOverlap(
         in probes: [ScreenRecordingWindowProbe],
-        selection: CGRect,
-        excludingOwnBundleID ownBundleID: String = Bundle.main.bundleIdentifier ?? "com.misswell.macpilot"
+        selection: CGRect
     ) -> ScreenRecordingWindowProbe? {
         guard selection.width > 0.5, selection.height > 0.5 else { return nil }
         let selectionArea = selection.width * selection.height
         var winner: ScreenRecordingWindowProbe?
         var winnerOverlap: CGFloat = 0
         for probe in probes
-        where probe.windowLayer == 0 && probe.isOnScreen && probe.bundleID != ownBundleID {
+        where probe.windowLayer == 0 && probe.isOnScreen {
             let overlap = probe.frame.intersection(selection)
             guard !overlap.isNull else { continue }
             let overlapArea = overlap.width * overlap.height

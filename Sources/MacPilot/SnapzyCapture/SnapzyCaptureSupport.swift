@@ -92,8 +92,9 @@ enum CaptureOverlayShortcutSettings {
 ///
 /// `AreaSelectionWindow` marks the temporary selection panels as non-shareable,
 /// so the display capture can include the user's other MacPilot windows without
-/// capturing the selection overlay itself. Application-window hit testing keeps
-/// its own filtering policy separately in `AreaSelectionApplicationConfiguration`.
+/// capturing the selection overlay itself. Application-window hit testing filters
+/// the same way: `SnapzyAreaSelectionController` removes only the panels it created
+/// for the current session, which keeps MacPilot's own windows selectable.
 enum SnapzyCaptureApplicationVisibilityPolicy {
     static let excludesOwnApplicationFromDisplaySnapshot = false
 }

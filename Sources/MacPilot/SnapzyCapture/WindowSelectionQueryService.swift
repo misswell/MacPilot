@@ -51,7 +51,7 @@ enum WindowSelectionQueryService {
 
   static func prepareSnapshot(
     prefetchedContentTask: ShareableContentPrefetchTask?,
-    excludeOwnApplication: Bool
+    excludedWindowIDs: Set<CGWindowID>
   ) async -> WindowSelectionSnapshot? {
     do {
       let content = try await loadShareableContent(prefetchedContentTask: prefetchedContentTask).value
@@ -104,6 +104,10 @@ enum WindowSelectionQueryService {
       for info in rawWindowInfoList {
         let windowID = info.windowID
         guard seenWindowIDs.insert(windowID).inserted else { continue }
+        // Only this session's own panels are removed. MacPilot's regular windows stay
+        // selectable because they remain shareable and sit at layer 0, while its capture
+        // chrome is filtered by layer and by `WindowCaptureSelectionPolicy`.
+        guard !excludedWindowIDs.contains(windowID) else { continue }
         let shareableWindow = shareableWindowsByID[windowID]
 
         let windowLayer = info.layer ?? shareableWindow?.windowLayer ?? 0
@@ -117,9 +121,6 @@ enum WindowSelectionQueryService {
           ?? info.ownerPID.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
 
         let isOwnApplication = bundleIdentifier == ownBundleIdentifier
-        if excludeOwnApplication, isOwnApplication {
-          continue
-        }
 
         let title = (shareableWindow?.title?.isEmpty == false) ? shareableWindow?.title : (info.title?.isEmpty == false ? info.title : nil)
         let ownerNameVal = (shareableWindow?.owningApplication?.applicationName.isEmpty == false
@@ -174,7 +175,7 @@ enum WindowSelectionQueryService {
   /// Menu extras may close as a side effect of global-hotkey handling, so a later async query
   /// cannot reliably discover or capture them.
   static func captureImmediateMenuBarPopoverCaptures(
-    excludeOwnApplication: Bool
+    excludedWindowIDs: Set<CGWindowID>
   ) -> [ImmediateMenuBarPopoverCapture] {
     let ownBundleIdentifier = Bundle.main.bundleIdentifier
     var captures: [ImmediateMenuBarPopoverCapture] = []
@@ -192,8 +193,8 @@ enum WindowSelectionQueryService {
       let bundleIdentifier = info.ownerPID.flatMap {
         NSRunningApplication(processIdentifier: $0)?.bundleIdentifier
       }
+      guard !excludedWindowIDs.contains(info.windowID) else { continue }
       let isOwnApplication = bundleIdentifier == ownBundleIdentifier
-      if excludeOwnApplication, isOwnApplication { continue }
 
       let ownerName = info.ownerName ?? ""
       guard WindowCaptureSelectionPolicy.targetKind(

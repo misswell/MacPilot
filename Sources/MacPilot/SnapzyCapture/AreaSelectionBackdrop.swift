@@ -156,16 +156,13 @@ nonisolated enum AreaSelectionTarget: Equatable {
 
 nonisolated struct AreaSelectionApplicationConfiguration {
   let prefetchedContentTask: ShareableContentPrefetchTask?
-  let excludeOwnApplication: Bool
   let immediateMenuBarPopoverCaptures: [ImmediateMenuBarPopoverCapture]
 
   init(
     prefetchedContentTask: ShareableContentPrefetchTask?,
-    excludeOwnApplication: Bool,
     immediateMenuBarPopoverCaptures: [ImmediateMenuBarPopoverCapture] = []
   ) {
     self.prefetchedContentTask = prefetchedContentTask
-    self.excludeOwnApplication = excludeOwnApplication
     self.immediateMenuBarPopoverCaptures = immediateMenuBarPopoverCaptures
   }
 }

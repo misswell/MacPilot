@@ -2593,8 +2593,7 @@ final class SmartScreenshotController {
         let applicationConfiguration: AreaSelectionApplicationConfiguration? =
             interactionMode == .applicationWindow
                 ? AreaSelectionApplicationConfiguration(
-                    prefetchedContentTask: SnapzyScreenCaptureManager.shared.prefetchShareableContent(),
-                    excludeOwnApplication: true
+                    prefetchedContentTask: SnapzyScreenCaptureManager.shared.prefetchShareableContent()
                 )
                 : nil
 
@@ -2659,8 +2658,7 @@ final class SmartScreenshotController {
             providedApplicationConfiguration
             ?? (interactionMode == .applicationWindow
                 ? AreaSelectionApplicationConfiguration(
-                    prefetchedContentTask: SnapzyScreenCaptureManager.shared.prefetchShareableContent(),
-                    excludeOwnApplication: true
+                    prefetchedContentTask: SnapzyScreenCaptureManager.shared.prefetchShareableContent()
                 )
                 : nil)
 
@@ -3747,8 +3745,10 @@ private enum SmartAXTargetQuery {
             return nil
         }
         for entry in info {
+            // The layer-0 guard is what keeps this off MacPilot's own capture chrome,
+            // which is presented above normal windows; its regular windows are therefore
+            // recognised like any other application's.
             guard let layer = entry[kCGWindowLayer as String] as? Int, layer == 0,
-                  let ownerPID = entry[kCGWindowOwnerPID as String] as? pid_t, ownerPID != getpid(),
                   let boundsDictionary = entry[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
                   let frame = appKitRect(fromQuartzRect: bounds), frame.contains(point),

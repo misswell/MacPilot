@@ -13,6 +13,25 @@ struct SnapzyCaptureTests {
         #expect(!SnapzyCaptureApplicationVisibilityPolicy.excludesOwnApplicationFromDisplaySnapshot)
     }
 
+    /// Window recognition must reach MacPilot's own windows while its capture
+    /// chrome — which is always presented above ordinary windows — stays unlisted.
+    @Test func applicationWindowTargetsAcceptMacPilotWindowsButNotItsOverlayPanels() {
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_920, height: 1_080)
+        func kind(windowLayer: Int, frame: CGRect) -> WindowCaptureTargetKind? {
+            WindowCaptureSelectionPolicy.targetKind(
+                windowLayer: windowLayer,
+                frame: frame,
+                visibleFrame: visibleFrame,
+                alpha: 1,
+                isOwnApplication: true,
+                isSystemOwned: false
+            )
+        }
+
+        #expect(kind(windowLayer: 0, frame: CGRect(x: 120, y: 90, width: 900, height: 620)) == .normal)
+        #expect(kind(windowLayer: 1_000, frame: CGRect(x: 0, y: 0, width: 1_920, height: 1_080)) == nil)
+    }
+
     @Test @MainActor func singleFrameCaptureConfigurationKeepsOnlyOneQueuedFrame() {
         let configuration = SnapzyCaptureConfiguration.display(
             width: 1_920,

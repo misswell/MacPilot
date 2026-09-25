@@ -141,10 +141,18 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
 
         if applicationConfiguration != nil {
             let task = applicationConfiguration?.prefetchedContentTask
+            let sessionPanels = windows
             Task { @MainActor [weak self] in
+                // These panels are the only windows removed from the candidate list, so
+                // the hit test can never land on the selection overlay while still
+                // reaching MacPilot's own windows.  Window numbers are read here rather
+                // than above because WindowServer assigns them on presentation.
+                let excludedWindowIDs = Set(
+                    sessionPanels.map(\.windowNumber).filter { $0 > 0 }.map(CGWindowID.init)
+                )
                 let snapshot = await WindowSelectionQueryService.prepareSnapshot(
                     prefetchedContentTask: task,
-                    excludeOwnApplication: applicationConfiguration?.excludeOwnApplication ?? true
+                    excludedWindowIDs: excludedWindowIDs
                 )
                 guard let self, self.sessionID == sessionID else { return }
                 for window in self.windows {

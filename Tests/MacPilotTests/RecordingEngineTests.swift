@@ -223,7 +223,7 @@ struct RecordingEngineTests {
         #expect(ScreenRecordingPixelFormat.yuv420p10f.pixelFormat == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange)
     }
 
-    @Test func windowSelectionPrefersTheLargestOverlapWithoutMatchingOwnWindows() {
+    @Test func windowSelectionPrefersTheLargestOverlap() {
         let selection = CGRect(x: 0, y: 0, width: 100, height: 100)
         let probes = [
             ScreenRecordingWindowProbe(
@@ -236,34 +236,33 @@ struct RecordingEngineTests {
             )
         ]
         #expect(
-            ScreenRecordingWindowPicker.largestOverlap(
-                in: probes,
-                selection: selection,
-                excludingOwnBundleID: "com.misswell.macpilot"
-            )?.bundleID == "com.example.large"
+            ScreenRecordingWindowPicker.largestOverlap(in: probes, selection: selection)?
+                .bundleID == "com.example.large"
         )
     }
 
-    @Test func windowSelectionIgnoresOffscreenOverlaysAndOwnWindows() {
+    @Test func windowSelectionRecordsMacPilotWindowsButIgnoresOffscreenAndOverlayLayers() {
         let selection = CGRect(x: 0, y: 0, width: 100, height: 100)
-        let probes = [
+        #expect(
+            ScreenRecordingWindowPicker.largestOverlap(
+                in: [
+                    ScreenRecordingWindowProbe(
+                        frame: selection, windowLayer: 0, isOnScreen: true,
+                        bundleID: "com.misswell.macpilot"
+                    )
+                ],
+                selection: selection
+            )?.bundleID == "com.misswell.macpilot"
+        )
+        let ignored = [
             ScreenRecordingWindowProbe(
                 frame: selection, windowLayer: 0, isOnScreen: false, bundleID: "com.example.offscreen"
             ),
             ScreenRecordingWindowProbe(
                 frame: selection, windowLayer: 25, isOnScreen: true, bundleID: "com.example.overlay"
-            ),
-            ScreenRecordingWindowProbe(
-                frame: selection, windowLayer: 0, isOnScreen: true, bundleID: "com.misswell.macpilot"
             )
         ]
-        #expect(
-            ScreenRecordingWindowPicker.largestOverlap(
-                in: probes,
-                selection: selection,
-                excludingOwnBundleID: "com.misswell.macpilot"
-            ) == nil
-        )
+        #expect(ScreenRecordingWindowPicker.largestOverlap(in: ignored, selection: selection) == nil)
     }
 
     @Test func windowSelectionRequiresMajorityCoverageAndAUsableSelection() {
@@ -277,16 +276,11 @@ struct RecordingEngineTests {
         #expect(
             ScreenRecordingWindowPicker.largestOverlap(
                 in: partial,
-                selection: CGRect(x: 0, y: 0, width: 100, height: 100),
-                excludingOwnBundleID: "com.misswell.macpilot"
+                selection: CGRect(x: 0, y: 0, width: 100, height: 100)
             ) == nil
         )
         #expect(
-            ScreenRecordingWindowPicker.largestOverlap(
-                in: partial,
-                selection: .zero,
-                excludingOwnBundleID: "com.misswell.macpilot"
-            ) == nil
+            ScreenRecordingWindowPicker.largestOverlap(in: partial, selection: .zero) == nil
         )
     }
 

@@ -21,8 +21,9 @@ nonisolated enum WindowCaptureSelectionPolicy {
     isOwnApplication: Bool,
     isSystemOwned: Bool
   ) -> WindowCaptureTargetKind? {
-    // Keep the established layer-0 behaviour unchanged. The query service
-    // applies the existing size, display, and alpha guards before this call.
+    // Layer 0 is an ordinary window. The query service applies the existing size,
+    // display and alpha guards before this call, and a selection session removes its
+    // own panels by window id, so MacPilot's own windows stay selectable here.
     if windowLayer == 0 {
       return .normal
     }

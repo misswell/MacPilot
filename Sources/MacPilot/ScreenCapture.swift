@@ -1610,8 +1610,7 @@ final class ScreenCaptureModel: ObservableObject {
 
     private func captureActiveWindowAndHandleResult() async {
         do {
-            let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
-            guard let pid, pid != getpid() else {
+            guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
                 throw ScreenCaptureError.captureFailed(AppText.value("scActiveWindowUnavailable", language: language))
             }
             let image: CGImage
@@ -1642,8 +1641,12 @@ final class ScreenCaptureModel: ObservableObject {
     }
 
     private func preferredCaptureWindow(from windows: [SCWindow], processID: pid_t) -> SCWindow? {
+        // Layer 0 keeps this to ordinary document windows: a floating panel or
+        // popover of the frontmost application — including MacPilot's own — is not
+        // what 「当前窗口截图」 means.
         let candidates = windows.filter {
             $0.owningApplication?.processID == processID && $0.isOnScreen && $0.windowID != 0
+                && $0.windowLayer == 0
                 && $0.frame.width >= 80 && $0.frame.height >= 60
         }
         let titled = candidates.filter { !($0.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
