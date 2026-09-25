@@ -1638,10 +1638,10 @@ enum AppText {
             "pipMediaPaused": "Media paused", "pipBack5Seconds": "Back 5 seconds", "pipForward5Seconds": "Forward 5 seconds", "pipToggleCaptions": "Toggle captions", "pipPause": "Pause", "pipPlay": "Play",
             "pipAccessibilityRequired": "Accessibility permission is required to intercept the global shortcut in other apps.", "pipGrantAccessibility": "Grant Accessibility…", "pipOpenAccessibility": "Open Accessibility Settings",
         "windowSwitcher": "Window Switcher", "windowSwitcherTitle": "Window Switcher", "windowSwitcherSubtitle": "Quickly switch between windows across applications with ⌥Tab. Hold Option to keep cycling, then release it to focus the selected window.",
-        "diagnostics": "Diagnostics", "resourceMonitor": "Resource Monitor", "resourceRefresh": "Refresh Sample",
-        "resourceMemory": "Memory: %@ MB", "resourceCPU": "CPU: %@%%",
-        "resourceActiveFeatures": "Managed features: %@", "resourceTasks": "Managed tasks: %d", "resourceObservers": "Tracked observers: %d",
-        "resourceUnavailable": "—", "resourceNone": "None",
+            "diagnostics": "Diagnostics", "resourceMonitor": "Resource Monitor", "resourceRefresh": "Refresh Sample",
+            "resourceMemory": "Memory: %@ MB", "resourceCPU": "CPU: %@%%",
+            "resourceActiveFeatures": "Managed features: %@", "resourceTasks": "Managed tasks: %d", "resourceObservers": "Tracked observers: %d",
+            "resourceUnavailable": "—", "resourceNone": "None",
             "windowSwitcherShortcut": "⌥Tab",
             "windowSwitcherIncludeMinimized": "Show minimized windows", "windowSwitcherIncludeHidden": "Show windows from hidden applications",
             "windowSwitcherShowThumbnails": "Show window thumbnails (requires Screen Recording)", "windowSwitcherShowTitles": "Show window titles",
@@ -5336,9 +5336,11 @@ private struct ResourceMonitorMenu: View {
             ?? model.t("resourceUnavailable")
         let cpu = sample.cpuPercent.map { String(format: "%.2f", $0) }
             ?? model.t("resourceUnavailable")
-        let features = sample.activeFeatures.isEmpty
+        let localizedFeatures = sample.activeFeatures.compactMap(MainSection.init(rawValue:))
+            .map { model.t($0.titleKey) }
+        let features = localizedFeatures.isEmpty
             ? model.t("resourceNone")
-            : sample.activeFeatures.joined(separator: ", ")
+            : localizedFeatures.joined(separator: ", ")
         Group {
             Text(model.t("resourceMemory", memory))
             Text(model.t("resourceCPU", cpu))
@@ -5354,11 +5356,11 @@ private struct ResourceMonitorMenu: View {
             }
         }
         .onAppear {
-            monitor.refresh(
-                lifecycle: model.featureLifecycle,
-                trackedObservers: model.trackedObserverCount
-            )
+            monitor.startSampling(lifecycle: model.featureLifecycle) {
+                model.trackedObserverCount
+            }
         }
+        .onDisappear { monitor.stopSampling() }
     }
 }
 

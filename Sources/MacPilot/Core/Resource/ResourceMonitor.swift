@@ -19,6 +19,26 @@ final class ResourceMonitor: ObservableObject {
     )
 
     private var previousCPU: (uptime: TimeInterval, seconds: Double)?
+    private var sampleTask: Task<Void, Never>?
+
+    func startSampling(lifecycle: FeatureLifecycleManager, trackedObservers: @escaping @MainActor () -> Int) {
+        stopSampling()
+        previousCPU = nil
+        refresh(lifecycle: lifecycle, trackedObservers: trackedObservers())
+        sampleTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) }
+                catch { return }
+                guard let self, !Task.isCancelled else { return }
+                self.refresh(lifecycle: lifecycle, trackedObservers: trackedObservers())
+            }
+        }
+    }
+
+    func stopSampling() {
+        sampleTask?.cancel()
+        sampleTask = nil
+    }
 
     func refresh(lifecycle: FeatureLifecycleManager, trackedObservers: Int) {
         let uptime = ProcessInfo.processInfo.systemUptime
