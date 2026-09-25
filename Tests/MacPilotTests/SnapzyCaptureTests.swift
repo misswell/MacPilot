@@ -906,9 +906,11 @@ struct SnapzyCaptureTests {
         window.overlayView.handleLivePassthroughMouseDragged(atScreenPoint: end)
         window.overlayView.handleLivePassthroughMouseUp(atScreenPoint: end)
 
-        #expect(recorder.manualBegan == [start])
-        #expect(recorder.manualEnded == [end])
-        #expect(recorder.manualChanged.first == end)
+        let localStart = window.overlayView.convert(window.convertPoint(fromScreen: start), from: nil)
+        let localEnd = window.overlayView.convert(window.convertPoint(fromScreen: end), from: nil)
+        #expect(recorder.manualBegan == [localStart])
+        #expect(recorder.manualEnded == [localEnd])
+        #expect(recorder.manualChanged.first == localEnd)
     }
 
     @Test @MainActor func initialSmartTargetResolutionRunsOnMainActor() async throws {
@@ -966,7 +968,8 @@ struct SnapzyCaptureTests {
         // it to a manual frame drag (the same threshold the app uses).
         window.overlayView.handleLivePassthroughMouseDown(atScreenPoint: start)
         window.overlayView.handleLivePassthroughMouseDragged(atScreenPoint: end)
-        #expect(recorder.manualBegan == [start])
+        let localStart = window.overlayView.convert(window.convertPoint(fromScreen: start), from: nil)
+        #expect(recorder.manualBegan == [localStart])
 
         // Reproduce the controller's render step for manual-selection drag
         // updates (`SnapzyAreaSelectionController.manualSelectionChangedTo`).
