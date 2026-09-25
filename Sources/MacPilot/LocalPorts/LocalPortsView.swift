@@ -4,6 +4,9 @@ import MacPilotLocalPortsCore
 import SwiftUI
 
 struct LocalPortsView: View {
+    /// 列表行与分组表头共用的起始内边距：`List` 自带 22pt，加上这里正好是页面的 36pt 边距。
+    static let rowLeadingInset: CGFloat = 14
+
     @EnvironmentObject private var appModel: MacPilotModel
     @ObservedObject var model: LocalPortsModel
     @State private var protectedExpanded = false
@@ -209,13 +212,17 @@ struct LocalPortsView: View {
                     .listRowSeparator(.hidden)
             } else {
                 if !projects.isEmpty {
-                    Section(appModel.t("localPortsProjects")) {
+                    Section {
                         ForEach(projects) { group in row(group) }
+                    } header: {
+                        groupHeader(appModel.t("localPortsProjects"))
                     }
                 }
                 if !services.isEmpty {
-                    Section(appModel.t("localPortsServices")) {
+                    Section {
                         ForEach(services) { group in row(group) }
+                    } header: {
+                        groupHeader(appModel.t("localPortsServices"))
                     }
                 }
                 if !protected.isEmpty {
@@ -227,10 +234,16 @@ struct LocalPortsView: View {
                         Button {
                             withAnimation(.easeInOut(duration: 0.15)) { protectedExpanded.toggle() }
                         } label: {
-                            Label(
-                                appModel.t("localPortsProtected", protected.count),
-                                systemImage: protectedExpanded ? "chevron.down" : "chevron.right"
-                            )
+                            // 箭头跟在标题后面：放在标题前会把这一组表头右推 24pt，与另两组错开。
+                            HStack(spacing: 8) {
+                                groupHeader(appModel.t("localPortsProtected", protected.count))
+                                Image(systemName: "chevron.forward")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .rotationEffect(.degrees(protectedExpanded ? 90 : 0))
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
@@ -243,12 +256,29 @@ struct LocalPortsView: View {
         .padding(.bottom, 20)
     }
 
+    /// 分组表头用列表标题的 `.headline` 语言。系统默认的 `Section` 表头比上方
+    /// 「监听进程」小一号、左缘也更靠外，三个分组之间还各自不一致（折叠组是按钮）。
+    /// 起始内边距与行相同，让表头、行和页面 36pt 边距落在同一条竖线上。
+    private func groupHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(.secondary)
+            .accessibilityAddTraits(.isHeader)
+            .textCase(nil)
+            .padding(.leading, LocalPortsView.rowLeadingInset)
+    }
+
     private func row(_ group: LocalPortProcessGroup) -> some View {
         LocalPortRow(group: group, model: model) {
             selectedActivity = group.representative
         }
         .environmentObject(appModel)
-        .listRowInsets(EdgeInsets(top: 7, leading: 14, bottom: 7, trailing: 14))
+        .listRowInsets(EdgeInsets(
+            top: 7,
+            leading: LocalPortsView.rowLeadingInset,
+            bottom: 7,
+            trailing: LocalPortsView.rowLeadingInset
+        ))
         .listRowSeparator(.hidden)
     }
 

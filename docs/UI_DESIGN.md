@@ -140,6 +140,7 @@ VStack(alignment: .leading, spacing: 0) {
 - 卡片里 label 用 `.subheadline` + secondary、value 用 `.subheadline.monospacedDigit().weight(.medium)`，两列 `GridItem(.flexible(), spacing: 24)`；要保留状态色就在值前放 8pt 圆点（见 `pressureValue`），不要把整行染色。
 - 加载态与空态是列表里的一行居中文字，不是整页 `ProgressView` / `ContentUnavailableView`——否则数据落地时整页骨架会跳版。
 - 行不要加 `.listRowBackground(Color.clear)`：`List` 自己负责层次，抹掉行背景会让 `Section` 头读成色带。
+- 列表内部还要再分组时（本地端口的「开发项目 / 其他服务 / 无法关闭的进程」），`Section` 表头必须自己写成控制行那套语言：`.font(.headline).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader).textCase(nil)`，再加 `.padding(.leading, 14)`——`List` 自带 22pt，合计 36pt，表头才和行、页头落在同一条竖线上。系统默认表头比列表标题小一号、左缘更靠外，可折叠分组若改用按钮表头又是另一种字号，三者互相对不齐。可折叠分组的箭头自绘 `chevron.forward`（同内存/CPU 行）放在标题**右侧**，放左侧会把该组表头右推。
 
 ### 首页功能网格
 
@@ -188,6 +189,7 @@ VStack(alignment: .leading, spacing: 0) {
 - [ ] 功能总开关只放在首页，详情页不再放「启用本功能」开关（子功能 / 暂停开关除外）
 - [ ] 主操作按钮使用 `macPilotProminentButtonStyle()`；多分类选中态使用统一 selection pill
 - [ ] 应用/规则列表用原生全高 `List`（不嵌卡片、不加 `ScrollView`/`minHeight`，避免嵌套滚动条）
+- [ ] `List` 内部再分组时，`Section` 表头自己写成 `.headline` + `secondary` + `.textCase(nil)` 并左缘对齐到 36pt，不用系统默认表头
 - [ ] 文案走 `AppText`/`AppLocalization`，中英文同步
 - [ ] macOS 26 Liquid Glass 与 macOS 15 fallback 都能编译；深色 / 浅色模式正常
 - [ ] `swift build` 通过；`swift test` 无新增失败
