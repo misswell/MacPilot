@@ -327,6 +327,26 @@ struct AwakeTests {
         #expect(AppText.value("awakePowerAdapterSection", language: .english) == "Power Adapter")
     }
 
+    @Test func sessionProtectionSheetStartsFromFixedDefaultsEachTime() {
+        var previousDraft = AwakeSessionProtectionDraft()
+        previousDraft.safetyPolicy.lowBatteryProtectionEnabled = false
+        previousDraft.safetyPolicy.minimumBatteryLevel = 35
+        previousDraft.warnBeforeBatteryTermination = true
+        previousDraft.ignoreBatteryLevelOnExternalPower = false
+        previousDraft.restartOnPowerReconnect = true
+        previousDraft.autoStartOnLaunch = true
+        previousDraft.autoStartOnWake = true
+
+        let nextDraft = AwakeSessionProtectionDraft()
+        #expect(nextDraft.safetyPolicy.lowBatteryProtectionEnabled)
+        #expect(nextDraft.safetyPolicy.minimumBatteryLevel == 15)
+        #expect(!nextDraft.warnBeforeBatteryTermination)
+        #expect(nextDraft.ignoreBatteryLevelOnExternalPower)
+        #expect(!nextDraft.restartOnPowerReconnect)
+        #expect(!nextDraft.autoStartOnLaunch)
+        #expect(!nextDraft.autoStartOnWake)
+    }
+
     @Test func sleepShiftsTimedSessionsOnlyWhenPausingDuringSleepIsConfigured() {
         var currentDate = Date(timeIntervalSince1970: 50_000)
         let manager = AwakeSessionManager(

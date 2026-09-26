@@ -417,22 +417,13 @@ struct AwakeSettingsView: View {
 
 }
 
-private struct AwakeSessionProtectionDraft {
-    var safetyPolicy: AwakeSafetyPolicy
-    var warnBeforeBatteryTermination: Bool
-    var ignoreBatteryLevelOnExternalPower: Bool
-    var restartOnPowerReconnect: Bool
-    var autoStartOnLaunch: Bool
-    var autoStartOnWake: Bool
-
-    init(settings: AwakeSettings) {
-        safetyPolicy = settings.safetyPolicy
-        warnBeforeBatteryTermination = settings.defaultSession.warnBeforeBatteryTermination
-        ignoreBatteryLevelOnExternalPower = settings.defaultSession.ignoreBatteryLevelOnExternalPower
-        restartOnPowerReconnect = settings.defaultSession.restartOnPowerReconnect
-        autoStartOnLaunch = settings.defaultSession.autoStartOnLaunch
-        autoStartOnWake = settings.defaultSession.autoStartOnWake
-    }
+struct AwakeSessionProtectionDraft {
+    var safetyPolicy = AwakeSafetyPolicy.standard
+    var warnBeforeBatteryTermination = false
+    var ignoreBatteryLevelOnExternalPower = true
+    var restartOnPowerReconnect = false
+    var autoStartOnLaunch = false
+    var autoStartOnWake = false
 }
 
 private struct AwakeSessionProtectionSheet: View {
@@ -440,11 +431,10 @@ private struct AwakeSessionProtectionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var awake: AwakeSessionManager
 
-    @State private var draft: AwakeSessionProtectionDraft
+    @State private var draft = AwakeSessionProtectionDraft()
 
     init(awake: AwakeSessionManager) {
         self.awake = awake
-        _draft = State(initialValue: AwakeSessionProtectionDraft(settings: awake.settings))
     }
 
     var body: some View {
@@ -485,7 +475,7 @@ private struct AwakeSessionProtectionSheet: View {
         }
         .frame(minWidth: 520, idealWidth: 560, minHeight: 580, idealHeight: 660)
         .onAppear {
-            draft = AwakeSessionProtectionDraft(settings: awake.settings)
+            draft = AwakeSessionProtectionDraft()
         }
     }
 
