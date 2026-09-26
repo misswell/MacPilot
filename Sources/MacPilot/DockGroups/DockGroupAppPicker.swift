@@ -124,9 +124,15 @@ struct DockGroupAppPicker: View {
             isLoading = false
             return
         }
-        let scanned = await Task.detached(priority: .userInitiated) {
+        let scan = Task.detached(priority: .userInitiated) {
             InstalledAppResolver.scanInstalledApps()
-        }.value
+        }
+        let scanned = await withTaskCancellationHandler {
+            await scan.value
+        } onCancel: {
+            scan.cancel()
+        }
+        guard !Task.isCancelled else { return }
         candidates = scanned
         isLoading = false
     }

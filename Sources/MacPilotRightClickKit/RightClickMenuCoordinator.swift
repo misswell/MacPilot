@@ -79,11 +79,6 @@ public final class RightClickMenuCoordinator {
                 await SharedDataManager.initializeDefaultData(context: context)
             }
 
-            // Preload icons for all apps to improve performance
-            Task { @MainActor in
-                IconCache.shared.preloadIcons(for: appState.apps.map { $0.url })
-            }
-
             // Register message handlers using type-safe API
             logger.info("Registering message handlers")
             messager.onExtensionMessage(.click) { [weak self] data in
@@ -216,6 +211,7 @@ public final class RightClickMenuCoordinator {
         // that process's life, long after this app is gone.
         messager.sendQuitNotification()
         messager.stopObserving()
+        IconCache.shared.clear()
         pluginRunning = false
         logger.info("RightClickMenuCoordinator.stop() called")
     }

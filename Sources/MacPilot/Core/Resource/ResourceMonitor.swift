@@ -7,10 +7,15 @@ struct ResourceSnapshot: Equatable {
     let activeFeatures: [String]
     let managedTasks: Int
     let trackedObservers: Int
+    let activeTimers: Int
+    let threadCount: Int?
     let eventTaps: Int
     let activeCaptures: Int
     let iconCacheEntries: Int
     let windowCacheEntries: Int
+    let estimatedIconCacheBytes: Int
+    let estimatedThumbnailCacheBytes: Int
+    let loadedClipboardContentBytes: UInt64?
 }
 
 struct ResourceRuntimeCounts {
@@ -18,7 +23,10 @@ struct ResourceRuntimeCounts {
     let activeCaptures: Int
     let externalObservers: Int
     let processIconEntries: Int
+    let processIconBytes: Int
     let windowCacheEntries: Int
+    let windowCacheBytes: Int
+    let loadedClipboardContentBytes: UInt64?
 }
 
 /// Diagnostics are sampled only while the user opens the menu. There is no
@@ -28,7 +36,10 @@ final class ResourceMonitor: ObservableObject {
     @Published private(set) var snapshot = ResourceSnapshot(
         memoryBytes: nil, cpuPercent: nil, activeFeatures: [],
         managedTasks: 0, trackedObservers: 0,
-        eventTaps: 0, activeCaptures: 0, iconCacheEntries: 0, windowCacheEntries: 0
+        activeTimers: 0, threadCount: nil,
+        eventTaps: 0, activeCaptures: 0, iconCacheEntries: 0, windowCacheEntries: 0,
+        estimatedIconCacheBytes: 0, estimatedThumbnailCacheBytes: 0,
+        loadedClipboardContentBytes: nil
     )
 
     private var previousCPU: (uptime: TimeInterval, seconds: Double)?
@@ -66,11 +77,23 @@ final class ResourceMonitor: ObservableObject {
             activeFeatures: lifecycle.activeIdentifiers,
             managedTasks: BackgroundTask.activeCount,
             trackedObservers: ObserverBag.activeCount + runtimeCounts.externalObservers,
+            activeTimers: TimerRegistry.activeCount,
+            threadCount: Self.threadCount(),
             eventTaps: runtimeCounts.eventTaps,
             activeCaptures: runtimeCounts.activeCaptures,
             iconCacheEntries: AppIconCache.shared.count + runtimeCounts.processIconEntries,
-            windowCacheEntries: runtimeCounts.windowCacheEntries
+            windowCacheEntries: runtimeCounts.windowCacheEntries,
+            estimatedIconCacheBytes: AppIconCache.shared.estimatedBytes + runtimeCounts.processIconBytes,
+            estimatedThumbnailCacheBytes: runtimeCounts.windowCacheBytes,
+            loadedClipboardContentBytes: runtimeCounts.loadedClipboardContentBytes
         )
+    }
+
+    private static func threadCount() -> Int? {
+        var info = proc_taskinfo()
+        let size = Int32(MemoryLayout<proc_taskinfo>.stride)
+        guard proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, &info, size) == size else { return nil }
+        return Int(info.pti_threadnum)
     }
 
     private static func cumulativeCPUSeconds() -> Double? {

@@ -12,6 +12,7 @@ final class ProcessIconStore: ObservableObject {
     private var generation = UUID()
 
     var count: Int { images.count }
+    var estimatedBytes: Int { images.count * 26 * 26 * 4 }
 
     func image(for path: String) -> NSImage? { images[path] }
 

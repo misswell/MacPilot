@@ -51,6 +51,10 @@ public class IconCache {
         }
     }
 
+    public func clear() {
+        memoryCache.removeAllObjects()
+    }
+
     /// 缓存中的图标数量
     ///
     /// `NSCache` does not expose its occupancy, so the old exact-count property

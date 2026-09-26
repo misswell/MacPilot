@@ -39,7 +39,7 @@ enum ClipboardAction {
 }
 
 @MainActor
-final class ClipboardModel: ObservableObject, ManagedFeature {
+final class ClipboardModel: ObservableObject, ManagedFeature, FeatureResourceReporting {
     let identifier = "clipboard"
     private(set) var isRunning = false
     private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "Clipboard")
@@ -63,10 +63,19 @@ final class ClipboardModel: ObservableObject, ManagedFeature {
         return loaded
     }
     var hasLoadedHistory: Bool { historyStorage != nil }
+    var loadedContentBytes: UInt64? {
+        historyStorage.map { history in
+            UInt64(history.allItems.flatMap(\.contents).reduce(0) { total, content in
+                total + (content.file == nil ? 0 : content.size)
+            })
+        }
+    }
     /// 悬停详情列的状态机。视图通过本模型观察它（见 `observations`）。
     let preview = ClipboardPreviewController()
     private let monitor = ClipboardMonitor()
     private let retentionTask = BackgroundTask()
+    var diagnosticTaskCount: Int { (monitor.isRunning ? 1 : 0) + (retentionTask.isRunning ? 1 : 0) }
+    var diagnosticObserverCount: Int { 0 }
     private lazy var hotKeyCenter = ClipboardHotKeyCenter()
 
     var persist: (() -> Void)?

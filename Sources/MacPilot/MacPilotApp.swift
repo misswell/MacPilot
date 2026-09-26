@@ -721,6 +721,7 @@ enum AppText {
         "resourceMemory": "内存：%@ MB", "resourceCPU": "CPU：%@%%",
         "resourceActiveFeatures": "已纳管功能：%@", "resourceTasks": "已纳管任务：%d", "resourceObservers": "已跟踪观察者：%d",
         "resourceEventTaps": "事件监听：%d", "resourceCaptures": "采集会话：%d", "resourceIconCache": "图标缓存：%d", "resourceWindowCache": "窗口缓存：%d",
+        "resourceTimers": "活动计时器：%d", "resourceThreads": "线程：%@", "resourceCacheBytes": "缓存估算（图标/缩略图/已加载剪贴板）：%@ / %@ / %@ MB",
         "resourceUnavailable": "—", "resourceNone": "无",
         "windowSwitcherShortcut": "⌥Tab",
         "windowSwitcherIncludeMinimized": "显示最小化窗口", "windowSwitcherIncludeHidden": "显示已隐藏应用的窗口",
@@ -1645,6 +1646,7 @@ enum AppText {
             "resourceMemory": "Memory: %@ MB", "resourceCPU": "CPU: %@%%",
             "resourceActiveFeatures": "Managed features: %@", "resourceTasks": "Managed tasks: %d", "resourceObservers": "Tracked observers: %d",
             "resourceEventTaps": "Event taps: %d", "resourceCaptures": "Capture sessions: %d", "resourceIconCache": "Icon cache: %d", "resourceWindowCache": "Window cache: %d",
+            "resourceTimers": "Active timers: %d", "resourceThreads": "Threads: %@", "resourceCacheBytes": "Estimated cache (icons/thumbnails/loaded clipboard): %@ / %@ / %@ MB",
             "resourceUnavailable": "—", "resourceNone": "None",
             "windowSwitcherShortcut": "⌥Tab",
             "windowSwitcherIncludeMinimized": "Show minimized windows", "windowSwitcherIncludeHidden": "Show windows from hidden applications",
@@ -2016,7 +2018,10 @@ final class MacPilotModel: ObservableObject {
                 + (screenRecording.isDeviceRecording ? 1 : 0),
             externalObservers: rightClickMenu.activeObserverCount,
             processIconEntries: cpuMonitor.store.icons.count + memoryMonitor.store.icons.count,
-            windowCacheEntries: windowSwitcher.cachedThumbnailCount
+            processIconBytes: cpuMonitor.store.icons.estimatedBytes + memoryMonitor.store.icons.estimatedBytes,
+            windowCacheEntries: windowSwitcher.cachedThumbnailCount,
+            windowCacheBytes: windowSwitcher.cachedThumbnailBytes,
+            loadedClipboardContentBytes: clipboard.loadedContentBytes
         )
     }
     /// Tokens for observers that live as long as the app (termination, deep
@@ -5374,6 +5379,11 @@ private struct ResourceMonitorMenu: View {
             ?? model.t("resourceUnavailable")
         let cpu = sample.cpuPercent.map { String(format: "%.2f", $0) }
             ?? model.t("resourceUnavailable")
+        let threads = sample.threadCount.map(String.init) ?? model.t("resourceUnavailable")
+        let iconBytes = String(format: "%.1f", Double(sample.estimatedIconCacheBytes) / 1_048_576)
+        let thumbnailBytes = String(format: "%.1f", Double(sample.estimatedThumbnailCacheBytes) / 1_048_576)
+        let clipboardBytes = sample.loadedClipboardContentBytes.map { String(format: "%.1f", Double($0) / 1_048_576) }
+            ?? model.t("resourceUnavailable")
         let localizedFeatures = sample.activeFeatures.compactMap(MainSection.init(rawValue:))
             .map { model.t($0.titleKey) }
         let features = localizedFeatures.isEmpty
@@ -5385,10 +5395,13 @@ private struct ResourceMonitorMenu: View {
             Text(model.t("resourceActiveFeatures", features))
             Text(model.t("resourceTasks", sample.managedTasks))
             Text(model.t("resourceObservers", sample.trackedObservers))
+            Text(model.t("resourceTimers", sample.activeTimers))
+            Text(model.t("resourceThreads", threads))
             Text(model.t("resourceEventTaps", sample.eventTaps))
             Text(model.t("resourceCaptures", sample.activeCaptures))
             Text(model.t("resourceIconCache", sample.iconCacheEntries))
             Text(model.t("resourceWindowCache", sample.windowCacheEntries))
+            Text(model.t("resourceCacheBytes", iconBytes, thumbnailBytes, clipboardBytes))
             Divider()
             Button(model.t("resourceRefresh")) {
                 monitor.refresh(

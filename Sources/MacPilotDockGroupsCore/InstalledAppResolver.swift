@@ -155,6 +155,7 @@ public enum InstalledAppResolver {
         var seenPaths = Set<String>()
 
         for directory in directories {
+            if Task.isCancelled { return [] }
             guard let enumerator = fileManager.enumerator(
                 at: directory,
                 includingPropertiesForKeys: [.isDirectoryKey],
@@ -163,6 +164,7 @@ public enum InstalledAppResolver {
             ) else { continue }
 
             for case let url as URL in enumerator {
+                if Task.isCancelled { return [] }
                 let depth = url.pathComponents.count - directory.pathComponents.count
                 if depth > maximumDepth {
                     enumerator.skipDescendants()

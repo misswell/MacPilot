@@ -544,10 +544,12 @@ private final class QuickAccessPinWindowController: NSObject {
       }
     }
     zoomTimer = timer
+    TimerRegistry.register(timer)
     RunLoop.main.add(timer, forMode: .common)
   }
 
   private func stopZoomAnimationLoop() {
+    TimerRegistry.unregister(zoomTimer)
     zoomTimer?.invalidate()
     zoomTimer = nil
     zoomCenter = nil

@@ -15,9 +15,16 @@ nonisolated(unsafe) private let exposureNotificationUUID = CBUUID(string: "FD6F"
 // MARK: - Model
 
 @MainActor
-final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate {
+final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureResourceReporting, @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate {
     let identifier = "ble"
     var isRunning: Bool { !observers.isEmpty }
+    var diagnosticTaskCount: Int {
+        [deviceRefreshTask != nil, wakeRetryTask != nil, systemWakeRecoveryTask != nil,
+         monitoringRecoveryTask != nil, unlockAttemptTask != nil].filter { $0 }.count
+            + [scanCleanupTimer, livenessTimer, mediaResumeTask, screenUnlockConfirmationTask]
+                .filter { $0?.isRunning == true }.count
+    }
+    var diagnosticObserverCount: Int { observers.count }
     func start() { activateFromConfiguration() }
     func stop() { deactivateFromConfiguration() }
     static let unlockDisabled = 1

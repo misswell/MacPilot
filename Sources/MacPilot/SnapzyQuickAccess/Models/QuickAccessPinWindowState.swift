@@ -36,6 +36,7 @@ final class QuickAccessPinWindowState: ObservableObject {
 
   private let absoluteMinimumZoomFactor: CGFloat = 0.4
   private var zoomInteractionTimer: Timer?
+  private var zoomInteractionTimerToken: UUID?
 
   /// Image pins can be zoomed; a text pin has no raster to scale.
   var supportsZoom: Bool { image != nil }
@@ -151,16 +152,25 @@ final class QuickAccessPinWindowState: ObservableObject {
     if !isZoomInteractionLive {
       isZoomInteractionLive = true
     }
+    if let zoomInteractionTimerToken {
+      TimerRegistry.unregister(zoomInteractionTimerToken)
+    }
     zoomInteractionTimer?.invalidate()
+    let token = UUID()
     let timer = Timer(
       timeInterval: PinnedScreenshotChromeStyle.zoomHUDIdleInterval,
       repeats: false
     ) { [weak self] _ in
       MainActor.assumeIsolated {
         self?.isZoomInteractionLive = false
+        self?.zoomInteractionTimer = nil
+        self?.zoomInteractionTimerToken = nil
+        TimerRegistry.unregister(token)
       }
     }
     zoomInteractionTimer = timer
+    zoomInteractionTimerToken = token
+    TimerRegistry.register(token)
     RunLoop.main.add(timer, forMode: .common)
   }
 }

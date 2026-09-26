@@ -18,9 +18,14 @@ import MacPilotDockGroupsCore
 import OSLog
 
 @MainActor
-final class DockGroupsModel: ObservableObject, ManagedFeature {
+final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceReporting {
     let identifier = "dockGroups"
     var isRunning: Bool { isActive }
+    var diagnosticTaskCount: Int {
+        (runningTask.isRunning ? 1 : 0) + (dockRefreshTask == nil ? 0 : 1)
+            + iconLoadTasks.count + (iconFlushTask == nil ? 0 : 1)
+    }
+    var diagnosticObserverCount: Int { workspaceObservers.count + appearanceObservers.count }
     func start() { activateFromConfiguration() }
     func stop() { shutdown() }
     private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "DockGroups")

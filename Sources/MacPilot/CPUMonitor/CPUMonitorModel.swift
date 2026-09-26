@@ -2,9 +2,11 @@ import Foundation
 
 /// CPU 监控的运行时状态：定时采样进程与系统 CPU，供监控页和菜单栏使用。
 @MainActor
-final class CPUMonitorModel: ManagedFeature {
+final class CPUMonitorModel: ManagedFeature, FeatureResourceReporting {
     let identifier = "cpuMonitor"
     var isRunning: Bool { refreshLoop.isRunning }
+    var diagnosticTaskCount: Int { (refreshLoop.isRunning ? 1 : 0) + (samplingTask == nil ? 0 : 1) }
+    var diagnosticObserverCount: Int { 0 }
     static let refreshInterval: TimeInterval = 3
 
     private static let menuSampler = CPUUsageSampler()

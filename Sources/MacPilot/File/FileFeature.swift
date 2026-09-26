@@ -2,9 +2,14 @@ import Foundation
 import SwiftUI
 
 @MainActor
-final class FolderCompressionModel: ObservableObject, ManagedFeature {
+final class FolderCompressionModel: ObservableObject, ManagedFeature, FeatureResourceReporting {
     let identifier = "compression"
     var isRunning: Bool { isActive }
+    var diagnosticTaskCount: Int {
+        [pendingDeadlineTask != nil, initialScanTask != nil, manualScanTask != nil,
+         manualOperationTask != nil, reconciliationTask != nil].filter { $0 }.count
+    }
+    var diagnosticObserverCount: Int { 0 }
     func start() { activateFromConfiguration() }
     func stop() { deactivateFromConfiguration() }
     private enum AutomaticScanScope: Sendable {

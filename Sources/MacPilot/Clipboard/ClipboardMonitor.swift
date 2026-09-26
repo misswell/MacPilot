@@ -23,6 +23,7 @@ final class ClipboardMonitor {
 
     private let pasteboard = NSPasteboard.general
     private let pollingTask = BackgroundTask()
+    var isRunning: Bool { pollingTask.isRunning }
 
     /// 打开面板期间暂停记录（避免粘贴自身被再次记录）。
     var isSuspended = false {

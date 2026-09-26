@@ -810,11 +810,19 @@ private enum WindowSwitcherFocusedWindowResolver {
 }
 
 @MainActor
-final class WindowSwitcherModel: ObservableObject, ManagedFeature {
+final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResourceReporting {
     let identifier = "windowSwitcher"
     var activeEventTapCount: Int { eventTap == nil ? 0 : 1 }
     var cachedThumbnailCount: Int { thumbnailCache.count }
+    var cachedThumbnailBytes: Int { thumbnailCache.totalCost }
     var isRunning: Bool { isRuntimeActive }
+    var diagnosticTaskCount: Int {
+        [inventoryTask != nil, inventoryRefreshDebounceTask != nil, thumbnailTask != nil,
+         selectedThumbnailTask != nil, manualDismissTask != nil, panelIdleTask != nil,
+         activationConfirmTask != nil, focusTask != nil,
+         focusedWindowResolutionTask != nil].filter { $0 }.count
+    }
+    var diagnosticObserverCount: Int { workspaceObservers.count + focusObservers.count }
     func start() { activateFromConfiguration() }
     func stop() { shutdown() }
     private static let inventoryRefreshDebounce = Duration.milliseconds(200)

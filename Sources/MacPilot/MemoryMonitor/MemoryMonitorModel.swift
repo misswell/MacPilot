@@ -2,9 +2,11 @@ import Foundation
 
 /// 内存监控的运行时状态：定时采样进程与系统内存，供监控页展示。
 @MainActor
-final class MemoryMonitorModel: ManagedFeature {
+final class MemoryMonitorModel: ManagedFeature, FeatureResourceReporting {
     let identifier = "memoryMonitor"
     var isRunning: Bool { refreshLoop.isRunning }
+    var diagnosticTaskCount: Int { (refreshLoop.isRunning ? 1 : 0) + (samplingTask == nil ? 0 : 1) }
+    var diagnosticObserverCount: Int { 0 }
     /// 自动刷新间隔：足够跟随变化，又不会带来可感知的开销。
     static let refreshInterval: TimeInterval = 3
 
