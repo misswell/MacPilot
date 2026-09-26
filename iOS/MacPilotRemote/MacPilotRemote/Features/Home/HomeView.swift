@@ -32,6 +32,9 @@ struct HomeView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 28)
             }
+            // The trackpad page must own the whole screen: while it is up the
+            // tab bar goes away, otherwise it floats over the touch surface.
+            .toolbar(trackpadVisible ? .hidden : .visible, for: .tabBar)
             .background(Color(.systemGroupedBackground))
             .navigationTitle(appModel.text("tabHome"))
             .navigationBarTitleDisplayMode(.inline)
@@ -39,10 +42,11 @@ struct HomeView: View {
         .overlay {
             // The trackpad page lives above everything and flips out of the
             // device card; it stays mounted through the exit animation so the
-            // end command and the reverse flip both finish.
+            // end command and the reverse flip both finish. The background
+            // inside extends under the system chrome; the content itself
+            // respects the safe areas.
             if trackpadVisible, let trackpadModel {
                 TrackpadContainerView(model: trackpadModel, onClose: closeTrackpad)
-                    .ignoresSafeArea()
                     .transition(.opacity)
             }
         }
@@ -133,8 +137,10 @@ struct HomeView: View {
         .accessibilityLabel(appModel.text("switchMacAccessibility", appModel.activeMacName))
     }
 
-    /// The trackpad entry. Enabled on a live session; when the Mac predates
-    /// the realtime channel it says so instead of pretending.
+    /// The trackpad entry. Only a live session whose Mac advertised the
+    /// realtime channel may open it — sending `beginRealtimeInput` to a Mac
+    /// that predates the channel makes that Mac drop the connection, which is
+    /// strictly worse than a disabled row.
     private var trackpadRow: some View {
         Button(action: openTrackpad) {
             HStack(spacing: 12) {
@@ -159,8 +165,12 @@ struct HomeView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!appModel.connectionState.isConnected)
+        .disabled(!trackpadReady)
         .accessibilityLabel(appModel.text("trackpadEntry"))
+    }
+
+    private var trackpadReady: Bool {
+        appModel.connectionState.isConnected && appModel.supportsRealtimeInput
     }
 
     private var trackpadSubtitle: String {

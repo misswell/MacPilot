@@ -84,6 +84,15 @@ final class RemoteTrackpadModel: ObservableObject {
     func open(appModel: RemoteAppModel) {
         guard phase == .idle else { return }
         self.appModel = appModel
+        // Defense in depth for a Mac that does not advertise the realtime
+        // channel: sending `beginRealtimeInput` anyway would make an older
+        // Mac fail to decode the command and drop the whole session. Say so
+        // and stop instead.
+        guard appModel.supportsRealtimeInput else {
+            beginErrorKey = "trackpadNeedsMacUpdate"
+            phase = .disconnected
+            return
+        }
         phase = .entering
         beginErrorKey = nil
         engine.reset()
