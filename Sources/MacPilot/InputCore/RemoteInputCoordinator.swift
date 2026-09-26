@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import MacPilotRemoteProtocol
+import OSLog
 
 enum RemoteInputArmResult: Equatable {
     case armed
@@ -35,6 +36,13 @@ final class RemoteInputCoordinator {
     private var virtualButtonBits: UInt8 = 0
     /// Logged once per session, not per dropped scroll event.
     private var didWarnScrollWithoutAccessibility = false
+    /// End-to-end diagnostics: receipt counters, sampled every couple of
+    /// seconds instead of per event — 120 Hz logging would be its own fault.
+    private let logger = Logger(subsystem: "com.misswell.macpilot.remote", category: "RemoteInput")
+    private var batchesReceived = 0
+    private var eventsInjected = 0
+    private var lastRateLogAt = Date()
+    private var didLogFirstBatch = false
 
     init(
         mouse: MouseInjecting = MouseInjector(),
@@ -67,6 +75,10 @@ final class RemoteInputCoordinator {
         if inserted {
             logHandler("realtime input session began path=\(virtualReady ? "virtualHID" : "cgEvent")")
             didWarnScrollWithoutAccessibility = false
+            batchesReceived = 0
+            eventsInjected = 0
+            lastRateLogAt = Date()
+            didLogFirstBatch = false
         }
         return .armed
     }
@@ -86,6 +98,27 @@ final class RemoteInputCoordinator {
     /// instead of a hole.
     func handle(_ batch: RemoteInputBatch, connectionID: UUID) {
         guard armedConnections.contains(connectionID) else { return }
+        batchesReceived += 1
+        eventsInjected += batch.events.count
+        if !didLogFirstBatch {
+            didLogFirstBatch = true
+            let detail = batch.events.prefix(4).map { event -> String in
+                switch event {
+                case let .move(dx, dy, buttons): return "move(dx:\(dx), dy:\(dy), buttons:\(buttons.rawValue))"
+                case let .click(button, action): return "click(\(button.rawValue), \(action.rawValue))"
+                case let .scroll(dx, dy): return "scroll(dx:\(dx), dy:\(dy))"
+                }
+            }.joined(separator: "; ")
+            logger.info("first realtime batch events=\(batch.events.count) [\(detail, privacy: .public)]")
+        }
+        let sinceLog = Date().timeIntervalSince(lastRateLogAt)
+        if sinceLog >= 2 {
+            let rate = Double(eventsInjected) / sinceLog
+            logger.info("realtime input batches=\(self.batchesReceived) events/s=\(Int(rate))")
+            batchesReceived = 0
+            eventsInjected = 0
+            lastRateLogAt = Date()
+        }
         for event in batch.events {
             switch event {
             case let .move(dx, dy, buttons):

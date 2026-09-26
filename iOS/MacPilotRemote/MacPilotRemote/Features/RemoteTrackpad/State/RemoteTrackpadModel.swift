@@ -2,6 +2,7 @@ import Combine
 import CoreGraphics
 import Foundation
 import MacPilotRemoteProtocol
+import OSLog
 import SwiftUI
 
 /// Orchestrates the trackpad page: touch callbacks in, binary input batches
@@ -70,6 +71,14 @@ final class RemoteTrackpadModel: ObservableObject {
     /// freshness beats completeness: keep the newest move, keep every click.
     private static let maximumPendingEvents = 24
 
+    /// End-to-end diagnostics, sampled every couple of seconds — never per
+    /// event, the flush loop is too hot for that.
+    private let logger = Logger(subsystem: "com.misswell.macpilot.remote", category: "Trackpad")
+    private var batchesSent = 0
+    private var eventsSent = 0
+    private var lastSendLogAt = Date()
+    private var didLogFirstBatch = false
+
     init() {
         let stored = store
         orientation = stored.orientation
@@ -131,6 +140,11 @@ final class RemoteTrackpadModel: ObservableObject {
             beginErrorKey = nil
             usesSystemAcceleration = session.usesSystemAcceleration
             phase = .active
+            batchesSent = 0
+            eventsSent = 0
+            lastSendLogAt = Date()
+            didLogFirstBatch = false
+            logger.info("realtime session armed systemAcceleration=\(session.usesSystemAcceleration)")
             // The flush loop stops whenever the page leaves the active states,
             // so every re-entry after a reconnect restarts it here.
             startFlushLoop()
@@ -321,6 +335,19 @@ final class RemoteTrackpadModel: ObservableObject {
         coalescePending()
         let batch = InputEncoder.encode(pending)
         pending.removeAll()
+        batchesSent += 1
+        eventsSent += batch.events.count
+        if !didLogFirstBatch {
+            didLogFirstBatch = true
+            logger.info("first batch sent events=\(batch.events.count)")
+        }
+        let sinceLog = Date().timeIntervalSince(lastSendLogAt)
+        if sinceLog >= 2 {
+            logger.info("input sent batches=\(self.batchesSent) events/s=\(Int(Double(self.eventsSent) / sinceLog))")
+            batchesSent = 0
+            eventsSent = 0
+            lastSendLogAt = Date()
+        }
         appModel.sendRealtimeInput(batch)
     }
 
