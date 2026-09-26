@@ -45,11 +45,18 @@ public enum RemoteProtocolError: Error, Equatable, Sendable {
 /// sealed payload.
 ///
 /// Frame payload layout:
-/// - plaintext frame: `0x01 || JSON`
-/// - secure frame:    `0x02 || UInt64 sequence (big endian) || sealed box`
+/// - plaintext frame:      `0x01 || JSON`
+/// - secure frame:         `0x02 || UInt64 sequence (big endian) || sealed box`
+/// - realtime input frame: `0x03 || UInt64 sequence (big endian) || sealed batch`
+///
+/// The realtime input tag carries `RemoteInputBatch` binary payloads — pointer
+/// motion at up to 120 Hz gets no response and is safe to drop, so it skips the
+/// JSON request/response machinery entirely. It is only sent on a session the
+/// Mac has armed via the `beginRealtimeInput` command.
 public enum RemoteFrameCodec {
     public static let plaintextTag: UInt8 = 0x01
     public static let secureTag: UInt8 = 0x02
+    public static let realtimeInputTag: UInt8 = 0x03
 
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -169,5 +176,34 @@ public enum RemoteFrameCodec {
         } catch {
             throw RemoteProtocolError.invalidMessage
         }
+    }
+
+    // MARK: - Realtime input
+
+    public static func encodeRealtimeInput(
+        _ batch: RemoteInputBatch,
+        key: RemoteSessionKey,
+        sequence: UInt64
+    ) throws -> Data {
+        let plaintext = try RemoteInputBatchCodec.encode(batch)
+        let sealed = try RemoteCrypto.seal(plaintext, key: key, sequence: sequence)
+        var payload = Data([realtimeInputTag])
+        payload.append(RemoteCrypto.bigEndianBytes(sequence))
+        payload.append(sealed)
+        return frame(payload)
+    }
+
+    /// Returns the decoded batch. The caller is responsible for replay
+    /// validation, exactly as with secure command frames.
+    public static func decodeRealtimeInput(
+        _ payload: Data,
+        key: RemoteSessionKey
+    ) throws -> (sequence: UInt64, batch: RemoteInputBatch) {
+        guard payload.first == realtimeInputTag else { throw RemoteProtocolError.malformedFrame }
+        let body = payload.dropFirst()
+        guard body.count > 8 else { throw RemoteProtocolError.malformedFrame }
+        let sequence = RemoteCrypto.sequence(fromBigEndian: Data(body.prefix(8)))
+        let plaintext = try RemoteCrypto.open(Data(body.dropFirst(8)), key: key, sequence: sequence)
+        return (sequence, try RemoteInputBatchCodec.decode(plaintext))
     }
 }

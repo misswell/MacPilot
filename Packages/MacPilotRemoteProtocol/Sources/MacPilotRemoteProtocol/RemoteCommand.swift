@@ -18,6 +18,12 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
     /// Drive the default output device's volume (and optionally its mute).
     /// Carries a `RemoteLevelRequest` payload.
     case setVolume
+    /// Arms the realtime input channel (the trackpad) for this connection.
+    /// The actual pointer events travel as binary batches on frame tag `0x03`,
+    /// never as commands.
+    case beginRealtimeInput
+    /// Disarms the realtime input channel.
+    case endRealtimeInput
 
     /// Commands that change the machine and therefore always require an
     /// authenticated, encrypted session.
@@ -26,7 +32,7 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
         case .getState, .ping:
             return false
         case .lockScreen, .displayOff, .wakeDisplay, .unlock, .wakeAndUnlock,
-             .setBrightness, .setVolume:
+             .setBrightness, .setVolume, .beginRealtimeInput, .endRealtimeInput:
             return true
         }
     }
@@ -38,4 +44,6 @@ public enum RemoteCapability: String, Codable, Sendable, CaseIterable, Equatable
     case displayOff
     case wake
     case unlock
+    /// The Mac accepts binary realtime input batches (the trackpad channel).
+    case realtimeInput
 }

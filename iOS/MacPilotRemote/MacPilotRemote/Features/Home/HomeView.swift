@@ -12,11 +12,14 @@ struct HomeView: View {
         GridItem(.flexible(), spacing: 14)
     ]
 
+    @State private var trackpadModel: RemoteTrackpadModel?
+    @State private var trackpadVisible = false
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
-                    deviceSwitcher
+                    deviceCard
                     statusHeader
                     actionGrid
                     levelsPanel
@@ -33,9 +36,57 @@ struct HomeView: View {
             .navigationTitle(appModel.text("tabHome"))
             .navigationBarTitleDisplayMode(.inline)
         }
+        .overlay {
+            // The trackpad page lives above everything and flips out of the
+            // device card; it stays mounted through the exit animation so the
+            // end command and the reverse flip both finish.
+            if trackpadVisible, let trackpadModel {
+                TrackpadContainerView(model: trackpadModel, onClose: closeTrackpad)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            }
+        }
+        .onChange(of: appModel.connectionState) { _, _ in
+            trackpadModel?.connectionStateChanged(appModel.connectionState)
+        }
     }
 
-    // MARK: - Header
+    // MARK: - Trackpad
+
+    private func openTrackpad() {
+        guard trackpadModel == nil else { return }
+        guard appModel.connectionState.isConnected else { return }
+        let model = RemoteTrackpadModel()
+        trackpadModel = model
+        trackpadVisible = true
+        model.open(appModel: appModel)
+    }
+
+    private func closeTrackpad() {
+        trackpadModel?.close()
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.34))
+            trackpadVisible = false
+            trackpadModel = nil
+        }
+    }
+
+    // MARK: - Device card
+
+    /// The current device card: switcher menu on top, trackpad entry below —
+    /// the trackpad is the card's back face, which is why opening it flips.
+    private var deviceCard: some View {
+        VStack(spacing: 0) {
+            deviceSwitcher
+            Divider().padding(.leading, 16)
+            trackpadRow
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
 
     private var deviceSwitcher: some View {
         Menu {
@@ -78,12 +129,48 @@ struct HomeView: View {
                     .foregroundStyle(Color.accentColor)
             }
             .padding(16)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color(.secondarySystemGroupedBackground))
-            )
         }
         .accessibilityLabel(appModel.text("switchMacAccessibility", appModel.activeMacName))
+    }
+
+    /// The trackpad entry. Enabled on a live session; when the Mac predates
+    /// the realtime channel it says so instead of pretending.
+    private var trackpadRow: some View {
+        Button(action: openTrackpad) {
+            HStack(spacing: 12) {
+                Image(systemName: "computermouse")
+                    .font(.title3)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(appModel.text("trackpadEntry"))
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(trackpadSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!appModel.connectionState.isConnected)
+        .accessibilityLabel(appModel.text("trackpadEntry"))
+    }
+
+    private var trackpadSubtitle: String {
+        if !appModel.connectionState.isConnected {
+            return appModel.text("trackpadNotConnected")
+        }
+        if !appModel.supportsRealtimeInput {
+            return appModel.text("trackpadNeedsMacUpdate")
+        }
+        return appModel.text("trackpadEntryHint")
     }
 
     private func presenceLabel(for mac: PairedMac) -> String {

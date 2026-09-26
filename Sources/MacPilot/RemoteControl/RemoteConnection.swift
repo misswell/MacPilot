@@ -10,6 +10,8 @@ protocol RemoteConnectionHost: AnyObject {
     var screenControl: MacScreenControlService { get }
     var pairingManager: RemotePairingManager { get }
     var deviceStore: RemoteDeviceStore { get }
+    /// The trackpad's injection pipeline, shared by every connection.
+    var inputCoordinator: RemoteInputCoordinator { get }
 
     func remoteConnection(
         _ connection: RemoteConnection,
@@ -50,6 +52,9 @@ final class RemoteConnection: Identifiable {
     private(set) var authenticatedClientName: String?
     private(set) var isClosed = false
     private(set) var remoteAddress: String?
+    /// True between `beginRealtimeInput` and `endRealtimeInput`/close: the
+    /// gate that turns the binary input channel from "exists" into "trusted".
+    private var isRealtimeInputArmed = false
 
     private var sentSequence: UInt64 = 0
     private var handshakeStartedAt: Date?
@@ -125,6 +130,10 @@ final class RemoteConnection: Identifiable {
     func close() {
         guard !isClosed else { return }
         isClosed = true
+        if isRealtimeInputArmed {
+            isRealtimeInputArmed = false
+            host?.inputCoordinator.connectionDidClose(connectionID: id)
+        }
         idleWatchdog?.cancel()
         idleWatchdog = nil
         transport.onStateChange = nil
@@ -272,7 +281,7 @@ final class RemoteConnection: Identifiable {
             deviceName: host.deviceStore.deviceName,
             paired: paired,
             serverNonce: serverNonce,
-            capabilities: [.lock, .displayOff, .wake, .unlock]
+            capabilities: [.lock, .displayOff, .wake, .unlock, .realtimeInput]
         )
         if !paired {
             let exchange = RemotePairingExchange(clientNonce: nonce, serverNonce: serverNonce)
@@ -381,6 +390,31 @@ final class RemoteConnection: Identifiable {
     // MARK: - Secure traffic
 
     private func handleSecure(_ payload: Data, key: RemoteSessionKey) async throws {
+        guard let tag = payload.first else { throw RemoteProtocolError.malformedFrame }
+        if tag == RemoteFrameCodec.realtimeInputTag {
+            try handleRealtimeInput(payload, key: key)
+            return
+        }
+        try await handleSecureRequest(payload, key: key)
+    }
+
+    /// The realtime input channel carries binary batches, not requests. A move
+    /// batch gets no response, and a stale or undecodable one is dropped rather
+    /// than tearing the session down — pointer motion is exactly the traffic
+    /// that is safe to lose.
+    private func handleRealtimeInput(_ payload: Data, key: RemoteSessionKey) throws {
+        let (sequence, batch) = try RemoteFrameCodec.decodeRealtimeInput(payload, key: key)
+        do {
+            try replayGuard.accept(sequence: sequence, timestampMilliseconds: batch.timestampMilliseconds)
+        } catch {
+            host?.remoteLog("realtime input frame dropped reason=replayOrStale")
+            return
+        }
+        guard isAuthenticated, isRealtimeInputArmed, let host else { return }
+        host.inputCoordinator.handle(batch, connectionID: id)
+    }
+
+    private func handleSecureRequest(_ payload: Data, key: RemoteSessionKey) async throws {
         let (sequence, request) = try RemoteFrameCodec.decodeSecure(RemoteRequest.self, from: payload, key: key)
         do {
             try replayGuard.accept(sequence: sequence, timestampMilliseconds: request.timestamp)
@@ -389,8 +423,61 @@ final class RemoteConnection: Identifiable {
             throw RemoteProtocolError.replayDetected
         }
         host?.remoteLog("command received command=\(request.command.rawValue) requestID=\(request.requestID.uuidString)")
-        let response = await router.response(for: request, isAuthenticated: isAuthenticated)
-        try sendSecure(response, key: key)
+        switch request.command {
+        case .beginRealtimeInput, .endRealtimeInput:
+            // These never reach the router: they arm per-connection state that
+            // only this connection owns, and begin doubles as the
+            // Accessibility gate.
+            try sendSecure(realtimeInputResponse(for: request), key: key)
+        default:
+            let response = await router.response(for: request, isAuthenticated: isAuthenticated)
+            try sendSecure(response, key: key)
+        }
+    }
+
+    private func realtimeInputResponse(for request: RemoteRequest) -> RemoteResponse {
+        guard let host else {
+            return RemoteResponse(
+                requestID: request.requestID,
+                success: false,
+                error: RemoteError(code: .internalError),
+                state: nil
+            )
+        }
+        switch request.command {
+        case .beginRealtimeInput:
+            guard isAuthenticated else {
+                return RemoteResponse(
+                    requestID: request.requestID,
+                    success: false,
+                    error: RemoteError(code: .unauthenticated),
+                    state: host.screenControl.currentState()
+                )
+            }
+            switch host.inputCoordinator.beginSession(connectionID: id) {
+            case .armed:
+                isRealtimeInputArmed = true
+                return RemoteResponse(requestID: request.requestID, success: true, state: host.screenControl.currentState())
+            case .accessibilityRequired:
+                return RemoteResponse(
+                    requestID: request.requestID,
+                    success: false,
+                    error: RemoteError(code: .accessibilityPermissionRequired),
+                    state: host.screenControl.currentState()
+                )
+            }
+        case .endRealtimeInput:
+            isRealtimeInputArmed = false
+            host.inputCoordinator.endSession(connectionID: id)
+            return RemoteResponse(requestID: request.requestID, success: true, state: host.screenControl.currentState())
+        default:
+            return RemoteResponse(
+                requestID: request.requestID,
+                success: false,
+                error: RemoteError(code: .unsupportedCommand),
+                state: host.screenControl.currentState()
+            )
+        }
     }
 
     // MARK: - Sending

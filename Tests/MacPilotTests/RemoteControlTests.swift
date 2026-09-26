@@ -541,6 +541,11 @@ struct RemoteConnectionIdleWatchdogTests {
             persist: {},
             log: { _ in }
         )
+        let inputCoordinator = RemoteInputCoordinator(
+            mouse: FakeMouseInjector(),
+            scroll: FakeScrollInjector(),
+            log: { _ in }
+        )
         var closed = 0
         var messages: [String] = []
 

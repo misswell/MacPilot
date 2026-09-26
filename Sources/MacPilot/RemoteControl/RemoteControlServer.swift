@@ -38,6 +38,9 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
     let deviceStore: RemoteDeviceStore
     let pairingManager: RemotePairingManager
     let screenControl: MacScreenControlService
+    /// The trackpad's injection pipeline. One coordinator serves every
+    /// connection; sessions are armed per connection.
+    let inputCoordinator: RemoteInputCoordinator
 
     /// Raised when a pairing code becomes visible so the app can show it.
     var onPairingCodePresented: (@MainActor (String, String) -> Void)?
@@ -78,6 +81,7 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
         self.deviceStore = deviceStore
         self.screenControl = screenControl
         self.logHandler = log
+        self.inputCoordinator = RemoteInputCoordinator(log: log)
         self.pairingManager = pairingManager ?? RemotePairingManager(log: log)
         self.pairingManager.onCodePresented = { [weak self] code, name in
             self?.onPairingCodePresented?(code, name)
@@ -178,7 +182,7 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
             deviceID: deviceStore.deviceID,
             name: deviceStore.deviceName,
             version: AppVersionInfo.current().version.description,
-            capabilities: [.lock, .displayOff, .wake, .unlock]
+            capabilities: [.lock, .displayOff, .wake, .unlock, .realtimeInput]
         )
         listener.service = NWListener.Service(
             name: Self.bonjourName(from: info.name),

@@ -75,12 +75,56 @@ selects the encoding:
 ```
 plaintext handshake:  0x01 || UTF-8 JSON (RemoteHandshakeMessage)
 sealed command:       0x02 || UInt64 BE sequence || ChaChaPoly combined box
+realtime input:       0x03 || UInt64 BE sequence || ChaChaPoly combined box
 ```
 
 The ChaChaPoly nonce is derived from the sequence: 4 zero bytes followed by the
 sequence as a big endian `UInt64`. The additional authenticated data is the
 `0x02` tag. Frames larger than `RemoteProtocolVersion.maximumFrameSize`
 (256 KiB) are rejected.
+
+## Realtime input channel (the trackpad)
+
+Cursor motion runs at up to 120 Hz, so it never travels as JSON commands. It
+rides frame tag `0x03`: the sealed plaintext is a binary `RemoteInputBatch`
+(codec in `RemoteInputPacket.swift`), not a `RemoteRequest`:
+
+```
+header:  u8  version (1) | u8 reserved | u16 BE event count | u64 BE timestamp ms
+events:  move   u8 kind=1 | i16 dx | i16 dy | u8 buttons    (0.1 px fixed point)
+         click  u8 kind=2 | u8 button | u8 action
+         scroll u8 kind=3 | i16 dx | i16 dy                (0.1 px fixed point)
+```
+
+Rules that make the channel safe:
+
+- **Capability gated.** The Mac advertises `realtimeInput` in its Bonjour TXT
+  record and in `serverHello` `capabilities`. The iPhone only opens the channel
+  when the session's Mac advertised it, so an old Mac never sees a `0x03` frame.
+- **Explicitly armed.** `beginRealtimeInput` / `endRealtimeInput` are ordinary
+  authenticated commands that arm the per-connection session; `begin` doubles as
+  the Accessibility gate (synthesizing mouse events requires trust) and fails
+  with `.accessibilityPermissionRequired` otherwise. Batches from an unarmed
+  connection are dropped.
+- **No response.** Input frames are fire and forget. A stale or undecodable one
+  is dropped, not treated as a protocol failure — pointer motion is exactly the
+  traffic that is safe to lose. Clicks are never dropped by the sender.
+- **Moves coalesce.** The iPhone merges consecutive same-button moves into the
+  newest one before flushing, so a slow link shows fresh position, not a laggy
+  replay of old deltas.
+- **Relative deltas only.** The wire carries finger deltas, never screen
+  coordinates — Retina scaling, resolution changes and multi-display Macs stay
+  the window server's problem.
+- **Same crypto, same sequence space.** `0x03` frames use the session key and
+  the same strictly-increasing per-connection sequence counter as `0x02`
+  frames, and the replay guard validates both identically.
+
+Injection lives on the Mac in `Sources/MacPilot/InputCore/`:
+`RemoteInputCoordinator` (arming + dispatch) → `MouseInjector` (relative
+`CGEvent` deltas, drags as left-button drag events) and `ScrollInjector`
+(continuous pixel scroll via the `scrollWheelEvent2` constructor). The iPhone
+side lives under `iOS/MacPilotRemote/MacPilotRemote/Features/RemoteTrackpad/`
+(touch surface → `GestureEngine` → velocity/acceleration → binary batch).
 
 ## Handshake
 

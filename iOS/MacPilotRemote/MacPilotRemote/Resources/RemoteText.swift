@@ -162,7 +162,28 @@ enum RemoteText {
         "errorBrightnessUnavailable": "无法调节亮度：这台 Mac 没有可控制的屏幕背光（例如合盖外接显示器时）。",
         "errorVolumeUnavailable": "无法调节音量：Mac 上没有可调音量的输出设备。",
         "errorTimeout": "命令超时。",
-        "errorInternal": "Mac 返回了内部错误。"
+        "errorInternal": "Mac 返回了内部错误。",
+
+        "trackpadEntry": "触控板",
+        "trackpadEntryHint": "把 iPhone 当作 Mac 的触控板",
+        "trackpadTitle": "触控板",
+        "trackpadNeedsMacUpdate": "需要把 Mac 端 MacPilot 更新到最新版。",
+        "trackpadNotConnected": "未连接 Mac",
+        "trackpadClose": "收起触控板",
+        "trackpadReconnecting": "Mac 已断开，正在重新连接…",
+        "trackpadDisconnected": "连接已断开",
+        "trackpadBluetoothHint": "蓝牙连接延迟较高，触控板体验会打折扣。",
+        "trackpadUseWiFi": "改用 Wi-Fi",
+        "trackpadOrientation": "握持方向",
+        "trackpadPortrait": "竖屏",
+        "trackpadLandscape": "横屏",
+        "trackpadSettings": "触控板设置",
+        "trackpadTrackingSpeed": "跟踪速度",
+        "trackpadNaturalScrolling": "自然滚动",
+        "trackpadTapToClick": "轻点来点按",
+        "trackpadScrollInertia": "滚动惯性",
+        "trackpadDone": "完成",
+        "trackpadGesturesHint": "单指移动光标；轻点＝左键；连点两下＝双击；轻点两下后按住＝拖动；双指滑动＝滚动；双指轻点＝右键。横屏时手机顶部朝左。"
     ]
 
     private static let english: [String: String] = [
@@ -299,7 +320,28 @@ enum RemoteText {
         "errorBrightnessUnavailable": "Cannot change brightness: this Mac has no display with a controllable backlight (an external monitor in clamshell mode, for example).",
         "errorVolumeUnavailable": "Cannot change volume: no output device with a volume control.",
         "errorTimeout": "The command timed out.",
-        "errorInternal": "The Mac reported an internal error."
+        "errorInternal": "The Mac reported an internal error.",
+
+        "trackpadEntry": "Trackpad",
+        "trackpadEntryHint": "Use your iPhone as a trackpad for your Mac",
+        "trackpadTitle": "Trackpad",
+        "trackpadNeedsMacUpdate": "Update MacPilot on your Mac to the latest version.",
+        "trackpadNotConnected": "Mac not connected",
+        "trackpadClose": "Close trackpad",
+        "trackpadReconnecting": "Mac disconnected, reconnecting…",
+        "trackpadDisconnected": "Connection lost",
+        "trackpadBluetoothHint": "Bluetooth adds lag; the trackpad works best over Wi-Fi.",
+        "trackpadUseWiFi": "Use Wi-Fi",
+        "trackpadOrientation": "Orientation",
+        "trackpadPortrait": "Portrait",
+        "trackpadLandscape": "Landscape",
+        "trackpadSettings": "Trackpad Settings",
+        "trackpadTrackingSpeed": "Tracking speed",
+        "trackpadNaturalScrolling": "Natural scrolling",
+        "trackpadTapToClick": "Tap to click",
+        "trackpadScrollInertia": "Scrolling inertia",
+        "trackpadDone": "Done",
+        "trackpadGesturesHint": "One finger moves the cursor; tap = left click; two quick taps = double click; double-tap and hold = drag; two-finger slide = scroll; two-finger tap = right click. Landscape holds the phone's top to the left."
     ]
 }
 

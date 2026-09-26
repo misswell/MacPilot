@@ -922,6 +922,35 @@ final class RemoteAppModel: ObservableObject {
         case offline
     }
 
+    // MARK: - Realtime input (trackpad)
+
+    /// The Mac advertised the realtime input channel. An older Mac build did
+    /// not, and the trackpad entry explains that instead of failing blindly.
+    var supportsRealtimeInput: Bool { connection.supportsRealtimeInput }
+
+    /// Quality of the link currently carrying the session, from the trackpad's
+    /// point of view. AWDL rides the same network transport — the race that
+    /// picks the session already prefers the fastest path, and AWDL is
+    /// normally exactly that — so only Bluetooth is called out.
+    var realtimeInputLinkKind: RemoteTransportKind? { connection.transportKind }
+
+    /// Arms the realtime channel for the trackpad page. Returns the error text
+    /// key on failure, `nil` when the Mac is ready for input batches.
+    func beginRealtimeInput() async -> String? {
+        await connection.beginRealtimeInput()
+    }
+
+    func endRealtimeInput() async {
+        await connection.endRealtimeInput()
+    }
+
+    /// Hands one binary input batch to the connection. Fire and forget: the
+    /// trackpad coalesced it already, and a failed send means a dead link the
+    /// state callbacks will report anyway.
+    func sendRealtimeInput(_ batch: RemoteInputBatch) {
+        connection.sendRealtimeInput(batch)
+    }
+
     // MARK: - Commands
 
     func perform(_ command: RemoteCommand) async {

@@ -64,6 +64,9 @@ final class RemoteConnectionManager {
     /// The Mac's ephemeral P-256 public key from `serverHello`, needed to derive
     /// the confirmation code and the long term key.
     private var serverPairingPublicKey: Data?
+    /// What the Mac advertised in `serverHello`. The trackpad UI gates on
+    /// `realtimeInput`, so an older Mac explains itself instead of failing.
+    private var serverCapabilities: Set<RemoteCapability> = []
     private var targetDeviceID: UUID?
     private var targetName: String = ""
     private var resolvedEndpoint = ResolvedEndpoint()
@@ -76,6 +79,8 @@ final class RemoteConnectionManager {
 
     var isReady: Bool { phase == .ready }
     var isPairing: Bool { phase == .pairing }
+    /// The Mac accepts realtime input batches (the trackpad channel).
+    var supportsRealtimeInput: Bool { serverCapabilities.contains(.realtimeInput) }
     /// True once the link is up, even if the handshake is still running. The
     /// race uses it to tell "still dialling" from "mid handshake", which decides
     /// whether an attempt may still be cut short.
@@ -127,6 +132,7 @@ final class RemoteConnectionManager {
         sessionKey = nil
         pairingExchange = nil
         serverPairingPublicKey = nil
+        serverCapabilities = []
         isTransportReady = false
         sentSequence = 0
         buffer = Data()
@@ -193,6 +199,45 @@ final class RemoteConnectionManager {
                 pending.resume(throwing: RemoteConnectionError.server(.commandTimeout))
             }
         }
+    }
+
+    // MARK: - Realtime input
+
+    /// Arms the realtime input channel. Returns the error text key on failure
+    /// (accessibility missing, protocol too old, …), `nil` when armed.
+    func beginRealtimeInput() async -> String? {
+        let response: RemoteResponse
+        do {
+            response = try await send(.beginRealtimeInput)
+        } catch let error as RemoteConnectionError {
+            return error.messageKey
+        } catch {
+            return "errorNetwork"
+        }
+        if response.success { return nil }
+        return response.error?.code.messageKey ?? "errorInternal"
+    }
+
+    func endRealtimeInput() async {
+        _ = try? await send(.endRealtimeInput)
+    }
+
+    /// Sends one binary input batch, fire and forget.
+    ///
+    /// No request ID, no response, no timeout: the Mac never answers input
+    /// frames, and pointer motion is the traffic that is safe to lose. A send
+    /// error only matters when the transport actually died, which the state
+    /// callbacks surface on their own.
+    func sendRealtimeInput(_ batch: RemoteInputBatch) {
+        guard let sessionKey, phase == .ready, let transport else { return }
+        sentSequence &+= 1
+        let frame: Data
+        do {
+            frame = try RemoteFrameCodec.encodeRealtimeInput(batch, key: sessionKey, sequence: sentSequence)
+        } catch {
+            return
+        }
+        transport.send(frame) { _ in }
     }
 
     // MARK: - Connection state
@@ -274,6 +319,7 @@ final class RemoteConnectionManager {
         }
         serverNonce = nonce
         targetDeviceID = deviceID
+        serverCapabilities = Set(message.capabilities ?? [])
         if let name = message.deviceName, !name.isEmpty { targetName = name }
         resolvedEndpoint.serviceName = resolvedServiceName()
 
@@ -422,6 +468,10 @@ final class RemoteConnectionManager {
         }
         for frame in frames {
             if let key = sessionKey {
+                // The Mac does not answer input frames today; if a later one
+                // ever sends tag 0x03 back, ignore it rather than kill the
+                // session over a frame this client does not expect.
+                if frame.first == RemoteFrameCodec.realtimeInputTag { continue }
                 handleSecure(frame, key: key)
             } else if let message = try? RemoteFrameCodec.decodePlain(RemoteHandshakeMessage.self, from: frame) {
                 handlePlaintext(message)
