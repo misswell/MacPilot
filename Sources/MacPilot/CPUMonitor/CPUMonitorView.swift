@@ -138,6 +138,7 @@ struct CPUMonitorView: View {
                     AppCPUUsageRow(
                         language: language,
                         app: app,
+                        icons: store.icons,
                         maxPercent: maxPercent,
                         totalPercent: store.systemCPU?.totalPercent
                     )
@@ -165,6 +166,7 @@ struct CPUMonitorView: View {
 private struct AppCPUUsageRow: View {
     let language: AppLanguage
     let app: AppCPUUsage
+    @ObservedObject var icons: ProcessIconStore
     let maxPercent: Double
     let totalPercent: Double?
     @State private var isExpanded = false
@@ -241,8 +243,8 @@ private struct AppCPUUsageRow: View {
 
     @ViewBuilder
     private var appIcon: some View {
-        if let path = app.bundlePath {
-            Image(nsImage: AppIconCache.shared.icon(for: path))
+        if let path = app.bundlePath, let icon = icons.image(for: path) {
+            Image(nsImage: icon)
                 .resizable()
                 .frame(width: 26, height: 26)
         } else {

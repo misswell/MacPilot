@@ -434,14 +434,16 @@ final class ScreenRecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @
     }
 
     /// Synchronous best-effort teardown for app termination. `willTerminate`
-    /// returns straight into `exit()`, so the asynchronous `cancel()` above never
-    /// runs; the writer must still be cancelled and the partial `.recpart` file
-    /// removed before the process goes away. The capture stream dies with the
-    /// process, so it is deliberately not stopped here.
+    /// returns straight into `exit()`, so the writer and partial file are
+    /// released synchronously. When a feature is switched off without exiting,
+    /// the stream stop also runs so its capture resources are released.
     func cancelImmediately() {
         let shouldTerminate = beginTermination()
         if shouldTerminate {
             stopMicrophoneCapture()
+        }
+        if let stream {
+            Task { try? await stream.stopCapture() }
         }
         sleepAssertion.release()
         if writer.status == .writing { writer.cancelWriting() }

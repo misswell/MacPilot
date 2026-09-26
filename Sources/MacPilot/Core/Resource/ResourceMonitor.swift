@@ -17,6 +17,7 @@ struct ResourceRuntimeCounts {
     let eventTaps: Int
     let activeCaptures: Int
     let externalObservers: Int
+    let processIconEntries: Int
     let windowCacheEntries: Int
 }
 
@@ -67,7 +68,7 @@ final class ResourceMonitor: ObservableObject {
             trackedObservers: ObserverBag.activeCount + runtimeCounts.externalObservers,
             eventTaps: runtimeCounts.eventTaps,
             activeCaptures: runtimeCounts.activeCaptures,
-            iconCacheEntries: AppIconCache.shared.count,
+            iconCacheEntries: AppIconCache.shared.count + runtimeCounts.processIconEntries,
             windowCacheEntries: runtimeCounts.windowCacheEntries
         )
     }

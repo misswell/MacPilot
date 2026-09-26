@@ -168,6 +168,29 @@ struct DockGroupsIconCacheTests {
         #expect(pixels.width <= 64)
     }
 
+    @MainActor
+    @Test func shutdownCancelsPendingIconLoading() async throws {
+        let workspace = try TestAppWorkspace()
+        defer { workspace.cleanUp() }
+        let cacheDirectory = try makeCacheDirectory()
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+
+        let model = DockGroupsModel(
+            store: DockGroupStore(rootDirectory: workspace.root),
+            helperManager: workspace.makeHelperManager(),
+            iconCacheDirectory: cacheDirectory
+        )
+        let app = try #require(NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.finder"))
+        let reference = try #require(InstalledAppResolver.makeReference(from: app))
+        #expect(model.icon(for: reference, size: 32) == nil)
+        model.shutdown()
+
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(model.iconRevision == 0)
+        let cachedFiles = try FileManager.default.contentsOfDirectory(atPath: cacheDirectory.path)
+        #expect(cachedFiles.isEmpty)
+    }
+
     /// 编辑器标题栏每次 body 求值都会取分组图标，必须命中缓存而不是重绘。
     @MainActor
     @Test func groupIconIsRenderedOncePerContentSignature() throws {

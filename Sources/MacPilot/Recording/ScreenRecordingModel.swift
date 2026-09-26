@@ -117,6 +117,11 @@ final class ScreenRecordingModel: ObservableObject {
     let mobileRecorder = ScreenRecordingMobileRecorder()
 
     private var session: ScreenRecordingEngine?
+    private var stoppingSession: ScreenRecordingEngine?
+    private var startTask: Task<Void, Never>?
+    private var startGeneration = UUID()
+    private var stopTask: Task<Void, Never>?
+    private var stopGeneration = UUID()
     private var timerTask: Task<Void, Never>?
     private var startedAt: Date?
     private var pauseStartedAt: Date?
@@ -138,6 +143,8 @@ final class ScreenRecordingModel: ObservableObject {
     ]
 
     deinit {
+        startTask?.cancel()
+        stopTask?.cancel()
         timerTask?.cancel()
     }
 
@@ -164,6 +171,7 @@ final class ScreenRecordingModel: ObservableObject {
             refreshCaptureDeviceLists()
         } else {
             if state == .recording || state == .paused { stop() }
+            if state == .preparing { cancel() }
             unregisterAllHotKeys()
             closeAuxiliaryCaptureSurfaces()
         }
@@ -654,11 +662,14 @@ final class ScreenRecordingModel: ObservableObject {
         if let overrideCaptureMode {
             snapshot.captureMode = overrideCaptureMode
         }
-        Task { @MainActor [weak self] in
+        let generation = UUID()
+        startGeneration = generation
+        startTask = Task { @MainActor [weak self] in
             await self?.performStart(
                 snapshot: snapshot,
                 captureRect: captureRect,
-                frontmostWindowOnly: directWindow
+                frontmostWindowOnly: directWindow,
+                generation: generation
             )
         }
     }
@@ -669,11 +680,17 @@ final class ScreenRecordingModel: ObservableObject {
     private func performStart(
         snapshot: ScreenRecordingSettings,
         captureRect: CGRect?,
-        frontmostWindowOnly: Bool
+        frontmostWindowOnly: Bool,
+        generation: UUID
     ) async {
+        var pendingSession: ScreenRecordingEngine?
+        defer {
+            if startGeneration == generation { startTask = nil }
+        }
         do {
             if snapshot.capturesMicrophone {
                 let granted = await Self.ensureMicrophonePermission()
+                guard startGeneration == generation, !Task.isCancelled else { return }
                 guard granted else {
                     state = .idle
                     errorMessage = localized(ScreenRecordingError.microphonePermissionRequired)
@@ -685,15 +702,25 @@ final class ScreenRecordingModel: ObservableObject {
                 captureRect: captureRect,
                 frontmostWindowOnly: frontmostWindowOnly
             )
+            pendingSession = session
+            guard startGeneration == generation, !Task.isCancelled else {
+                session.cancelImmediately()
+                return
+            }
             session.microphoneLevelHandler = { [weak self] level in
                 Task { @MainActor [weak self] in
                     self?.microphoneLevel = Double(level)
                 }
             }
             try await session.start()
+            guard startGeneration == generation, !Task.isCancelled else {
+                session.cancelImmediately()
+                return
+            }
             session.encoderFallbackHandler = sessionConfigurationHooks?.onEncoderFallback
             session.presenterOverlayActivityHandler = sessionConfigurationHooks?.onPresenterOverlayChanged
             self.session = session
+            pendingSession = nil
             startedAt = Date()
             pauseStartedAt = nil
             accumulatedPauseDuration = 0
@@ -705,6 +732,8 @@ final class ScreenRecordingModel: ObservableObject {
             startTimer()
             recordingSessionBegan()
         } catch {
+            pendingSession?.cancelImmediately()
+            guard startGeneration == generation, !Task.isCancelled else { return }
             state = .idle
             errorMessage = localized(error)
             Self.logger.error("Could not start recording: \(error.localizedDescription, privacy: .public)")
@@ -840,16 +869,23 @@ final class ScreenRecordingModel: ObservableObject {
         ScreenRecordingRangeBorder.shared.close()
         stopTimer()
         self.session = nil
+        stoppingSession = session
+        let generation = UUID()
+        stopGeneration = generation
         ScreenRecordingFloatingController.shared.close()
         ScreenRecordingMouseHighlighter.shared.stopMonitoring()
         ScreenRecordingMagnifier.shared.stop()
-        Task { [weak self] in
+        stopTask = Task { [weak self] in
             do {
                 let url = try await session.stop()
-                guard let self else { return }
+                guard let self, self.stopGeneration == generation, !Task.isCancelled else { return }
+                self.stoppingSession = nil
+                self.stopTask = nil
                 self.finishRecording(url: url)
             } catch {
-                guard let self else { return }
+                guard let self, self.stopGeneration == generation, !Task.isCancelled else { return }
+                self.stoppingSession = nil
+                self.stopTask = nil
                 self.state = .idle
                 self.startedAt = nil
                 self.errorMessage = self.localized(error)
@@ -881,6 +917,14 @@ final class ScreenRecordingModel: ObservableObject {
     }
 
     func cancel() {
+        startGeneration = UUID()
+        startTask?.cancel()
+        startTask = nil
+        stopGeneration = UUID()
+        stopTask?.cancel()
+        stopTask = nil
+        stoppingSession?.cancelImmediately()
+        stoppingSession = nil
         ScreenRecordingRangeBorder.shared.close()
         guard let session else {
             state = .idle
@@ -936,6 +980,14 @@ final class ScreenRecordingModel: ObservableObject {
 
     func shutdown() {
         isRuntimeActive = false
+        startGeneration = UUID()
+        startTask?.cancel()
+        startTask = nil
+        stopGeneration = UUID()
+        stopTask?.cancel()
+        stopTask = nil
+        stoppingSession?.cancelImmediately()
+        stoppingSession = nil
         ScreenRecordingRangeBorder.shared.close()
         timerTask?.cancel()
         timerTask = nil

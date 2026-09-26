@@ -196,7 +196,7 @@ struct MemoryMonitorView: View {
             } else {
                 let maxBytes = store.apps.first?.footprintBytes ?? 0
                 ForEach(filteredApps) { app in
-                    AppMemoryRow(language: language, app: app, maxBytes: maxBytes, usedBytes: store.systemMemory?.usedBytes)
+                    AppMemoryRow(language: language, app: app, icons: store.icons, maxBytes: maxBytes, usedBytes: store.systemMemory?.usedBytes)
                         .listRowInsets(EdgeInsets(top: 7, leading: 14, bottom: 7, trailing: 14))
                         .listRowSeparator(.hidden)
                 }
@@ -223,6 +223,7 @@ struct MemoryMonitorView: View {
 private struct AppMemoryRow: View {
     let language: AppLanguage
     let app: AppMemoryUsage
+    @ObservedObject var icons: ProcessIconStore
     let maxBytes: UInt64
     let usedBytes: UInt64?
     @State private var isExpanded = false
@@ -300,8 +301,8 @@ private struct AppMemoryRow: View {
 
     @ViewBuilder
     private var appIcon: some View {
-        if let path = app.bundlePath {
-            Image(nsImage: AppIconCache.shared.icon(for: path))
+        if let path = app.bundlePath, let icon = icons.image(for: path) {
+            Image(nsImage: icon)
                 .resizable()
                 .frame(width: 26, height: 26)
         } else {

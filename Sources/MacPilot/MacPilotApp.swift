@@ -2015,6 +2015,7 @@ final class MacPilotModel: ObservableObject {
                 + (screenRecording.state == .recording || screenRecording.state == .paused || screenRecording.state == .stopping ? 1 : 0)
                 + (screenRecording.isDeviceRecording ? 1 : 0),
             externalObservers: rightClickMenu.activeObserverCount,
+            processIconEntries: cpuMonitor.store.icons.count + memoryMonitor.store.icons.count,
             windowCacheEntries: windowSwitcher.cachedThumbnailCount
         )
     }

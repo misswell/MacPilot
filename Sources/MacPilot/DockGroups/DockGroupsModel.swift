@@ -60,10 +60,13 @@ final class DockGroupsModel: ObservableObject, ManagedFeature {
     private var failedIconKeys: Set<String> = []
     private var iconLoadQueue: [IconLoadRequest] = []
     private var activeIconLoads = 0
+    private var iconLoadTasks: [String: Task<Void, Never>] = [:]
+    private var iconLoadGeneration: UInt64 = 0
     /// 同时在跑的图标加载上限：既不排队几秒，也不把图标服务打满。
     private let maxConcurrentIconLoads = 4
     /// 图标就绪后合并刷新：271 个图标逐个 `objectWillChange` 会引发 271 轮重绘。
     private var iconFlushScheduled = false
+    private var iconFlushTask: Task<Void, Never>?
     /// 图标加载完成后自增，SwiftUI 依赖它重新取图。
     @Published private(set) var iconRevision = 0
 
@@ -111,6 +114,10 @@ final class DockGroupsModel: ObservableObject, ManagedFeature {
 
     func shutdown() {
         isActive = false
+        cancelPendingIconLoads()
+        iconCache.removeAll()
+        groupIconCache.removeAll()
+        groupIconSignatures.removeAll()
         stopObservingWorkspace()
         stopObservingAppearance()
         dockRefreshTask?.cancel()
@@ -221,15 +228,26 @@ final class DockGroupsModel: ObservableObject, ManagedFeature {
     private func drainIconQueue() {
         while activeIconLoads < maxConcurrentIconLoads, !iconLoadQueue.isEmpty {
             let request = iconLoadQueue.removeFirst()
+            let generation = iconLoadGeneration
             activeIconLoads += 1
-            Task { [weak self] in
+            iconLoadTasks[request.key.fileName] = Task { [weak self] in
                 // 取图 + 按尺寸重绘 + PNG 编码全部离开主线程；跨 actor 只传 Data。
-                let data = await Task.detached(priority: .userInitiated) {
+                let worker = Task.detached(priority: .userInitiated) {
                     DockGroupIconThumbnail.pngData(forFileAt: request.url, pointSize: request.pointSize)
-                }.value
-                guard let self else { return }
+                }
+                let data = await withTaskCancellationHandler {
+                    await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
+                guard let self, self.iconLoadGeneration == generation else { return }
                 self.activeIconLoads -= 1
+                self.iconLoadTasks[request.key.fileName] = nil
                 self.pendingIconKeys.remove(request.key.fileName)
+                guard !Task.isCancelled else {
+                    self.drainIconQueue()
+                    return
+                }
                 if let data, let image = self.iconCacheStore.storeThumbnailPNG(data, for: request.key) {
                     self.iconCache[request.key.fileName] = image
                 } else {
@@ -246,18 +264,26 @@ final class DockGroupsModel: ObservableObject, ManagedFeature {
     private func scheduleIconFlush() {
         guard !iconFlushScheduled else { return }
         iconFlushScheduled = true
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(80))
-            guard let self else { return }
+        iconFlushTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
+            guard let self, !Task.isCancelled else { return }
             self.iconFlushScheduled = false
+            self.iconFlushTask = nil
             self.iconRevision &+= 1
         }
     }
 
     private func cancelPendingIconLoads() {
+        iconLoadGeneration &+= 1
+        for task in iconLoadTasks.values { task.cancel() }
+        iconLoadTasks.removeAll()
         iconLoadQueue.removeAll()
+        activeIconLoads = 0
         pendingIconKeys.removeAll()
         failedIconKeys.removeAll()
+        iconFlushTask?.cancel()
+        iconFlushTask = nil
+        iconFlushScheduled = false
     }
 
     /// 分组图标按「分组内容签名 + 尺寸 + 深浅外观」缓存：编辑器标题栏每次 body
