@@ -6,6 +6,25 @@ import Testing
 /// active scan while delivering zero advertisements to the process — for days.
 /// These tests pin the detection contract that surfaces that state to the user.
 struct BLEAdvertisementLivenessTests {
+    @Test func backgroundScanArmsLivenessWithoutDevicePicker() {
+        #expect(BLEAdvertisementLiveness.monitoringActive(
+            featureEnabled: true,
+            hasMonitoredDevice: true,
+            bluetoothPoweredOn: true,
+            displayAsleep: false,
+            systemAsleep: false,
+            centralScanning: true
+        ))
+        #expect(!BLEAdvertisementLiveness.monitoringActive(
+            featureEnabled: true,
+            hasMonitoredDevice: true,
+            bluetoothPoweredOn: true,
+            displayAsleep: false,
+            systemAsleep: false,
+            centralScanning: false
+        ))
+    }
+
     @Test func silenceTripsOnlyAfterTheThresholdWhileMonitoringIsActive() {
         var liveness = BLEAdvertisementLiveness(silenceThreshold: 600, now: Date(timeIntervalSince1970: 0))
 

@@ -1466,12 +1466,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, @preconc
     }
 
     private func evaluateAdvertisementLiveness() {
-        let monitoringActive = settings.isEnabled
-            && hasMonitoredDevice
-            && bluetoothPoweredOn
-            && !displaySleep
-            && !systemSleep
-            && (isScanning || monitoredRuntimes.values.contains { $0.activeModeTimer != nil })
+        let monitoringActive = BLEAdvertisementLiveness.monitoringActive(
+            featureEnabled: settings.isEnabled,
+            hasMonitoredDevice: hasMonitoredDevice,
+            bluetoothPoweredOn: bluetoothPoweredOn,
+            displayAsleep: displaySleep,
+            systemAsleep: systemSleep,
+            centralScanning: centralMgr?.isScanning == true
+        )
         let silent = advertisementLiveness.evaluate(now: Date(), monitoringActive: monitoringActive)
         if silent, !advertisementStreamStalled {
             advertisementStreamStalled = true

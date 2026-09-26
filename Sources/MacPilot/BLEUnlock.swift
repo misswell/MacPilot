@@ -438,6 +438,18 @@ struct BLEAdvertisementLiveness: Equatable {
         lastActivityAt = now
     }
 
+    static func monitoringActive(
+        featureEnabled: Bool,
+        hasMonitoredDevice: Bool,
+        bluetoothPoweredOn: Bool,
+        displayAsleep: Bool,
+        systemAsleep: Bool,
+        centralScanning: Bool
+    ) -> Bool {
+        featureEnabled && hasMonitoredDevice && bluetoothPoweredOn
+            && !displayAsleep && !systemAsleep && centralScanning
+    }
+
     /// Returns true when the process should be receiving advertisement
     /// callbacks but has received none for `silenceThreshold`. While
     /// monitoring is not expected to produce callbacks — feature off, display
