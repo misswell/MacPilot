@@ -203,19 +203,35 @@ final class RemoteConnectionManager {
 
     // MARK: - Realtime input
 
-    /// Arms the realtime input channel. Returns the error text key on failure
-    /// (accessibility missing, protocol too old, …), `nil` when armed.
-    func beginRealtimeInput() async -> String? {
+    /// Why the realtime channel failed to arm. `messageKey` is the localized
+    /// string key the UI shows.
+    struct RealtimeInputError: Error {
+        let messageKey: String
+    }
+
+    /// What the Mac reported when the realtime channel armed.
+    struct RealtimeInputSession: Equatable {
+        /// The Mac injects pointer motion through its own virtual HID device
+        /// and applies its own acceleration; the phone must send raw finger
+        /// deltas instead of pre-scaled ones.
+        var usesSystemAcceleration: Bool
+    }
+
+    /// Arms the realtime input channel.
+    func beginRealtimeInput() async -> Result<RealtimeInputSession, RealtimeInputError> {
         let response: RemoteResponse
         do {
             response = try await send(.beginRealtimeInput)
         } catch let error as RemoteConnectionError {
-            return error.messageKey
+            return .failure(RealtimeInputError(messageKey: error.messageKey))
         } catch {
-            return "errorNetwork"
+            return .failure(RealtimeInputError(messageKey: "errorNetwork"))
         }
-        if response.success { return nil }
-        return response.error?.code.messageKey ?? "errorInternal"
+        guard response.success else {
+            return .failure(RealtimeInputError(messageKey: response.error?.code.messageKey ?? "errorInternal"))
+        }
+        let systemAcceleration = response.state?.realtimeInputSystemAcceleration == .yes
+        return .success(RealtimeInputSession(usesSystemAcceleration: systemAcceleration))
     }
 
     func endRealtimeInput() async {

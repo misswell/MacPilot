@@ -120,11 +120,38 @@ Rules that make the channel safe:
   frames, and the replay guard validates both identically.
 
 Injection lives on the Mac in `Sources/MacPilot/InputCore/`:
-`RemoteInputCoordinator` (arming + dispatch) → `MouseInjector` (relative
-`CGEvent` deltas, drags as left-button drag events) and `ScrollInjector`
-(continuous pixel scroll via the `scrollWheelEvent2` constructor). The iPhone
-side lives under `iOS/MacPilotRemote/MacPilotRemote/Features/RemoteTrackpad/`
-(touch surface → `GestureEngine` → velocity/acceleration → binary batch).
+`RemoteInputCoordinator` (arming + dispatch) → `VirtualHIDDevice` /
+`MouseInjector` (relative deltas, drags as left-button drag events) and
+`ScrollInjector` (continuous pixel scrolling via the `scrollWheelEvent2`
+constructor). The iPhone side lives under
+`iOS/MacPilotRemote/MacPilotRemote/Features/RemoteTrackpad/` (touch surface →
+`GestureEngine` → velocity/acceleration → binary batch).
+
+### Injection paths: virtual HID device vs CGEvent
+
+The coordinator prefers the device-level path: `VirtualHIDDevice` creates a
+user-space HID pointing device (`IOHIDUserDeviceCreate`) and posts 7-byte HID
+reports, so motion and clicks reach the window server as genuine device input
+— macOS's own pointer acceleration applies, and no Accessibility grant is
+needed. When armed over that path, the Mac reports
+`realtimeInputSystemAcceleration = yes` and the phone sends raw finger deltas;
+over the CGEvent fallback the phone keeps its own acceleration curve.
+
+Reality check (verified on macOS 26): recent macOS denies
+`IOHIDUserDeviceCreate` to ordinary processes — the gate is the private
+`com.apple.private.hid.system.user-access-service` entitlement, which is not
+available to Developer ID apps. On those systems creation fails once, the
+coordinator logs `virtual HID device failed`/path=`cgEvent` and every session
+rides the CGEvent path (which still requires the Accessibility grant, and the
+begin response reports `realtimeInputSystemAcceleration = no`). On older
+releases where creation succeeds, the device path arms without the grant —
+scrolling stays on `ScrollInjector` either way, because a stepped wheel
+report cannot match continuous-event glide quality.
+
+A full Magic Trackpad emulation (multitouch digitizer frames feeding the
+system gesture engine) remains out of reach: Apple's multitouch report format
+is undocumented, and a half-formed multitouch device would degrade rather
+than improve the experience.
 
 ## Handshake
 

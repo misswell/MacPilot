@@ -44,6 +44,12 @@ public struct MacRemoteState: Codable, Sendable, Equatable {
     public var volume: Double?
     /// `nil` when the output device has no mute control.
     public var volumeMuted: RemoteBooleanState?
+    /// `yes` when the Mac injects pointer motion through its own virtual HID
+    /// device, so the phone must send raw finger deltas — macOS applies its
+    /// own pointer acceleration on top, and stacking the phone's curve would
+    /// double it. `no` (or `nil` from an older Mac build) means the phone
+    /// keeps its own acceleration curve.
+    public var realtimeInputSystemAcceleration: RemoteBooleanState?
 
     public init(
         screenLocked: RemoteBooleanState = .unknown,
@@ -53,7 +59,8 @@ public struct MacRemoteState: Codable, Sendable, Equatable {
         displaySleeping: RemoteBooleanState? = nil,
         brightness: Double? = nil,
         volume: Double? = nil,
-        volumeMuted: RemoteBooleanState? = nil
+        volumeMuted: RemoteBooleanState? = nil,
+        realtimeInputSystemAcceleration: RemoteBooleanState? = nil
     ) {
         self.screenLocked = screenLocked
         self.canUnlock = canUnlock
@@ -63,6 +70,7 @@ public struct MacRemoteState: Codable, Sendable, Equatable {
         self.brightness = brightness
         self.volume = volume
         self.volumeMuted = volumeMuted
+        self.realtimeInputSystemAcceleration = realtimeInputSystemAcceleration
     }
 }
 

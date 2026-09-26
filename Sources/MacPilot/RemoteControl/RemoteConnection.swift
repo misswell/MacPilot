@@ -457,7 +457,12 @@ final class RemoteConnection: Identifiable {
             switch host.inputCoordinator.beginSession(connectionID: id) {
             case .armed:
                 isRealtimeInputArmed = true
-                return RemoteResponse(requestID: request.requestID, success: true, state: host.screenControl.currentState())
+                var state = host.screenControl.currentState()
+                // The phone must know which side owns pointer acceleration:
+                // with the virtual HID device the system applies its own curve,
+                // so the phone sends raw finger deltas.
+                state.realtimeInputSystemAcceleration = host.inputCoordinator.usesVirtualDevice ? .yes : .no
+                return RemoteResponse(requestID: request.requestID, success: true, state: state)
             case .accessibilityRequired:
                 return RemoteResponse(
                     requestID: request.requestID,

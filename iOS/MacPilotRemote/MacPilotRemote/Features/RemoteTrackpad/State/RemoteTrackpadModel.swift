@@ -35,6 +35,10 @@ final class RemoteTrackpadModel: ObservableObject {
 
     private weak var appModel: RemoteAppModel?
     private var store = TrackpadSettingsStore()
+    /// True when the Mac injects through its own virtual HID device: macOS
+    /// applies its pointer curve, so raw finger deltas leave this side and the
+    /// local acceleration is bypassed. Refreshed on every (re)begin.
+    private var usesSystemAcceleration = false
 
     /// Switches the finger→cursor mapping. Only the mapping changes: the page
     /// never rotates itself with the device.
@@ -110,16 +114,18 @@ final class RemoteTrackpadModel: ObservableObject {
             phase = .reconnecting
             return
         }
-        if let errorKey = await appModel.beginRealtimeInput() {
-            beginErrorKey = errorKey
+        switch await appModel.beginRealtimeInput() {
+        case .failure(let error):
+            beginErrorKey = error.messageKey
             phase = .disconnected
-            return
+        case .success(let session):
+            beginErrorKey = nil
+            usesSystemAcceleration = session.usesSystemAcceleration
+            phase = .active
+            // The flush loop stops whenever the page leaves the active states,
+            // so every re-entry after a reconnect restarts it here.
+            startFlushLoop()
         }
-        beginErrorKey = nil
-        phase = .active
-        // The flush loop stops whenever the page leaves the active states, so
-        // every re-entry after a reconnect restarts it here.
-        startFlushLoop()
     }
 
     private func startFlushLoop() {
@@ -196,16 +202,26 @@ final class RemoteTrackpadModel: ObservableObject {
             switch output {
             case let .cursor(dx, dy, dragging, time):
                 let (mdx, mdy) = mapped(dx: dx, dy: dy)
-                cursorTravel.x += mdx
-                cursorTravel.y += mdy
-                let velocity = velocity.record(position: cursorTravel, time: time)
-                let speed = hypot(velocity.x, velocity.y)
-                let scaled = acceleration.apply(dx: mdx, dy: mdy, fingerSpeed: speed)
-                append(.move(
-                    dx: quantized(scaled.x, into: &cursorRemainder.x),
-                    dy: quantized(scaled.y, into: &cursorRemainder.y),
-                    dragging: dragging
-                ))
+                if usesSystemAcceleration {
+                    // The Mac's virtual HID device rides macOS's own pointer
+                    // curve; adding ours would double it.
+                    append(.move(
+                        dx: quantized(mdx, into: &cursorRemainder.x),
+                        dy: quantized(mdy, into: &cursorRemainder.y),
+                        dragging: dragging
+                    ))
+                } else {
+                    cursorTravel.x += mdx
+                    cursorTravel.y += mdy
+                    let velocity = velocity.record(position: cursorTravel, time: time)
+                    let speed = hypot(velocity.x, velocity.y)
+                    let scaled = acceleration.apply(dx: mdx, dy: mdy, fingerSpeed: speed)
+                    append(.move(
+                        dx: quantized(scaled.x, into: &cursorRemainder.x),
+                        dy: quantized(scaled.y, into: &cursorRemainder.y),
+                        dragging: dragging
+                    ))
+                }
 
             case let .scroll(dx, dy, time):
                 scrollTravel.x += dx

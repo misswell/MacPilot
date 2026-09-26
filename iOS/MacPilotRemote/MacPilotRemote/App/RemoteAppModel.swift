@@ -934,9 +934,10 @@ final class RemoteAppModel: ObservableObject {
     /// normally exactly that — so only Bluetooth is called out.
     var realtimeInputLinkKind: RemoteTransportKind? { connection.transportKind }
 
-    /// Arms the realtime channel for the trackpad page. Returns the error text
-    /// key on failure, `nil` when the Mac is ready for input batches.
-    func beginRealtimeInput() async -> String? {
+    /// Arms the realtime channel for the trackpad page. Failure carries the
+    /// error text key; success tells the trackpad which side owns pointer
+    /// acceleration.
+    func beginRealtimeInput() async -> Result<RemoteConnectionManager.RealtimeInputSession, RemoteConnectionManager.RealtimeInputError> {
         await connection.beginRealtimeInput()
     }
 
