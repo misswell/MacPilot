@@ -102,6 +102,7 @@ final class RemoteTrackpadModel: ObservableObject {
     }
 
     private func beginSession() async {
+        defer { beginTask = nil }
         guard let appModel else { return }
         guard appModel.connectionState.isConnected else {
             // The page opened while the supervisor was still dialling; the
@@ -116,6 +117,9 @@ final class RemoteTrackpadModel: ObservableObject {
         }
         beginErrorKey = nil
         phase = .active
+        // The flush loop stops whenever the page leaves the active states, so
+        // every re-entry after a reconnect restarts it here.
+        startFlushLoop()
     }
 
     private func startFlushLoop() {
