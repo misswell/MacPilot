@@ -44,7 +44,11 @@ enum DiagnosticLog {
         qos: .utility
     )
     private static let retentionInterval: TimeInterval = 24 * 60 * 60
-    private static let cleanupInterval: TimeInterval = 60
+    // A full pass parses every timestamp in the diagnostic file. Running it
+    // once per minute made that file the largest idle CPU hotspot when the
+    // log had accumulated thousands of lines. Hourly cleanup keeps the
+    // one-day retention window bounded without repeated background scans.
+    private static let cleanupInterval: TimeInterval = 60 * 60
     nonisolated(unsafe) private static var lastCleanupAt = Date.distantPast
     private static let isRunningTests: Bool = {
         let environment = ProcessInfo.processInfo.environment
