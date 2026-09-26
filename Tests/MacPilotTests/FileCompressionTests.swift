@@ -3,6 +3,68 @@ import Testing
 @testable import MacPilot
 
 struct FileCompressionTests {
+    @Test func automaticScanCompressesCandidatesWithoutCollectingTheirMetadata() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacPilotCompressionAutomatic-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        for name in ["first.log", "second.log"] {
+            try Data(repeating: 65, count: 256_000).write(to: root.appendingPathComponent(name))
+        }
+        let settings = FolderCompressionSettings(
+            folderPaths: [root.path], fileExtensions: ["log"],
+            minimumFileSize: 1, stableSeconds: 0, minimumSavingsPercent: 10
+        )
+        let engine = AppleFileCompressionEngine()
+        let (result, issues) = try engine.scanAndCompress(settings: settings)
+
+        #expect(issues.isEmpty)
+        #expect(result.compressedCount == 2)
+        #expect(try engine.scan(settings: settings).compressedFiles.count == 2)
+    }
+
+    @Test func boundedScanSummaryAndCompressedPagesKeepExactCounts() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacPilotCompressionPages-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        for index in 0..<12 {
+            try Data(repeating: 65, count: 256_000)
+                .write(to: root.appendingPathComponent("file-\(index).log"))
+        }
+        let settings = FolderCompressionSettings(
+            folderPaths: [root.path], fileExtensions: ["log"],
+            minimumFileSize: 1, stableSeconds: 0, minimumSavingsPercent: 10
+        )
+        let engine = AppleFileCompressionEngine()
+        let before = try engine.scanSummary(settings: settings)
+        #expect(before.candidateCount == 12)
+        #expect(before.candidates.count == 8)
+        #expect(before.candidateBytes == 12 * 256_000)
+
+        let (result, _) = try engine.scanAndCompress(settings: settings)
+        #expect(result.compressedCount == 12)
+        let after = try engine.scanSummary(settings: settings)
+        #expect(after.compressedCount == 12)
+        #expect(after.compressedFiles.count == 8)
+
+        let first = try engine.compressedPage(settings: settings, search: "file-", sort: .logicalSize, after: nil, limit: 5)
+        #expect(first.files.count == 5)
+        #expect(first.matchingCount == 12)
+        #expect(first.hasMore)
+        let second = try engine.compressedPage(
+            settings: settings, search: "file-", sort: .logicalSize,
+            after: first.files.last, limit: 5
+        )
+        #expect(second.files.count == 5)
+        #expect(second.hasMore)
+        #expect(Set(first.files.map(\.id)).isDisjoint(with: Set(second.files.map(\.id))))
+
+        let restored = try engine.scanAndRestore(settings: settings)
+        #expect(restored.restoredCount == 12)
+        #expect(try engine.scanSummary(settings: settings).candidateCount == 12)
+    }
+
     @Test func streamingScanYieldsEachCandidate() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("MacPilotCompressionStream-\(UUID().uuidString)", isDirectory: true)

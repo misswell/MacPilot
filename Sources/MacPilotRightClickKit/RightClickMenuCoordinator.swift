@@ -48,11 +48,15 @@ public final class RightClickMenuCoordinator {
     /// loops after a stop that already happened.
     private var isStopped = false
 
+    public var isRunning: Bool { configObserver != nil || bootstrapTask != nil }
+    public var activeObserverCount: Int { (configObserver == nil ? 0 : 1) + (messager.isObserving ? 1 : 0) }
+
     public init() {}
 
     public func start() {
         guard configObserver == nil, bootstrapTask == nil else { return }
         isStopped = false
+        messager.startObserving()
         PermissionDiagnostics.record("coordinator.start")
         logger.info("RightClickMenuCoordinator.start() called")
 
@@ -211,6 +215,7 @@ public final class RightClickMenuCoordinator {
         // process and would otherwise keep sending every 10 s for the rest of
         // that process's life, long after this app is gone.
         messager.sendQuitNotification()
+        messager.stopObserving()
         pluginRunning = false
         logger.info("RightClickMenuCoordinator.stop() called")
     }

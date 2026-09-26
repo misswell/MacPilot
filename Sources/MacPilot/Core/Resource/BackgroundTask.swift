@@ -6,7 +6,13 @@ import Foundation
 final class BackgroundTask {
     private var task: Task<Void, Never>?
     private(set) var isRunning = false
-    private(set) static var activeCount = 0
+    private nonisolated static let countLock = NSLock()
+    private nonisolated(unsafe) static var runningCount = 0
+    nonisolated static var activeCount: Int { countLock.withLock { runningCount } }
+
+    private nonisolated static func updateCount(by change: Int) {
+        countLock.withLock { runningCount += change }
+    }
 
     static func once(after interval: TimeInterval, action: @escaping @MainActor () -> Void) -> BackgroundTask {
         let timer = BackgroundTask()
@@ -23,7 +29,7 @@ final class BackgroundTask {
     func start(interval: Duration, action: @escaping @MainActor () -> Void) {
         guard task == nil else { return }
         isRunning = true
-        Self.activeCount += 1
+        Self.updateCount(by: 1)
         task = Task { [weak self] in
             while !Task.isCancelled {
                 do {
@@ -42,7 +48,7 @@ final class BackgroundTask {
     func startAsync(interval: Duration, action: @escaping @MainActor () async -> Void) {
         guard task == nil else { return }
         isRunning = true
-        Self.activeCount += 1
+        Self.updateCount(by: 1)
         task = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: interval) }
@@ -58,25 +64,26 @@ final class BackgroundTask {
         isRunning = false
         task?.cancel()
         task = nil
-        Self.activeCount -= 1
+        Self.updateCount(by: -1)
     }
 
     func startOnce(after interval: Duration, action: @escaping @MainActor () -> Void) {
         guard task == nil else { return }
         isRunning = true
-        Self.activeCount += 1
+        Self.updateCount(by: 1)
         task = Task { [weak self] in
             do { try await Task.sleep(for: interval) }
             catch { return }
             guard !Task.isCancelled, let self, self.isRunning else { return }
             self.isRunning = false
             self.task = nil
-            Self.activeCount -= 1
+            Self.updateCount(by: -1)
             action()
         }
     }
 
     deinit {
         task?.cancel()
+        if isRunning { Self.updateCount(by: -1) }
     }
 }

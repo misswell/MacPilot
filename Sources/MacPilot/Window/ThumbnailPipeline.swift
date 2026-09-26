@@ -8,6 +8,11 @@ struct WindowSwitcherCapturedPreview: @unchecked Sendable {
     let image: CGImage
 }
 
+private struct WindowCaptureRequest: @unchecked Sendable {
+    let index: Int
+    let window: SCWindow
+}
+
 enum WindowSwitcherPreviewCapture {
     static func captureBatch(
         windowIDs: [CGWindowID],
@@ -26,40 +31,63 @@ enum WindowSwitcherPreviewCapture {
                 .filter { $0.windowID != 0 }
                 .map { ($0.windowID, $0) }
         )
-        var result: [WindowSwitcherCapturedPreview] = []
-        result.reserveCapacity(windowIDs.count)
-
-        for windowID in windowIDs {
-            guard !Task.isCancelled, let window = windowsByID[windowID] else { continue }
-            let outputSize = WindowSwitcherThumbnailCapturePolicy.outputPixelSize(
-                windowSize: window.frame.size,
-                maximumPixelSize: maximumPixelSize
-            )
-            let configuration = SCStreamConfiguration()
-            configuration.width = max(1, Int(outputSize.width))
-            configuration.height = max(1, Int(outputSize.height))
-            configuration.queueDepth = 1
-            configuration.scalesToFit = true
-            configuration.preservesAspectRatio = true
-            configuration.showsCursor = false
-            configuration.capturesAudio = false
-            configuration.ignoreShadowsSingleWindow = true
-            configuration.captureResolution = .nominal
-
-            let filter = SCContentFilter(desktopIndependentWindow: window)
-            guard let image = try? await SCScreenshotManager.captureImage(
-                contentFilter: filter,
-                configuration: configuration
-            ), !Task.isCancelled else {
-                return []
-            }
-            result.append(WindowSwitcherCapturedPreview(windowID: windowID, image: image))
+        let requests = windowIDs.enumerated().compactMap { index, windowID -> WindowCaptureRequest? in
+            guard let window = windowsByID[windowID] else { return nil }
+            return WindowCaptureRequest(index: index, window: window)
         }
-        return result
+        return await withTaskGroup(of: (Int, WindowSwitcherCapturedPreview?).self) { group in
+            var next = 0
+            var completed: [(Int, WindowSwitcherCapturedPreview)] = []
+
+            func enqueue() {
+                guard next < requests.count, !Task.isCancelled else { return }
+                let request = requests[next]
+                next += 1
+                group.addTask {
+                    (request.index, await capture(request.window, maximumPixelSize: maximumPixelSize))
+                }
+            }
+
+            enqueue()
+            enqueue()
+            while let (index, preview) = await group.next() {
+                if let preview { completed.append((index, preview)) }
+                enqueue()
+            }
+            return completed.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+    }
+
+    private static func capture(
+        _ window: SCWindow,
+        maximumPixelSize: CGSize
+    ) async -> WindowSwitcherCapturedPreview? {
+        guard !Task.isCancelled else { return nil }
+        let outputSize = WindowSwitcherThumbnailCapturePolicy.outputPixelSize(
+            windowSize: window.frame.size,
+            maximumPixelSize: maximumPixelSize
+        )
+        let configuration = SCStreamConfiguration()
+        configuration.width = max(1, Int(outputSize.width))
+        configuration.height = max(1, Int(outputSize.height))
+        configuration.queueDepth = 1
+        configuration.scalesToFit = true
+        configuration.preservesAspectRatio = true
+        configuration.showsCursor = false
+        configuration.capturesAudio = false
+        configuration.ignoreShadowsSingleWindow = true
+        configuration.captureResolution = .nominal
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        guard let image = try? await SCScreenshotManager.captureImage(
+            contentFilter: filter,
+            configuration: configuration
+        ), !Task.isCancelled else { return nil }
+        return WindowSwitcherCapturedPreview(windowID: window.windowID, image: image)
     }
 }
 
-/// Keep one thumbnail batch serialized. ScreenCaptureKit is configured to
+/// Keep batches serialized and capture at most two windows per batch.
+/// ScreenCaptureKit is configured to
 /// produce the final 256x160-class image, so WindowServer never has to send a
 /// native-resolution window image to this process for downscaling.
 actor WindowSwitcherPreviewCaptureQueue {
@@ -88,4 +116,3 @@ actor WindowSwitcherPreviewCaptureQueue {
         }
     }
 }
-

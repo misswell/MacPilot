@@ -219,6 +219,8 @@ public final class Messager: @unchecked Sendable {
     // 安全说明：注册发生在启动阶段，之后处理器字典只读；
     // 注册与分发都可能来自不同线程，统一由 handlerLock 保护。
     private let handlerLock = NSLock()
+    private let observationLock = NSLock()
+    private var observing = false
     nonisolated(unsafe) private var mainToExtensionHandlers: [MainToExtensionAction: (Data?) -> Void] = [:]
     nonisolated(unsafe) private var extensionToMainHandlers: [ExtensionToMainAction: (Data?) -> Void] = [:]
 
@@ -234,7 +236,17 @@ public final class Messager: @unchecked Sendable {
         let bundleId = Bundle.main.bundleIdentifier ?? ""
         self.isExtension = bundleId == "com.misswell.macpilot.finder-sync"
 
-        // Danger note: DistributedNotificationCenter 初始化线程安全
+        // FinderSync listens for its process lifetime. The main app starts its
+        // observer only while the right-click feature is enabled.
+        if isExtension { startObserving() }
+    }
+
+    public var isObserving: Bool { observationLock.withLock { observing } }
+
+    public func startObserving() {
+        observationLock.lock()
+        defer { observationLock.unlock() }
+        guard !observing else { return }
         let center = DistributedNotificationCenter.default()
         if isExtension {
             center.addObserver(
@@ -251,7 +263,18 @@ public final class Messager: @unchecked Sendable {
                 object: nil
             )
         }
+        observing = true
     }
+
+    public func stopObserving() {
+        observationLock.lock()
+        defer { observationLock.unlock() }
+        guard observing else { return }
+        DistributedNotificationCenter.default().removeObserver(self)
+        observing = false
+    }
+
+    deinit { stopObserving() }
 
     // MARK: - 发送消息（nonisolated，不访问 @MainActor 状态）
 

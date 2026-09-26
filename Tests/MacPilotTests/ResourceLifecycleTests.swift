@@ -83,6 +83,23 @@ struct ResourceLifecycleTests {
         #expect(feature.stops == 1)
     }
 
+    @Test func monitorPagesRegisterOnlyTheirActiveSamplingLoops() {
+        let manager = FeatureLifecycleManager()
+        let cpu = CPUMonitorModel()
+        let memory = MemoryMonitorModel()
+        manager.register(cpu)
+        manager.register(memory)
+
+        #expect(manager.activeIdentifiers.isEmpty)
+        manager.start(cpu.identifier)
+        #expect(manager.activeIdentifiers == [cpu.identifier])
+        manager.start(memory.identifier)
+        #expect(manager.activeIdentifiers == [cpu.identifier, memory.identifier])
+        manager.stop(cpu.identifier)
+        manager.stop(memory.identifier)
+        #expect(manager.activeIdentifiers.isEmpty)
+    }
+
     @Test func cancelledBackgroundTaskNeverRunsItsAction() async throws {
         let baseline = BackgroundTask.activeCount
         let polling = BackgroundTask()
@@ -103,6 +120,15 @@ struct ResourceLifecycleTests {
         try await Task.sleep(for: .milliseconds(50))
         #expect(fired)
         #expect(!timer.isRunning)
+        #expect(BackgroundTask.activeCount == baseline)
+    }
+
+    @Test func abandonedManagedTaskDoesNotLeaveAStaleDiagnosticCount() {
+        let baseline = BackgroundTask.activeCount
+        var task: BackgroundTask? = BackgroundTask()
+        task?.start(interval: .seconds(60)) {}
+        #expect(BackgroundTask.activeCount == baseline + 1)
+        task = nil
         #expect(BackgroundTask.activeCount == baseline)
     }
 }

@@ -4,7 +4,11 @@ import AppKit
 import OSLog
 
 @MainActor
-final class AwakeSessionManager: ObservableObject {
+final class AwakeSessionManager: ObservableObject, ManagedFeature {
+    let identifier = "awake"
+    var isRunning: Bool { !observers.isEmpty }
+    func start() { activateFromConfiguration() }
+    func stop() { deactivateFromConfiguration() }
     /// Upper bound on ended sessions kept for the UI's recent history.
     private static let maximumRetainedEndedSessions = 20
     /// Upper bound on concurrently active sessions. Every menu click starts a

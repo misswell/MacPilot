@@ -5,12 +5,14 @@ import SwiftUI
 /// 与内存监控共用统一的页头、SettingsCard 和原生全高 List。
 struct CPUMonitorView: View {
     let monitor: CPUMonitorModel
+    let lifecycle: FeatureLifecycleManager
     @ObservedObject var store: CPUStore
 
     let language: AppLanguage
 
-    init(monitor: CPUMonitorModel, language: AppLanguage) {
+    init(monitor: CPUMonitorModel, lifecycle: FeatureLifecycleManager, language: AppLanguage) {
         self.monitor = monitor
+        self.lifecycle = lifecycle
         self.store = monitor.store
         self.language = language
     }
@@ -39,11 +41,11 @@ struct CPUMonitorView: View {
             appList
         }
         .onAppear {
-            if autoRefresh { monitor.startAutoRefresh() } else { monitor.refresh() }
+            if autoRefresh { lifecycle.start(monitor.identifier) } else { monitor.refresh() }
         }
-        .onDisappear { monitor.stopAutoRefresh() }
+        .onDisappear { lifecycle.stop(monitor.identifier) }
         .onChange(of: autoRefresh) { _, enabled in
-            if enabled { monitor.startAutoRefresh() } else { monitor.stopAutoRefresh() }
+            if enabled { lifecycle.start(monitor.identifier) } else { lifecycle.stop(monitor.identifier) }
         }
     }
 

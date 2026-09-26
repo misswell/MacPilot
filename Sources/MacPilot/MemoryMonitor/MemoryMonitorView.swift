@@ -5,12 +5,14 @@ import SwiftUI
 /// 遵循统一 UI 语言：30pt 页头 + 自适应玻璃卡片 + 原生全高 List。
 struct MemoryMonitorView: View {
     let monitor: MemoryMonitorModel
+    let lifecycle: FeatureLifecycleManager
     @ObservedObject var store: MemoryStore
 
     let language: AppLanguage
 
-    init(monitor: MemoryMonitorModel, language: AppLanguage) {
+    init(monitor: MemoryMonitorModel, lifecycle: FeatureLifecycleManager, language: AppLanguage) {
         self.monitor = monitor
+        self.lifecycle = lifecycle
         self.store = monitor.store
         self.language = language
     }
@@ -40,11 +42,11 @@ struct MemoryMonitorView: View {
             appList
         }
         .onAppear {
-            if autoRefresh { monitor.startAutoRefresh() } else { monitor.refresh() }
+            if autoRefresh { lifecycle.start(monitor.identifier) } else { monitor.refresh() }
         }
-        .onDisappear { monitor.stopAutoRefresh() }
+        .onDisappear { lifecycle.stop(monitor.identifier) }
         .onChange(of: autoRefresh) { _, enabled in
-            if enabled { monitor.startAutoRefresh() } else { monitor.stopAutoRefresh() }
+            if enabled { lifecycle.start(monitor.identifier) } else { lifecycle.stop(monitor.identifier) }
         }
     }
 

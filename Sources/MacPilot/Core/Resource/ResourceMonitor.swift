@@ -8,12 +8,15 @@ struct ResourceSnapshot: Equatable {
     let managedTasks: Int
     let trackedObservers: Int
     let eventTaps: Int
+    let activeCaptures: Int
     let iconCacheEntries: Int
     let windowCacheEntries: Int
 }
 
 struct ResourceRuntimeCounts {
     let eventTaps: Int
+    let activeCaptures: Int
+    let externalObservers: Int
     let windowCacheEntries: Int
 }
 
@@ -24,7 +27,7 @@ final class ResourceMonitor: ObservableObject {
     @Published private(set) var snapshot = ResourceSnapshot(
         memoryBytes: nil, cpuPercent: nil, activeFeatures: [],
         managedTasks: 0, trackedObservers: 0,
-        eventTaps: 0, iconCacheEntries: 0, windowCacheEntries: 0
+        eventTaps: 0, activeCaptures: 0, iconCacheEntries: 0, windowCacheEntries: 0
     )
 
     private var previousCPU: (uptime: TimeInterval, seconds: Double)?
@@ -61,8 +64,9 @@ final class ResourceMonitor: ObservableObject {
             cpuPercent: percent,
             activeFeatures: lifecycle.activeIdentifiers,
             managedTasks: BackgroundTask.activeCount,
-            trackedObservers: ObserverBag.activeCount,
+            trackedObservers: ObserverBag.activeCount + runtimeCounts.externalObservers,
             eventTaps: runtimeCounts.eventTaps,
+            activeCaptures: runtimeCounts.activeCaptures,
             iconCacheEntries: AppIconCache.shared.count,
             windowCacheEntries: runtimeCounts.windowCacheEntries
         )

@@ -80,6 +80,7 @@ final class ScreenRecordingModel: ObservableObject {
     private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "ScreenRecording")
 
     @Published private(set) var settings = ScreenRecordingSettings()
+    private(set) var isRuntimeActive = false
     @Published private(set) var state: ScreenRecordingState = .idle
     @Published private(set) var lastRecordingURL: URL?
     @Published private(set) var elapsedTime: TimeInterval = 0
@@ -149,6 +150,7 @@ final class ScreenRecordingModel: ObservableObject {
         // A switched-off recorder must not claim global hot keys or enumerate
         // cameras, microphones and Continuity devices at launch.
         guard settings.isEnabled else { return }
+        isRuntimeActive = true
         registerAllHotKeys()
         refreshCaptureDeviceLists()
     }
@@ -156,6 +158,7 @@ final class ScreenRecordingModel: ObservableObject {
     func setEnabled(_ enabled: Bool) {
         guard settings.isEnabled != enabled else { return }
         updateSettings { $0.isEnabled = enabled }
+        isRuntimeActive = enabled
         if enabled {
             _ = registerAllHotKeys()
             refreshCaptureDeviceLists()
@@ -932,6 +935,7 @@ final class ScreenRecordingModel: ObservableObject {
     }
 
     func shutdown() {
+        isRuntimeActive = false
         ScreenRecordingRangeBorder.shared.close()
         timerTask?.cancel()
         timerTask = nil

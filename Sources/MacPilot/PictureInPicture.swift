@@ -894,6 +894,7 @@ final class PiPSession: ObservableObject, Identifiable {
     private var hoverHintDisplayCount = 0
     private var captureStartTask: Task<Void, Never>?
     private var stallMonitorTask: Task<Void, Never>?
+    private var detectionScriptRuns: [UUID: (process: Process, timeout: BackgroundTask)] = [:]
     private var captureToken = UUID()
     private var zoomSelectionStart: CGPoint?
     private var pinchZoomStart: CGFloat?
@@ -923,6 +924,12 @@ final class PiPSession: ObservableObject, Identifiable {
         hoverHintTask?.cancel()
         captureStartTask?.cancel()
         stallMonitorTask?.cancel()
+        MainActor.assumeIsolated {
+            for run in detectionScriptRuns.values {
+                run.timeout.stop()
+                if run.process.isRunning { run.process.terminate() }
+            }
+        }
     }
 
     func start() {
@@ -940,6 +947,11 @@ final class PiPSession: ObservableObject, Identifiable {
     }
 
     func stop() {
+        for run in detectionScriptRuns.values {
+            run.timeout.stop()
+            if run.process.isRunning { run.process.terminate() }
+        }
+        detectionScriptRuns.removeAll()
         captureToken = UUID()
         captureStartTask?.cancel()
         captureStartTask = nil
@@ -1525,14 +1537,22 @@ final class PiPSession: ObservableObject, Identifiable {
         process.environment = environment
         do {
             try process.run()
-            let timeout = DispatchWorkItem { [weak process] in
-                guard process?.isRunning == true else { return }
-                process?.terminate()
+            let runID = UUID()
+            process.terminationHandler = { [weak self] _ in
+                Task { @MainActor [weak self] in self?.finishDetectionScript(runID) }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(presentationSettings.detectionScriptTimeoutSeconds), execute: timeout)
+            let timeout = BackgroundTask.once(after: TimeInterval(presentationSettings.detectionScriptTimeoutSeconds)) { [weak self, weak process] in
+                if process?.isRunning == true { process?.terminate() }
+                self?.finishDetectionScript(runID)
+            }
+            detectionScriptRuns[runID] = (process, timeout)
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func finishDetectionScript(_ id: UUID) {
+        detectionScriptRuns.removeValue(forKey: id)?.timeout.stop()
     }
 }
 

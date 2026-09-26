@@ -626,6 +626,7 @@ enum AppText {
         "compressionAnalysis": "空间分析", "compressionScanNow": "立即扫描", "compressionScanPrompt": "选择文件夹并扫描，查看可安全压缩的文件。",
         "compressionCandidates": "待压缩文件", "compressionAlreadyCompressed": "已压缩文件", "compressionSpaceSaved": "已节省空间",
         "compressionViewAllCompressed": "查看全部 %d 个已压缩文件", "compressionCompressedListTitle": "已压缩文件",
+        "compressionPreviousPage": "上一页", "compressionNextPage": "下一页",
         "compressionSearchFiles": "搜索文件路径", "compressionNoMatchingFiles": "没有匹配的文件", "compressionClose": "关闭",
         "compressionSortBy": "排序", "compressionSortLogicalSize": "逻辑大小（从大到小）", "compressionSortActualSize": "实际大小（从大到小）",
         "compressionUses": "实际占用 %@", "compressionLogical": "逻辑大小 %@", "compressionSizeDetail": "逻辑 %@ · 实际 %@", "compressionCompressFiles": "压缩 %d 个文件",
@@ -719,7 +720,7 @@ enum AppText {
         "diagnostics": "诊断", "resourceMonitor": "资源监控", "resourceRefresh": "刷新采样",
         "resourceMemory": "内存：%@ MB", "resourceCPU": "CPU：%@%%",
         "resourceActiveFeatures": "已纳管功能：%@", "resourceTasks": "已纳管任务：%d", "resourceObservers": "已跟踪观察者：%d",
-        "resourceEventTaps": "事件监听：%d", "resourceIconCache": "图标缓存：%d", "resourceWindowCache": "窗口缓存：%d",
+        "resourceEventTaps": "事件监听：%d", "resourceCaptures": "采集会话：%d", "resourceIconCache": "图标缓存：%d", "resourceWindowCache": "窗口缓存：%d",
         "resourceUnavailable": "—", "resourceNone": "无",
         "windowSwitcherShortcut": "⌥Tab",
         "windowSwitcherIncludeMinimized": "显示最小化窗口", "windowSwitcherIncludeHidden": "显示已隐藏应用的窗口",
@@ -1549,6 +1550,7 @@ enum AppText {
             "compressionAnalysis": "Space Analysis", "compressionScanNow": "Scan Now", "compressionScanPrompt": "Choose a folder and scan it to find files that are safe to compress.",
             "compressionCandidates": "Ready to compress", "compressionAlreadyCompressed": "Compressed files", "compressionSpaceSaved": "Space saved",
             "compressionViewAllCompressed": "View All %d Compressed Files", "compressionCompressedListTitle": "Compressed Files",
+            "compressionPreviousPage": "Previous", "compressionNextPage": "Next",
             "compressionSearchFiles": "Search file paths", "compressionNoMatchingFiles": "No matching files", "compressionClose": "Close",
             "compressionSortBy": "Sort", "compressionSortLogicalSize": "Logical Size (Largest First)", "compressionSortActualSize": "Actual Size (Largest First)",
             "compressionUses": "%@ on disk", "compressionLogical": "%@ logical", "compressionSizeDetail": "%@ logical · %@ on disk", "compressionCompressFiles": "Compress %d Files",
@@ -1642,7 +1644,7 @@ enum AppText {
             "diagnostics": "Diagnostics", "resourceMonitor": "Resource Monitor", "resourceRefresh": "Refresh Sample",
             "resourceMemory": "Memory: %@ MB", "resourceCPU": "CPU: %@%%",
             "resourceActiveFeatures": "Managed features: %@", "resourceTasks": "Managed tasks: %d", "resourceObservers": "Tracked observers: %d",
-            "resourceEventTaps": "Event taps: %d", "resourceIconCache": "Icon cache: %d", "resourceWindowCache": "Window cache: %d",
+            "resourceEventTaps": "Event taps: %d", "resourceCaptures": "Capture sessions: %d", "resourceIconCache": "Icon cache: %d", "resourceWindowCache": "Window cache: %d",
             "resourceUnavailable": "—", "resourceNone": "None",
             "windowSwitcherShortcut": "⌥Tab",
             "windowSwitcherIncludeMinimized": "Show minimized windows", "windowSwitcherIncludeHidden": "Show windows from hidden applications",
@@ -1925,6 +1927,7 @@ final class MacPilotModel: ObservableObject {
     let fileCompression = FolderCompressionModel()
     let screenCapture = ScreenCaptureModel()
     let screenRecording = ScreenRecordingModel()
+    lazy var screenRecordingFeature = ScreenRecordingFeature(recorder: screenRecording)
     let pictureInPicture = PictureInPictureModel()
     let inputSources = InputSourceModel()
     let windowSwitcher = WindowSwitcherModel()
@@ -1936,6 +1939,35 @@ final class MacPilotModel: ObservableObject {
     let awake: AwakeSessionManager
     let awakeTriggers: AwakeTriggerEngine
     let featureLifecycle = FeatureLifecycleManager()
+    lazy var exitFeature = ClosureManagedFeature(
+        identifier: "exit",
+        isRunning: { [weak self] in !(self?.workspaceObservers.isEmpty ?? true) },
+        start: { [weak self] in
+            self?.startObservingWorkspace()
+            self?.startSafetyChecks()
+            self?.rebuildQuitSchedule()
+        },
+        stop: { [weak self] in
+            self?.stopSafetyChecks()
+            self?.cancelAllQuitTasks(resetRuntime: true)
+            self?.stopObservingWorkspace()
+        }
+    )
+    lazy var launchFeature = ClosureManagedFeature(
+        identifier: "launch",
+        isRunning: { [weak self] in !(self?.launchTasks.isEmpty ?? true) },
+        start: { [weak self] in self?.scheduleLaunchPlanForCurrentBootIfNeeded() },
+        stop: { [weak self] in
+            self?.lastScheduledBootSession = nil
+            self?.cancelScheduledLaunches()
+        }
+    )
+    lazy var rightClickFeature = ClosureManagedFeature(
+        identifier: "rightClick",
+        isRunning: { [weak self] in self?.rightClickMenu.isRunning ?? false },
+        start: { [weak self] in self?.startRightClickMenu() },
+        stop: { [weak self] in self?.rightClickMenu.stop() }
+    )
     lazy var memoryMonitor = MemoryMonitorModel()
     lazy var cpuMonitor = CPUMonitorModel()
     /// iPhone remote control. Lazily created so it can reference `self` for
@@ -1979,6 +2011,10 @@ final class MacPilotModel: ObservableObject {
                 + inputSources.activeEventTapCount
                 + windowSwitcher.activeEventTapCount
                 + smoothScrolling.activeEventTapCount,
+            activeCaptures: (screenCapture.isCapturing ? 1 : 0)
+                + (screenRecording.state == .recording || screenRecording.state == .paused || screenRecording.state == .stopping ? 1 : 0)
+                + (screenRecording.isDeviceRecording ? 1 : 0),
+            externalObservers: rightClickMenu.activeObserverCount,
             windowCacheEntries: windowSwitcher.cachedThumbnailCount
         )
     }
@@ -2842,19 +2878,12 @@ final class MacPilotModel: ObservableObject {
         guard !hasShutdown else { return }
         hasShutdown = true
         configurationStore.finish()
-        stopSafetyChecks()
-        cancelAllQuitTasks(resetRuntime: true)
-        for task in launchTasks.values { task.cancel() }
-        launchTasks.removeAll()
         inputSourceSaveTask?.cancel()
         inputSourceSaveTask = nil
 
         featureLifecycle.stopAll()
         ble.shutdown()
-        screenRecording.shutdown()
-        remoteControl.stop()
         DisplayPower.shutdown()
-        rightClickMenu.stop()
         MemoryMonitorModel.clearMenuCache()
         CPUMonitorModel.clearMenuCache()
         awake.shutdown()
@@ -2864,7 +2893,6 @@ final class MacPilotModel: ObservableObject {
         localPorts.shutdown()
 
         lifetimeObservers.removeAll()
-        stopObservingWorkspace()
     }
 
     private func wakeQuitRule(_ id: UUID) {
@@ -3292,18 +3320,16 @@ extension MacPilotModel {
         case .home, .settings:
             break
         case .exit:
-            startObservingWorkspace()
-            startSafetyChecks()
-            rebuildQuitSchedule()
+            featureLifecycle.start(exitFeature.identifier)
         case .launch:
-            scheduleLaunchPlanForCurrentBootIfNeeded()
+            featureLifecycle.start(launchFeature.identifier)
         case .awake:
-            awake.activateFromConfiguration()
+            featureLifecycle.start(awake.identifier)
             awakeTriggers.setFeatureEnabled(awake.settings.isEnabled)
         case .ble:
             featureLifecycle.start(ble.identifier)
         case .remoteControl:
-            if remoteDeviceStore.settings.isEnabled { remoteControl.start() }
+            if remoteDeviceStore.settings.isEnabled { featureLifecycle.start(remoteControl.identifier) }
         case .inputSources:
             featureLifecycle.start(inputSources.identifier)
         case .compression:
@@ -3311,7 +3337,7 @@ extension MacPilotModel {
         case .capture:
             featureLifecycle.start(screenCapture.identifier)
         case .screenRecording:
-            screenRecording.activateFromConfiguration()
+            featureLifecycle.start(screenRecordingFeature.identifier)
         case .pictureInPicture:
             featureLifecycle.start(pictureInPicture.identifier)
         case .windowSwitcher:
@@ -3321,7 +3347,7 @@ extension MacPilotModel {
         case .clipboard:
             if clipboard.settings.isEnabled { featureLifecycle.start(clipboard.identifier) }
         case .rightClick:
-            startRightClickMenu()
+            featureLifecycle.start(rightClickFeature.identifier)
         case .dockGroups:
             featureLifecycle.start(dockGroups.identifier)
         case .memoryMonitor, .cpuMonitor, .localPorts:
@@ -3334,19 +3360,16 @@ extension MacPilotModel {
         case .home, .settings:
             break
         case .exit:
-            stopSafetyChecks()
-            cancelAllQuitTasks(resetRuntime: true)
-            stopObservingWorkspace()
+            featureLifecycle.stop(exitFeature.identifier)
         case .launch:
-            lastScheduledBootSession = nil
-            cancelScheduledLaunches()
+            featureLifecycle.stop(launchFeature.identifier)
         case .awake:
-            awake.deactivateFromConfiguration()
+            featureLifecycle.stop(awake.identifier)
             awakeTriggers.setFeatureEnabled(false)
         case .ble:
             featureLifecycle.stop(ble.identifier)
         case .remoteControl:
-            remoteControl.stop()
+            featureLifecycle.stop(remoteControl.identifier)
         case .inputSources:
             featureLifecycle.stop(inputSources.identifier)
         case .compression:
@@ -3354,7 +3377,7 @@ extension MacPilotModel {
         case .capture:
             featureLifecycle.stop(screenCapture.identifier)
         case .screenRecording:
-            screenRecording.shutdown()
+            featureLifecycle.stop(screenRecordingFeature.identifier)
         case .pictureInPicture:
             featureLifecycle.stop(pictureInPicture.identifier)
         case .windowSwitcher:
@@ -3364,7 +3387,7 @@ extension MacPilotModel {
         case .clipboard:
             featureLifecycle.stop(clipboard.identifier)
         case .rightClick:
-            rightClickMenu.stop()
+            featureLifecycle.stop(rightClickFeature.identifier)
         case .dockGroups:
             featureLifecycle.stop(dockGroups.identifier)
         case .memoryMonitor:
@@ -3608,9 +3631,9 @@ struct ContentView: View {
         case .dockGroups:
             DockGroupsView(dockGroups: model.dockGroups)
         case .memoryMonitor:
-            MemoryMonitorView(monitor: model.memoryMonitor, language: model.language)
+            MemoryMonitorView(monitor: model.memoryMonitor, lifecycle: model.featureLifecycle, language: model.language)
         case .cpuMonitor:
-            CPUMonitorView(monitor: model.cpuMonitor, language: model.language)
+            CPUMonitorView(monitor: model.cpuMonitor, lifecycle: model.featureLifecycle, language: model.language)
         case .localPorts:
             LocalPortsView(model: model.localPorts)
         case .settings:
@@ -5362,6 +5385,7 @@ private struct ResourceMonitorMenu: View {
             Text(model.t("resourceTasks", sample.managedTasks))
             Text(model.t("resourceObservers", sample.trackedObservers))
             Text(model.t("resourceEventTaps", sample.eventTaps))
+            Text(model.t("resourceCaptures", sample.activeCaptures))
             Text(model.t("resourceIconCache", sample.iconCacheEntries))
             Text(model.t("resourceWindowCache", sample.windowCacheEntries))
             Divider()

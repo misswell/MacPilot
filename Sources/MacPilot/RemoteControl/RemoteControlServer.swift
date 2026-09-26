@@ -12,7 +12,8 @@ import Network
 ///
 /// A BLE central runs alongside it as a second, network-independent link.
 @MainActor
-final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
+final class RemoteControlServer: ObservableObject, RemoteConnectionHost, ManagedFeature {
+    let identifier = "remoteControl"
     enum Status: Equatable {
         case stopped
         case starting
@@ -88,7 +89,7 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost {
         logHandler(text)
     }
 
-    var isRunning: Bool { status.isRunning }
+    var isRunning: Bool { listener != nil || bleCentralStarted }
 
     // MARK: - Lifecycle
 
