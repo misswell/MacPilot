@@ -541,7 +541,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             // session even though the commit path honours `outputStyle`.
             setOutputStyleToggle(action)
             return
-        case .refreshCapture, .newSelection, .adjustSelection, .more, .annotate, .annotateTool:
+        case .refreshCapture, .scrollingCapture, .newSelection, .adjustSelection, .more, .annotate, .annotateTool:
             return
         default:
             break

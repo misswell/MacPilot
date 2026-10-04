@@ -2429,7 +2429,7 @@ final class SmartScreenshotController {
         // keep their specialized MacPilot flows because they need a
         // post-capture editor.
         if mode == .smartElement || mode == .manualArea || mode == .applicationWindow ||
-            mode == .recordingArea || mode == .recordingApplication {
+            mode == .recordingArea || mode == .recordingApplication || mode == .scrolling {
             startSnapzySelection(mode: mode, recordingConfiguration: recordingConfiguration)
             return
         }
@@ -2991,6 +2991,15 @@ final class SmartScreenshotController {
                 if requestedMode == .manualArea {
                     self.onSelectionRect(result.rect)
                 }
+                if action == .scrollingCapture ||
+                    (requestedMode == .scrolling && (action == .capture || action == .save)) {
+                    self.presentScrollingCapture(
+                        initialImage: crop.image,
+                        for: result.rect,
+                        quartzClickPoint: .zero
+                    )
+                    return
+                }
                 // Side-bar output style (圆角/阴影) applies to the delivered
                 // image only, never to the frozen backdrop.
                 crop = FrozenAreaCropResult(
@@ -3009,7 +3018,7 @@ final class SmartScreenshotController {
                     SmartCaptureClipboard.copy(image: crop.image)
                 case .upload:
                     self.uploadImageToCloud(crop.image)
-                case .newSelection, .adjustSelection, .more,
+                case .newSelection, .adjustSelection, .more, .scrollingCapture,
                      .toggleRoundedCorners, .toggleShadow, .refreshCapture,
                      .recordingStart, .recordingToggleMicrophone,
                      .recordingToggleSystemAudio, .recordingToggleQuality,
@@ -3092,6 +3101,8 @@ final class SmartScreenshotController {
                 }
                 guard let self else { return }
                 switch requestedMode {
+                case .scrolling:
+                    self.presentScrollingCapture(initialImage: crop.image, for: result.rect, quartzClickPoint: .zero)
                 case .applicationWindow, .manualArea:
                     if requestedMode == .manualArea { self.onSelectionRect(result.rect) }
                     self.onCapture(crop.image)
@@ -4032,23 +4043,10 @@ enum SmartScrollingCaptureBudget {
     }
 }
 
-/// CGImage is not `Sendable`, so the frames cross into the stitching task
-/// through this wrapper. Only one task ever reads them, and the HUD has stopped
-/// capturing by then.
-private struct StitchingFrames: @unchecked Sendable {
-    let value: [CGImage]
-}
-
-/// Snapzy-style scrolling capture HUD.  The selected region remains owned by
-/// the foreground app while this small floating panel listens for wheel events
-/// and samples the region after every scroll settle.  Completion stitches the
-/// frames using `ScreenCaptureVerticalStitcher` and returns one image through
-/// the normal post-capture pipeline.
+/// The floating HUD leaves the selected page interactive while the session
+/// serializes sampling and completion away from AppKit window lifetime.
 @MainActor
 private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDelegate {
-    private var frames: [CGImage]
-    private var capturedBytes: Int
-    private var reachedLimit = false
     private let rect: CGRect
     private let quartzClickPoint: CGPoint
     private let language: AppLanguage
@@ -4058,8 +4056,24 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
     private var scrollMonitor: Any?
     private var localScrollMonitor: Any?
     private var settleTask: Task<Void, Never>?
-    private var isCapturing = false
-    private var isStitching = false
+    private var finishTask: Task<Void, Never>?
+    private let initialImage: CGImage
+    private lazy var session: ScrollingCaptureSession = makeSession()
+
+    private func makeSession() -> ScrollingCaptureSession {
+        ScrollingCaptureSession(initialImage: initialImage) { @MainActor [weak self] in
+            guard let self, let panel = self.panel else { throw CancellationError() }
+            // On a wide selection the HUD may overlap the captured area. Hide it
+            // for the snapshot without excluding other MacPilot windows.
+            panel.orderOut(nil)
+            defer { if self.panel != nil { panel.orderFrontRegardless() } }
+            try await Task.sleep(for: .milliseconds(60))
+            try Task.checkCancellation()
+            return try await SmartScreenImageCapture.capture(
+                appKitRect: self.rect, quartzClickPoint: self.quartzClickPoint
+            )
+        }
+    }
 
     init(
         initialImage: CGImage,
@@ -4069,8 +4083,7 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
         onComplete: @escaping (CGImage) -> Void,
         onClose: @escaping () -> Void
     ) {
-        self.frames = [initialImage]
-        self.capturedBytes = SmartScrollingCaptureBudget.bytes(of: initialImage)
+        self.initialImage = initialImage
         self.rect = rect
         self.quartzClickPoint = quartzClickPoint
         self.language = language
@@ -4080,7 +4093,7 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
 
     func show() {
         let panel = NSPanel(
-            contentRect: CGRect(x: 0, y: 0, width: 370, height: 148),
+            contentRect: CGRect(x: 0, y: 0, width: 460, height: 156),
             styleMask: [.titled, .closable, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -4090,44 +4103,48 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         panel.delegate = self
-        installContent(in: panel)
+        self.panel = panel
+        session.onChange = { [weak self] in self?.refreshContent() }
+        session.onError = { [weak self] error in
+            guard let self, self.panel != nil, !self.session.isFinishing else { return }
+            self.showError(error.localizedDescription)
+        }
+        refreshContent()
         panel.setFrameOrigin(Self.panelOrigin(for: rect, size: panel.frame.size))
         panel.orderFrontRegardless()
-        self.panel = panel
         installScrollMonitors()
     }
 
     func close() {
+        session.cancel()
         settleTask?.cancel()
-        settleTask = nil
+        finishTask?.cancel()
         removeScrollMonitors()
         panel?.close()
-        panel = nil
     }
 
     func windowWillClose(_ notification: Notification) {
+        session.cancel()
         settleTask?.cancel()
-        settleTask = nil
+        finishTask?.cancel()
         removeScrollMonitors()
         panel?.contentView = nil
         panel = nil
         onClose()
     }
 
-    private func installContent(in panel: NSPanel) {
-        panel.contentView = NSHostingView(rootView: SmartScrollingCaptureView(
-            frameCount: frames.count,
-            reachedLimit: reachedLimit,
-            isStitching: isStitching,
+    private func refreshContent() {
+        panel?.contentView = NSHostingView(rootView: SmartScrollingCaptureView(
+            frameCount: session.frames.count,
+            reachedLimit: session.reachedLimit,
+            needsSmallerScroll: session.needsSmallerScroll,
+            isStitching: session.isFinishing,
+            isCapturing: session.isCapturing,
             language: language,
+            onSample: { [weak self] in self?.sampleNow() },
             onFinish: { [weak self] in self?.finish() },
             onCancel: { [weak self] in self?.close() }
         ))
-    }
-
-    private func refreshContent() {
-        guard let panel else { return }
-        installContent(in: panel)
     }
 
     private func installScrollMonitors() {
@@ -4149,77 +4166,48 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
     }
 
     private func handleScroll(_ event: NSEvent) {
-        guard panel != nil,
-              !isCapturing,
+        guard panel != nil, !session.isFinishing, !session.reachedLimit,
               rect.contains(NSEvent.mouseLocation),
-              abs(event.scrollingDeltaY) > 0.1 || abs(event.scrollingDeltaX) > 0.1 else { return }
+              abs(event.scrollingDeltaY) > 0.1 else { return }
+        // Even events arriving during a snapshot must schedule a later sample.
         settleTask?.cancel()
         settleTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            await self?.captureSettledFrame()
+            await self?.session.sample()
         }
     }
 
-    private func captureSettledFrame() async {
-        guard panel != nil, !isCapturing else { return }
-        isCapturing = true
-        defer { isCapturing = false }
-        do {
-            let image = try await SmartScreenImageCapture.capture(
-                appKitRect: rect,
-                quartzClickPoint: quartzClickPoint
-            )
-            let bytes = SmartScrollingCaptureBudget.bytes(of: image)
-            guard SmartScrollingCaptureBudget.accepts(
-                capturedBytes: capturedBytes,
-                frameCount: frames.count,
-                adding: bytes
-            ) else {
-                // The user keeps scrolling; say so, or the counter just stopping
-                // looks like the capture broke.
-                reachedLimit = true
-                refreshContent()
-                return
-            }
-            capturedBytes += bytes
-            frames.append(image)
-            refreshContent()
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = AppText.value("scScrollingTitle", language: language)
-            alert.informativeText = error.localizedDescription
-            alert.addButton(withTitle: AppText.value("scOK", language: language))
-            alert.runModal()
-        }
+    private func sampleNow() {
+        settleTask?.cancel()
+        settleTask = Task { [weak self] in await self?.session.sample() }
     }
 
     private func finish() {
-        guard !isStitching else { return }
-        isStitching = true
-        refreshContent()
-        // Stitching redraws every frame into one canvas — hundreds of
-        // megabytes of work for a long page. On the main thread that is the
-        // moment the HUD freezes and the whole app stops answering.
-        let images = StitchingFrames(value: frames)
-        Task { [weak self] in
-            let stitched = await Task.detached(priority: .userInitiated) {
-                // A cooperative-pool thread has no run loop draining autorelease
-                // objects, and this is the step that touches every frame.
-                autoreleasepool { ScreenCaptureVerticalStitcher.stitch(images.value) }
-            }.value
+        guard finishTask == nil else { return }
+        settleTask?.cancel()
+        removeScrollMonitors()
+        finishTask = Task { [weak self] in
             guard let self else { return }
-            self.close()
-            guard let stitched else {
-                let alert = NSAlert()
-                alert.messageText = AppText.value("scScrollingTitle", language: self.language)
-                alert.informativeText = AppText.value("scScrollingStitchFailed", language: self.language)
-                alert.addButton(withTitle: AppText.value("scOK", language: self.language))
-                alert.runModal()
-                return
+            let image = await self.session.finish()
+            guard !Task.isCancelled, !self.session.isClosed, self.panel != nil else { return }
+            if let image {
+                self.close()
+                self.onComplete(image)
+            } else {
+                self.finishTask = nil
+                self.installScrollMonitors()
+                self.showError(AppText.value("scScrollingStitchFailed", language: self.language))
             }
-            self.onComplete(stitched)
         }
+    }
+
+    private func showError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = AppText.value("scScrollingTitle", language: language)
+        alert.informativeText = message
+        alert.addButton(withTitle: AppText.value("scOK", language: language))
+        if let panel { alert.beginSheetModal(for: panel) }
     }
 
     private static func panelOrigin(for selection: CGRect, size: CGSize) -> CGPoint {
@@ -4234,8 +4222,11 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
 private struct SmartScrollingCaptureView: View {
     let frameCount: Int
     let reachedLimit: Bool
+    let needsSmallerScroll: Bool
     let isStitching: Bool
+    let isCapturing: Bool
     let language: AppLanguage
+    let onSample: () -> Void
     let onFinish: () -> Void
     let onCancel: () -> Void
 
@@ -4243,19 +4234,22 @@ private struct SmartScrollingCaptureView: View {
         VStack(alignment: .leading, spacing: 10) {
             // Replacing the hint keeps the HUD the same height; the panel is
             // sized for one caption block.
-            Text(AppText.value(reachedLimit ? "scScrollingLimit" : "scScrollingHint", language: language))
+            Text(AppText.value(reachedLimit ? "scScrollingLimit" : needsSmallerScroll ? "scScrollingRetry" : "scScrollingHint", language: language))
                 .font(.caption)
-                .foregroundStyle(reachedLimit ? AnyShapeStyle(Color.orange) : AnyShapeStyle(HierarchicalShapeStyle.secondary))
+                .foregroundStyle(reachedLimit || needsSmallerScroll ? AnyShapeStyle(Color.orange) : AnyShapeStyle(HierarchicalShapeStyle.secondary))
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Label(AppText.value("scScrollingFrames", language: language, frameCount), systemImage: "square.stack.3d.up")
                 Spacer()
+                Button(AppText.value("scScrollingSample", language: language), action: onSample)
+                    .disabled(isStitching || isCapturing || reachedLimit)
                 Button(AppText.value("scCancel", language: language), action: onCancel)
+                    .keyboardShortcut(.cancelAction)
                 Button(
                     AppText.value(isStitching ? "scScrollingStitching" : "scDone", language: language),
                     action: onFinish
                 )
-                .buttonStyle(.borderedProminent)
+                .macPilotProminentButtonStyle()
                 .disabled(isStitching)
             }
         }

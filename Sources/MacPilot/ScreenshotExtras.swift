@@ -174,16 +174,18 @@ enum ScreenCaptureVerticalStitcher {
         minimumOverlap: Int = 12,
         tolerance: Double = 18
     ) -> Int {
-        guard let lhs = raster(previous), let rhs = raster(current), lhs.width == rhs.width else { return 0 }
-        let maximum = min(lhs.height, rhs.height) - 1
+        guard previous.width == current.width,
+              let lhs = raster(previous), let rhs = raster(current) else { return 0 }
+        let maximum = min(lhs.height, rhs.height)
         guard maximum >= minimumOverlap else { return 0 }
         var best = 0
         var bestScore = Double.greatestFiniteMagnitude
         // Large overlaps are common for slow trackpad scrolling, so search
         // from the largest to the smallest and keep the first equally good
-        // candidate.  Sampling four rows per candidate keeps this cheap.
+        // candidate.  Validate across the strip so repeated blank rows alone do not
+        // count as evidence of alignment.
         for overlap in stride(from: maximum, through: minimumOverlap, by: -1) {
-            let samples = min(5, overlap)
+            let samples = min(32, overlap)
             var score = 0.0
             for sample in 0..<samples {
                 let offset = samples == 1 ? 0 : sample * (overlap - 1) / (samples - 1)
@@ -202,6 +204,8 @@ enum ScreenCaptureVerticalStitcher {
         return bestScore <= tolerance ? best : 0
     }
 
+    static let maximumOutputBytes = 256 * 1_024 * 1_024
+
     static func stitch(_ images: [CGImage]) -> CGImage? {
         guard let first = images.first else { return nil }
         guard images.count > 1 else { return first }
@@ -210,8 +214,10 @@ enum ScreenCaptureVerticalStitcher {
         var totalHeight = first.height
         for index in 1..<images.count {
             let overlap = bestOverlap(previous: images[index - 1], current: images[index])
+            guard overlap > 0 else { return nil }
             overlaps.append(overlap)
             totalHeight += images[index].height - overlap
+            guard totalHeight <= maximumOutputBytes / 4 / first.width else { return nil }
         }
         guard let context = CGContext(
             data: nil,

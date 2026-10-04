@@ -512,7 +512,7 @@ struct ScreenCaptureTests {
     @Test func scrollingStitcherFindsStableVerticalOverlap() throws {
         let first = try #require(makeTestImage(width: 40, height: 80, color: .systemBlue))
         let second = try #require(makeTestImage(width: 40, height: 80, color: .systemBlue))
-        #expect(ScreenCaptureVerticalStitcher.bestOverlap(previous: first, current: second, minimumOverlap: 8, tolerance: 1) == 79)
+        #expect(ScreenCaptureVerticalStitcher.bestOverlap(previous: first, current: second, minimumOverlap: 8, tolerance: 1) == 80)
     }
 
     @Test func scrollingStitcherRejectsDifferentWidths() throws {

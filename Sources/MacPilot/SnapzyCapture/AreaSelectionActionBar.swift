@@ -128,6 +128,7 @@ final class AreaSelectionActionBar: NSView {
     static let moreReselect = 25
     static let moreRoundedCorners = 26
     static let moreShadow = 27
+    static let moreScrolling = 28
   }
 
   init(onAction: @escaping (AreaSelectionAction) -> Void) {
@@ -931,6 +932,11 @@ final class AreaSelectionActionBar: NSView {
     ))
     if !isAnnotating {
       menu.addItem(makeMoreItem(
+        "arrow.down.to.line.compact",
+        titleKey: "scScrollingCaptureNow",
+        tag: BarTag.moreScrolling
+      ))
+      menu.addItem(makeMoreItem(
         "scissors",
         titleKey: "scAnnotationCrop",
         tag: BarTag.moreCrop
@@ -999,6 +1005,7 @@ final class AreaSelectionActionBar: NSView {
     case BarTag.moreUpload: perform(.upload)
     case BarTag.moreCrop: perform(.annotateTool(.crop))
     case BarTag.moreRefresh: perform(.refreshCapture)
+    case BarTag.moreScrolling: perform(.scrollingCapture)
     case BarTag.moreAdjust: perform(.adjustSelection)
     case BarTag.moreReselect: perform(.newSelection)
     case BarTag.moreRoundedCorners: perform(.toggleRoundedCorners)

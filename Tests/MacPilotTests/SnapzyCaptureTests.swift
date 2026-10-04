@@ -468,6 +468,7 @@ struct SnapzyCaptureTests {
         // 原右侧竖栏的命令现在都在「更多」菜单里，逐条路由到同一个动作回调。
         bar.handleMoreItem(tag: try item("scAdjustSelection").tag)
         bar.handleMoreItem(tag: try item("scToolRefresh").tag)
+        bar.handleMoreItem(tag: try item("scScrollingCaptureNow").tag)
         bar.handleMoreItem(tag: try item("scToolReselect").tag)
         bar.handleMoreItem(tag: try item("scToolRoundedCorners").tag)
         bar.handleMoreItem(tag: try item("scToolShadow").tag)
@@ -475,6 +476,7 @@ struct SnapzyCaptureTests {
         #expect(requestedActions == [
             .adjustSelection,
             .refreshCapture,
+            .scrollingCapture,
             .newSelection,
             .toggleRoundedCorners,
             .toggleShadow,
@@ -519,7 +521,7 @@ struct SnapzyCaptureTests {
         }
         // 画布接管了选区：改框/刷新/重选/裁剪在会话中没有意义，不再展示
         // （此前它们留在界面上但点了没反应）。
-        for titleKey in ["scAdjustSelection", "scToolRefresh", "scToolReselect", "scAnnotationCrop"] {
+        for titleKey in ["scAdjustSelection", "scToolRefresh", "scToolReselect", "scAnnotationCrop", "scScrollingCaptureNow"] {
             #expect(!titles.contains(AppText.value(titleKey, language: .system)))
         }
 

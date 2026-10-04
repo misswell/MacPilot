@@ -138,7 +138,7 @@ struct ScrollShotStitcherTests {
         let previous = gradientImage(width: 1200, height: 400, startRow: 0)
         let scrolled = gradientImage(width: 1200, height: 400, startRow: 150)
         #expect(ScreenCaptureVerticalStitcher.bestOverlap(previous: previous, current: scrolled) == 250)
-        #expect(ScreenCaptureVerticalStitcher.bestOverlap(previous: previous, current: previous) == 0)
+        #expect(ScreenCaptureVerticalStitcher.bestOverlap(previous: previous, current: previous) == 400)
     }
 
     /// 拼接的高度必须等于「两帧之和减去重叠」——这是缩放后仍然对齐的证据。

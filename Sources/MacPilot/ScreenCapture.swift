@@ -599,7 +599,7 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
             self?.presentAreaAnnotation(image, at: screenRect, initialTool: tool)
         },
         onOCRCapture: { [weak self] image in self?.handleOCRCapture(image) },
-        onScrollingCapture: { [weak self] image in self?.handleSmartCapture(image) },
+        onScrollingCapture: { [weak self] image in self?.handleCapturedImage(image, imageFormat: .png) },
         onObjectCutoutCapture: { [weak self] image in self?.handleObjectCutout(image) },
         onDelayedAreaCapture: { [weak self] in self?.startDelayedAreaCapture() },
         onQuickCopySave: { [weak self] image in self?.saveSmartCaptureQuickCopy(image) }
