@@ -280,16 +280,13 @@ struct HomeView: View {
                     }
                 }
                 .padding(8)
-                .background(
-                    LinearGradient(colors: [Color(white: 0.12), Color(white: 0.055)],
-                                   startPoint: .top, endPoint: .bottom),
-                    in: RoundedRectangle(cornerRadius: 20, style: .continuous)
-                )
+                .background(Color(.secondarySystemGroupedBackground),
+                            in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+                        .strokeBorder(.primary.opacity(0.06), lineWidth: 0.5)
                 }
-                .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
+                .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
                 if appModel.connectionState.isConnected && !appModel.supportsMediaControl {
                     hint(appModel.text("mediaNeedsUpdate"))
                 }
@@ -305,13 +302,13 @@ struct HomeView: View {
         } label: {
             ZStack {
                 if appModel.runningCommand == feature.command {
-                    ProgressView().tint(.white)
+                    ProgressView().tint(commandEnabled(feature) ? Color.accentColor : Color.secondary)
                 } else {
                     Image(systemName: feature.icon)
                         .font(.system(size: feature == .mediaPlayPause ? 23 : 20, weight: .medium))
                 }
             }
-            .foregroundStyle(.white.opacity(commandEnabled(feature) ? 1 : 0.55))
+            .foregroundStyle(commandEnabled(feature) ? Color.accentColor : Color.secondary)
             .frame(maxWidth: .infinity, minHeight: 48)
         }
         .buttonStyle(TouchBarKeyStyle(prominent: feature == .mediaPlayPause))
@@ -615,29 +612,35 @@ private struct LevelSliderRow: View {
     }
 }
 
-/// A shallow illuminated key, like the physical MacBook Touch Bar. Keep the
-/// strip dark in either appearance, with reduced-motion support for its press.
+/// Shallow Touch Bar keys use the same adaptive surfaces and accent as the
+/// surrounding controls, with reduced-motion support for their press feedback.
 private struct TouchBarKeyStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
     let prominent: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(
                 LinearGradient(
-                    colors: [Color(white: prominent ? 0.28 : 0.19), Color(white: prominent ? 0.20 : 0.13)],
+                    colors: [Color(.tertiarySystemFill).opacity(0.65), Color(.tertiarySystemFill)],
                     startPoint: .top, endPoint: .bottom
                 ),
                 in: RoundedRectangle(cornerRadius: 12, style: .continuous)
             )
+            .background(
+                Color.accentColor.opacity(prominent && isEnabled ? 0.08 : 0),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.white.opacity(configuration.isPressed ? 0.14 : 0))
+                    .fill(Color.accentColor.opacity(configuration.isPressed ? 0.12 : 0))
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(.white.opacity(prominent ? 0.15 : 0.06), lineWidth: 0.5)
+                    .strokeBorder(.primary.opacity(prominent ? 0.09 : 0.04), lineWidth: 0.5)
             }
+            .opacity(isEnabled ? 1 : 0.5)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
