@@ -32,6 +32,50 @@ final class ScreenshotTests: XCTestCase {
     }
 
     @MainActor
+    func testControlSelectionPersistsAndHomeMediaLayoutFits() {
+        let app = launchAndSettle()
+        selectControlTab(app, index: 2)
+        app.buttons["controlSettings"].tap()
+        let toggle = app.switches["controlToggle.lockScreen"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        capture("06-control-features")
+        app.terminate()
+        app.launch()
+        selectControlTab(app, index: 0)
+        let hidden = !app.buttons["control.lockScreen"].exists
+        let previous = app.buttons["control.mediaPrevious"]
+        let playPause = app.buttons["control.mediaPlayPause"]
+        let next = app.buttons["control.mediaNext"]
+        XCTAssertTrue(previous.waitForExistence(timeout: 5))
+        XCTAssertTrue(playPause.exists)
+        XCTAssertTrue(next.exists)
+        for button in [previous, playPause, next] {
+            XCTAssertGreaterThanOrEqual(button.frame.minX, 0)
+            XCTAssertLessThanOrEqual(button.frame.maxX, app.frame.width)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+        }
+        capture("07-home-controls")
+        selectControlTab(app, index: 2)
+        app.buttons["controlSettings"].tap()
+        app.switches["controlToggle.lockScreen"]
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        XCTAssertTrue(hidden)
+    }
+
+    @MainActor
+    private func selectControlTab(_ app: XCUIApplication, index: Int) {
+        if app.tabBars.firstMatch.exists {
+            app.tabBars.buttons.element(boundBy: index).tap()
+        } else {
+            // iPad's floating tab strip is exposed as ordinary buttons.
+            let title = index == 0 ? ["控制", "Control"] : ["设置", "Settings"]
+            let button = app.buttons[title[0]].firstMatch
+            (button.exists ? button : app.buttons[title[1]].firstMatch).tap()
+        }
+    }
+
+    @MainActor
     func testScreenshotDevices() {
         let app = launchAndSettle()
         let tabBar = app.tabBars.firstMatch

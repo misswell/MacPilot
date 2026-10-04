@@ -5,15 +5,14 @@ import SwiftUI
 import UIKit
 #endif
 
-/// The four remote actions. No confirmation dialogs: an authenticated, encrypted
-/// connection is already in place.
+/// User-selected controls, grouped by intent on the authenticated connection.
 struct HomeView: View {
     @EnvironmentObject private var appModel: RemoteAppModel
     @Binding var selectedTab: RootTab
 
     /// Adaptive so the action grid fills an iPad's width instead of
     /// stretching two columns across it; on a phone it still lands on two.
-    private let columns = [GridItem(.adaptive(minimum: 150), spacing: 14)]
+    private let columns = [GridItem(.adaptive(minimum: 140), spacing: 12)]
 
     @State private var trackpadModel: RemoteTrackpadModel?
     @State private var trackpadVisible = false
@@ -26,8 +25,18 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 18) {
                     deviceCard
+                    inputTools
                     actionGrid
-                    levelsPanel
+                    mediaPanel
+                    if hasEnabledLevels { levelsPanel }
+                    if !appModel.controlPreferences.hasHomeControls {
+                        VStack(spacing: 12) {
+                            hint(appModel.text("controlsEmpty"))
+                            Button(appModel.text("controlsSettings")) { selectedTab = .settings }
+                                .buttonStyle(.bordered)
+                        }
+                        .padding(16)
+                    }
                     messageBanner
                     if !appModel.connectionState.isConnected {
                         disconnectedPanel
@@ -80,28 +89,32 @@ struct HomeView: View {
         )
     }
 
-    private var desktopEntry: some View {
-        Button {
-            guard appModel.connectionState.isConnected, appModel.supportsRealtimeInput else {
-                trackpadHintKey = "trackpadNotConnected"; return
+    @ViewBuilder
+    private var inputTools: some View {
+        let tools = [RemoteControlFeature.desktop, .trackpad].filter(isEnabled)
+        if !tools.isEmpty {
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(tools) { feature in
+                    Button {
+                        if feature == .desktop {
+                            guard trackpadReady else {
+                                trackpadHintKey = !appModel.connectionState.isConnected
+                                    ? "trackpadNotConnected" : "trackpadNeedsMacUpdate"
+                                return
+                            }
+                            desktopVisible = true
+                            openTrackpad()
+                        } else {
+                            handleTrackpadTap()
+                        }
+                    } label: {
+                        controlLabel(feature, running: false)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("control.\(feature.rawValue)")
+                }
             }
-            desktopVisible = true
-            openTrackpad()
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: "display").font(.body)
-                Text(appModel.text("desktopTitle"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-            }
-            .frame(minHeight: 72)
-            .padding(.horizontal, 12)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(appModel.text("desktopTitle"))
-        .accessibilityHint(appModel.text("desktopHint"))
     }
 
     // MARK: - Trackpad
@@ -127,20 +140,11 @@ struct HomeView: View {
 
     // MARK: - Device card
 
-    /// Device switching and both remote tools share one compact row.
+    /// Device identity has its own row so long names do not squeeze the tools.
     private var deviceCard: some View {
-        HStack(spacing: 0) {
-            deviceSwitcher
-            Divider().padding(.vertical, 12)
-            desktopEntry
-            Divider().padding(.vertical, 12)
-            trackpadRow
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        deviceSwitcher
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var deviceSwitcher: some View {
@@ -193,32 +197,10 @@ struct HomeView: View {
         .accessibilityLabel(appModel.text("switchMacAccessibility", appModel.activeMacName))
     }
 
-    /// The trackpad entry. Only a live session whose Mac advertised the
-    /// realtime channel may open it; any other tap explains itself with an
-    /// alert — a Mac that predates the channel would drop the connection if
-    /// `beginRealtimeInput` reached it, so it is told to update instead.
-    private var trackpadRow: some View {
-        Button(action: handleTrackpadTap) {
-            VStack(spacing: 4) {
-                Image(systemName: "computermouse")
-                    .font(.body)
-                    .foregroundStyle(trackpadReady ? Color.accentColor : Color.secondary)
-                Text(appModel.text("trackpadEntry"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
-            }
-            .frame(minHeight: 72)
-            .padding(.horizontal, 12)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(appModel.text("trackpadEntry"))
-        .accessibilityHint(trackpadSubtitle)
-    }
-
     private func handleTrackpadTap() {
         guard trackpadReady else {
-            trackpadHintKey = trackpadSubtitle
+            trackpadHintKey = !appModel.connectionState.isConnected
+                ? "trackpadNotConnected" : "trackpadNeedsMacUpdate"
             return
         }
         openTrackpad()
@@ -226,16 +208,6 @@ struct HomeView: View {
 
     private var trackpadReady: Bool {
         appModel.connectionState.isConnected && appModel.supportsRealtimeInput
-    }
-
-    private var trackpadSubtitle: String {
-        if !appModel.connectionState.isConnected {
-            return appModel.text("trackpadNotConnected")
-        }
-        if !appModel.supportsRealtimeInput {
-            return appModel.text("trackpadNeedsMacUpdate")
-        }
-        return appModel.text("trackpadEntryHint")
     }
 
     private func presenceLabel(for mac: PairedMac) -> String {
@@ -257,63 +229,86 @@ struct HomeView: View {
 
     // MARK: - Actions
 
-    /// The four remote actions, paired by intent: the first row takes the Mac
-    /// away (lock, black), the second brings it back (light the screen, wake and
-    /// unlock).
-    ///
-    /// There is deliberately no plain "unlock" button: the Mac's unlock path
-    /// wakes the display itself when it is off, so a separate action was the same
-    /// thing with a second way to get it wrong.
+    private func isEnabled(_ feature: RemoteControlFeature) -> Bool {
+        appModel.controlPreferences.isEnabled(feature)
+    }
+
+    @ViewBuilder
     private var actionGrid: some View {
-        LazyVGrid(columns: columns, spacing: 14) {
-            actionButton(.displayOff, titleKey: "actionDisplayOff", systemImage: "moon.fill", tint: .indigo)
-            actionButton(.wakeDisplay, titleKey: "actionWakeDisplay", systemImage: "sun.max.fill", tint: .yellow)
-            actionButton(.lockScreen, titleKey: "actionLock", systemImage: "lock.fill", tint: .blue)
-            actionButton(.wakeAndUnlock, titleKey: "actionWakeAndUnlock", systemImage: "sunrise.fill", tint: .orange)
+        let actions = RemoteControlFeature.Group.screen.features.filter(isEnabled)
+        if !actions.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("controlsGroupScreen")
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(actions) { feature in
+                        actionButton(feature)
+                    }
+                }
+            }
         }
     }
 
-    private func actionButton(
-        _ command: RemoteCommand,
-        titleKey: String,
-        systemImage: String,
-        tint: Color
-    ) -> some View {
-        let isRunning = appModel.runningCommand == command
+    @ViewBuilder
+    private var mediaPanel: some View {
+        let actions = RemoteControlFeature.Group.media.features.filter(isEnabled)
+        if !actions.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("controlsGroupMedia")
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 12)], spacing: 12) {
+                    ForEach(actions) { feature in
+                        actionButton(feature)
+                    }
+                }
+                if appModel.connectionState.isConnected && !appModel.supportsMediaControl {
+                    hint(appModel.text("mediaNeedsUpdate"))
+                }
+            }
+        }
+    }
+
+    private func sectionTitle(_ key: String) -> some View {
+        Text(appModel.text(key))
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func controlLabel(_ feature: RemoteControlFeature, running: Bool) -> some View {
+        VStack(spacing: 8) {
+            ZStack {
+                if running { ProgressView() }
+                else { Image(systemName: feature.icon).font(.title3.weight(.semibold)) }
+            }
+            .frame(height: 24)
+            Text(appModel.text(feature.titleKey))
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2, reservesSpace: true)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(Rectangle())
+    }
+
+    private func actionButton(_ feature: RemoteControlFeature) -> some View {
+        let command = feature.command!
         let enabled = appModel.connectionState.isConnected && appModel.runningCommand == nil
+            && (feature.group != .media || appModel.supportsMediaControl)
         return Button {
             appModel.beginCommand(command)
             Task { await appModel.perform(command) }
         } label: {
-            VStack(spacing: 12) {
-                ZStack {
-                    if isRunning {
-                        ProgressView()
-                            .controlSize(.regular)
-                    } else {
-                        Image(systemName: systemImage)
-                            .font(.system(size: 30, weight: .semibold))
-                    }
-                }
-                .frame(height: 34)
-                Text(appModel.text(titleKey))
-                    .font(.headline)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 22)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color(.secondarySystemGroupedBackground))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(tint.opacity(enabled ? 0.28 : 0.10))
-            )
-            .foregroundStyle(enabled ? tint : Color.secondary)
+            controlLabel(feature, running: appModel.runningCommand == command)
+                .foregroundStyle(enabled ? Color.accentColor : Color.secondary)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .accessibilityLabel(appModel.text(titleKey))
+        .accessibilityLabel(appModel.text(feature.titleKey))
+        .accessibilityIdentifier("control.\(feature.rawValue)")
     }
 
     // MARK: - Output levels
@@ -324,6 +319,14 @@ struct HomeView: View {
     /// A level the Mac did not report is not shown at all: an external monitor
     /// with no controllable backlight, or a Mac with no output device, both mean
     /// a slider that cannot work. The card says so instead of offering one.
+    private var enabledLevelKinds: [RemoteLevelKind] {
+        RemoteLevelKind.allCases.filter { kind in
+            kind == .volume ? (isEnabled(.volume) || isEnabled(.mute)) : isEnabled(.brightness)
+        }
+    }
+
+    private var hasEnabledLevels: Bool { !enabledLevelKinds.isEmpty }
+
     private var levelsPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(appModel.text("levelsTitle"))
@@ -336,8 +339,8 @@ struct HomeView: View {
                 // The state rides along with the first response after the
                 // handshake; nothing useful to say for that one round trip.
                 hint(appModel.text("levelsUnavailableShort"))
-            } else if appModel.hasLevelControls {
-                ForEach(RemoteLevelKind.allCases, id: \.self) { kind in
+            } else if enabledLevelKinds.contains(where: { $0.value(in: appModel.macState) != nil }) {
+                ForEach(enabledLevelKinds, id: \.self) { kind in
                     if let value = kind.value(in: appModel.macState) {
                         LevelSliderRow(kind: kind, value: value)
                     }
@@ -504,19 +507,21 @@ private struct LevelSliderRow: View {
                 Text("\(Int((draft * 100).rounded()))%")
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
-                if kind == .volume, appModel.volumeMuted != nil {
+                if kind == .volume, appModel.volumeMuted != nil, appModel.controlPreferences.isEnabled(.mute) {
                     muteButton
                 }
             }
 
-            Slider(value: $draft, in: 0...1, step: 0.01) { editing in
-                isEditing = editing
-                // The release is sent explicitly so a drag that ends between two
-                // coalesced requests still lands on its final value.
-                if !editing { send(draft) }
+            if kind != .volume || appModel.controlPreferences.isEnabled(.volume) {
+                Slider(value: $draft, in: 0...1, step: 0.01) { editing in
+                    isEditing = editing
+                    // The release is sent explicitly so a drag that ends between two
+                    // coalesced requests still lands on its final value.
+                    if !editing { send(draft) }
+                }
+                .accessibilityLabel(appModel.text(kind.labelKey))
+                .accessibilityValue("\(Int((draft * 100).rounded()))%")
             }
-            .accessibilityLabel(appModel.text(kind.labelKey))
-            .accessibilityValue("\(Int((draft * 100).rounded()))%")
         }
         .onAppear { draft = value }
         .onChange(of: draft) { _, newValue in

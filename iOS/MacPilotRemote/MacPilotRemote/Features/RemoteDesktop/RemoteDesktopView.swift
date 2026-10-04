@@ -45,11 +45,13 @@ struct RemoteDesktopView: View {
                     trackpad.setOrientation(.top)
                     InterfaceOrientationController.shared.setSupported(landscape ? .landscapeRight : .portrait)
                 } label: { Label(appModel.text("desktopOrientation"), systemImage: "arrow.up.and.down") }
-                Button {
-                    if trackpad.keyboardActive { trackpad.dismissKeyboard() }
-                    else { trackpad.requestKeyboard() }
-                } label: { Label(appModel.text("desktopKeyboard"), systemImage: "keyboard") }
-                .disabled(trackpad.phase != .active)
+                if appModel.controlPreferences.isEnabled(.keyboard) {
+                    Button {
+                        if trackpad.keyboardActive { trackpad.dismissKeyboard() }
+                        else { trackpad.requestKeyboard() }
+                    } label: { Label(appModel.text("desktopKeyboard"), systemImage: "keyboard") }
+                    .disabled(trackpad.phase != .active)
+                }
                 Button { showSettings = true } label: { Image(systemName: "gearshape") }
                     .accessibilityLabel(appModel.text("trackpadSettings"))
             }

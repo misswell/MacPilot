@@ -84,6 +84,7 @@ final class RemoteConnectionManager {
     var isPairing: Bool { phase == .pairing }
     /// The Mac accepts realtime input batches (the trackpad channel).
     var supportsRemoteDesktop: Bool { serverCapabilities.contains(.remoteDesktop) }
+    var supportsMediaControl: Bool { serverCapabilities.contains(.mediaControl) }
 
     func beginRemoteVideo(displayID: UInt32?) async throws -> (RemoteVideoOffer, String) {
         guard supportsRemoteDesktop, transportKind == .network, let host = transport?.remoteHost else {

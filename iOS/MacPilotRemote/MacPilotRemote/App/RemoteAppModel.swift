@@ -139,6 +139,7 @@ final class RemoteAppModel: ObservableObject {
     private let bleLogger = Logger(subsystem: "com.misswell.macpilot.remote", category: "BLE")
 
     let store: PairedMacStore
+    let controlPreferences = RemoteControlPreferences()
     let discovery = RemoteDiscoveryService()
     /// The link carrying the session. A race promotes its winner here, so this
     /// is replaced rather than reused; higher-ranked candidates keep running.
@@ -220,6 +221,11 @@ final class RemoteAppModel: ObservableObject {
 
     init(store: PairedMacStore = PairedMacStore()) {
         self.store = store
+        controlPreferences.objectWillChange
+            .sink { [weak self] in
+                MainActor.assumeIsolated { self?.objectWillChange.send() }
+            }
+            .store(in: &storeChanges)
         // Views observe this model, not the store it forwards to, and a nested
         // `ObservableObject` does not republish through its parent. Without this
         // bridge, deleting a device or setting a default would not refresh the
@@ -1093,6 +1099,7 @@ final class RemoteAppModel: ObservableObject {
     @Published var desktopModifiers: UInt8 = 0
 
     var supportsRemoteDesktop: Bool { connection.supportsRemoteDesktop }
+    var supportsMediaControl: Bool { connection.supportsMediaControl }
     func beginRemoteVideo(displayID: UInt32?) async throws -> (RemoteVideoOffer, String) {
         try await connection.beginRemoteVideo(displayID: displayID)
     }
@@ -1173,6 +1180,10 @@ final class RemoteAppModel: ObservableObject {
     func perform(_ command: RemoteCommand) async {
         guard connectionState.isConnected else {
             errorKey = "errorNotPaired"
+            return
+        }
+        if [.mediaPrevious, .mediaPlayPause, .mediaNext].contains(command), !supportsMediaControl {
+            errorKey = "mediaNeedsUpdate"
             return
         }
         let manager = connection

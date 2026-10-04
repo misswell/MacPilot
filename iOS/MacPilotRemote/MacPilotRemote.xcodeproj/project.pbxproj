@@ -32,6 +32,7 @@
 		6E9F62D64507C5CC4E50142A /* RemoteVideoDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73F668EDF35E69390AC04692 /* RemoteVideoDecoder.swift */; };
 		70EB80CE61981CAF16DD2B71 /* ScreenshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447CDE5B9C0AAC4C65F9D517 /* ScreenshotTests.swift */; };
 		746C20ADD2D532ED80A341B6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D110E3CC36E64E72A3521A8C /* Assets.xcassets */; };
+		76DE2646AF35A8E17A3CC3EA /* RemoteControlPreferencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00C1B29E6E95D05262D3D9A /* RemoteControlPreferencesTests.swift */; };
 		7AD15026D75C2BBA62B0B152 /* RemoteTrackpadModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D31EAE82FAE4CB3CCAD7C9 /* RemoteTrackpadModel.swift */; };
 		7F9A392EE7B644AB9A987F7A /* RemoteBLEPeripheral.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7890B51F3A461DD34A2BF5C8 /* RemoteBLEPeripheral.swift */; };
 		8ABE53FBAA8C5E88D864E561 /* RemoteConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */; };
@@ -44,6 +45,7 @@
 		ABAB1A3DD21B1D9F93831A4A /* MacPilotRemoteProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 2DA6CC718265164CF50E009F /* MacPilotRemoteProtocol */; };
 		AE22ED3FC0D9F79938EAFDB0 /* TouchHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F191E81E8CA9B2CCD4CF79A9 /* TouchHistory.swift */; };
 		B2072638812E9D738D98CA6F /* PressureSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E2DE683D33CF6736C45DE3 /* PressureSample.swift */; };
+		B34AB35731C1146F2A3516C4 /* RemoteControlPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC707A41C6093408D63F5E10 /* RemoteControlPreferences.swift */; };
 		BA215FCD67694460D269A62D /* PressureCurve.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4083ECB0625AD91715E766A6 /* PressureCurve.swift */; };
 		BBA8EB473A8DFC5AFF6FC54E /* MacPilotRemoteTransport in Frameworks */ = {isa = PBXBuildFile; productRef = EC71CA884A51DA6FA3C258DF /* MacPilotRemoteTransport */; };
 		C0F29AE38E0B010578AAD67D /* RemoteModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A556F1AAEC7A9B11C37B641 /* RemoteModels.swift */; };
@@ -117,6 +119,7 @@
 		9AD3A5D4789D587B13BE376E /* PressureDebugInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressureDebugInfo.swift; sourceTree = "<group>"; };
 		A11CCEAC5B50B59CC42724C3 /* VelocityCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VelocityCalculator.swift; sourceTree = "<group>"; };
 		A631B526163D86A62B57FE38 /* MacPilotRemoteProtocol */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MacPilotRemoteProtocol; path = ../../Packages/MacPilotRemoteProtocol; sourceTree = SOURCE_ROOT; };
+		AC707A41C6093408D63F5E10 /* RemoteControlPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlPreferences.swift; sourceTree = "<group>"; };
 		B8E51007DA7A300933D953C5 /* PressureIntentEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressureIntentEngine.swift; sourceTree = "<group>"; };
 		BE5AAC04F84819EBB0BDBC6B /* AccelerationCurve.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccelerationCurve.swift; sourceTree = "<group>"; };
 		C11AAB2029319459E3E108E1 /* PressureScore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressureScore.swift; sourceTree = "<group>"; };
@@ -127,6 +130,7 @@
 		D152E96DBE715090384BAA76 /* TouchProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchProcessor.swift; sourceTree = "<group>"; };
 		E21C2AB621EFBC8E6529C0E5 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		E36953057505FD14ED272AED /* PressGestureRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressGestureRecognizer.swift; sourceTree = "<group>"; };
+		F00C1B29E6E95D05262D3D9A /* RemoteControlPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlPreferencesTests.swift; sourceTree = "<group>"; };
 		F191E81E8CA9B2CCD4CF79A9 /* TouchHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchHistory.swift; sourceTree = "<group>"; };
 		F4E2DE683D33CF6736C45DE3 /* PressureSample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressureSample.swift; sourceTree = "<group>"; };
 		FCFB309710B660CAEDF2CF72 /* TrackpadSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadSettingsView.swift; sourceTree = "<group>"; };
@@ -298,6 +302,7 @@
 			isa = PBXGroup;
 			children = (
 				448BBB633EBACB20D7BD15CB /* PairedMacStore.swift */,
+				AC707A41C6093408D63F5E10 /* RemoteControlPreferences.swift */,
 				3A556F1AAEC7A9B11C37B641 /* RemoteModels.swift */,
 			);
 			path = Models;
@@ -316,6 +321,7 @@
 			children = (
 				3774E27F2A76D7C23AFC2393 /* RemoteConnectionHandshakeTests.swift */,
 				8ECA729F7E430578837002D2 /* RemoteConnectionRetryTests.swift */,
+				F00C1B29E6E95D05262D3D9A /* RemoteControlPreferencesTests.swift */,
 				781285C1ADB724EF9E3897A7 /* RemoteReconnectLifecycleTests.swift */,
 				21D83AE67089B04DF8E33CDD /* RemoteVideoZoomTests.swift */,
 			);
@@ -506,6 +512,7 @@
 			files = (
 				A285F69495332DCECE7A1F60 /* RemoteConnectionHandshakeTests.swift in Sources */,
 				3653E921D16C12BABE7A2B41 /* RemoteConnectionRetryTests.swift in Sources */,
+				76DE2646AF35A8E17A3CC3EA /* RemoteControlPreferencesTests.swift in Sources */,
 				2CCED346F1F6F92AF0A9D473 /* RemoteReconnectLifecycleTests.swift in Sources */,
 				33110033AB36379243431578 /* RemoteVideoZoomTests.swift in Sources */,
 			);
@@ -535,6 +542,7 @@
 				2A4D3DB2192AC62F75C6B89D /* RemoteAppModel.swift in Sources */,
 				7F9A392EE7B644AB9A987F7A /* RemoteBLEPeripheral.swift in Sources */,
 				8ABE53FBAA8C5E88D864E561 /* RemoteConnectionManager.swift in Sources */,
+				B34AB35731C1146F2A3516C4 /* RemoteControlPreferences.swift in Sources */,
 				298C11B06564BF9AC1AE7F98 /* RemoteDesktopState.swift in Sources */,
 				2A31139F8AA46E71787728F6 /* RemoteDesktopView.swift in Sources */,
 				97D7FA550D676240482EF5B6 /* RemoteDiscoveryService.swift in Sources */,

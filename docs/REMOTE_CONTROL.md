@@ -176,7 +176,8 @@ the already-focused editable field can be used only when it belongs to the
 hit-tested process and its screen bounds contain the pointer. Clicking outside
 that field cannot reopen the keyboard through this fallback. Focused text
 descendants are normalized to their editable ancestor before each operation.
-The trackpad's keyboard button is always visible (disabled while disconnected).
+The trackpad's keyboard button is visible when keyboard control is enabled
+in the phone's settings (disabled while disconnected).
 It opens or dismisses the keyboard. Opening sends the existing focused-mode
 `beginTextInput` payload `0x01` over any authenticated, armed input connection,
 including Bluetooth; no video session is required. This explicit typing intent
@@ -248,6 +249,25 @@ button bits). While the mode is `off` no recognizer exists anywhere and
 behavior is byte-for-byte the trackpad of previous releases. iPads have no
 Taptic engine, so press feedback plays a synthesized trackpad click instead
 of buzzing.
+
+## Media keys and phone control preferences
+
+The Mac advertises `mediaControl` only to clients that declare that feature.
+`mediaPrevious`, `mediaPlayPause`, and `mediaNext` use the authenticated command
+channel and dispatch a system media-key down/up pair. They require Accessibility
+permission and control the Mac's active media app, like a keyboard's media keys.
+A successful response acknowledges event dispatch; it does not claim that a
+player has started or stopped. Phones connected to older Macs disable the keys
+and show an update hint without sending unfamiliar command values.
+
+PilotNest Settings → Control features provides individual switches for remote
+screen, trackpad, keyboard, all four screen actions, all three media keys,
+brightness, volume, and mute. They default to visible and persist on the phone
+across launches and Mac switches. Hidden-key storage preserves unknown keys
+across downgrades. Keyboard off also suppresses automatic editable-field probes.
+Volume and mute can be shown independently. The home screen separates the Mac
+switcher from input tools, groups screen/media actions in adaptive grids, omits
+empty groups, and offers a Settings shortcut when all home controls are hidden.
 
 ## Dock groups (launch a work set from the phone)
 

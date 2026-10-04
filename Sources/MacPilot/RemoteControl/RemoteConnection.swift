@@ -34,7 +34,8 @@ extension RemoteConnectionHost {
     /// phone never sends a command this build cannot route.
     var advertisedCapabilities: [RemoteCapability] {
         var capabilities: [RemoteCapability] = [
-            .lock, .displayOff, .wake, .unlock, .realtimeInput, .inputPressure, .inputPressureStream
+            .lock, .displayOff, .wake, .unlock, .realtimeInput, .inputPressure, .inputPressureStream,
+            .mediaControl
         ]
         if dockGroupsHosting != nil {
             capabilities.append(.dockGroups)

@@ -29,6 +29,17 @@ enum RemoteText {
     }
 
     private static let chinese: [String: String] = [
+        "controlsSettings": "控制功能",
+        "controlsSettingsHint": "选择要显示的控制功能，关闭后会隐藏对应控件。设置保存在本机，对所有 Mac 生效。",
+        "controlsGroupInput": "触控与键盘",
+        "controlsGroupScreen": "屏幕操作",
+        "controlsGroupMedia": "媒体播放",
+        "controlsGroupLevels": "亮度与音量",
+        "controlsEmpty": "控制功能已全部隐藏，可前往设置重新开启。",
+        "mediaPrevious": "上一曲",
+        "mediaPlayPause": "播放 / 暂停",
+        "mediaNext": "下一曲",
+        "mediaNeedsUpdate": "请更新 Mac 上的 MacPilot 以使用媒体控制键。",
         "desktopTitle": "远程控制",
         "desktopHint": "Mac 实时画面、触控板与系统键盘",
         "desktopBluetooth": "当前为蓝牙连接，仅支持触控板。请连接 Wi-Fi 后重试。",
@@ -244,6 +255,17 @@ enum RemoteText {
     ]
 
     private static let english: [String: String] = [
+        "controlsSettings": "Control features",
+        "controlsSettingsHint": "Choose which controls to show. Turning a feature off hides its controls. Preferences are saved on this device and apply to all Macs.",
+        "controlsGroupInput": "Trackpad & keyboard",
+        "controlsGroupScreen": "Screen actions",
+        "controlsGroupMedia": "Media playback",
+        "controlsGroupLevels": "Brightness & volume",
+        "controlsEmpty": "All controls are hidden. Enable them again in Settings.",
+        "mediaPrevious": "Previous",
+        "mediaPlayPause": "Play / Pause",
+        "mediaNext": "Next",
+        "mediaNeedsUpdate": "Update MacPilot on your Mac to use media controls.",
         "desktopTitle": "Remote control",
         "desktopHint": "Live Mac screen, trackpad and keyboard",
         "desktopBluetooth": "Bluetooth connection: trackpad only. Connect to Wi-Fi and retry.",

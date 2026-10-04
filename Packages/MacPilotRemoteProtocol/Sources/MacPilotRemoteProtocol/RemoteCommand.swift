@@ -18,6 +18,9 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
     /// Drive the default output device's volume (and optionally its mute).
     /// Carries a `RemoteLevelRequest` payload.
     case setVolume
+    case mediaPrevious
+    case mediaPlayPause
+    case mediaNext
     /// Arms the realtime input channel (the trackpad) for this connection.
     /// The actual pointer events travel as binary batches on frame tag `0x03`,
     /// never as commands.
@@ -50,7 +53,8 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
         case .getState, .ping:
             return false
         case .lockScreen, .displayOff, .wakeDisplay, .unlock, .wakeAndUnlock,
-             .setBrightness, .setVolume, .beginRealtimeInput, .endRealtimeInput,
+             .setBrightness, .setVolume, .mediaPrevious, .mediaPlayPause, .mediaNext,
+             .beginRealtimeInput, .endRealtimeInput,
              .beginTextInput, .textInput, .endTextInput,
              .getDockGroups, .launchDockGroup, .launchDockGroupApp,
              .beginRemoteVideo, .endRemoteVideo, .remotePointer, .remoteKey:
@@ -82,6 +86,8 @@ public enum RemoteCapability: String, Codable, Sendable, CaseIterable, Equatable
     /// so the phone hides the whole section instead of sending it.
     case dockGroups
     case remoteDesktop
+    /// System media keys. Senders must see this before sending media commands.
+    case mediaControl
 
     /// App Store 1.0/1.1 peers know only the four screen-control cases.
     /// Their synthesized Codable decoder rejects the entire hello on any new
@@ -96,7 +102,7 @@ public enum RemoteCapability: String, Codable, Sendable, CaseIterable, Equatable
                 // The first feature-aware 1.2 clients declared only desktop,
                 // but already understood all three input capability cases.
                 known.contains(capability.rawValue) || known.contains(Self.remoteDesktop.rawValue)
-            case .remoteDesktop, .dockGroups:
+            case .remoteDesktop, .dockGroups, .mediaControl:
                 known.contains(capability.rawValue)
             }
         }

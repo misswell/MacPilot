@@ -117,23 +117,25 @@ struct TrackpadContainerView: View {
                 }
             }
             Spacer(minLength: 8)
-            Button {
-                if model.keyboardActive {
-                    model.dismissKeyboard()
-                } else {
-                    model.requestKeyboard(focused: true)
+            if appModel.controlPreferences.isEnabled(.keyboard) {
+                Button {
+                    if model.keyboardActive {
+                        model.dismissKeyboard()
+                    } else {
+                        model.requestKeyboard(focused: true)
+                    }
+                } label: {
+                    Image(systemName: model.keyboardActive ? "keyboard.chevron.compact.down" : "keyboard")
+                        .font(.body.weight(.medium))
+                        .frame(width: 38, height: 34)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color(.tertiarySystemFill))
+                        )
                 }
-            } label: {
-                Image(systemName: model.keyboardActive ? "keyboard.chevron.compact.down" : "keyboard")
-                    .font(.body.weight(.medium))
-                    .frame(width: 38, height: 34)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color(.tertiarySystemFill))
-                    )
+                .disabled(!model.phase.isActiveLike)
+                .accessibilityLabel(appModel.text(model.keyboardActive ? "trackpadHideKeyboard" : "trackpadShowKeyboard"))
             }
-            .disabled(!model.phase.isActiveLike)
-            .accessibilityLabel(appModel.text(model.keyboardActive ? "trackpadHideKeyboard" : "trackpadShowKeyboard"))
             Button {
                 showSettings = true
             } label: {

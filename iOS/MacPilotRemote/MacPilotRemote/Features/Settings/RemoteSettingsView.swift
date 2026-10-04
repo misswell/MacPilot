@@ -9,6 +9,16 @@ struct RemoteSettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    NavigationLink {
+                        controlSettings
+                    } label: {
+                        Label(appModel.text("controlsSettings"), systemImage: "slider.horizontal.3")
+                    }
+                    .accessibilityIdentifier("controlSettings")
+                } footer: {
+                    Text(appModel.text("controlsSettingsHint"))
+                }
+                Section {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(appModel.text("requirementsIntro"))
                         // Numbered here rather than baked into the strings so the
@@ -57,6 +67,7 @@ struct RemoteSettingsView: View {
                 } footer: {
                     Text(appModel.text("connectionPriorityHint"))
                 }
+                .environment(\.editMode, .constant(.active))
 
                 Section(appModel.text("permissions")) {
                     HStack {
@@ -135,7 +146,6 @@ struct RemoteSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .environment(\.editMode, .constant(.active))
             .navigationTitle(appModel.text("settingsTitle"))
             .navigationBarTitleDisplayMode(.large)
             .confirmationDialog(
@@ -151,6 +161,32 @@ struct RemoteSettingsView: View {
                 Text(appModel.text("resetPairingsConfirm"))
             }
         }
+    }
+
+    private var controlSettings: some View {
+        Form {
+            ForEach(RemoteControlFeature.Group.allCases) { group in
+                Section(appModel.text(group.titleKey)) {
+                    ForEach(group.features) { feature in
+                        Toggle(isOn: Binding(
+                            get: { appModel.controlPreferences.isEnabled(feature) },
+                            set: { appModel.controlPreferences.setEnabled($0, for: feature) }
+                        )) {
+                            Label(appModel.text(feature.titleKey), systemImage: feature.icon)
+                        }
+                        .toggleStyle(.switch)
+                        .accessibilityIdentifier("controlToggle.\(feature.rawValue)")
+                    }
+                }
+            }
+            Section {
+                Text(appModel.text("controlsSettingsHint"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle(appModel.text("controlsSettings"))
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     /// Setup steps, in the order the user has to do them.

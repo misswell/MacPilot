@@ -489,7 +489,8 @@ final class RemoteTrackpadModel: ObservableObject {
             keyboardRequestTask?.cancel()
             keyboardRequestTask = nil
         }
-        guard !keyboardActive, keyboardRequestTask == nil, let appModel else { return }
+        guard !keyboardActive, keyboardRequestTask == nil, let appModel,
+              appModel.controlPreferences.isEnabled(.keyboard) else { return }
         keyboardRequestTask = Task { [weak self] in
             try? await Task.sleep(for: Self.keyboardProbeDelay)
             // A quick dismissal followed by another tap must finish the

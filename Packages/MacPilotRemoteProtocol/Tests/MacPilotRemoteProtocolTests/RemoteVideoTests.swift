@@ -111,7 +111,7 @@ struct RemoteVideoTests {
         #expect(RemoteCapability.negotiated(RemoteCapability.allCases, features: ["realtimeInput"]) ==
             [.lock, .displayOff, .wake, .unlock, .realtimeInput])
         #expect(RemoteCapability.negotiated(RemoteCapability.allCases, features: ["remoteDesktop"]) ==
-            RemoteCapability.allCases.filter { $0 != .dockGroups })
+            RemoteCapability.allCases.filter { $0 != .dockGroups && $0 != .mediaControl })
     }
 
     @Test func videoCapabilitiesNeverChangeExistingInputEventNumbers() {
