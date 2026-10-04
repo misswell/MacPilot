@@ -32,13 +32,41 @@ final class ScreenshotTests: XCTestCase {
     }
 
     @MainActor
+    func testTouchBarAndAllHomeButtonsFitWithoutScrolling() {
+        let app = launchAndSettle()
+        let names = ["desktop", "trackpad", "displayOff", "wakeDisplay", "lockScreen",
+                     "wakeAndUnlock", "mediaPrevious", "mediaPlayPause", "mediaNext", "mute"]
+        let safeBottom = app.tabBars.firstMatch.exists
+            ? app.tabBars.firstMatch.frame.minY : app.frame.maxY - 30
+        for name in names {
+            let button = app.buttons["control.\(name)"]
+            XCTAssertTrue(button.exists, name)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44, name)
+            XCTAssertGreaterThanOrEqual(button.frame.minX, 0, name)
+            XCTAssertLessThanOrEqual(button.frame.maxX, app.frame.maxX, name)
+            XCTAssertLessThanOrEqual(button.frame.maxY, safeBottom, name)
+        }
+        let previous = app.buttons["control.mediaPrevious"].frame
+        let play = app.buttons["control.mediaPlayPause"].frame
+        let next = app.buttons["control.mediaNext"].frame
+        XCTAssertEqual(previous.midY, play.midY, accuracy: 1)
+        XCTAssertEqual(play.midY, next.midY, accuracy: 1)
+        XCTAssertLessThan(previous.maxX, play.minX)
+        XCTAssertLessThan(play.maxX, next.minX)
+        capture("08-touchbar-home")
+    }
+
+    @MainActor
     func testControlSelectionPersistsAndHomeMediaLayoutFits() {
         let app = launchAndSettle()
         selectControlTab(app, index: 2)
         app.buttons["controlSettings"].tap()
         let toggle = app.switches["controlToggle.lockScreen"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        // SwiftUI exposes the entire row as a switch. Tap the physical thumb
+        // at a fixed inset from the trailing edge on both iPhone and iPad.
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -42, dy: 0)).tap()
         capture("06-control-features")
         app.terminate()
         app.launch()
@@ -59,7 +87,8 @@ final class ScreenshotTests: XCTestCase {
         selectControlTab(app, index: 2)
         app.buttons["controlSettings"].tap()
         app.switches["controlToggle.lockScreen"]
-            .coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+            .coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -42, dy: 0)).tap()
         XCTAssertTrue(hidden)
     }
 

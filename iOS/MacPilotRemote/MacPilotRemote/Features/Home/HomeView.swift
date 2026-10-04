@@ -10,9 +10,14 @@ struct HomeView: View {
     @EnvironmentObject private var appModel: RemoteAppModel
     @Binding var selectedTab: RootTab
 
-    /// Adaptive so the action grid fills an iPad's width instead of
-    /// stretching two columns across it; on a phone it still lands on two.
-    private let columns = [GridItem(.adaptive(minimum: 140), spacing: 12)]
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    // A compact control deck on phones, with a comfortable maximum width on
+    // iPad. Accessibility text gets extra rows instead of smaller touch targets.
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 8),
+              count: dynamicTypeSize >= .xxLarge ? 2 : 4)
+    }
 
     @State private var trackpadModel: RemoteTrackpadModel?
     @State private var trackpadVisible = false
@@ -23,7 +28,7 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 18) {
+                VStack(spacing: 10) {
                     deviceCard
                     inputTools
                     actionGrid
@@ -42,9 +47,11 @@ struct HomeView: View {
                         disconnectedPanel
                     }
                 }
-                .padding(.horizontal, 20)
+                .frame(maxWidth: 560)
+                .padding(.horizontal, 16)
                 .padding(.top, 8)
-                .padding(.bottom, 28)
+                .padding(.bottom, 16)
+                .frame(maxWidth: .infinity)
             }
             // The trackpad page must own the whole screen: while it is up the
             // tab bar goes away, otherwise it floats over the touch surface.
@@ -93,7 +100,7 @@ struct HomeView: View {
     private var inputTools: some View {
         let tools = [RemoteControlFeature.desktop, .trackpad].filter(isEnabled)
         if !tools.isEmpty {
-            LazyVGrid(columns: columns, spacing: 12) {
+            HStack(spacing: 10) {
                 ForEach(tools) { feature in
                     Button {
                         if feature == .desktop {
@@ -108,7 +115,20 @@ struct HomeView: View {
                             handleTrackpadTap()
                         }
                     } label: {
-                        controlLabel(feature, running: false)
+                        HStack(spacing: 10) {
+                            Image(systemName: feature.icon)
+                                .font(.title3.weight(.medium))
+                                .foregroundStyle(Color.accentColor)
+                            Text(appModel.text(feature.titleKey))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .padding(.horizontal, 12)
+                        .background(Color(.secondarySystemGroupedBackground),
+                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("control.\(feature.rawValue)")
@@ -170,7 +190,9 @@ struct HomeView: View {
                 Image(systemName: "desktopcomputer")
                     .font(.body)
                     .foregroundStyle(Color.accentColor)
-                    .frame(width: 22)
+                    .frame(width: 36, height: 36)
+                    .background(Color.accentColor.opacity(0.08),
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(appModel.pairedMacs.isEmpty ? appModel.text("chooseMac") : appModel.activeMacName)
                         .font(.subheadline.weight(.semibold))
@@ -184,6 +206,7 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 }
+                Spacer(minLength: 8)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -191,9 +214,10 @@ struct HomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 14)
             .padding(.trailing, 10)
-            .padding(.vertical, 12)
+            .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .accessibilityLabel(appModel.text("switchMacAccessibility", appModel.activeMacName))
     }
 
@@ -237,12 +261,9 @@ struct HomeView: View {
     private var actionGrid: some View {
         let actions = RemoteControlFeature.Group.screen.features.filter(isEnabled)
         if !actions.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionTitle("controlsGroupScreen")
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(actions) { feature in
-                        actionButton(feature)
-                    }
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(actions) { feature in
+                    actionButton(feature)
                 }
             }
         }
@@ -252,13 +273,23 @@ struct HomeView: View {
     private var mediaPanel: some View {
         let actions = RemoteControlFeature.Group.media.features.filter(isEnabled)
         if !actions.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionTitle("controlsGroupMedia")
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 12)], spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
                     ForEach(actions) { feature in
-                        actionButton(feature)
+                        mediaButton(feature)
                     }
                 }
+                .padding(8)
+                .background(
+                    LinearGradient(colors: [Color(white: 0.12), Color(white: 0.055)],
+                                   startPoint: .top, endPoint: .bottom),
+                    in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+                }
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
                 if appModel.connectionState.isConnected && !appModel.supportsMediaControl {
                     hint(appModel.text("mediaNeedsUpdate"))
                 }
@@ -266,43 +297,63 @@ struct HomeView: View {
         }
     }
 
-    private func sectionTitle(_ key: String) -> some View {
-        Text(appModel.text(key))
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .accessibilityAddTraits(.isHeader)
+    private func mediaButton(_ feature: RemoteControlFeature) -> some View {
+        Button {
+            guard let command = feature.command else { return }
+            appModel.beginCommand(command)
+            Task { await appModel.perform(command) }
+        } label: {
+            ZStack {
+                if appModel.runningCommand == feature.command {
+                    ProgressView().tint(.white)
+                } else {
+                    Image(systemName: feature.icon)
+                        .font(.system(size: feature == .mediaPlayPause ? 23 : 20, weight: .medium))
+                }
+            }
+            .foregroundStyle(.white.opacity(commandEnabled(feature) ? 1 : 0.55))
+            .frame(maxWidth: .infinity, minHeight: 48)
+        }
+        .buttonStyle(TouchBarKeyStyle(prominent: feature == .mediaPlayPause))
+        .disabled(!commandEnabled(feature))
+        .accessibilityLabel(appModel.text(feature.titleKey))
+        .accessibilityIdentifier("control.\(feature.rawValue)")
+    }
+
+    private func commandEnabled(_ feature: RemoteControlFeature) -> Bool {
+        appModel.connectionState.isConnected && appModel.runningCommand == nil
+            && (feature.group != .media || appModel.supportsMediaControl)
     }
 
     private func controlLabel(_ feature: RemoteControlFeature, running: Bool) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             ZStack {
                 if running { ProgressView() }
-                else { Image(systemName: feature.icon).font(.title3.weight(.semibold)) }
+                else { Image(systemName: feature.icon).font(.title3.weight(.medium)) }
             }
             .frame(height: 24)
             Text(appModel.text(feature.titleKey))
-                .font(.subheadline.weight(.semibold))
+                .font(.caption.weight(.medium))
                 .lineLimit(2, reservesSpace: true)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: 72)
         .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .contentShape(Rectangle())
     }
 
     private func actionButton(_ feature: RemoteControlFeature) -> some View {
-        let command = feature.command!
-        let enabled = appModel.connectionState.isConnected && appModel.runningCommand == nil
-            && (feature.group != .media || appModel.supportsMediaControl)
+        let enabled = commandEnabled(feature)
         return Button {
+            guard let command = feature.command else { return }
             appModel.beginCommand(command)
             Task { await appModel.perform(command) }
         } label: {
-            controlLabel(feature, running: appModel.runningCommand == command)
+            controlLabel(feature, running: appModel.runningCommand == feature.command)
                 .foregroundStyle(enabled ? Color.accentColor : Color.secondary)
         }
         .buttonStyle(.plain)
@@ -316,9 +367,9 @@ struct HomeView: View {
     /// Brightness and volume, read from the same `MacRemoteState` the rest of
     /// the screen uses.
     ///
-    /// A level the Mac did not report is not shown at all: an external monitor
-    /// with no controllable backlight, or a Mac with no output device, both mean
-    /// a slider that cannot work. The card says so instead of offering one.
+    /// Unknown levels retain a labeled row with an unavailable indicator, never
+    /// a guessed zero or an interactive slider. The deck stays stable as the
+    /// first state arrives after connecting.
     private var enabledLevelKinds: [RemoteLevelKind] {
         RemoteLevelKind.allCases.filter { kind in
             kind == .volume ? (isEnabled(.volume) || isEnabled(.mute)) : isEnabled(.brightness)
@@ -328,33 +379,17 @@ struct HomeView: View {
     private var hasEnabledLevels: Bool { !enabledLevelKinds.isEmpty }
 
     private var levelsPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(appModel.text("levelsTitle"))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            if !appModel.connectionState.isConnected {
-                hint(appModel.text("levelsNotConnected"))
-            } else if appModel.macState == nil {
-                // The state rides along with the first response after the
-                // handshake; nothing useful to say for that one round trip.
-                hint(appModel.text("levelsUnavailableShort"))
-            } else if enabledLevelKinds.contains(where: { $0.value(in: appModel.macState) != nil }) {
-                ForEach(enabledLevelKinds, id: \.self) { kind in
-                    if let value = kind.value(in: appModel.macState) {
-                        LevelSliderRow(kind: kind, value: value)
-                    }
-                }
-            } else {
-                hint(appModel.text("levelsUnavailable"))
+        VStack(spacing: 4) {
+            ForEach(enabledLevelKinds, id: \.self) { kind in
+                LevelSliderRow(kind: kind, value: kind.value(in: appModel.macState))
+                if kind != enabledLevelKinds.last { Divider() }
             }
         }
-        .padding(16)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func hint(_ text: String) -> some View {
@@ -433,30 +468,35 @@ struct HomeView: View {
     }
 
     private var disconnectedPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(disconnectedTitle).font(.headline)
-            Text(disconnectedDetail).font(.subheadline).foregroundStyle(.secondary)
-
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(disconnectedTitle).font(.subheadline.weight(.semibold))
+                    Text(disconnectedDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
                 if unpairedMac != nil {
                     Button(appModel.text("goToPairing")) { selectedTab = .devices }
                         .buttonStyle(.borderedProminent)
+                        .frame(minHeight: 44)
                 } else {
                     Button(appModel.text("retry")) { appModel.retry() }
                         .buttonStyle(.borderedProminent)
-                }
-                if appModel.localNetworkDenied {
-                    Button(appModel.text("openSystemSettings")) { openSystemSettings() }
-                        .buttonStyle(.bordered)
+                        .frame(minHeight: 44)
                 }
             }
+            if appModel.localNetworkDenied {
+                Button(appModel.text("openSystemSettings")) { openSystemSettings() }
+                    .buttonStyle(.bordered)
+            }
         }
-        .padding(16)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func openSystemSettings() {
@@ -482,10 +522,11 @@ extension RemoteAppModel {
 /// drag into a single in-flight request ending on the value the user let go of.
 private struct LevelSliderRow: View {
     @EnvironmentObject private var appModel: RemoteAppModel
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let kind: RemoteLevelKind
     /// The value the Mac last reported, used whenever the finger is up.
-    let value: Double
+    let value: Double?
 
     @State private var draft: Double = 0
     @State private var isEditing = false
@@ -494,42 +535,56 @@ private struct LevelSliderRow: View {
         kind == .volume && appModel.volumeMuted == true
     }
 
+    private var showsSlider: Bool {
+        kind != .volume || appModel.controlPreferences.isEnabled(.volume)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
+            if dynamicTypeSize.isAccessibilitySize {
+                Text(appModel.text(kind.labelKey))
+                    .font(.subheadline.weight(.medium))
+            }
             HStack(spacing: 8) {
                 Image(systemName: isMuted ? "speaker.slash.fill" : kind.iconName)
                     .font(.subheadline)
                     .frame(width: 20)
                     .foregroundStyle(isMuted ? Color.orange : Color.accentColor)
-                Text(appModel.text(kind.labelKey))
-                    .font(.subheadline.weight(.medium))
-                Spacer(minLength: 8)
-                Text("\(Int((draft * 100).rounded()))%")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                if kind == .volume, appModel.volumeMuted != nil, appModel.controlPreferences.isEnabled(.mute) {
-                    muteButton
+                if showsSlider, value != nil {
+                    Slider(value: $draft, in: 0...1, step: 0.01) { editing in
+                        isEditing = editing
+                        if !editing { send(draft) }
+                    }
+                    .accessibilityLabel(appModel.text(kind.labelKey))
+                    .accessibilityValue("\(Int((draft * 100).rounded()))%")
+                    .accessibilityIdentifier("control.\(kind.rawValue)")
+                    Text("\(Int((draft * 100).rounded()))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 34, alignment: .trailing)
+                } else {
+                    Text(appModel.text(kind.labelKey))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    if showsSlider {
+                        Text("—").foregroundStyle(.tertiary)
+                            .accessibilityLabel(appModel.text("levelsUnavailableShort"))
+                    }
+                }
+                if kind == .volume, appModel.controlPreferences.isEnabled(.mute) {
+                    muteButton.disabled(value == nil || appModel.volumeMuted == nil)
                 }
             }
-
-            if kind != .volume || appModel.controlPreferences.isEnabled(.volume) {
-                Slider(value: $draft, in: 0...1, step: 0.01) { editing in
-                    isEditing = editing
-                    // The release is sent explicitly so a drag that ends between two
-                    // coalesced requests still lands on its final value.
-                    if !editing { send(draft) }
-                }
-                .accessibilityLabel(appModel.text(kind.labelKey))
-                .accessibilityValue("\(Int((draft * 100).rounded()))%")
-            }
+            .frame(minHeight: 44)
         }
-        .onAppear { draft = value }
+        .onAppear { if let value { draft = value } }
         .onChange(of: draft) { _, newValue in
             guard isEditing else { return }
             send(newValue)
         }
         .onChange(of: value) { _, newValue in
-            guard !isEditing else { return }
+            guard !isEditing, let newValue else { return }
             draft = newValue
         }
     }
@@ -541,7 +596,7 @@ private struct LevelSliderRow: View {
         } label: {
             Image(systemName: isMuted ? "speaker.slash" : "speaker.wave.2")
                 .font(.subheadline)
-                .frame(width: 30, height: 26)
+                .frame(width: 44, height: 44)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(Color(.tertiarySystemFill))
@@ -549,6 +604,7 @@ private struct LevelSliderRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(appModel.text(isMuted ? "unmute" : "mute"))
+        .accessibilityIdentifier("control.mute")
     }
 
     /// Raising the volume clears mute, exactly like the Mac's own volume keys;
@@ -556,5 +612,33 @@ private struct LevelSliderRow: View {
     private func send(_ newValue: Double) {
         let muted: Bool? = kind == .volume && newValue > 0 ? false : nil
         appModel.setLevel(kind, value: newValue, muted: muted)
+    }
+}
+
+/// A shallow illuminated key, like the physical MacBook Touch Bar. Keep the
+/// strip dark in either appearance, with reduced-motion support for its press.
+private struct TouchBarKeyStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let prominent: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                LinearGradient(
+                    colors: [Color(white: prominent ? 0.28 : 0.19), Color(white: prominent ? 0.20 : 0.13)],
+                    startPoint: .top, endPoint: .bottom
+                ),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.white.opacity(configuration.isPressed ? 0.14 : 0))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(.white.opacity(prominent ? 0.15 : 0.06), lineWidth: 0.5)
+            }
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

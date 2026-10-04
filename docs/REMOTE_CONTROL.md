@@ -266,8 +266,14 @@ brightness, volume, and mute. They default to visible and persist on the phone
 across launches and Mac switches. Hidden-key storage preserves unknown keys
 across downgrades. Keyboard off also suppresses automatic editable-field probes.
 Volume and mute can be shown independently. The home screen separates the Mac
-switcher from input tools, groups screen/media actions in adaptive grids, omits
-empty groups, and offers a Settings shortcut when all home controls are hidden.
+switcher from input tools and places four compact screen keys in a row. Media
+keys share one dark Touch Bar with illuminated key surfaces and press feedback
+that respects Reduce Motion. Brightness/volume use compact inline sliders;
+unknown levels show an unavailable indicator rather than a guessed zero. The
+560-point content limit keeps iPad layouts compact. Larger text uses extra rows
+and scrolling; default-size controls fit even an iPhone SE portrait viewport.
+Empty groups are omitted, and a Settings shortcut remains when all home controls
+are hidden.
 
 ## Dock groups (launch a work set from the phone)
 
