@@ -41,10 +41,17 @@ final class ScreenshotTests: XCTestCase {
         for name in names {
             let button = app.buttons["control.\(name)"]
             XCTAssertTrue(button.exists, name)
-            XCTAssertGreaterThanOrEqual(button.frame.height, 44, name)
+            // Accessibility frame conversion can round 44 points down slightly.
+            XCTAssertGreaterThanOrEqual(button.frame.height + 0.01, 44, name)
             XCTAssertGreaterThanOrEqual(button.frame.minX, 0, name)
             XCTAssertLessThanOrEqual(button.frame.maxX, app.frame.maxX, name)
             XCTAssertLessThanOrEqual(button.frame.maxY, safeBottom, name)
+        }
+        let screenKeys = ["displayOff", "wakeDisplay", "lockScreen", "wakeAndUnlock"]
+            .map { app.buttons["control.\($0)"].frame }
+        for frame in screenKeys.dropFirst() {
+            XCTAssertEqual(frame.midY, screenKeys[0].midY, accuracy: 0.1)
+            XCTAssertEqual(frame.height, screenKeys[0].height, accuracy: 0.1)
         }
         let previous = app.buttons["control.mediaPrevious"].frame
         let play = app.buttons["control.mediaPlayPause"].frame

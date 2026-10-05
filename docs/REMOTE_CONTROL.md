@@ -266,7 +266,11 @@ brightness, volume, and mute. They default to visible and persist on the phone
 across launches and Mac switches. Hidden-key storage preserves unknown keys
 across downgrades. Keyboard off also suppresses automatic editable-field probes.
 Volume and mute can be shown independently. The home screen separates the Mac
-switcher from input tools and places four compact screen keys in a row. Media
+switcher from input tools and places four compact screen keys in a row. Screen
+key content is centered in equal-height, Dynamic Type-scaled keys; single-line
+captions do not reserve an invisible second line. Input, screen, media, and mute
+keys reuse the same surfaces and press feedback, and all groups share one
+adaptive card background, 16-point radius, and subtle border. Media
 keys share one Touch Bar with adaptive grouped surfaces and the same accent as
 the surrounding controls. Subtle key shading and press feedback retain its
 tactile appearance in light and dark mode and respect Reduce Motion.

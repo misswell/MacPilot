@@ -11,6 +11,9 @@ struct HomeView: View {
     @Binding var selectedTab: RootTab
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .subheadline) private var inputKeyHeight: CGFloat = 44
+    @ScaledMetric(relativeTo: .caption) private var actionKeyHeight: CGFloat = 72
+    @ScaledMetric(relativeTo: .title3) private var actionIconHeight: CGFloat = 24
 
     // A compact control deck on phones, with a comfortable maximum width on
     // iPad. Accessibility text gets extra rows instead of smaller touch targets.
@@ -28,7 +31,7 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 10) {
+                VStack(spacing: 8) {
                     deviceCard
                     inputTools
                     actionGrid
@@ -100,7 +103,9 @@ struct HomeView: View {
     private var inputTools: some View {
         let tools = [RemoteControlFeature.desktop, .trackpad].filter(isEnabled)
         if !tools.isEmpty {
-            HStack(spacing: 10) {
+            let layout = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+            layout {
                 ForEach(tools) { feature in
                     Button {
                         if feature == .desktop {
@@ -124,16 +129,16 @@ struct HomeView: View {
                                 .foregroundStyle(.primary)
                                 .lineLimit(2)
                         }
-                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .frame(maxWidth: .infinity, minHeight: inputKeyHeight)
                         .padding(.horizontal, 12)
-                        .background(Color(.secondarySystemGroupedBackground),
-                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ControlKeyStyle(prominent: false))
                     .accessibilityIdentifier("control.\(feature.rawValue)")
                 }
             }
+            .padding(8)
+            .controlDeckCard()
         }
     }
 
@@ -163,8 +168,7 @@ struct HomeView: View {
     /// Device identity has its own row so long names do not squeeze the tools.
     private var deviceCard: some View {
         deviceSwitcher
-            .background(Color(.secondarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .controlDeckCard()
     }
 
     private var deviceSwitcher: some View {
@@ -266,6 +270,8 @@ struct HomeView: View {
                     actionButton(feature)
                 }
             }
+            .padding(8)
+            .controlDeckCard()
         }
     }
 
@@ -280,13 +286,7 @@ struct HomeView: View {
                     }
                 }
                 .padding(8)
-                .background(Color(.secondarySystemGroupedBackground),
-                            in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .strokeBorder(.primary.opacity(0.06), lineWidth: 0.5)
-                }
-                .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
+                .controlDeckCard()
                 if appModel.connectionState.isConnected && !appModel.supportsMediaControl {
                     hint(appModel.text("mediaNeedsUpdate"))
                 }
@@ -311,7 +311,7 @@ struct HomeView: View {
             .foregroundStyle(commandEnabled(feature) ? Color.accentColor : Color.secondary)
             .frame(maxWidth: .infinity, minHeight: 48)
         }
-        .buttonStyle(TouchBarKeyStyle(prominent: feature == .mediaPlayPause))
+        .buttonStyle(ControlKeyStyle(prominent: feature == .mediaPlayPause))
         .disabled(!commandEnabled(feature))
         .accessibilityLabel(appModel.text(feature.titleKey))
         .accessibilityIdentifier("control.\(feature.rawValue)")
@@ -323,23 +323,23 @@ struct HomeView: View {
     }
 
     private func controlLabel(_ feature: RemoteControlFeature, running: Bool) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             ZStack {
                 if running { ProgressView() }
                 else { Image(systemName: feature.icon).font(.title3.weight(.medium)) }
             }
-            .frame(height: 24)
+            .frame(height: actionIconHeight)
             Text(appModel.text(feature.titleKey))
                 .font(.caption.weight(.medium))
-                .lineLimit(2, reservesSpace: true)
+                .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .foregroundStyle(commandEnabled(feature) ? Color.primary : Color.secondary)
         }
         .padding(.horizontal, 4)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: 72)
-        .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .frame(height: actionKeyHeight, alignment: .center)
         .contentShape(Rectangle())
     }
 
@@ -353,7 +353,7 @@ struct HomeView: View {
             controlLabel(feature, running: appModel.runningCommand == feature.command)
                 .foregroundStyle(enabled ? Color.accentColor : Color.secondary)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ControlKeyStyle(prominent: false))
         .disabled(!enabled)
         .accessibilityLabel(appModel.text(feature.titleKey))
         .accessibilityIdentifier("control.\(feature.rawValue)")
@@ -385,8 +385,7 @@ struct HomeView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .controlDeckCard()
     }
 
     private func hint(_ text: String) -> some View {
@@ -492,8 +491,7 @@ struct HomeView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .controlDeckCard()
     }
 
     private func openSystemSettings() {
@@ -587,19 +585,17 @@ private struct LevelSliderRow: View {
     }
 
     private var muteButton: some View {
-        Button {
+        let available = value != nil && appModel.volumeMuted != nil
+        return Button {
             appModel.setLevel(kind, value: draft, muted: !isMuted)
             Haptics.impact()
         } label: {
             Image(systemName: isMuted ? "speaker.slash" : "speaker.wave.2")
                 .font(.subheadline)
+                .foregroundStyle(available ? (isMuted ? Color.orange : Color.accentColor) : Color.secondary)
                 .frame(width: 44, height: 44)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color(.tertiarySystemFill))
-                )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ControlKeyStyle(prominent: false))
         .accessibilityLabel(appModel.text(isMuted ? "unmute" : "mute"))
         .accessibilityIdentifier("control.mute")
     }
@@ -612,9 +608,20 @@ private struct LevelSliderRow: View {
     }
 }
 
-/// Shallow Touch Bar keys use the same adaptive surfaces and accent as the
-/// surrounding controls, with reduced-motion support for their press feedback.
-private struct TouchBarKeyStyle: ButtonStyle {
+/// All home control groups share one quiet, adaptive card surface.
+private extension View {
+    func controlDeckCard() -> some View {
+        background(Color(.secondarySystemGroupedBackground),
+                   in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(.primary.opacity(0.06), lineWidth: 0.5)
+            }
+    }
+}
+
+/// Screen, media, input and mute keys share Touch Bar surfaces and feedback.
+private struct ControlKeyStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
     let prominent: Bool
