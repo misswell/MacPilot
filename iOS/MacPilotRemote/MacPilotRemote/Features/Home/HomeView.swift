@@ -11,15 +11,12 @@ struct HomeView: View {
     @Binding var selectedTab: RootTab
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @ScaledMetric(relativeTo: .subheadline) private var inputKeyHeight: CGFloat = 44
-    @ScaledMetric(relativeTo: .caption) private var actionKeyHeight: CGFloat = 72
-    @ScaledMetric(relativeTo: .title3) private var actionIconHeight: CGFloat = 24
 
     // A compact control deck on phones, with a comfortable maximum width on
     // iPad. Accessibility text gets extra rows instead of smaller touch targets.
     private var columns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 8),
-              count: dynamicTypeSize >= .xxLarge ? 2 : 4)
+              count: dynamicTypeSize.isAccessibilitySize ? 1 : 2)
     }
 
     @State private var trackpadModel: RemoteTrackpadModel?
@@ -31,7 +28,7 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 8) {
+                VStack(spacing: 6) {
                     deviceCard
                     inputTools
                     actionGrid
@@ -120,18 +117,8 @@ struct HomeView: View {
                             handleTrackpadTap()
                         }
                     } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: feature.icon)
-                                .font(.title3.weight(.medium))
-                                .foregroundStyle(Color.accentColor)
-                            Text(appModel.text(feature.titleKey))
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(2)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: inputKeyHeight)
-                        .padding(.horizontal, 12)
-                        .contentShape(Rectangle())
+                        ControlKeyLabel(title: appModel.text(feature.titleKey),
+                                        icon: feature.icon, enabled: true)
                     }
                     .buttonStyle(ControlKeyStyle(prominent: false))
                     .accessibilityIdentifier("control.\(feature.rawValue)")
@@ -280,7 +267,9 @@ struct HomeView: View {
         let actions = RemoteControlFeature.Group.media.features.filter(isEnabled)
         if !actions.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
+                let layout = dynamicTypeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+                layout {
                     ForEach(actions) { feature in
                         mediaButton(feature)
                     }
@@ -300,16 +289,9 @@ struct HomeView: View {
             appModel.beginCommand(command)
             Task { await appModel.perform(command) }
         } label: {
-            ZStack {
-                if appModel.runningCommand == feature.command {
-                    ProgressView().tint(commandEnabled(feature) ? Color.accentColor : Color.secondary)
-                } else {
-                    Image(systemName: feature.icon)
-                        .font(.system(size: feature == .mediaPlayPause ? 23 : 20, weight: .medium))
-                }
-            }
-            .foregroundStyle(commandEnabled(feature) ? Color.accentColor : Color.secondary)
-            .frame(maxWidth: .infinity, minHeight: 48)
+            ControlKeyLabel(title: appModel.text(feature.titleKey), icon: feature.icon,
+                            enabled: commandEnabled(feature),
+                            running: appModel.runningCommand == feature.command)
         }
         .buttonStyle(ControlKeyStyle(prominent: feature == .mediaPlayPause))
         .disabled(!commandEnabled(feature))
@@ -322,27 +304,6 @@ struct HomeView: View {
             && (feature.group != .media || appModel.supportsMediaControl)
     }
 
-    private func controlLabel(_ feature: RemoteControlFeature, running: Bool) -> some View {
-        VStack(spacing: 4) {
-            ZStack {
-                if running { ProgressView() }
-                else { Image(systemName: feature.icon).font(.title3.weight(.medium)) }
-            }
-            .frame(height: actionIconHeight)
-            Text(appModel.text(feature.titleKey))
-                .font(.caption.weight(.medium))
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .foregroundStyle(commandEnabled(feature) ? Color.primary : Color.secondary)
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity)
-        .frame(height: actionKeyHeight, alignment: .center)
-        .contentShape(Rectangle())
-    }
-
     private func actionButton(_ feature: RemoteControlFeature) -> some View {
         let enabled = commandEnabled(feature)
         return Button {
@@ -350,8 +311,8 @@ struct HomeView: View {
             appModel.beginCommand(command)
             Task { await appModel.perform(command) }
         } label: {
-            controlLabel(feature, running: appModel.runningCommand == feature.command)
-                .foregroundStyle(enabled ? Color.accentColor : Color.secondary)
+            ControlKeyLabel(title: appModel.text(feature.titleKey), icon: feature.icon,
+                            enabled: enabled, running: appModel.runningCommand == feature.command)
         }
         .buttonStyle(ControlKeyStyle(prominent: false))
         .disabled(!enabled)
@@ -523,6 +484,9 @@ private struct LevelSliderRow: View {
     /// The value the Mac last reported, used whenever the finger is up.
     let value: Double?
 
+    @ScaledMetric(relativeTo: .subheadline) private var muteKeyWidth: CGFloat = 84
+    @ScaledMetric(relativeTo: .subheadline) private var levelIconWidth: CGFloat = 20
+
     @State private var draft: Double = 0
     @State private var isEditing = false
 
@@ -543,7 +507,7 @@ private struct LevelSliderRow: View {
             HStack(spacing: 8) {
                 Image(systemName: isMuted ? "speaker.slash.fill" : kind.iconName)
                     .font(.subheadline)
-                    .frame(width: 20)
+                    .frame(width: levelIconWidth)
                     .foregroundStyle(isMuted ? Color.orange : Color.accentColor)
                 if showsSlider, value != nil {
                     Slider(value: $draft, in: 0...1, step: 0.01) { editing in
@@ -558,20 +522,27 @@ private struct LevelSliderRow: View {
                         .foregroundStyle(.secondary)
                         .frame(minWidth: 34, alignment: .trailing)
                 } else {
-                    Text(appModel.text(kind.labelKey))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    if !dynamicTypeSize.isAccessibilitySize {
+                        Text(appModel.text(kind.labelKey))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer(minLength: 8)
                     if showsSlider {
                         Text("—").foregroundStyle(.tertiary)
                             .accessibilityLabel(appModel.text("levelsUnavailableShort"))
                     }
                 }
-                if kind == .volume, appModel.controlPreferences.isEnabled(.mute) {
+                if kind == .volume, appModel.controlPreferences.isEnabled(.mute),
+                   !dynamicTypeSize.isAccessibilitySize {
                     muteButton.disabled(value == nil || appModel.volumeMuted == nil)
                 }
             }
             .frame(minHeight: 44)
+            if kind == .volume, appModel.controlPreferences.isEnabled(.mute),
+               dynamicTypeSize.isAccessibilitySize {
+                muteButton.disabled(value == nil || appModel.volumeMuted == nil)
+            }
         }
         .onAppear { if let value { draft = value } }
         .onChange(of: draft) { _, newValue in
@@ -590,10 +561,10 @@ private struct LevelSliderRow: View {
             appModel.setLevel(kind, value: draft, muted: !isMuted)
             Haptics.impact()
         } label: {
-            Image(systemName: isMuted ? "speaker.slash" : "speaker.wave.2")
-                .font(.subheadline)
-                .foregroundStyle(available ? (isMuted ? Color.orange : Color.accentColor) : Color.secondary)
-                .frame(width: 44, height: 44)
+            ControlKeyLabel(title: appModel.text(isMuted ? "unmute" : "mute"),
+                            icon: isMuted ? "speaker.slash" : "speaker.wave.2",
+                            enabled: available, tint: isMuted ? .orange : .accentColor)
+                .frame(width: dynamicTypeSize.isAccessibilitySize ? nil : muteKeyWidth)
         }
         .buttonStyle(ControlKeyStyle(prominent: false))
         .accessibilityLabel(appModel.text(isMuted ? "unmute" : "mute"))
@@ -605,6 +576,39 @@ private struct LevelSliderRow: View {
     private func send(_ newValue: Double) {
         let muted: Bool? = kind == .volume && newValue > 0 ? false : nil
         appModel.setLevel(kind, value: newValue, muted: muted)
+    }
+}
+
+/// Keep both the symbol and the full caption on the same center line.
+/// Intrinsic text height lets larger fonts wrap without clipping the key.
+private struct ControlKeyLabel: View {
+    @ScaledMetric(relativeTo: .subheadline) private var iconSize: CGFloat = 20
+    @ScaledMetric(relativeTo: .subheadline) private var minimumHeight: CGFloat = 44
+
+    let title: String
+    let icon: String
+    let enabled: Bool
+    var running = false
+    var tint: Color = .accentColor
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 6) {
+            ZStack {
+                if running { ProgressView() }
+                else { Image(systemName: icon).font(.system(size: iconSize, weight: .medium)) }
+            }
+            .frame(width: iconSize, height: iconSize)
+            .foregroundStyle(enabled ? tint : .secondary)
+            Text(title)
+                .font(.subheadline.weight(.medium))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .foregroundStyle(enabled ? Color.primary : .secondary)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .center)
+        .contentShape(Rectangle())
     }
 }
 
