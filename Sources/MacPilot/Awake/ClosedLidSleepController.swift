@@ -23,8 +23,8 @@ protocol ClosedLidSleepControlling: AnyObject {
     func openSystemSettings()
     func setEnabled(_ enabled: Bool)
     /// Finishes an enable that registration interrupted: the user approves the
-    /// daemon outside the app, so only a later state refresh can notice the
-    /// service became ready while the desired flag stayed on.
+    /// daemon outside the app. Also verifies already-active protection against
+    /// the real system setting when the user returns to the settings page.
     func reenableIfPending()
     func shutdown()
 }
@@ -81,6 +81,7 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
     func prepareIfNeeded() async {
         guard !isShutdown else { return }
         await ensureRegistration()
+        guard !isShutdown, !Task.isCancelled else { return }
         notifyStateChange()
     }
 
@@ -133,6 +134,7 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         guard !Task.isCancelled else { return }
         reconnectAttempt = 0
         await ensureRegistration()
+        guard desiredEnabled, !isShutdown, !Task.isCancelled else { return }
         switch helper.registrationState {
         case .ready:
             break
@@ -151,23 +153,20 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         serviceState = .enabling
         notifyStateChange()
         let result = await helper.setSleepDisabled(true)
-        guard !isShutdown, desiredEnabled else { return }
+        guard !isShutdown, desiredEnabled, !Task.isCancelled else { return }
         switch result {
         case .success(let owned):
             ownsSleepDisabled = owned
             if owned { mayOwnSleepDisabled = true }
-            isActive = true
-            serviceState = .enabled
-            lastFailure = nil
-            logger.notice("Closed-lid sleep enabled (owned=\(owned, privacy: .public))")
-            startHeartbeat()
+            if await verifyAppliedState() {
+                logger.notice("Closed-lid sleep verified (owned=\(owned, privacy: .public))")
+            }
         case .failure(let failure):
             ownsSleepDisabled = false
-            isActive = false
-            lastFailure = failure
-            serviceState = .error(failure.message)
+            recordFailure(failure)
             logger.error("Closed-lid sleep enable failed: \(failure.message, privacy: .public)")
         }
+        if desiredEnabled, !isShutdown, !Task.isCancelled { startHeartbeat() }
         notifyStateChange()
     }
 
@@ -176,11 +175,13 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         stopHeartbeat()
         reconnectAttempt = 0
         let result = await helper.setSleepDisabled(false)
+        guard !desiredEnabled, !isShutdown, !Task.isCancelled else { return }
         switch result {
         case .success:
             ownsSleepDisabled = false
             mayOwnSleepDisabled = false
             isActive = false
+            systemSleepDisabled = nil
             lastFailure = nil
             serviceState = helper.registrationState
             logger.notice("Closed-lid sleep released")
@@ -226,11 +227,53 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
     }
 
     func reenableIfPending() {
-        guard desiredEnabled, !isActive, isServiceReady, !isShutdown else { return }
+        guard desiredEnabled, isServiceReady, !isShutdown else { return }
         workTask?.cancel()
         workTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.enableIfNeeded()
+            if self.isActive {
+                await self.checkAndRepairAppliedState()
+            } else {
+                await self.enableIfNeeded()
+            }
+        }
+    }
+
+    /// An XPC success or a helper-owned flag cannot prove that lid sleep is
+    /// blocked. Only the system value may publish protection as active.
+    private func verifyAppliedState() async -> Bool {
+        let result = await helper.sleepDisabled()
+        guard desiredEnabled, !isShutdown, !Task.isCancelled else { return false }
+        switch result {
+        case .success(true):
+            systemSleepDisabled = true
+            isActive = true
+            serviceState = .enabled
+            lastFailure = nil
+        case .success(false):
+            recordFailure(.requestFailed("Closed-lid sleep prevention is not active."), systemValue: false)
+        case .failure(let failure):
+            recordFailure(failure)
+        }
+        notifyStateChange()
+        return isActive
+    }
+
+    private func recordFailure(_ failure: ClosedLidSleepFailure, systemValue: Bool? = nil) {
+        isActive = false
+        systemSleepDisabled = systemValue
+        lastFailure = failure
+        serviceState = .error(failure.message)
+    }
+
+    private func checkAndRepairAppliedState() async {
+        if await verifyAppliedState() { return }
+        guard desiredEnabled, !isShutdown, !Task.isCancelled else { return }
+        if systemSleepDisabled == false {
+            logger.notice("Closed-lid sleep setting was lost; reapplying protection")
+            await enableIfNeeded()
+        } else {
+            await attemptReconnect()
         }
     }
 
@@ -260,17 +303,13 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
     private func sendHeartbeat() async {
         guard desiredEnabled, !isShutdown else { return }
         let result = await helper.heartbeat()
-        guard !isShutdown else { return }
+        guard desiredEnabled, !isShutdown, !Task.isCancelled else { return }
         switch result {
         case .success:
             reconnectAttempt = 0
-            if case .error = serviceState {
-                serviceState = .enabled
-            }
-            lastFailure = nil
+            await checkAndRepairAppliedState()
         case .failure(let failure):
-            lastFailure = failure
-            serviceState = .error(failure.message)
+            recordFailure(failure)
             logger.error("Heartbeat failed: \(failure.message, privacy: .public)")
             await attemptReconnect()
             return
@@ -295,16 +334,14 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         guard desiredEnabled, !isShutdown else { return }
         logger.notice("Reconnecting to the background power service (attempt \(self.reconnectAttempt, privacy: .public))")
         let result = await helper.setSleepDisabled(true)
-        guard !isShutdown else { return }
+        guard desiredEnabled, !isShutdown, !Task.isCancelled else { return }
         switch result {
         case .success(let owned):
             ownsSleepDisabled = owned
-            isActive = true
-            serviceState = .enabled
-            lastFailure = nil
+            if owned { mayOwnSleepDisabled = true }
+            _ = await verifyAppliedState()
         case .failure(let failure):
-            lastFailure = failure
-            serviceState = .error(failure.message)
+            recordFailure(failure)
         }
         notifyStateChange()
     }

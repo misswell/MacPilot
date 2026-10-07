@@ -53,7 +53,8 @@ public enum SleepDisabledPlanner {
         currentSleepDisabled: Bool,
         state: SleepDisabledRuntimeState
     ) -> SleepDisabledPlan {
-        if state.macPilotOwnedSleepDisable { return .noChange }
+        // Ownership records who must restore the setting, not whether the
+        // setting is still applied. Another power tool can reset it to zero.
         if currentSleepDisabled { return .noChange }
         return .enableByRunningPMSet
     }

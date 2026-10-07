@@ -277,6 +277,7 @@ final class AwakeSessionManager: ObservableObject, ManagedFeature {
             self.sleepStartedAt = nil
         }
         refreshPowerState()
+        refreshClosedLidServiceState()
         guard settings.isEnabled, activeSessions.isEmpty else { return }
         if let profileStore {
             let automaticProfiles = profileStore.profiles.filter { $0.configuration.autoStartOnWake }

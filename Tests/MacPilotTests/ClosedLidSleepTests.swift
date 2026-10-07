@@ -45,6 +45,11 @@ struct SleepDisabledPlannerTests {
         #expect(SleepDisabledPlanner.planEnable(currentSleepDisabled: true, state: owned) == .noChange)
     }
 
+    @Test func lostSystemSettingIsReappliedEvenWhenOwnershipIsStillRecorded() {
+        let owned = SleepDisabledRuntimeState(macPilotOwnedSleepDisable: true)
+        #expect(SleepDisabledPlanner.planEnable(currentSleepDisabled: false, state: owned) == .enableByRunningPMSet)
+    }
+
     @Test func watchdogRecoversOnlyOwnedSettingsAfterTheTimeout() {
         let now = Date(timeIntervalSince1970: 1_000)
         var owned = SleepDisabledRuntimeState(
@@ -416,6 +421,61 @@ struct ClosedLidDisplayTests {
 
 @MainActor
 struct ClosedLidSleepControllerTests {
+    @Test func successfulRequestWithoutAnAppliedSettingNeverReportsProtection() async {
+        let helper = ClosedLidTestPowerHelper()
+        helper.systemSleepDisabled = false
+        helper.appliesRequestedSetting = false
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .seconds(60), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        controller.setEnabled(true)
+        await waitUntil { controller.serviceState != .ready && controller.serviceState != .enabling }
+        #expect(!controller.isActive)
+        #expect(controller.systemSleepDisabled == false)
+        #expect(controller.lastFailure != nil)
+    }
+
+    @Test func heartbeatRepairsALostSettingEvenWhenTheConnectionIsHealthy() async {
+        let helper = ClosedLidTestPowerHelper()
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .milliseconds(10), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        controller.setEnabled(true)
+        await waitUntil { controller.isActive }
+        helper.systemSleepDisabled = false
+        await waitUntil { helper.setSleepDisabledCalls.count >= 2 }
+        #expect(helper.systemSleepDisabled)
+        #expect(controller.isActive)
+        #expect(controller.systemSleepDisabled == true)
+    }
+
+    @Test func foregroundRefreshRepairsAnAlreadyActiveSession() async {
+        let helper = ClosedLidTestPowerHelper()
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .seconds(60), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        controller.setEnabled(true)
+        await waitUntil { controller.isActive }
+        helper.systemSleepDisabled = false
+        controller.reenableIfPending()
+        await waitUntil { helper.setSleepDisabledCalls.count >= 2 }
+        #expect(helper.systemSleepDisabled)
+        #expect(controller.systemSleepDisabled == true)
+    }
+
+    @Test func failedHeartbeatClearsThePreviouslyVerifiedProtection() async {
+        let helper = ClosedLidTestPowerHelper()
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .milliseconds(10), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        controller.setEnabled(true)
+        await waitUntil { controller.isActive }
+        helper.heartbeatResult = .failure(.requestFailed("connection invalid"))
+        await waitUntil { controller.lastFailure != nil }
+        #expect(!controller.isActive)
+        #expect(controller.systemSleepDisabled == nil)
+    }
+
     @Test func repeatedEnableRequestsAreIdempotent() async {
         let helper = ClosedLidTestPowerHelper()
         let controller = ClosedLidSleepController(
@@ -875,6 +935,8 @@ private final class ClosedLidTestPowerHelper: PowerHelperServicing {
     private(set) var releaseSynchronouslyCallCount = 0
     var setSleepDisabledResult: Result<Bool, ClosedLidSleepFailure> = .success(true)
     var heartbeatResult: Result<Bool, ClosedLidSleepFailure> = .success(true)
+    var systemSleepDisabled = true
+    var appliesRequestedSetting = true
 
     func register() throws {
         registerCallCount += 1
@@ -891,11 +953,14 @@ private final class ClosedLidTestPowerHelper: PowerHelperServicing {
 
     func setSleepDisabled(_ disabled: Bool) async -> Result<Bool, ClosedLidSleepFailure> {
         setSleepDisabledCalls.append(disabled)
+        if case .success = setSleepDisabledResult, appliesRequestedSetting {
+            systemSleepDisabled = disabled
+        }
         return setSleepDisabledResult
     }
 
     func sleepDisabled() async -> Result<Bool, ClosedLidSleepFailure> {
-        .success(true)
+        .success(systemSleepDisabled)
     }
 
     func heartbeat() async -> Result<Bool, ClosedLidSleepFailure> {

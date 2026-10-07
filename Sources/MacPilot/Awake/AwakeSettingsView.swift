@@ -104,7 +104,7 @@ struct AwakeSettingsView: View {
                 .foregroundStyle(.secondary)
 
             AwakeSessionOptionsView(configuration: sessionConfigurationBinding)
-            if awake.settings.defaultPolicy.preventClosedLidSleep {
+            if awake.settings.defaultPolicy.preventClosedLidSleep || awake.desiredAwakeState.preventClosedLidSleep {
                 closedLidServiceStatus
             }
 
@@ -151,6 +151,7 @@ struct AwakeSettingsView: View {
                         ForEach(awake.activeSessions) { session in
                             AwakeSessionDetailRow(
                                 session: session,
+                                isClosedLidSleepActive: awake.isClosedLidSleepActive,
                                 now: context.date,
                                 triggerName: awakeTriggerName(for: session.source, triggerEngine: triggerEngine),
                                 onStop: { stopAwakeSession(session, awake: awake, triggerEngine: triggerEngine) }
@@ -343,12 +344,38 @@ struct AwakeSettingsView: View {
                 action: { awake.openClosedLidServiceSettings() }
             )
         case .error(let message):
-            warningBanner(Label(
-                model.t("awakeClosedLidError", message),
-                systemImage: "exclamationmark.triangle.fill"
-            ))
-        case .ready, .enabling, .enabled:
-            EmptyView()
+            closedLidServiceBanner(
+                message: model.t("awakeClosedLidServiceNotApplied"),
+                actionTitle: model.t("awakeClosedLidServiceRepair"),
+                action: { Task { await awake.prepareClosedLidService() } }
+            )
+            .help(model.t("awakeClosedLidError", message))
+        case .ready:
+            if awake.desiredAwakeState.preventClosedLidSleep {
+                closedLidServiceBanner(
+                    message: model.t("awakeClosedLidServiceNotApplied"),
+                    actionTitle: model.t("awakeClosedLidServiceRepair"),
+                    action: { awake.refreshClosedLidServiceState() }
+                )
+            } else {
+                Label(model.t("awakeClosedLidServiceReady"), systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .enabling:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(model.t("awakeClosedLidServiceEnabling"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .enabled:
+            Label(
+                model.t(awake.isClosedLidSleepActive ? "awakeClosedLidServiceVerified" : "awakeClosedLidServiceNotApplied"),
+                systemImage: awake.isClosedLidSleepActive ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(awake.isClosedLidSleepActive ? Color.green : Color.orange)
         }
     }
 
@@ -361,6 +388,7 @@ struct AwakeSettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                 Button(actionTitle, action: action)
+                    .macPilotProminentButtonStyle()
                     .controlSize(.small)
             }
         )
@@ -1026,6 +1054,7 @@ private struct AwakeProfileEditorSheet: View {
 private struct AwakeSessionDetailRow: View {
     @EnvironmentObject private var model: MacPilotModel
     let session: AwakeSession
+    let isClosedLidSleepActive: Bool
     let now: Date
     let triggerName: String?
     let onStop: () -> Void
@@ -1058,7 +1087,9 @@ private struct AwakeSessionDetailRow: View {
             )
             detailLine(
                 model.t("awakeClosedLidSleepDetail"),
-                value: session.policy.preventClosedLidSleep ? model.t("awakePrevented") : model.t("awakeAllowed")
+                value: session.policy.preventClosedLidSleep
+                    ? model.t(isClosedLidSleepActive ? "awakePrevented" : "awakeClosedLidNotApplied")
+                    : model.t("awakeAllowed")
             )
             if let expectedEndAt = session.expectedEndAt {
                 detailLine(model.t("awakeEndsAt"), value: dateDescription(expectedEndAt))
@@ -1108,6 +1139,9 @@ struct AwakeMenuView: View {
                     .foregroundStyle(.secondary)
                 Text("\(model.t("awakeSystemSleep")): \(assertionStatus(active: awake.isSystemAssertionActive, desired: awake.desiredAwakeState.preventSystemSleep, kind: .systemSleep))")
                 Text("\(model.t("awakeDisplaySleep")): \(assertionStatus(active: awake.isDisplayAssertionActive, desired: awake.desiredAwakeState.preventDisplaySleep, kind: .displaySleep))")
+                if awake.desiredAwakeState.preventClosedLidSleep {
+                    Text("\(model.t("awakeClosedLidSleepDetail")): \(model.t(awake.isClosedLidSleepActive ? "awakePrevented" : "awakeClosedLidNotApplied"))")
+                }
                 if let expiryText {
                     Text(expiryText)
                         .foregroundStyle(.secondary)
