@@ -158,7 +158,7 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         case .success(let owned):
             ownsSleepDisabled = owned
             if owned { mayOwnSleepDisabled = true }
-            if await verifyAppliedState() {
+            if await verifyOrRepairAppliedState() {
                 logger.notice("Closed-lid sleep verified (owned=\(owned, privacy: .public))")
             }
         case .failure(let failure):
@@ -266,12 +266,52 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         serviceState = .error(failure.message)
     }
 
+    private func verifyOrRepairAppliedState() async -> Bool {
+        if await verifyAppliedState() { return true }
+        if desiredEnabled, !isShutdown, !Task.isCancelled, systemSleepDisabled == false {
+            await repairLostSetting()
+        }
+        return isActive
+    }
+
+    /// A daemon from the previous app version may still be running. Its
+    /// ownership shortcut can acknowledge an enable without applying it. The
+    /// system is already unprotected here, so release the stale ownership first
+    /// and then apply once. Both operations preserve the helper's ownership
+    /// boundary; no daemon restart or extra system authorization is needed.
+    private func repairLostSetting() async {
+        guard desiredEnabled, !isShutdown, !Task.isCancelled, systemSleepDisabled == false else { return }
+        serviceState = .enabling
+        notifyStateChange()
+        let release = await helper.setSleepDisabled(false)
+        guard desiredEnabled, !isShutdown, !Task.isCancelled else { return }
+        if case .failure(let failure) = release {
+            recordFailure(failure)
+            notifyStateChange()
+            return
+        }
+        ownsSleepDisabled = false
+        // Keep the conservative quit-time release armed until the complete
+        // repair has finished; a new enable is about to be sent.
+        let result = await helper.setSleepDisabled(true)
+        guard desiredEnabled, !isShutdown, !Task.isCancelled else { return }
+        switch result {
+        case .success(let owned):
+            ownsSleepDisabled = owned
+            if owned { mayOwnSleepDisabled = true }
+            _ = await verifyAppliedState()
+        case .failure(let failure):
+            recordFailure(failure)
+        }
+        notifyStateChange()
+    }
+
     private func checkAndRepairAppliedState() async {
         if await verifyAppliedState() { return }
         guard desiredEnabled, !isShutdown, !Task.isCancelled else { return }
         if systemSleepDisabled == false {
             logger.notice("Closed-lid sleep setting was lost; reapplying protection")
-            await enableIfNeeded()
+            await repairLostSetting()
         } else {
             await attemptReconnect()
         }
@@ -339,7 +379,7 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         case .success(let owned):
             ownsSleepDisabled = owned
             if owned { mayOwnSleepDisabled = true }
-            _ = await verifyAppliedState()
+            _ = await verifyOrRepairAppliedState()
         case .failure(let failure):
             recordFailure(failure)
         }

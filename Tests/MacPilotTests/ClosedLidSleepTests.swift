@@ -421,6 +421,21 @@ struct ClosedLidDisplayTests {
 
 @MainActor
 struct ClosedLidSleepControllerTests {
+    @Test func oldHelperWithStaleOwnershipCanBeRepairedWithoutRestartingTheService() async {
+        let helper = ClosedLidTestPowerHelper()
+        helper.systemSleepDisabled = false
+        helper.helperOwnsSleepDisable = true
+        helper.simulatesLegacyOwnershipShortcut = true
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .seconds(60), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        controller.setEnabled(true)
+        await waitUntil { controller.isActive }
+        #expect(controller.isActive)
+        #expect(helper.systemSleepDisabled)
+        #expect(helper.setSleepDisabledCalls == [true, false, true])
+    }
+
     @Test func successfulRequestWithoutAnAppliedSettingNeverReportsProtection() async {
         let helper = ClosedLidTestPowerHelper()
         helper.systemSleepDisabled = false
@@ -937,6 +952,8 @@ private final class ClosedLidTestPowerHelper: PowerHelperServicing {
     var heartbeatResult: Result<Bool, ClosedLidSleepFailure> = .success(true)
     var systemSleepDisabled = true
     var appliesRequestedSetting = true
+    var helperOwnsSleepDisable = false
+    var simulatesLegacyOwnershipShortcut = false
 
     func register() throws {
         registerCallCount += 1
@@ -954,7 +971,12 @@ private final class ClosedLidTestPowerHelper: PowerHelperServicing {
     func setSleepDisabled(_ disabled: Bool) async -> Result<Bool, ClosedLidSleepFailure> {
         setSleepDisabledCalls.append(disabled)
         if case .success = setSleepDisabledResult, appliesRequestedSetting {
-            systemSleepDisabled = disabled
+            // Replay the old helper's planEnable shortcut: an ownership record
+            // caused it to acknowledge success without restoring the real value.
+            if !disabled || !simulatesLegacyOwnershipShortcut || !helperOwnsSleepDisable {
+                systemSleepDisabled = disabled
+            }
+            helperOwnsSleepDisable = disabled
         }
         return setSleepDisabledResult
     }
