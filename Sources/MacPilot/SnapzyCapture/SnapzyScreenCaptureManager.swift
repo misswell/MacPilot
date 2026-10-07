@@ -183,6 +183,28 @@ final class SnapzyScreenCaptureManager {
 
     // MARK: - Snapzy capture-core helpers
 
+    /// Reuse one region-scoped stream for a scrolling session. Multi-display
+    /// selections retain the existing still/composite fallback.
+    func prepareScrollingCapture(rect: CGRect, pixelSize: CGSize) async throws -> (SCContentFilter, SCStreamConfiguration)? {
+        guard CGPreflightScreenCaptureAccess() else { throw ScreenCaptureError.permissionRequired }
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(rect) }),
+              let displayID = screen.snapzyDisplayID else { return nil }
+        let content = try await SCShareableContent.current
+        guard let display = content.displays.first(where: { $0.displayID == Int(displayID) }) else { return nil }
+        let filter = makeFilter(display: display, content: content, excludeOwnApplication: true)
+        let configuration = SnapzyCaptureConfiguration.display(
+            width: Int(pixelSize.width), height: Int(pixelSize.height),
+            showsCursor: false, colorSpaceName: preferredCaptureColorSpaceName(for: screen)
+        )
+        configuration.sourceRect = CGRect(
+            x: rect.minX - screen.frame.minX, y: screen.frame.maxY - rect.maxY,
+            width: rect.width, height: rect.height
+        )
+        configuration.queueDepth = 3
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 15)
+        return (filter, configuration)
+    }
+
     private func loadShareableContent(
         prefetchedContentTask: ShareableContentPrefetchTask?
     ) async throws -> SCShareableContent {

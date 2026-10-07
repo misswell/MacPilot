@@ -53,6 +53,12 @@ This notice does not change MacPilot's license. It identifies the upstream
 source used for the single-frame ScreenCaptureKit session, frozen display
 snapshots, multi-display crop/composition, and area-selection overlay.
 
+The scrolling-capture stitcher and region stream additionally use Snapzy commit
+`224afa560f54d868376b84d0761539f289c08ffb`. The stitcher retains its guided
+matching, Vision recovery, static-band detection, and slice-based preview.
+MacPilot adapts small-region thresholds, upward slice ordering, actor isolation,
+bounded frame storage, localization, and the existing completion/save flow.
+
 ```text
 BSD 3-Clause License
 

@@ -1,28 +1,39 @@
 import CoreGraphics
 import Foundation
 
-/// Owns long-shot sampling independently of the HUD. Cancelling invalidates
-/// every suspended operation, including ScreenCaptureKit calls that cannot
-/// themselves be cancelled immediately.
+/// A serial commit lane owns Snapzy's stitcher. The main actor only keeps a
+/// thumbnail and counters; full-size accepted frames live in the stitcher.
 @MainActor
 final class ScrollingCaptureSession {
-    private(set) var frames: [CGImage]
+    private(set) var acceptedFrameCount = 1
+    private(set) var outputHeight: Int
+    private(set) var previewImage: CGImage?
     private(set) var reachedLimit = false
     private(set) var needsSmallerScroll = false
+    private(set) var likelyReachedBoundary = false
     private(set) var isFinishing = false
     private(set) var isClosed = false
     var isCapturing: Bool { captureTask != nil }
     var onChange: () -> Void = {}
     var onError: (Error) -> Void = { _ in }
     private var hasCaptureError = false
-    private var capturedBytes: Int
     private var captureTask: Task<Void, Never>?
+    private var pendingSample = false
+    private var processor: ScrollingCaptureProcessor?
     private let capture: @MainActor () async throws -> CGImage
 
     init(initialImage: CGImage, capture: @escaping @MainActor () async throws -> CGImage) {
-        frames = [initialImage]
-        capturedBytes = SmartScrollingCaptureBudget.bytes(of: initialImage)
+        outputHeight = initialImage.height
+        processor = ScrollingCaptureProcessor(initialImage: ScrollingCaptureImage(value: initialImage))
         self.capture = capture
+    }
+
+    func preparePreview() async {
+        guard let processor else { return }
+        let preview = await processor.preview()
+        guard !isClosed else { return }
+        previewImage = preview?.value
+        onChange()
     }
 
     func sample() async {
@@ -33,6 +44,9 @@ final class ScrollingCaptureSession {
     private func sampleCurrentFrame() async {
         guard !isClosed, !reachedLimit else { return }
         if let captureTask {
+            // Keep one pending refresh, including scrolls during an in-flight
+            // capture. The next capture sees the newest viewport.
+            pendingSample = true
             await captureTask.value
             return
         }
@@ -42,36 +56,35 @@ final class ScrollingCaptureSession {
                 self.captureTask = nil
                 if !self.isClosed { self.onChange() }
             }
-            self.hasCaptureError = false
-            do {
-                let image = try await self.capture()
-                guard !self.isClosed, !Task.isCancelled, let previous = self.frames.last else { return }
-                let pair = [ScrollingCaptureImage(value: previous), ScrollingCaptureImage(value: image)]
-                let overlap = await Task.detached(priority: .userInitiated) {
-                    autoreleasepool {
-                        ScreenCaptureVerticalStitcher.bestOverlap(previous: pair[0].value, current: pair[1].value)
+            repeat {
+                self.pendingSample = false
+                self.hasCaptureError = false
+                do {
+                    let image = try await self.capture()
+                    guard !self.isClosed, !Task.isCancelled, let processor = self.processor else { return }
+                    let result = await processor.append(ScrollingCaptureImage(value: image))
+                    guard !self.isClosed, !Task.isCancelled else { return }
+                    self.reachedLimit = result.reachedLimit
+                    if let update = result.update {
+                        self.acceptedFrameCount = update.acceptedFrameCount
+                        self.outputHeight = update.outputHeight
+                        self.likelyReachedBoundary = update.likelyReachedBoundary
+                        if case .ignoredAlignmentFailed = update.outcome {
+                            self.needsSmallerScroll = true
+                        } else {
+                            self.needsSmallerScroll = false
+                        }
+                    } else if !result.reachedLimit {
+                        self.needsSmallerScroll = true
                     }
-                }.value
-                guard !self.isClosed, !Task.isCancelled else { return }
-                self.needsSmallerScroll = overlap == 0
-                // An unchanged page (including the end of the document) must
-                // neither grow the output nor consume the frame budget.
-                if overlap > 0, overlap < image.height {
-                    let bytes = SmartScrollingCaptureBudget.bytes(of: image)
-                    if SmartScrollingCaptureBudget.accepts(
-                        capturedBytes: self.capturedBytes, frameCount: self.frames.count, adding: bytes
-                    ) {
-                        self.frames.append(image)
-                        self.capturedBytes += bytes
-                    } else {
-                        self.reachedLimit = true
-                    }
+                    self.previewImage = result.preview?.value ?? self.previewImage
+                    self.onChange()
+                } catch {
+                    guard !self.isClosed, !Task.isCancelled else { return }
+                    self.hasCaptureError = true
+                    self.onError(error)
                 }
-            } catch {
-                guard !self.isClosed, !Task.isCancelled else { return }
-                self.hasCaptureError = true
-                self.onError(error)
-            }
+            } while self.pendingSample && !self.isClosed && !self.reachedLimit && !Task.isCancelled
         }
         captureTask = task
         onChange()
@@ -86,32 +99,85 @@ final class ScrollingCaptureSession {
             if !isClosed { onChange() }
         }
         onChange()
-        // Drain the in-flight sample, then capture the actual final viewport.
-        // A pending debounce must not discard the last scroll on Done.
         await captureTask?.value
         try? await Task.sleep(for: .milliseconds(180))
         guard !isClosed, !Task.isCancelled else { return nil }
         await sampleCurrentFrame()
+        guard !isClosed, !Task.isCancelled,
+              !needsSmallerScroll, !hasCaptureError, let processor else { return nil }
+        let output = await processor.output()
         guard !isClosed, !Task.isCancelled else { return nil }
-        guard !needsSmallerScroll, !hasCaptureError else { return nil }
-        let images = frames.map { ScrollingCaptureImage(value: $0) }
-        let output = await Task.detached(priority: .userInitiated) {
-            autoreleasepool { ScreenCaptureVerticalStitcher.stitch(images.map(\.value)) }
-        }.value
-        guard !isClosed, !Task.isCancelled else { return nil }
-        return output
+        return output?.value
     }
 
     func cancel() {
         isClosed = true
+        pendingSample = false
         captureTask?.cancel()
-        frames.removeAll()
-        capturedBytes = 0
+        processor = nil
+        previewImage = nil
+        acceptedFrameCount = 0
     }
 }
 
-/// Immutable image references read by one worker while the main actor owns
-/// the frame list. CGImage exposes no mutation through this wrapper.
-private struct ScrollingCaptureImage: @unchecked Sendable {
+/// CGImage is immutable; wrappers cross the actor boundary without exposing
+/// the mutable, actor-confined stitcher.
+struct ScrollingCaptureImage: @unchecked Sendable {
     let value: CGImage
+}
+
+private struct ScrollingCaptureProcessedFrame: @unchecked Sendable {
+    let update: ScrollingCaptureStitchUpdate?
+    let preview: ScrollingCaptureImage?
+    let reachedLimit: Bool
+}
+
+private actor ScrollingCaptureProcessor {
+    private let stitcher = ScrollingCaptureStitcher()
+    private var initialImage: ScrollingCaptureImage?
+    private var capturedBytes: Int
+    private let maximumOutputHeight: Int
+
+    init(initialImage: ScrollingCaptureImage) {
+        self.initialImage = initialImage
+        capturedBytes = SmartScrollingCaptureBudget.bytes(of: initialImage.value)
+        maximumOutputHeight = min(32_768, ScreenCaptureVerticalStitcher.maximumOutputBytes / 4 / max(1, initialImage.value.width))
+    }
+
+    private func initialize() {
+        if let image = initialImage {
+            _ = stitcher.start(with: image.value)
+            initialImage = nil
+        }
+    }
+
+    func append(_ image: ScrollingCaptureImage) -> ScrollingCaptureProcessedFrame {
+        autoreleasepool {
+            initialize()
+            let bytes = SmartScrollingCaptureBudget.bytes(of: image.value)
+            guard SmartScrollingCaptureBudget.accepts(
+                capturedBytes: capturedBytes, frameCount: stitcher.acceptedFrameCount, adding: bytes
+            ) else {
+                return ScrollingCaptureProcessedFrame(update: nil, preview: nil, reachedLimit: true)
+            }
+            let previousCount = stitcher.acceptedFrameCount
+            let update = stitcher.append(image.value, maxOutputHeight: maximumOutputHeight, renderMergedImage: false)
+            if stitcher.acceptedFrameCount > previousCount { capturedBytes += bytes }
+            let reachedLimit: Bool
+            if case .reachedHeightLimit = update?.outcome { reachedLimit = true } else { reachedLimit = false }
+            return ScrollingCaptureProcessedFrame(update: update, preview: makePreview(), reachedLimit: reachedLimit)
+        }
+    }
+
+    func preview() -> ScrollingCaptureImage? {
+        autoreleasepool { initialize(); return makePreview() }
+    }
+
+    private func makePreview() -> ScrollingCaptureImage? {
+        stitcher.previewImage(maxPixelWidth: 440, maxPixelHeight: 840).map { ScrollingCaptureImage(value: $0) }
+    }
+
+    func output() -> ScrollingCaptureImage? {
+        autoreleasepool { initialize(); return stitcher.mergedImage().map { ScrollingCaptureImage(value: $0) } }
+    }
 }

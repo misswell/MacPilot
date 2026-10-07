@@ -4057,21 +4057,30 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
     private var localScrollMonitor: Any?
     private var settleTask: Task<Void, Never>?
     private var finishTask: Task<Void, Never>?
+    private var startupTask: Task<Void, Never>?
+    private var previewPanel: NSPanel?
+    private var regionPanel: NSPanel?
+    private let frameSource = ScrollingCaptureFrameSource()
+    private var latestFrame: ScrollingCaptureLiveFrame?
+    private var lastScrollAt: TimeInterval = 0
+    private var lastCommitAt: TimeInterval = 0
     private let initialImage: CGImage
     private lazy var session: ScrollingCaptureSession = makeSession()
 
     private func makeSession() -> ScrollingCaptureSession {
         ScrollingCaptureSession(initialImage: initialImage) { @MainActor [weak self] in
-            guard let self, let panel = self.panel else { throw CancellationError() }
-            // On a wide selection the HUD may overlap the captured area. Hide it
-            // for the snapshot without excluding other MacPilot windows.
-            panel.orderOut(nil)
-            defer { if self.panel != nil { panel.orderFrontRegardless() } }
-            try await Task.sleep(for: .milliseconds(60))
+            guard let self, self.panel != nil else { throw CancellationError() }
             try Task.checkCancellation()
-            return try await SmartScreenImageCapture.capture(
-                appKitRect: self.rect, quartzClickPoint: self.quartzClickPoint
-            )
+            if !self.session.isFinishing, let frame = self.latestFrame,
+               ProcessInfo.processInfo.systemUptime - frame.capturedAt < 0.3 {
+                return frame.image
+            }
+            // Keep the controls visible without including MacPilot's preview
+            // in either a region stream or the multi-display still fallback.
+            guard let image = try await SnapzyScreenCaptureManager.shared.captureAreaAsImage(
+                rect: self.rect, excludeOwnApplication: true
+            ) else { throw CancellationError() }
+            return image
         }
     }
 
@@ -4113,12 +4122,31 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
         panel.setFrameOrigin(Self.panelOrigin(for: rect, size: panel.frame.size))
         panel.orderFrontRegardless()
         installScrollMonitors()
+        showPreview()
+        startupTask = Task { [weak self] in
+            guard let self else { return }
+            await self.session.preparePreview()
+            guard self.panel != nil, !Task.isCancelled else { return }
+            do {
+                try await self.frameSource.start(
+                    rect: self.rect,
+                    pixelSize: CGSize(width: self.initialImage.width, height: self.initialImage.height),
+                    onFrame: { [weak self] frame in self?.received(frame) },
+                    onFailure: { [weak self] in self?.latestFrame = nil }
+                )
+                if self.panel == nil || Task.isCancelled { self.frameSource.stop() }
+            } catch {
+                // The existing still capture path remains available.
+                self.latestFrame = nil
+            }
+        }
     }
 
     func close() {
         session.cancel()
         settleTask?.cancel()
         finishTask?.cancel()
+        stopPreview()
         removeScrollMonitors()
         panel?.close()
     }
@@ -4127,6 +4155,7 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
         session.cancel()
         settleTask?.cancel()
         finishTask?.cancel()
+        stopPreview()
         removeScrollMonitors()
         panel?.contentView = nil
         panel = nil
@@ -4135,7 +4164,7 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
 
     private func refreshContent() {
         panel?.contentView = NSHostingView(rootView: SmartScrollingCaptureView(
-            frameCount: session.frames.count,
+            frameCount: session.acceptedFrameCount,
             reachedLimit: session.reachedLimit,
             needsSmallerScroll: session.needsSmallerScroll,
             isStitching: session.isFinishing,
@@ -4145,6 +4174,65 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
             onFinish: { [weak self] in self?.finish() },
             onCancel: { [weak self] in self?.close() }
         ))
+        previewPanel?.contentView = NSHostingView(rootView: SmartScrollingCapturePreviewView(
+            image: session.previewImage, outputHeight: session.outputHeight,
+            statusKey: session.isFinishing ? "scScrollingStitching" : session.needsSmallerScroll ? "scScrollingPaused" : session.isCapturing ? "scScrollingSyncing" : "scScrollingCaptured",
+            language: language
+        ))
+    }
+
+    private func showPreview() {
+        let border = NSPanel(contentRect: rect.insetBy(dx: -3, dy: -3),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        border.isReleasedWhenClosed = false
+        border.backgroundColor = .clear
+        border.isOpaque = false
+        border.hasShadow = false
+        border.ignoresMouseEvents = true
+        border.level = .floating
+        border.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        border.contentView = NSHostingView(rootView: Rectangle().strokeBorder(Color.accentColor, lineWidth: 2))
+        border.orderFrontRegardless()
+        regionPanel = border
+        let screen = NSScreen.screens.first { $0.frame.intersects(rect) } ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? rect
+        let size = CGSize(width: 244, height: min(460, max(160, visible.height - 24)))
+        let preview = NSPanel(contentRect: CGRect(origin: .zero, size: size),
+                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        preview.isReleasedWhenClosed = false
+        preview.isOpaque = false
+        preview.backgroundColor = .clear
+        preview.ignoresMouseEvents = true
+        preview.level = .floating
+        preview.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        let preferredX = rect.maxX + size.width + 12 <= visible.maxX ? rect.maxX + 12 : rect.minX - size.width - 12
+        preview.setFrameOrigin(CGPoint(
+            x: min(max(visible.minX + 8, preferredX), visible.maxX - size.width - 8),
+            y: min(max(visible.minY + 8, rect.maxY - size.height), visible.maxY - size.height - 8)
+        ))
+        previewPanel = preview
+        refreshContent()
+        preview.orderFrontRegardless()
+    }
+
+    private func stopPreview() {
+        startupTask?.cancel()
+        frameSource.stop()
+        latestFrame = nil
+        previewPanel?.close()
+        previewPanel = nil
+        regionPanel?.close()
+        regionPanel = nil
+    }
+
+    private func received(_ frame: ScrollingCaptureLiveFrame) {
+        guard panel != nil, !session.isClosed else { return }
+        latestFrame = frame
+        let now = ProcessInfo.processInfo.systemUptime
+        guard !session.isFinishing, !session.reachedLimit,
+              now - lastScrollAt < 0.28, now - lastCommitAt >= 0.09 else { return }
+        lastCommitAt = now
+        Task { [weak self] in await self?.session.sample() }
     }
 
     private func installScrollMonitors() {
@@ -4168,11 +4256,13 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
     private func handleScroll(_ event: NSEvent) {
         guard panel != nil, !session.isFinishing, !session.reachedLimit,
               rect.contains(NSEvent.mouseLocation),
-              abs(event.scrollingDeltaY) > 0.1 else { return }
+              abs(event.scrollingDeltaY) > 0.1,
+              abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) else { return }
+        lastScrollAt = ProcessInfo.processInfo.systemUptime
         // Even events arriving during a snapshot must schedule a later sample.
         settleTask?.cancel()
         settleTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(180))
+            try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled else { return }
             await self?.session.sample()
         }
@@ -4213,8 +4303,10 @@ private final class SmartScrollingCaptureWindowController: NSObject, NSWindowDel
     private static func panelOrigin(for selection: CGRect, size: CGSize) -> CGPoint {
         let screen = NSScreen.screens.first { $0.frame.intersects(selection) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        let x = min(max(selection.maxX + 12, visible.minX + 8), visible.maxX - size.width - 8)
-        let y = min(max(selection.maxY - size.height, visible.minY + 8), visible.maxY - size.height - 8)
+        let x = min(max(selection.midX - size.width / 2, visible.minX + 8), visible.maxX - size.width - 8)
+        let preferredY = selection.maxY + size.height + 12 <= visible.maxY
+            ? selection.maxY + 12 : selection.minY - size.height - 12
+        let y = min(max(preferredY, visible.minY + 8), visible.maxY - size.height - 8)
         return CGPoint(x: x, y: y)
     }
 }
@@ -4255,6 +4347,29 @@ private struct SmartScrollingCaptureView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct SmartScrollingCapturePreviewView: View {
+    let image: CGImage?
+    let outputHeight: Int
+    let statusKey: String
+    let language: AppLanguage
+
+    var body: some View {
+        SettingsCard {
+            HStack {
+                Text(AppText.value("scScrollingPreview", language: language)).font(.headline)
+                Spacer()
+                Text(AppText.value(statusKey, language: language)).font(.caption).foregroundStyle(.secondary)
+            }
+            if let image {
+                Image(decorative: image, scale: 1).resizable().scaledToFit().frame(maxHeight: .infinity)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            Text(AppText.value("scScrollingHeight", language: language, outputHeight)).font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
