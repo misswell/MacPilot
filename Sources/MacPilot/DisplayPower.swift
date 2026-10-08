@@ -13,9 +13,10 @@
 //    proximity lock, the Awake lid policy). On a Mac whose Lock Screen setting
 //    requires a password as soon as the display turns off, it also locks the
 //    session — that is system policy, not this call.
-//  * `turnOffScreen()` blacks every display without sleeping any of them, so
-//    that policy never fires and the session stays unlocked. It is what a user
-//    pressing "turn off screen" actually means, since MacPilot has a separate
+//  * `turnOffScreen()` blacks every display without forcing display sleep, so
+//    it does not immediately lock the session. The normal idle-sleep and lock
+//    policy still applies; blanking adds no display-sleep prevention.
+//    It handles "turn off screen", since MacPilot has a separate
 //    lock action. Nothing is being told to sleep, so the keyboard backlight a
 //    real display sleep would have dimmed has to be driven here as well — see
 //    `KeyboardBacklightController`.
@@ -103,8 +104,8 @@ enum DisplayPower {
     /// silently ignored on modern macOS, so go through pmset, whose
     /// displaysleepnow still works.
     ///
-    /// A held blank is released first: `turnOffScreen()` keeps the display awake
-    /// on purpose, and this call exists precisely to let it idle down.
+    /// Release the held backlight values before asking macOS to sleep, so the
+    /// next system wake does not leave a panel at zero brightness.
     @MainActor
     static func sleepDisplay() {
         unblankDisplay()
@@ -158,11 +159,6 @@ enum DisplayPower {
         .milliseconds(250),
         .milliseconds(500)
     ]
-    /// Held while the screen is blacked, so macOS cannot run its own
-    /// display-sleep timer underneath. On a Mac that requires a password as soon
-    /// as the display turns off — the default — that timer is what eventually
-    /// turns "black" into "locked".
-    @MainActor private static var displaySleepAssertion: IOPMAssertionID?
     /// Where the held-blank brightness snapshot lives while the screen is black.
     @MainActor private static let snapshotStore = DisplayBlankSnapshotStore.standard
 
@@ -174,11 +170,11 @@ enum DisplayPower {
             || !blankedKeyboardBacklights.isEmpty || isOverlayShowing
     }
 
-    /// Blacks every online display *without* putting any of them to sleep, so
-    /// the system's "require password after the display is turned off" policy
-    /// never fires.
+    /// Blacks every online display without forcing sleep. Automatic display
+    /// sleep remains governed by System Settings and the active Awake policy.
     ///
-    /// - Returns: false when there was nothing to black at all.
+    /// - Returns: false when any online display could neither be darkened nor
+    /// covered. Any partial backlight/power changes are restored on failure.
     @MainActor
     @discardableResult
     static func blankDisplay() -> Bool {
@@ -200,6 +196,8 @@ enum DisplayPower {
         var blanked: [CGDirectDisplayID: Float] = [:]
         var ddcBlanked: [CGDirectDisplayID: Double] = [:]
         var ddcPoweredOff: Set<CGDirectDisplayID> = []
+        var coveredDisplays: Set<CGDirectDisplayID> = []
+        var confirmedPowerOff: Set<CGDirectDisplayID> = []
         var overlayScreens: [NSScreen] = []
         for step in steps {
             // Trust the probe, then verify: the state between the two can change
@@ -207,10 +205,16 @@ enum DisplayPower {
             // leave that display uncovered.
             if step.action == .backlight,
                let driver = BrightnessDriver.shared,
-               let original = driver.current(step.displayID),
-               driver.apply(0, to: step.displayID) {
-                blanked[step.displayID] = original
-                continue
+               let original = driver.current(step.displayID) {
+                let write = driver.writeAndReadBack(0, to: step.displayID)
+                // A sent write may have changed the panel even if the read-back
+                // failed. Preserve its original level for unblank/recovery.
+                if write.sent { blanked[step.displayID] = original }
+                DiagnosticLog.write("DisplayPower", "blank backlight display=\(step.displayID) sent=\(write.sent) readback=\(String(describing: write.readback)) confirmed=\(write.confirms(0))")
+                if write.confirms(0) {
+                    coveredDisplays.insert(step.displayID)
+                    continue
+                }
             }
             if step.action == .ddcBacklight, let ddc = DDCBacklight.shared {
                 // The monitor's own power switch is what makes an external panel
@@ -218,6 +222,7 @@ enum DisplayPower {
                 // brightness zero is a *dim but visible* level, which is exactly
                 // the "black screen that is only dimmed" MacPilot must not ship.
                 let write = ddc.setPowerMode(DDCPacket.powerOff, step.displayID)
+                DiagnosticLog.write("DisplayPower", "blank DDC power display=\(step.displayID) sent=\(write.sent) confirmed=\(write.didConfirm)")
                 if write.mayHavePoweredDown {
                     // Recorded from the write, not from the confirmation. The
                     // monitor may be dark already and simply refuse to say so —
@@ -226,7 +231,11 @@ enum DisplayPower {
                     // with no record of the switch-off has nothing to power
                     // back on. That is the external monitor that "never wakes".
                     ddcPoweredOff.insert(step.displayID)
-                    if write.didConfirm { continue }
+                    if write.didConfirm {
+                        confirmedPowerOff.insert(step.displayID)
+                        coveredDisplays.insert(step.displayID)
+                        continue
+                    }
                 }
                 // Unconfirmed: still fall back, so a monitor that ignored the
                 // write is dark *now* rather than left lit behind a claim of
@@ -235,20 +244,26 @@ enum DisplayPower {
                 if let original = ddc.level(step.displayID), ddc.setLevel(0, step.displayID) {
                     // Already confirmed at zero by the read-back inside setLevel.
                     ddcBlanked[step.displayID] = original
-                    continue
+                    // Zero luminance can still leave a visible desktop on an
+                    // external panel. Cover it too when power-off is unverified.
                 }
             }
-            overlayScreens.append(contentsOf: screens(for: step.displayID))
-        }
-
-        guard !blanked.isEmpty || !ddcBlanked.isEmpty || !ddcPoweredOff.isEmpty || !overlayScreens.isEmpty else {
-            DiagnosticLog.write("DisplayPower", "display blank failed reason=noDisplayCouldBeBlacked")
-            return false
+            let covers = screens(for: step.displayID)
+            overlayScreens.append(contentsOf: covers)
+            if !covers.isEmpty { coveredDisplays.insert(step.displayID) }
+            DiagnosticLog.write("DisplayPower", "blank overlay display=\(step.displayID) covered=\(!covers.isEmpty)")
         }
 
         blankedDisplays = blanked
         ddcBlankedDisplays = ddcBlanked
         ddcPoweredOffDisplays = ddcPoweredOff
+        guard Set(steps.map(\.displayID)).isSubset(of: coveredDisplays) else {
+            // A sent but unconfirmed DDC write alone is recovery state, not
+            // proof that every display went dark. Undo partial changes.
+            DiagnosticLog.write("DisplayPower", "display blank failed reason=incompleteCoverage displays=\(steps.map(\.displayID)) covered=\(coveredDisplays.sorted())")
+            unblankDisplay()
+            return false
+        }
         // The keyboard follows the screens, never leads them: past this point at
         // least one display is genuinely dark, so a dark keyboard is part of the
         // same state the user asked for. Its own captures are best effort — a
@@ -279,11 +294,10 @@ enum DisplayPower {
             ScreenBlankOverlay.shared.show(covering: overlayScreens)
             isOverlayShowing = true
         }
-        holdDisplaySleepAssertion()
         startUnblankWatcher(inputCounterAtBlank: inputCounterAtBlank)
         DiagnosticLog.write(
             "DisplayPower",
-            "display blanked without sleeping backlight=\(blanked.count) ddc=\(ddcBlanked.count) ddcOff=\(ddcPoweredOff.count) overlay=\(overlayScreens.count) keyboard=\(keyboards.count) displays=\(steps.map(\.displayID))"
+            "display blanked idleSleepOverride=false backlightWrites=\(blanked.count) ddc=\(ddcBlanked.count) ddcOffSent=\(ddcPoweredOff.count) ddcOffConfirmed=\(confirmedPowerOff.count) overlay=\(overlayScreens.count) keyboard=\(keyboards.count) displays=\(steps.map(\.displayID))"
         )
         return true
     }
@@ -311,9 +325,6 @@ enum DisplayPower {
         unblankWatcher = nil
         keyboardRestoreRetryTask?.cancel()
         keyboardRestoreRetryTask = nil
-        // Released even when nothing is blanked: a state that cleared
-        // `blankedDisplays` on another path must not strand the assertion.
-        defer { releaseDisplaySleepAssertion() }
         guard isBlanked else { return }
 
         let restoredBacklights = blankedDisplays.count
@@ -554,36 +565,6 @@ enum DisplayPower {
         }
     }
 
-    // MARK: - Keeping the display awake
-
-    /// A blacked screen that sleeps is a locked screen, which defeats the point
-    /// of blacking it. The assertion is bounded by user activity — the first
-    /// input releases it along with the blank — and by the process: IOKit drops
-    /// it if MacPilot exits while one is held.
-    @MainActor
-    private static func holdDisplaySleepAssertion() {
-        guard displaySleepAssertion == nil else { return }
-        var assertionID = IOPMAssertionID()
-        let result = IOPMAssertionCreateWithName(
-            kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
-            IOPMAssertionLevel(kIOPMAssertionLevelOn),
-            "MacPilot screen off" as CFString,
-            &assertionID
-        )
-        guard result == kIOReturnSuccess else {
-            DiagnosticLog.write("DisplayPower", "display sleep assertion failed code=\(result)")
-            return
-        }
-        displaySleepAssertion = assertionID
-    }
-
-    @MainActor
-    private static func releaseDisplaySleepAssertion() {
-        guard let assertionID = displaySleepAssertion else { return }
-        displaySleepAssertion = nil
-        IOPMAssertionRelease(assertionID)
-    }
-
     // MARK: - Display discovery
 
     /// Online, awake displays with their backlight capability probed. The probe
@@ -665,5 +646,21 @@ struct BrightnessDriver: Sendable {
     func current(_ displayID: CGDirectDisplayID) -> Float? { read(displayID) }
     @discardableResult func apply(_ value: Float, to displayID: CGDirectDisplayID) -> Bool {
         write(displayID, value)
+    }
+
+    struct WriteResult: Equatable {
+        let sent: Bool
+        let readback: Float?
+
+        func confirms(_ value: Float) -> Bool {
+            guard sent, let readback, readback.isFinite, value.isFinite else { return false }
+            // A nonzero level can still be visibly lit; blanking requires zero.
+            return value == 0 ? readback == 0 : abs(readback - value) <= 0.01
+        }
+    }
+
+    func writeAndReadBack(_ value: Float, to displayID: CGDirectDisplayID) -> WriteResult {
+        guard write(displayID, value) else { return WriteResult(sent: false, readback: nil) }
+        return WriteResult(sent: true, readback: read(displayID))
     }
 }

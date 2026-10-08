@@ -9,6 +9,37 @@ struct DisplayPowerTests {
 }
 
 extension DisplayPowerTests {
+    @Test func anAcceptedBacklightWriteDoesNotConfirmADisplayThatRemainsLit() {
+        let driver = BrightnessDriver(read: { _ in 0.75 }, write: { _, _ in true })
+        let result = driver.writeAndReadBack(0, to: 1)
+        #expect(result.sent)
+        #expect(result.readback == 0.75)
+        #expect(!result.confirms(0))
+    }
+
+    @Test func anUnreadablePanelStillRetainsTheSentWriteForRestoration() {
+        let driver = BrightnessDriver(read: { _ in nil }, write: { _, _ in true })
+        let result = driver.writeAndReadBack(0, to: 1)
+        #expect(result.sent)
+        #expect(!result.confirms(0))
+    }
+
+    @Test func aRejectedBacklightWriteCannotBeConfirmedByAPanelAlreadyAtZero() {
+        let driver = BrightnessDriver(read: { _ in 0 }, write: { _, _ in false })
+        let result = driver.writeAndReadBack(0, to: 1)
+        #expect(!result.sent)
+        #expect(!result.confirms(0))
+    }
+
+    @Test func onlyAZeroBacklightConfirmsBlanking() {
+        let dark = BrightnessDriver(read: { _ in 0 }, write: { _, _ in true })
+        #expect(dark.writeAndReadBack(0, to: 1).confirms(0))
+        let dim = BrightnessDriver(read: { _ in 0.001 }, write: { _, _ in true })
+        #expect(!dim.writeAndReadBack(0, to: 1).confirms(0))
+        let invalid = BrightnessDriver(read: { _ in .nan }, write: { _, _ in true })
+        #expect(!invalid.writeAndReadBack(0, to: 1).confirms(0))
+    }
+
     /// The rule that brings the backlight back after MacPilot blanks the screen.
     /// A counter change survives the polling interval: the idle clock can be
     /// larger than its value at blank time after a mouse event, but the counter

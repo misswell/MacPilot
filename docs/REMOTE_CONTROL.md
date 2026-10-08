@@ -46,6 +46,13 @@ screen, extracted from `BLEUnlock.swift`:
   `unlock`, `wakeAndUnlock`, `currentState`. Every call takes a
   `ScreenControlSource` (`.localManual`, `.bleAutomatic`, `.remoteExplicit`) and
   returns a `ScreenControlResult`.
+  On an unlocked Mac, display-off blanks the panels without forcing an
+  immediate lock. It does not hold its own display-sleep assertion: normal
+  idle display sleep and the system's lock policy still apply. Awake can still
+  prevent idle sleep explicitly. Backlight writes are read back; an unconfirmed
+  monitor power-off falls back to a black cover rather than claiming the panel
+  is physically off. Partial blanking without coverage of every display fails
+  and restores the panels already changed.
 - `ScreenCredentialStore` — the login password, in the Keychain, behind a
   `SecretStore` protocol so tests use an in-memory implementation instead of
   prompting for Keychain access.

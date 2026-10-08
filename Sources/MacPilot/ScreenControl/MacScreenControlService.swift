@@ -252,7 +252,8 @@ final class MacScreenControlService: ObservableObject {
 
     // MARK: - Display power
 
-    /// Blacks the display without locking the session.
+    /// Blacks the display without forcing an immediate lock. Normal idle
+    /// display sleep and the system's lock policy continue to apply.
     ///
     /// On an unlocked desktop a real display sleep is deliberately not a
     /// fallback: on a Mac that requires a password as soon as the display turns
@@ -283,7 +284,7 @@ final class MacScreenControlService: ObservableObject {
             return .success(currentState())
         case .blankCover:
             guard DisplayPower.turnOffScreen() else {
-                log("display off failed reason=noDisplayCouldBeBlacked")
+                log("display off failed reason=blankIncomplete")
                 return .failure(.displaySleepFailed, state: currentState())
             }
             log("display blacked without sleeping")
