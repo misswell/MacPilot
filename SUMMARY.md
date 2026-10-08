@@ -1978,3 +1978,11 @@ Scripts/measure-memory.sh --diff a.json b.json         # 按角色列 delta
 
 - 新增 `lockShortcutScheduleSpansTheSwallowWindow`：首条立即发送、间隔有界、累计 ≥18 秒覆盖实测窗口、总时长 ≤30 秒、归属窗口盖住全程。ScreenControl 相关 14 条全绿。
 - 全量 `swift test` 828 条：仍是已知的 3 条并行负载偶发（单跑全绿），无新增失败。
+
+## 六十八、关闭靠近唤醒后，蓝牙主动重连仍可能亮屏（2026-10-09）
+
+手机一直放在电脑旁也会亮屏：这次现场的五次亮屏都紧跟同一监控设备的蓝牙连接恢复，接近状态保持不变。系统日志明确将连接归属到 `com.misswell.macpilot`，随后记录 `Bluetooth LE HID activity woke up machine fully`；自动解锁的合成按键在亮屏后才发出。不能仅凭断言归属 `bluetoothd` 就排除应用自身。
+
+`wakeOnProximity=false` 原先只阻止显式 `DisplayPower.wakeDisplay()`，没有约束用于读取 RSSI 的 `CBCentralManager.connect`。屏幕不可用且用户禁止靠近唤醒时，BLE 监控必须暂停主动连接、取消已有连接与在途请求，继续被动扫描；恢复、定时重试、名称探测和迟到的连接回调都要遵守同一策略。自动解锁同样不能在此时发出可能亮屏的按键。
+
+MacPilot 手动黑屏不会产生系统显示休眠通知，因此 held-blank 状态变化也需要立即同步连接策略。用户正常亮屏后恢复其原有主动/被动模式，不改写配置。回归测试验证这些状态转换；未替换运行中的 `/Applications/MacPilot.app`，升级后的长时间真机熄屏行为需另行验证。

@@ -97,6 +97,10 @@ enum ScreenBlankPlanner {
 }
 
 enum DisplayPower {
+    /// Posted whenever MacPilot's held-blank state changes so features that
+    /// must stop hardware activity during a blank can react immediately.
+    static let blankStateDidChangeNotification = Notification.Name("MacPilotDisplayBlankStateDidChange")
+
     // MARK: - Real display sleep
 
     /// Puts the display to sleep. Keyboard or mouse input wakes it again.
@@ -162,12 +166,16 @@ enum DisplayPower {
     /// Where the held-blank brightness snapshot lives while the screen is black.
     @MainActor private static let snapshotStore = DisplayBlankSnapshotStore.standard
 
-    /// True while MacPilot is holding the screen black — including the keyboard
-    /// backlight it turned off with it, because both are released by the same
-    /// unblank and a held keyboard must keep the wake watcher running too.
-    @MainActor static var isBlanked: Bool {
+    /// True while MacPilot is holding one or more displays black.
+    @MainActor static var isDisplayBlanked: Bool {
         !blankedDisplays.isEmpty || !ddcBlankedDisplays.isEmpty || !ddcPoweredOffDisplays.isEmpty
-            || !blankedKeyboardBacklights.isEmpty || isOverlayShowing
+            || isOverlayShowing
+    }
+
+    /// True while MacPilot is holding the screen black or restoring its
+    /// keyboard backlight, which is released by the same unblank operation.
+    @MainActor static var isBlanked: Bool {
+        isDisplayBlanked || !blankedKeyboardBacklights.isEmpty
     }
 
     /// Blacks every online display without forcing sleep. Automatic display
@@ -299,6 +307,7 @@ enum DisplayPower {
             "DisplayPower",
             "display blanked idleSleepOverride=false backlightWrites=\(blanked.count) ddc=\(ddcBlanked.count) ddcOffSent=\(ddcPoweredOff.count) ddcOffConfirmed=\(confirmedPowerOff.count) overlay=\(overlayScreens.count) keyboard=\(keyboards.count) displays=\(steps.map(\.displayID))"
         )
+        NotificationCenter.default.post(name: blankStateDidChangeNotification, object: nil)
         return true
     }
 
@@ -388,6 +397,7 @@ enum DisplayPower {
             "DisplayPower",
             "display unblanked backlight=\(restoredBacklights) ddcOn=\(poweredOn) ddcOnPending=\(stillWaiting.count) overlay=\(hidOverlay ? 1 : 0) keyboardCaptured=\(capturedKeyboards) keyboardPending=\(unresolvedKeyboards.count)"
         )
+        NotificationCenter.default.post(name: blankStateDidChangeNotification, object: nil)
     }
 
     /// Keeps only state that the just-finished unblank still needs to retry.

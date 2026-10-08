@@ -110,6 +110,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     private var displaySleep = false
     private var systemSleep = false
     private var recoveringFromSystemSleep = false
+    private var lastActiveConnectionPauseState: Bool?
+    var displayUnavailableProbe: () -> Bool = {
+        DisplayPower.isDisplayBlanked || CGDisplayIsAsleep(CGMainDisplayID()) != 0
+    }
+    var workspaceNotificationCenterOverride: NotificationCenter?
+    var heldBlankNotificationCenterOverride: NotificationCenter?
     private var manualLock = false
     private var pendingLockSource: ScreenLockHistorySource?
     private var pendingLockSourceExpiresAt = Date.distantPast
@@ -122,6 +128,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     private var nowPlayingWasPlaying = false
 
     var isRecoveringFromSystemSleep: Bool { recoveringFromSystemSleep }
+    var isUnlockAttemptScheduled: Bool { unlockAttemptSlot.isOccupied }
+    var activeConnectionsPaused: Bool {
+        BLEActiveConnectionPolicy.shouldPause(
+            displayAsleep: displayUnavailable,
+            systemAsleep: systemSleep,
+            wakeOnProximity: settings.wakeOnProximity
+        )
+    }
     var screenLockHistory: [ScreenLockHistoryEntry] { settings.screenLockHistory.entries }
 
     // MediaRemote (private framework, loaded lazily).
@@ -319,7 +333,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     func setProximityTimeout(_ value: Int) { log("setProximityTimeout from=\(settings.proximityTimeout) to=\(value)"); settings.proximityTimeout = value; notifyChange() }
     func setSignalTimeout(_ value: Int) { log("setSignalTimeout from=\(settings.signalTimeout) to=\(value)"); settings.signalTimeout = value; notifyChange() }
     func setThresholdRSSI(_ value: Int) { log("setThresholdRSSI from=\(settings.thresholdRSSI) to=\(value)"); settings.thresholdRSSI = value; notifyChange() }
-    func setWakeOnProximity(_ value: Bool) { log("setWakeOnProximity from=\(settings.wakeOnProximity) to=\(value)"); settings.wakeOnProximity = value; notifyChange() }
+    func setWakeOnProximity(_ value: Bool) {
+        log("setWakeOnProximity from=\(settings.wakeOnProximity) to=\(value)")
+        settings.wakeOnProximity = value
+        reconcileActiveConnectionPolicy(reason: "wakeOnProximityChanged", force: true)
+        notifyChange()
+    }
     func setWakeWithoutUnlocking(_ value: Bool) { log("setWakeWithoutUnlocking from=\(settings.wakeWithoutUnlocking) to=\(value)"); settings.wakeWithoutUnlocking = value; notifyChange() }
     func setPauseNowPlaying(_ value: Bool) { log("setPauseNowPlaying from=\(settings.pauseNowPlaying) to=\(value)"); settings.pauseNowPlaying = value; notifyChange() }
     func setUseScreensaver(_ value: Bool) { log("setUseScreensaver from=\(settings.useScreensaver) to=\(value)"); settings.useScreensaver = value; notifyChange() }
@@ -516,6 +535,69 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         _ = bluetoothScanner.startIfPoweredOn()
     }
 
+    private var displayUnavailable: Bool {
+        displaySleep || displayUnavailableProbe()
+    }
+
+    private var workspaceNotificationCenter: NotificationCenter {
+        workspaceNotificationCenterOverride ?? NSWorkspace.shared.notificationCenter
+    }
+
+    private var heldBlankNotificationCenter: NotificationCenter {
+        heldBlankNotificationCenterOverride ?? .default
+    }
+
+    /// Pauses all active connections while keeping advertisement scanning alive.
+    private func reconcileActiveConnectionPolicy(reason: String, force: Bool = false) {
+        let paused = activeConnectionsPaused
+        guard force || lastActiveConnectionPauseState != paused else { return }
+        lastActiveConnectionPauseState = paused
+        log("active connection policy paused=\(paused) reason=\(reason) displaySleep=\(displaySleep) heldBlank=\(DisplayPower.isDisplayBlanked) systemSleep=\(systemSleep) wakeOnProximity=\(settings.wakeOnProximity)")
+
+        if paused {
+            cancelUnlockAttempt(reason: "displayUnavailable")
+            wakeRetryTask?.cancel()
+            wakeRetryTask = nil
+            for runtime in monitoredRuntimes.values {
+                runtime.activeModeTimer?.stop()
+                runtime.activeModeTimer = nil
+                runtime.activeMode = false
+                runtime.connectionTimer?.stop()
+                runtime.connectionTimer = nil
+                runtime.connectionRetryGate.reset()
+                runtime.rssiRequestTimeoutTimer?.stop()
+                runtime.rssiRequestTimeoutTimer = nil
+                runtime.rssiReadGate.reset()
+            }
+            var peripheralsByID: [UUID: CBPeripheral] = [:]
+            for runtime in monitoredRuntimes.values {
+                if let peripheral = runtime.peripheral { peripheralsByID[peripheral.identifier] = peripheral }
+            }
+            for device in deviceMap.values {
+                guard let peripheral = device.peripheral,
+                      !isMonitoredPeripheral(peripheral) else { continue }
+                peripheralsByID[peripheral.identifier] = peripheral
+            }
+            for peripheral in peripheralsByID.values {
+                centralMgr?.cancelPeripheralConnection(peripheral)
+            }
+            refreshPublishedMonitoringState()
+        } else {
+            for uuid in monitoredUUIDs where !settings.passiveMode {
+                connectMonitoredPeripheral(for: uuid)
+            }
+            if isScanning {
+                for device in deviceMap.values where device.bluetoothName == nil {
+                    guard let peripheral = device.peripheral,
+                          peripheral.name == nil, device.rssi >= -55 else { continue }
+                    peripheral.delegate = self
+                    centralMgr?.connect(peripheral, options: nil)
+                }
+            }
+        }
+        scanForPeripherals()
+    }
+
     private func applyPassiveMode() {
         for runtime in monitoredRuntimes.values {
             if settings.passiveMode {
@@ -655,6 +737,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
 
     private func connectMonitoredPeripheral(for uuid: UUID) {
+        guard !activeConnectionsPaused else {
+            log("connect skipped reason=displayUnavailable wakeOnProximity=\(settings.wakeOnProximity) uuid=\(uuid.uuidString)")
+            return
+        }
         guard let runtime = runtime(for: uuid), let peripheral = runtime.peripheral else {
             log("connect skipped reason=noMonitoredPeripheral")
             return
@@ -783,7 +869,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         deviceMap[peripheral.identifier] = device
         log("device discovered uuid=\(peripheral.identifier.uuidString) name=\(peripheral.name ?? device.bluetoothName ?? "unknown") rssi=\(rssi) visibleCount=\(deviceMap.count)")
         if device.bluetoothName == nil, peripheral.name == nil, rssi >= -55 {
-            central.connect(peripheral, options: nil)
+            if activeConnectionsPaused {
+                log("name resolution connection skipped reason=displayUnavailable uuid=\(peripheral.identifier.uuidString)")
+            } else {
+                central.connect(peripheral, options: nil)
+            }
         }
         requestDeviceRefresh()
     }
@@ -793,6 +883,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         let monitoredRuntime = runtime(for: peripheral.identifier)
         let isMonitored = monitoredRuntime != nil
         log("peripheral connected monitored=\(isMonitored) uuid=\(peripheral.identifier.uuidString) state=\(String(describing: peripheral.state))")
+        guard !activeConnectionsPaused else {
+            log("connected peripheral cancelled because display policy blocks active connections")
+            central.cancelPeripheralConnection(peripheral)
+            return
+        }
         guard isScanning || isMonitored else {
             log("connected peripheral cancelled because it is not monitored or scanning")
             central.cancelPeripheralConnection(peripheral)
@@ -850,7 +945,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         let rssi = RSSI.intValue > 0 ? 0 : RSSI.intValue
         updateMonitoredPeripheral(rssi, for: runtime.uuid)
 
-        if runtime.activeModeTimer == nil && !settings.passiveMode {
+        if runtime.activeModeTimer == nil && !settings.passiveMode && !activeConnectionsPaused {
             let anotherDeviceNeedsScan = monitoredUUIDs.contains {
                 monitoredRuntimes[$0]?.peripheral == nil
             }
@@ -997,6 +1092,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             log("unlock skipped trigger=\(trigger) reason=systemSleep")
             return
         }
+        if !settings.wakeOnProximity, displayUnavailable {
+            log("unlock skipped trigger=\(trigger) reason=displayUnavailable wakeOnProximity=false")
+            return
+        }
         log("unlock requested trigger=\(trigger) displaySleep=\(displaySleep) inScreensaver=\(inScreensaver) lastRSSI=\(lastRSSI.map(String.init) ?? "none")")
 
         if inScreensaver {
@@ -1020,7 +1119,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         // pressing a key. Query the display as well so that wake recovery can
         // proceed even when that notification was missed.
         let isAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
-        log("display readiness checked asleep=\(isAsleep) notificationSleep=\(displaySleep) systemSleep=\(systemSleep)")
+        let heldBlankBlocksUnlock = !settings.wakeOnProximity && displayUnavailable
+        log("display readiness checked asleep=\(isAsleep) notificationSleep=\(displaySleep) heldBlankBlocksUnlock=\(heldBlankBlocksUnlock) systemSleep=\(systemSleep)")
         if !isAsleep, displaySleep {
             // Repair the notification-derived state as soon as the display
             // proves that it has actually woken.
@@ -1028,7 +1128,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             wakeRetryTask?.cancel()
             wakeRetryTask = nil
         }
-        return !isAsleep
+        return !isAsleep && !heldBlankBlocksUnlock
     }
 
     private func cancelUnlockAttempt(reason: String = "unspecified") {
@@ -1149,6 +1249,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 case .exhausted:
                     self.log("unlock attempt exhausted before posting deadline=\(deadline)")
                 case .postPassword(let attemptDeadline):
+                    if !self.settings.wakeOnProximity && self.displayUnavailable {
+                        self.log("unlock attempt stopped deadline=\(attemptDeadline) reason=displayUnavailable wakeOnProximity=false")
+                        self.unlockAttemptSlot.release(generation: generation)
+                        return
+                    }
                     guard let password = self.fetchPassword(warn: true) else {
                         self.log("unlock attempt stopped deadline=\(attemptDeadline) reason=passwordUnavailable")
                         self.unlockAttemptSlot.release(generation: generation)
@@ -1158,6 +1263,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                     self.lastUnlockRequestAt = requestTimestamp
                     self.lastAutomaticUnlockRequestAt = requestTimestamp
                     self.log("posting unlock key events deadline=\(attemptDeadline) screenState=locked accessibilityTrusted=\(AXIsProcessTrusted())")
+                    guard self.settings.wakeOnProximity || !self.displayUnavailable else {
+                        self.lastUnlockRequestAt = 0
+                        self.lastAutomaticUnlockRequestAt = 0
+                        self.log("unlock attempt stopped deadline=\(attemptDeadline) reason=displayBecameUnavailable wakeOnProximity=false")
+                        self.unlockAttemptSlot.release(generation: generation)
+                        return
+                    }
                     await self.fakeKeyStrokes(password)
                     self.log("unlock key events posted deadline=\(attemptDeadline) screenStateAfterPost=\(self.screenLockState().rawValue)")
                 }
@@ -1303,6 +1415,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     func handleSystemWillSleep() {
         log("system will sleep presence=\(presence) lastRSSI=\(lastRSSI.map(String.init) ?? "none") monitored=\(monitoredUUIDs.count)")
         systemSleep = true
+        reconcileActiveConnectionPolicy(reason: "systemWillSleep", force: true)
         screenControl.noteSystemSleeping(true)
         recoveringFromSystemSleep = true
         wakeRetryTask?.cancel(); wakeRetryTask = nil
@@ -1370,6 +1483,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         BLEMonitoringRestoration.restore(
             identifiers: monitoredUUIDs,
             passiveMode: settings.passiveMode,
+            activeConnectionsPaused: activeConnectionsPaused,
             retrieve: { uuid in
                 let runtime = self.ensureRuntime(for: uuid)
                 return runtime.peripheral ?? central.retrievePeripherals(withIdentifiers: [uuid]).first
@@ -1502,7 +1616,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             featureEnabled: settings.isEnabled,
             hasMonitoredDevice: hasMonitoredDevice,
             bluetoothPoweredOn: bluetoothPoweredOn,
-            displayAsleep: displaySleep,
+            displayAsleep: displayUnavailable,
             systemAsleep: systemSleep,
             centralScanning: centralMgr?.isScanning == true
         )
@@ -1585,13 +1699,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             return
         }
         log("installing system observers")
-        let nc = NSWorkspace.shared.notificationCenter
+        let nc = workspaceNotificationCenter
         observers.add(nc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.displaySleep = true
                 self.screenControl.noteDisplaySleeping(true)
                 self.log("display sleep notification received")
+                self.reconcileActiveConnectionPolicy(reason: "screensDidSleep", force: true)
             }
         }, center: nc)
         observers.add(nc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -1599,12 +1714,22 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 self?.log("display wake notification received")
                 self?.displaySleep = false
                 self?.screenControl.noteDisplaySleeping(false)
+                self?.reconcileActiveConnectionPolicy(reason: "screensDidWake", force: true)
                 self?.recoveringFromSystemSleep = false
                 self?.wakeRetryTask?.cancel()
                 self?.startMonitoringRecovery(reason: "displayWake", restartImmediately: true)
                 self?.tryUnlockScreen(trigger: "screensDidWake")
             }
         }, center: nc)
+        observers.add(heldBlankNotificationCenter.addObserver(
+            forName: DisplayPower.blankStateDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.reconcileActiveConnectionPolicy(reason: "heldBlankChanged", force: true)
+            }
+        }, center: heldBlankNotificationCenter)
         observers.add(nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.handleSystemWillSleep() }
         }, center: nc)

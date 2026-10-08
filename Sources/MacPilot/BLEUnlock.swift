@@ -419,16 +419,27 @@ enum BLEMonitoringRestoration {
     static func restore<Device>(
         identifiers: [UUID],
         passiveMode: Bool,
+        activeConnectionsPaused: Bool = false,
         retrieve: (UUID) -> Device?,
         connect: (UUID, Device) -> Void,
         armSignalTimeout: (UUID) -> Void
     ) {
         for identifier in identifiers {
             armSignalTimeout(identifier)
-            guard !passiveMode, let device = retrieve(identifier) else { continue }
+            guard !passiveMode, !activeConnectionsPaused,
+                  let device = retrieve(identifier) else { continue }
             connect(identifier, device)
         }
     }
+}
+
+/// Blocks CoreBluetooth connection requests while the display is unavailable
+/// unless the user explicitly enabled proximity wake.
+enum BLEActiveConnectionPolicy {
+    static func shouldPause(displayAsleep: Bool, systemAsleep: Bool, wakeOnProximity: Bool) -> Bool {
+        !wakeOnProximity && (displayAsleep || systemAsleep)
+    }
+
 }
 
 /// Detects prolonged silence while monitoring is active. Duplicate filtering
