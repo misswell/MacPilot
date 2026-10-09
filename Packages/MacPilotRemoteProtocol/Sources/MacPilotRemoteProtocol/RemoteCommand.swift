@@ -45,6 +45,9 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
     case endRemoteVideo
     case remotePointer
     case remoteKey
+    /// Sends one explicit PageUp/PageDown/Home/End key to the foreground app.
+    /// Carries a one-byte `RemoteNavigationKey` payload.
+    case navigationKey
 
     /// Commands that change the machine and therefore always require an
     /// authenticated, encrypted session.
@@ -57,7 +60,8 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
              .beginRealtimeInput, .endRealtimeInput,
              .beginTextInput, .textInput, .endTextInput,
              .getDockGroups, .launchDockGroup, .launchDockGroupApp,
-             .beginRemoteVideo, .endRemoteVideo, .remotePointer, .remoteKey:
+             .beginRemoteVideo, .endRemoteVideo, .remotePointer, .remoteKey,
+             .navigationKey:
             return true
         }
     }
@@ -92,6 +96,10 @@ public enum RemoteCapability: String, Codable, Sendable, CaseIterable, Equatable
     /// identity, so an authenticated BLE session may report its observed
     /// peripheral identity for alias learning.
     case bleIdentityLearning
+    /// The Mac accepts explicit PageUp/PageDown/Home/End commands. Unlike
+    /// older capabilities, this is negotiated only when the client declares
+    /// the matching feature, not merely because it supports remote desktop.
+    case navigationKeys
 
     /// App Store 1.0/1.1 peers know only the four screen-control cases.
     /// Their synthesized Codable decoder rejects the entire hello on any new
@@ -106,7 +114,8 @@ public enum RemoteCapability: String, Codable, Sendable, CaseIterable, Equatable
                 // The first feature-aware 1.2 clients declared only desktop,
                 // but already understood all three input capability cases.
                 known.contains(capability.rawValue) || known.contains(Self.remoteDesktop.rawValue)
-            case .remoteDesktop, .dockGroups, .mediaControl, .bleIdentityLearning:
+            case .remoteDesktop, .dockGroups, .mediaControl, .bleIdentityLearning,
+                 .navigationKeys:
                 known.contains(capability.rawValue)
             }
         }

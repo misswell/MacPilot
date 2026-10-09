@@ -30,6 +30,7 @@
 		534B34773F1A696B2114D81A /* TrackpadState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996A9B575EF823EFF98F1EB8 /* TrackpadState.swift */; };
 		561351D0B1E1B4630DFB5532 /* RemoteBLEIdentityProbePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7093562EFA1A9CB73661828 /* RemoteBLEIdentityProbePolicy.swift */; };
 		58102F1CE9508E1A18B14846 /* RemoteSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE506F7AEC00BC4D65847C12 /* RemoteSettingsView.swift */; };
+		5F09E65FDAE093628B7C3BF1 /* ControlSectionOrderUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E81ADDA4A7D54CF015D28FD0 /* ControlSectionOrderUITests.swift */; };
 		6E9F62D64507C5CC4E50142A /* RemoteVideoDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73F668EDF35E69390AC04692 /* RemoteVideoDecoder.swift */; };
 		70EB80CE61981CAF16DD2B71 /* ScreenshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447CDE5B9C0AAC4C65F9D517 /* ScreenshotTests.swift */; };
 		7393D511673B758035113D6E /* RemoteAutomaticMacSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B8B6ED7EB42F06AB748760 /* RemoteAutomaticMacSelection.swift */; };
@@ -138,6 +139,7 @@
 		D7093562EFA1A9CB73661828 /* RemoteBLEIdentityProbePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBLEIdentityProbePolicy.swift; sourceTree = "<group>"; };
 		E21C2AB621EFBC8E6529C0E5 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		E36953057505FD14ED272AED /* PressGestureRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressGestureRecognizer.swift; sourceTree = "<group>"; };
+		E81ADDA4A7D54CF015D28FD0 /* ControlSectionOrderUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlSectionOrderUITests.swift; sourceTree = "<group>"; };
 		F00C1B29E6E95D05262D3D9A /* RemoteControlPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlPreferencesTests.swift; sourceTree = "<group>"; };
 		F191E81E8CA9B2CCD4CF79A9 /* TouchHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchHistory.swift; sourceTree = "<group>"; };
 		F4E2DE683D33CF6736C45DE3 /* PressureSample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressureSample.swift; sourceTree = "<group>"; };
@@ -196,6 +198,7 @@
 		39EC12C68FFA2B00A907F119 /* ScreenshotTests */ = {
 			isa = PBXGroup;
 			children = (
+				E81ADDA4A7D54CF015D28FD0 /* ControlSectionOrderUITests.swift */,
 				447CDE5B9C0AAC4C65F9D517 /* ScreenshotTests.swift */,
 			);
 			path = ScreenshotTests;
@@ -514,6 +517,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5F09E65FDAE093628B7C3BF1 /* ControlSectionOrderUITests.swift in Sources */,
 				70EB80CE61981CAF16DD2B71 /* ScreenshotTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -672,7 +676,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 33;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacPilotRemote/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -693,7 +697,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 33;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacPilotRemote/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

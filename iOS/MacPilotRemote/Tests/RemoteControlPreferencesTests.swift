@@ -39,12 +39,13 @@ struct RemoteControlPreferencesTests {
         }
     }
 
-    @Test func defaultOrderRetainsTheFourSections() throws {
+    @Test func navigationAppendsWithoutDisturbingTheFourOriginalSections() throws {
         try withPreferences { preferences, _ in
             #expect(preferences.orderedGroups == RemoteControlFeature.Group.allCases)
             #expect(preferences.homeSections == [
                 [.desktop, .trackpad], [.displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock],
-                [.mediaPrevious, .mediaPlayPause, .mediaNext], [.brightness, .volume, .mute]
+                [.mediaPrevious, .mediaPlayPause, .mediaNext], [.brightness, .volume, .mute],
+                [.pageUp, .pageDown, .home, .end]
             ])
         }
     }
@@ -53,10 +54,10 @@ struct RemoteControlPreferencesTests {
         try withPreferences { preferences, defaults in
             preferences.moveGroups(fromOffsets: IndexSet(integer: 2), toOffset: 0)
             let reloaded = RemoteControlPreferences(defaults: defaults)
-            #expect(reloaded.orderedGroups == [.media, .input, .screen, .levels])
+            #expect(reloaded.orderedGroups == [.media, .input, .screen, .levels, .navigation])
             #expect(reloaded.homeSections.first == [.mediaPrevious, .mediaPlayPause, .mediaNext])
             reloaded.moveFeatures(in: .screen, fromOffsets: IndexSet(integer: 0), toOffset: 4)
-            #expect(reloaded.orderedGroups == [.media, .input, .screen, .levels])
+            #expect(reloaded.orderedGroups == [.media, .input, .screen, .levels, .navigation])
             #expect(reloaded.features(in: .input) == [.desktop, .trackpad, .keyboard])
         }
     }
@@ -69,7 +70,7 @@ struct RemoteControlPreferencesTests {
             let preferences = RemoteControlPreferences(defaults: defaults)
             #expect(Set(preferences.orderedFeatures) == Set(RemoteControlFeature.allCases))
             #expect(preferences.orderedFeatures.count == RemoteControlFeature.allCases.count)
-            #expect(preferences.orderedGroups == [.media, .input, .screen, .levels])
+            #expect(preferences.orderedGroups == [.media, .input, .screen, .levels, .navigation])
             preferences.moveFeatures(in: .input, fromOffsets: IndexSet(integer: 0), toOffset: 2)
             preferences.moveGroups(fromOffsets: IndexSet(integer: 0), toOffset: 4)
             preferences.setEnabled(false, for: .mute)
@@ -84,12 +85,12 @@ struct RemoteControlPreferencesTests {
             defaults.set(["mediaNext", "volume", "desktop", "mediaPrevious", "mute", "brightness"],
                          forKey: "remoteControl.featureOrder")
             let preferences = RemoteControlPreferences(defaults: defaults)
-            #expect(preferences.orderedGroups == [.media, .levels, .input, .screen])
+            #expect(preferences.orderedGroups == [.media, .levels, .input, .screen, .navigation])
             #expect(preferences.features(in: .media) == [.mediaNext, .mediaPrevious, .mediaPlayPause])
             #expect(preferences.features(in: .levels) == [.volume, .brightness, .mute])
-            #expect(preferences.homeSections.count == 4)
+            #expect(preferences.homeSections.count == 5)
             preferences.moveFeatures(in: .input, fromOffsets: IndexSet(integer: 0), toOffset: 2)
-            #expect(RemoteControlPreferences(defaults: defaults).orderedGroups == [.media, .levels, .input, .screen])
+            #expect(RemoteControlPreferences(defaults: defaults).orderedGroups == [.media, .levels, .input, .screen, .navigation])
         }
     }
 
@@ -119,8 +120,21 @@ struct RemoteControlPreferencesTests {
             preferences.moveFeatures(in: .levels, fromOffsets: IndexSet(integer: 1), toOffset: 0)
             #expect(preferences.features(in: .levels) == [.volume, .brightness, .mute])
             preferences.setEnabled(false, for: .volume)
-            #expect(preferences.homeSections.last == [.brightness, .mute])
+            #expect(preferences.homeSections.contains([.brightness, .mute]))
             #expect(!preferences.homeSections.flatMap { $0 }.contains(.keyboard))
+        }
+    }
+
+    @Test func navigationKeysReorderAndMapOnlyToWhitelistedKeys() throws {
+        try withPreferences { preferences, defaults in
+            preferences.moveFeatures(in: .navigation, fromOffsets: IndexSet(integer: 3), toOffset: 0)
+            #expect(RemoteControlPreferences(defaults: defaults).features(in: .navigation) == [.end, .pageUp, .pageDown, .home])
+            #expect(RemoteControlFeature.pageUp.navigationKey == .pageUp)
+            #expect(RemoteControlFeature.pageDown.navigationKey == .pageDown)
+            #expect(RemoteControlFeature.home.navigationKey == .home)
+            #expect(RemoteControlFeature.end.navigationKey == .end)
+            #expect(RemoteControlFeature.mute.navigationKey == nil)
+            #expect(preferences.features(in: .screen) == [.displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock])
         }
     }
 }

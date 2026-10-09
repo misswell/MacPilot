@@ -108,6 +108,7 @@ final class RemoteAppModel: ObservableObject {
     @Published private(set) var errorKey: String?
     @Published private(set) var infoKey: String?
     @Published private(set) var runningCommand: RemoteCommand?
+    @Published private(set) var runningNavigationKey: RemoteNavigationKey?
     /// The Mac's Dock groups, when it advertises the capability. `nil` until
     /// the first fetch answers, and cleared whenever the connection resets.
     @Published private(set) var dockGroupsSnapshot: RemoteDockGroupsSnapshot?
@@ -955,6 +956,7 @@ final class RemoteAppModel: ObservableObject {
             : (manager.linkDescription.hasPrefix("awdl") ? .awdl : .localNetwork)
         previous.disconnect(report: false)
         runningCommand = nil
+        runningNavigationKey = nil
         latencyMs = nil
         metrics.commandRTTMs = nil
         pendingLevel = nil
@@ -1223,6 +1225,7 @@ final class RemoteAppModel: ObservableObject {
         errorKey = nil
         infoKey = nil
         runningCommand = nil
+        runningNavigationKey = nil
         dockGroupsSnapshot = nil
         dockGroupsMissingApps = []
         launchingDockGroupID = nil
@@ -1335,6 +1338,7 @@ final class RemoteAppModel: ObservableObject {
 
     var supportsRemoteDesktop: Bool { connection.supportsRemoteDesktop }
     var supportsMediaControl: Bool { connection.supportsMediaControl }
+    var supportsNavigationKeys: Bool { connection.supportsNavigationKeys }
     func beginRemoteVideo(displayID: UInt32?) async throws -> (RemoteVideoOffer, String) {
         try await connection.beginRemoteVideo(displayID: displayID)
     }
@@ -1412,7 +1416,15 @@ final class RemoteAppModel: ObservableObject {
 
     // MARK: - Commands
 
-    func perform(_ command: RemoteCommand) async {
+    func performNavigationKey(_ key: RemoteNavigationKey) async {
+        guard runningCommand == nil else { return }
+        let manager = connection
+        runningNavigationKey = key
+        defer { if isCurrent(manager) { runningNavigationKey = nil } }
+        await perform(.navigationKey, payload: key.encoded())
+    }
+
+    func perform(_ command: RemoteCommand, payload: Data? = nil) async {
         guard connectionState.isConnected else {
             errorKey = "errorNotPaired"
             return
@@ -1421,13 +1433,17 @@ final class RemoteAppModel: ObservableObject {
             errorKey = "mediaNeedsUpdate"
             return
         }
+        if command == .navigationKey, !supportsNavigationKeys {
+            errorKey = "navigationNeedsUpdate"
+            return
+        }
         let manager = connection
         runningCommand = command
         defer { if isCurrent(manager) { runningCommand = nil } }
 
         let started = Date()
         do {
-            let response = try await manager.send(command)
+            let response = try await manager.send(command, payload: payload)
             guard isCurrent(manager) else { return }
             metrics.executionLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
             if let state = response.state { macState = state }

@@ -16,16 +16,19 @@ struct RemoteCommandRouter {
 
     private let logHandler: (String) -> Void
     private let mediaControl: (RemoteCommand) -> RemoteErrorCode?
+    private let navigationControl: (RemoteNavigationKey) -> RemoteErrorCode?
 
     init(
         service: MacScreenControlService,
         dockGroups: (any RemoteDockGroupsHosting)? = nil,
         mediaControl: @escaping (RemoteCommand) -> RemoteErrorCode? = { RemoteMediaControl.send($0) },
+        navigationControl: @escaping (RemoteNavigationKey) -> RemoteErrorCode? = { RemoteNavigationControl.send($0) },
         log: @escaping (String) -> Void = { remoteControlLog($0) }
     ) {
         self.service = service
         self.dockGroups = dockGroups
         self.mediaControl = mediaControl
+        self.navigationControl = navigationControl
         self.logHandler = log
     }
 
@@ -70,6 +73,16 @@ struct RemoteCommandRouter {
 
         case .mediaPrevious, .mediaPlayPause, .mediaNext:
             if let error = mediaControl(request.command) {
+                return failure(for: request, code: error)
+            }
+            return payloadResponse(request, started: started, payload: nil)
+
+        case .navigationKey:
+            guard let key = RemoteNavigationKey.decoded(from: request.payload) else {
+                log("command refused reason=invalidNavigationKey command=\(request.command.rawValue)")
+                return failure(for: request, code: .invalidMessage)
+            }
+            if let error = navigationControl(key) {
                 return failure(for: request, code: error)
             }
             return payloadResponse(request, started: started, payload: nil)

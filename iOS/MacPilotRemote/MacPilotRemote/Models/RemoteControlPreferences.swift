@@ -7,11 +7,12 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
     case displayOff, wakeDisplay, lockScreen, wakeAndUnlock
     case mediaPrevious, mediaPlayPause, mediaNext
     case brightness, volume, mute
+    case pageUp, pageDown, home, end
 
     var id: String { rawValue }
 
     enum Group: String, CaseIterable, Identifiable {
-        case input, screen, media, levels
+        case input, screen, media, levels, navigation
         var id: String { rawValue }
         var titleKey: String { "controlsGroup\(rawValue.capitalized)" }
         var features: [RemoteControlFeature] {
@@ -25,6 +26,7 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
         case .displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock: .screen
         case .mediaPrevious, .mediaPlayPause, .mediaNext: .media
         case .brightness, .volume, .mute: .levels
+        case .pageUp, .pageDown, .home, .end: .navigation
         }
     }
 
@@ -43,6 +45,10 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
         case .brightness: "brightnessLabel"
         case .volume: "volumeLabel"
         case .mute: "mute"
+        case .pageUp: "navigationPageUp"
+        case .pageDown: "navigationPageDown"
+        case .home: "navigationHome"
+        case .end: "navigationEnd"
         }
     }
 
@@ -61,6 +67,10 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
         case .brightness: "sun.max"
         case .volume: "speaker.wave.2"
         case .mute: "speaker.slash"
+        case .pageUp: "chevron.up"
+        case .pageDown: "chevron.down"
+        case .home: "arrow.up.to.line"
+        case .end: "arrow.down.to.line"
         }
     }
 
@@ -73,6 +83,16 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
         case .mediaPrevious: .mediaPrevious
         case .mediaPlayPause: .mediaPlayPause
         case .mediaNext: .mediaNext
+        default: nil
+        }
+    }
+
+    var navigationKey: RemoteNavigationKey? {
+        switch self {
+        case .pageUp: .pageUp
+        case .pageDown: .pageDown
+        case .home: .home
+        case .end: .end
         default: nil
         }
     }

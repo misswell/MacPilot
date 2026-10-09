@@ -36,6 +36,7 @@ struct HomeView: View {
                         case .screen: actionGrid(features)
                         case .media: mediaPanel(features)
                         case .levels: levelsPanel(features)
+                        case .navigation: navigationPanel(features)
                         case nil: EmptyView()
                         }
                     }
@@ -298,6 +299,34 @@ struct HomeView: View {
         .accessibilityIdentifier("control.\(feature.rawValue)")
     }
 
+    private func navigationPanel(_ features: [RemoteControlFeature]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(features) { feature in
+                    let enabled = appModel.connectionState.isConnected
+                        && appModel.supportsNavigationKeys && appModel.runningCommand == nil
+                    Button {
+                        guard let key = feature.navigationKey else { return }
+                        Task { await appModel.performNavigationKey(key) }
+                    } label: {
+                        ControlKeyLabel(title: appModel.text(feature.titleKey), icon: feature.icon,
+                                        enabled: enabled,
+                                        running: appModel.runningNavigationKey == feature.navigationKey)
+                    }
+                    .buttonStyle(ControlKeyStyle(prominent: false))
+                    .disabled(!enabled)
+                    .accessibilityLabel(appModel.text(feature.titleKey))
+                    .accessibilityIdentifier("control.\(feature.rawValue)")
+                }
+            }
+            .padding(8)
+            .controlDeckCard()
+            if appModel.connectionState.isConnected && !appModel.supportsNavigationKeys {
+                hint(appModel.text("navigationNeedsUpdate"))
+            }
+        }
+    }
+
     private func commandEnabled(_ feature: RemoteControlFeature) -> Bool {
         appModel.connectionState.isConnected && appModel.runningCommand == nil
             && (feature.group != .media || appModel.supportsMediaControl)
@@ -483,7 +512,6 @@ private struct LevelSliderRow: View {
     /// The value the Mac last reported, used whenever the finger is up.
     let value: Double?
 
-    @ScaledMetric(relativeTo: .subheadline) private var muteKeyWidth: CGFloat = 84
     @ScaledMetric(relativeTo: .subheadline) private var levelIconWidth: CGFloat = 20
 
     @State private var draft: Double = 0
@@ -532,16 +560,11 @@ private struct LevelSliderRow: View {
                             .accessibilityLabel(appModel.text("levelsUnavailableShort"))
                     }
                 }
-                if kind == .volume, appModel.controlPreferences.isEnabled(.mute),
-                   !dynamicTypeSize.isAccessibilitySize {
+                if kind == .volume, appModel.controlPreferences.isEnabled(.mute) {
                     muteButton.disabled(value == nil || appModel.volumeMuted == nil)
                 }
             }
             .frame(minHeight: 44)
-            if kind == .volume, appModel.controlPreferences.isEnabled(.mute),
-               dynamicTypeSize.isAccessibilitySize {
-                muteButton.disabled(value == nil || appModel.volumeMuted == nil)
-            }
         }
         .onAppear { if let value { draft = value } }
         .onChange(of: draft) { _, newValue in
@@ -560,12 +583,13 @@ private struct LevelSliderRow: View {
             appModel.setLevel(kind, value: draft, muted: !isMuted)
             Haptics.impact()
         } label: {
-            ControlKeyLabel(title: appModel.text(isMuted ? "unmute" : "mute"),
-                            icon: isMuted ? "speaker.slash" : "speaker.wave.2",
-                            enabled: available, tint: isMuted ? .orange : .accentColor)
-                .frame(width: dynamicTypeSize.isAccessibilitySize ? nil : muteKeyWidth)
+            Image(systemName: isMuted ? "speaker.slash" : "speaker.wave.2")
+                .font(.title3)
+                .foregroundStyle(available ? (isMuted ? Color.orange : Color.accentColor) : Color.secondary)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(ControlKeyStyle(prominent: false))
+        .buttonStyle(.plain)
         .accessibilityLabel(appModel.text(isMuted ? "unmute" : "mute"))
         .accessibilityIdentifier("control.mute")
     }

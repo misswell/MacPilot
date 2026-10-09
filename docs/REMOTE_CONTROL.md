@@ -273,10 +273,18 @@ and show an update hint without sending unfamiliar command values.
 
 PilotNest Settings → Control features provides individual switches for remote
 screen, trackpad, keyboard, all four screen actions, all three media keys,
-brightness, volume, and mute. They default to visible and persist on the phone
+brightness, volume, mute, and Page Up/Page Down/Home/End. They default to visible and persist on the phone
 across launches and Mac switches. The native settings list supports long-press
-drag reordering within each of the four sections, with permanent reorder handles.
-The separate Section order page reorders whole sections. Section order, feature
+drag reordering within each section, with permanent reorder handles. The new
+Paging & navigation section is appended after the four original sections.
+The toolbar's Section order button opens a separate page for whole-section
+reordering. Navigation is intentionally outside the permanently editing list:
+an in-list NavigationLink is not tappable while that list is in active edit mode.
+`ControlSectionOrderUITests` covers the actual Settings → Control features →
+Section order tap, plus dragging a navigation key and its section and retaining
+both orders after relaunch. Run this class only on an isolated, unpaired simulator;
+it never taps remote commands or modifies the Mac's screen state.
+Section order, feature
 order and visibility are stored independently; hidden controls retain their
 positions and new controls are appended in their section's default order. Unknown
 visibility/order keys survive downgrades; the previous flat feature order is
@@ -286,18 +294,29 @@ be shown independently, but mute is anchored to the volume slider's right edge
 and cannot be dragged to a standalone row. The home screen keeps the Mac switcher
 first, then renders entire sections and their controls in the saved order. Screen
 key content is centered in equal-height, Dynamic Type-scaled keys; single-line
-captions do not reserve an invisible second line. Input, screen, media, and mute
+captions do not reserve an invisible second line. Input, screen, media, and navigation
 keys reuse the same surfaces and press feedback, and all groups share one
 adaptive card background, 16-point radius, and subtle border. Media
 keys share one Touch Bar with adaptive grouped surfaces and the same accent as
 the surrounding controls. Subtle key shading and press feedback retain its
 tactile appearance in light and dark mode and respect Reduce Motion.
-Brightness/volume use compact inline sliders;
+Brightness/volume use compact inline sliders. Mute is a plain, icon-only action
+at the right of the volume row, with no caption or button chrome; its 44-point
+hit target and localized VoiceOver label remain, including at accessibility text sizes;
 unknown levels show an unavailable indicator rather than a guessed zero. The
 560-point content limit keeps iPad layouts compact. Larger text uses extra rows
-and scrolling; default-size controls fit even an iPhone SE portrait viewport.
+and scrolling; additional sections remain reachable by scrolling on small phones.
 Empty groups are omitted, and a Settings shortcut remains when all home controls
 are hidden.
+
+`navigationKeys` is negotiated only with clients declaring that exact feature.
+The authenticated `navigationKey` command carries one byte: 1 Page Up, 2 Page Down,
+3 Home, or 4 End. Missing, unknown, and oversized payloads are rejected. The Mac
+requires Accessibility permission and dispatches an unmodified key-down/up pair
+to the foreground app; apps decide their own navigation behavior. These home
+controls do not require opening or arming a remote-desktop session. Old Macs
+disable the four keys and show an update hint without receiving unfamiliar
+commands. Tests inject an event sink and never post real keyboard events.
 
 When the selected Mac is absent, PilotNest can automatically select another
 already-paired Mac only after that Mac remains the sole discovered paired identity

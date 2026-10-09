@@ -4,6 +4,7 @@ import SwiftUI
 struct RemoteSettingsView: View {
     @EnvironmentObject private var appModel: RemoteAppModel
     @State private var showResetConfirmation = false
+    @State private var showGroupOrder = false
 
     var body: some View {
         NavigationStack {
@@ -165,11 +166,6 @@ struct RemoteSettingsView: View {
 
     private var controlSettings: some View {
         List {
-            Section {
-                NavigationLink(appModel.text("controlsGroupOrder")) {
-                    groupOrderSettings
-                }
-            }
             ForEach(appModel.controlPreferences.orderedGroups) { group in
                 Section(appModel.text(group.titleKey)) {
                     ForEach(appModel.controlPreferences.features(in: group)) { feature in
@@ -201,6 +197,17 @@ struct RemoteSettingsView: View {
         .environment(\.editMode, .constant(.active))
         .navigationTitle(appModel.text("controlsSettings"))
         .navigationBarTitleDisplayMode(.inline)
+        // Active List editing disables NavigationLink rows. Keep navigation
+        // outside that interaction boundary while retaining reorder handles.
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(appModel.text("controlsGroupOrder")) { showGroupOrder = true }
+                    .accessibilityIdentifier("controlGroupOrder")
+            }
+        }
+        .navigationDestination(isPresented: $showGroupOrder) {
+            groupOrderSettings
+        }
     }
 
     private var groupOrderSettings: some View {

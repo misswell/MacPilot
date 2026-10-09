@@ -69,9 +69,19 @@ struct RemoteVideoTests {
     }
 
     @Test func newPhonesReceiveOnlyTheFeaturesTheyDeclared() {
-        let advertised: [RemoteCapability] = [.realtimeInput, .dockGroups, .remoteDesktop]
+        let advertised: [RemoteCapability] = [.realtimeInput, .dockGroups, .remoteDesktop, .navigationKeys]
         #expect(RemoteCapability.negotiated(advertised, features: ["remoteDesktop"]) == [.realtimeInput, .remoteDesktop])
-        #expect(RemoteCapability.negotiated(advertised, features: ["remoteDesktop", "dockGroups"]) == advertised)
+        #expect(RemoteCapability.negotiated(
+            advertised,
+            features: ["remoteDesktop", "dockGroups", "navigationKeys"]
+        ) == advertised)
+    }
+
+    @Test func navigationKeysRequireTheirOwnExplicitCapabilityDeclaration() {
+        let advertised: [RemoteCapability] = [.remoteDesktop, .navigationKeys]
+        #expect(!RemoteCapability.negotiated(advertised, features: nil).contains(.navigationKeys))
+        #expect(!RemoteCapability.negotiated(advertised, features: ["remoteDesktop"]).contains(.navigationKeys))
+        #expect(RemoteCapability.negotiated(advertised, features: ["navigationKeys"]).contains(.navigationKeys))
     }
 
     @Test func bleIdentityLearningIsNegotiatedOnlyWhenDeclared() {
@@ -121,7 +131,7 @@ struct RemoteVideoTests {
             [.lock, .displayOff, .wake, .unlock, .realtimeInput])
         #expect(RemoteCapability.negotiated(RemoteCapability.allCases, features: ["remoteDesktop"]) ==
             RemoteCapability.allCases.filter {
-                $0 != .dockGroups && $0 != .mediaControl && $0 != .bleIdentityLearning
+                $0 != .dockGroups && $0 != .mediaControl && $0 != .bleIdentityLearning && $0 != .navigationKeys
             })
     }
 
@@ -129,6 +139,7 @@ struct RemoteVideoTests {
         #expect(RemoteCommand.beginRemoteVideo.requiresAuthentication)
         #expect(RemoteCommand.remotePointer.requiresAuthentication)
         #expect(RemoteCommand.remoteKey.requiresAuthentication)
+        #expect(RemoteCommand.navigationKey.requiresAuthentication)
         #expect(RemoteVideoQuality.balanced.width == 1280)
         #expect(RemoteVideoQuality.balanced.fps == 30)
         #expect(RemoteVideoQuality.balanced.bitrate == 2_000_000)

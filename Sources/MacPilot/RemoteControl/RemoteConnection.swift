@@ -37,7 +37,7 @@ extension RemoteConnectionHost {
     var advertisedCapabilities: [RemoteCapability] {
         var capabilities: [RemoteCapability] = [
             .lock, .displayOff, .wake, .unlock, .realtimeInput, .inputPressure, .inputPressureStream,
-            .mediaControl
+            .mediaControl, .navigationKeys
         ]
         if dockGroupsHosting != nil {
             capabilities.append(.dockGroups)
