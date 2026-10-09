@@ -45,8 +45,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     private let userActivityMonitor: BLEUserActivityMonitor
     private var userActivityPolicyTimer: BackgroundTask?
 
-    init(userActivityMonitor: BLEUserActivityMonitor = BLEUserActivityMonitor()) {
+    init(
+        userActivityMonitor: BLEUserActivityMonitor = BLEUserActivityMonitor(),
+        bluetoothScanner: any BluetoothScanning = BluetoothScanner()
+    ) {
         self.userActivityMonitor = userActivityMonitor
+        self.bluetoothScanner = bluetoothScanner
         super.init()
         screenControl.willLock = { [weak self] source in
             guard let self else { return }
@@ -88,7 +92,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     var settings = BLEUnlockSettings()
 
-    private let bluetoothScanner = BluetoothScanner()
+    private let bluetoothScanner: any BluetoothScanning
     private var centralMgr: CBCentralManager? {
         get { bluetoothScanner.central }
         set { bluetoothScanner.central = newValue }
@@ -105,6 +109,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     private var wakeRetryTask: Task<Void, Never>?
     private var systemWakeRecoveryTask: Task<Void, Never>?
     private var monitoringRecoveryTask: Task<Void, Never>?
+    var monitoringRecoverySleep: @MainActor (TimeInterval) async -> Void = { delay in
+        try? await Task.sleep(for: .milliseconds(Int64(delay * 1_000)))
+    }
     private var unlockAttemptTask: Task<Void, Never>?
     private var unlockAttemptSlot = BLEUnlockAttemptSlot()
     private var lastLoggedRSSIAt = Date.distantPast
@@ -1556,8 +1563,38 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         )
     }
 
+    private func startDisplayWakeMonitoringRecovery(clearSignal: Bool) {
+        guard settings.isEnabled, hasMonitoredDevice, !systemSleep else { return }
+        // Wake must not wait behind a signal-timeout recovery already in flight.
+        cancelMonitoringRecovery(reason: "displayWake")
+        if clearSignal {
+            for runtime in monitoredRuntimes.values {
+                runtime.lastRSSI = nil
+                runtime.latestRSSIs.removeAll(keepingCapacity: true)
+                runtime.presence = false
+                runtime.proximityTimer?.stop()
+                runtime.proximityTimer = nil
+            }
+            presence = false
+            refreshPublishedMonitoringState()
+        }
+        startMonitoringRecovery(reason: "displayWake", restartImmediately: true)
+    }
+
     private func restartMonitoringAfterRecovery(reason: String) {
         guard settings.isEnabled, hasMonitoredDevice, !systemSleep else { return }
+        if reason == "displayWake" {
+            // Discover immediately using the existing session. Recreating the
+            // central here (and again at 3/10 seconds) cancels the connections
+            // that the wake transition has just started restoring.
+            ensureCentralManager()
+            let scanning = bluetoothScanner.restartIfPoweredOn()
+            log("display wake scan \(scanning ? "restarted" : "deferred") preservingConnections=true")
+            if let central = centralMgr, central.state == .poweredOn {
+                restoreKnownMonitoredPeripherals(using: central)
+            }
+            return
+        }
         log("restarting monitoring after recovery reason=\(reason)")
 
         let central = centralMgr
@@ -1612,7 +1649,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             for deadline in restartDelays {
                 let wait = deadline - previousDeadline
                 if wait > 0 {
-                    try? await Task.sleep(for: .milliseconds(Int64(wait * 1_000)))
+                    guard let sleep = self?.monitoringRecoverySleep else { return }
+                    await sleep(wait)
                 }
                 guard !Task.isCancelled, let self else { return }
                 guard !self.monitoringHasFreshSignal else { break }
@@ -1771,10 +1809,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 self.displaySleep = false
                 self.screenControl.noteDisplaySleeping(false)
                 self.userActivityMonitor.noteDisplayWake(fromSleep: hadSleepTransition)
-                self.reconcileActiveConnectionPolicy(reason: "screensDidWake", force: true)
                 self.recoveringFromSystemSleep = false
                 self.wakeRetryTask?.cancel()
-                self.startMonitoringRecovery(reason: "displayWake", restartImmediately: true)
+                self.startDisplayWakeMonitoringRecovery(clearSignal: hadSleepTransition)
+                self.reconcileActiveConnectionPolicy(reason: "screensDidWake", force: true)
                 self.tryUnlockScreen(trigger: "screensDidWake")
             }
         }, center: nc)
@@ -1784,7 +1822,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.reconcileActiveConnectionPolicy(reason: "heldBlankChanged", force: true)
+                guard let self else { return }
+                if !self.displayUnavailable {
+                    self.userActivityMonitor.noteDisplayWake(fromSleep: true)
+                    self.startDisplayWakeMonitoringRecovery(clearSignal: true)
+                }
+                self.reconcileActiveConnectionPolicy(reason: "heldBlankChanged", force: true)
             }
         }, center: heldBlankNotificationCenter)
         observers.add(nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in

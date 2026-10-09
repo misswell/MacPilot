@@ -18,7 +18,17 @@ enum BLEScanPolicy {
 /// Owns the CoreBluetooth session so feature stop can close its XPC/delegate
 /// graph, not merely stop advertising callbacks.
 @MainActor
-final class BluetoothScanner {
+protocol BluetoothScanning: AnyObject {
+    var central: CBCentralManager? { get set }
+    func createIfNeeded(delegate: CBCentralManagerDelegate)
+    func startIfPoweredOn() -> Bool
+    func restartIfPoweredOn() -> Bool
+    func stop()
+    func release()
+}
+
+@MainActor
+final class BluetoothScanner: BluetoothScanning {
     var central: CBCentralManager?
 
     func createIfNeeded(delegate: CBCentralManagerDelegate) {
@@ -38,6 +48,15 @@ final class BluetoothScanner {
     }
 
     func stop() { central?.stopScan() }
+
+    /// Start a new discovery session without cancelling pending connections.
+    func restartIfPoweredOn() -> Bool {
+        guard let central, central.state == .poweredOn else { return false }
+        central.stopScan()
+        // Do not trust an isScanning value left over from display sleep.
+        central.scanForPeripherals(withServices: nil, options: BLEScanPolicy.scanOptions)
+        return true
+    }
 
     func release() {
         central?.stopScan()

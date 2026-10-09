@@ -1,10 +1,143 @@
 import AppKit
+import CoreBluetooth
 import Foundation
 import Testing
 @testable import MacPilot
 
 @MainActor
 struct BLEMonitoringRestorationTests {
+    @Test func displayWakePreemptsAnOlderSignalTimeoutRecovery() {
+        let scanner = RecordingBluetoothScanner()
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: scanner
+        )
+        defer { model.shutdown() }
+        let workspaceCenter = NotificationCenter()
+        model.workspaceNotificationCenterOverride = workspaceCenter
+        model.displayUnavailableProbe = { false }
+        model.settings.isEnabled = true
+        // This timeout exercises recovery, never the user's real lock screen.
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
+        model.startObservingSystemState()
+        let monitored = UUID()
+        model.startMonitor(monitored)
+        model.handleMonitoredSignalTimeout(for: monitored)
+        let resetsBeforeWake = scanner.centralResets
+        workspaceCenter.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+
+        workspaceCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+
+        #expect(scanner.scanRestarts == 1, "An earlier recovery must not defer the wake scan")
+        #expect(scanner.centralResets == resetsBeforeWake)
+    }
+
+    @Test func manualDisplayUnblankImmediatelyRestartsDiscovery() {
+        let scanner = RecordingBluetoothScanner()
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: scanner
+        )
+        defer { model.shutdown() }
+        var isBlanked = false
+        let blankCenter = NotificationCenter()
+        model.displayUnavailableProbe = { isBlanked }
+        model.heldBlankNotificationCenterOverride = blankCenter
+        model.settings.isEnabled = true
+        model.startObservingSystemState()
+        model.startMonitor(UUID())
+        isBlanked = true
+        blankCenter.post(name: DisplayPower.blankStateDidChangeNotification, object: nil)
+        #expect(scanner.scanRestarts == 0)
+
+        isBlanked = false
+        blankCenter.post(name: DisplayPower.blankStateDidChangeNotification, object: nil)
+
+        #expect(scanner.scanRestarts == 1)
+        #expect(scanner.centralResets == 0)
+        #expect(!model.activeConnectionsPaused)
+    }
+
+    @Test func displayWakeImmediatelyRestartsScanningWithoutReplacingTheCentral() {
+        let scanner = RecordingBluetoothScanner()
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: scanner
+        )
+        defer { model.shutdown() }
+        let workspaceCenter = NotificationCenter()
+        model.workspaceNotificationCenterOverride = workspaceCenter
+        model.displayUnavailableProbe = { false }
+        model.screenLockStateProbe = { .locked }
+        model.settings.isEnabled = true
+        model.settings.unlockRSSI = -70
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.startObservingSystemState()
+        let monitored = UUID()
+        model.startMonitor(monitored)
+        model.updateMonitoredPeripheral(-50, for: monitored)
+        workspaceCenter.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+
+        workspaceCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+
+        #expect(scanner.scanRestarts == 1, "Discovery must restart synchronously on display wake")
+        #expect(scanner.centralResets == 0, "The reconnect must keep its CoreBluetooth session")
+        #expect(!model.presence, "Pre-wake RSSI must not authorize unlock")
+        #expect(!model.isUnlockAttemptScheduled)
+
+        model.updateMonitoredPeripheral(-50, for: monitored)
+        #expect(model.presence)
+        #expect(model.isUnlockAttemptScheduled, "Fresh nearby signal must resume automatic unlock")
+    }
+
+    @Test func displayWakeScanRetriesPreserveTheCentralAndStopAfterFreshSignal() async {
+        let scanner = RecordingBluetoothScanner()
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: scanner
+        )
+        defer { model.shutdown() }
+        let delays = AsyncStream<TimeInterval>.makeStream()
+        var sleepContinuation: CheckedContinuation<Void, Never>?
+        model.monitoringRecoverySleep = { delay in
+            await withCheckedContinuation { continuation in
+                sleepContinuation = continuation
+                delays.continuation.yield(delay)
+            }
+        }
+        defer {
+            sleepContinuation?.resume()
+            delays.continuation.finish()
+        }
+        let workspaceCenter = NotificationCenter()
+        model.workspaceNotificationCenterOverride = workspaceCenter
+        model.displayUnavailableProbe = { false }
+        model.settings.isEnabled = true
+        model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.startObservingSystemState()
+        let monitored = UUID()
+        model.startMonitor(monitored)
+        workspaceCenter.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        workspaceCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+
+        var delayIterator = delays.stream.makeAsyncIterator()
+        let firstDelay = await delayIterator.next()
+        #expect(firstDelay == 3)
+        sleepContinuation?.resume()
+        sleepContinuation = nil
+        let secondDelay = await delayIterator.next()
+        #expect(secondDelay == 7)
+        #expect(scanner.scanRestarts == 2)
+        #expect(scanner.centralResets == 0, "The three-second retry must not cancel a pending connection")
+        let taskCount = model.diagnosticTaskCount
+        model.updateMonitoredPeripheral(-50, for: monitored)
+        #expect(model.presence)
+        // Fresh RSSI cancels the remaining ten-second scan retry immediately.
+        #expect(model.diagnosticTaskCount == taskCount - 1)
+    }
+
     @Test func absentSecondaryDoesNotResetAFreshPrimaryInAnyDeviceMode() {
         let primary = UUID()
         let secondary = UUID()
@@ -278,4 +411,22 @@ struct BLEMonitoringRestorationTests {
         workspaceCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
         #expect(!model.activeConnectionsPaused)
     }
+}
+
+@MainActor
+private final class RecordingBluetoothScanner: BluetoothScanning {
+    var central: CBCentralManager? {
+        get { nil }
+        set { centralResets += 1 }
+    }
+    private(set) var scanRestarts = 0
+    private(set) var centralResets = 0
+    func createIfNeeded(delegate: CBCentralManagerDelegate) {}
+    func startIfPoweredOn() -> Bool { true }
+    func restartIfPoweredOn() -> Bool {
+        scanRestarts += 1
+        return true
+    }
+    func stop() {}
+    func release() {}
 }
