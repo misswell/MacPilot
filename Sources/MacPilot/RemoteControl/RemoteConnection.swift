@@ -12,6 +12,7 @@ protocol RemoteConnectionHost: AnyObject {
     var deviceStore: RemoteDeviceStore { get }
     /// The trackpad's injection pipeline, shared by every connection.
     var inputCoordinator: RemoteInputCoordinator { get }
+    func supportsBLEIdentityLearning(clientID: String) -> Bool
 
     func remoteConnection(
         _ connection: RemoteConnection,
@@ -24,6 +25,7 @@ protocol RemoteConnectionHost: AnyObject {
 }
 
 extension RemoteConnectionHost {
+    func supportsBLEIdentityLearning(clientID: String) -> Bool { false }
     /// Dock groups, when the host wires them up. `nil` on hosts without the
     /// feature (and every test host), which makes the three Dock group
     /// commands answer `unsupportedCommand`.
@@ -71,6 +73,7 @@ final class RemoteConnection: Identifiable {
 
     private(set) var isAuthenticated = false
     private(set) var authenticatedClientName: String?
+    private(set) var authenticatedPairingKeyFingerprint: String?
     private(set) var isClosed = false
     private(set) var remoteAddress: String?
     /// True between `beginRealtimeInput` and `endRealtimeInput`/close: the
@@ -308,13 +311,17 @@ final class RemoteConnection: Identifiable {
         self.serverNonce = serverNonce
 
         let paired = host.deviceStore.isPaired(clientID: incomingClientID.uuidString)
+        var capabilities = host.advertisedCapabilities + [.remoteDesktop]
+        if paired, host.supportsBLEIdentityLearning(clientID: incomingClientID.uuidString) {
+            capabilities.append(.bleIdentityLearning)
+        }
         var reply = RemoteHandshakeMessage(
             kind: .serverHello,
             deviceID: host.deviceStore.deviceID,
             deviceName: host.deviceStore.deviceName,
             paired: paired,
             serverNonce: serverNonce,
-            capabilities: RemoteCapability.negotiated(host.advertisedCapabilities + [.remoteDesktop], features: message.features)
+            capabilities: RemoteCapability.negotiated(capabilities, features: message.features)
         )
         // A Mac-side key does not prove the phone still has its copy (e.g.
         // after switching installs). Both published and current phones fall
@@ -376,6 +383,7 @@ final class RemoteConnection: Identifiable {
 
         sessionKey = RemoteCrypto.sessionKey(pairingKey: key, clientNonce: clientNonce, serverNonce: serverNonce)
         isAuthenticated = true
+        authenticatedPairingKeyFingerprint = RemoteDeviceStore.fingerprint(of: key)
         authenticatedClientName = clientName ?? "iPhone"
         logHandshakeLatency(event: "pairing")
         try sendPlain(RemoteHandshakeMessage(
@@ -405,6 +413,7 @@ final class RemoteConnection: Identifiable {
 
         sessionKey = RemoteCrypto.sessionKey(pairingKey: key, clientNonce: clientNonce, serverNonce: serverNonce)
         isAuthenticated = true
+        authenticatedPairingKeyFingerprint = RemoteDeviceStore.fingerprint(of: key)
         authenticatedClientName = clientName ?? "iPhone"
         host.deviceStore.markConnected(clientID: clientID, address: remoteAddress)
         logHandshakeLatency(event: "auth")

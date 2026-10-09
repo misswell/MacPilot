@@ -88,6 +88,10 @@ public enum RemoteCapability: String, Codable, Sendable, CaseIterable, Equatable
     case remoteDesktop
     /// System media keys. Senders must see this before sending media commands.
     case mediaControl
+    /// The Mac has an explicit pairing between this client and a BLE Unlock
+    /// identity, so an authenticated BLE session may report its observed
+    /// peripheral identity for alias learning.
+    case bleIdentityLearning
 
     /// App Store 1.0/1.1 peers know only the four screen-control cases.
     /// Their synthesized Codable decoder rejects the entire hello on any new
@@ -102,7 +106,7 @@ public enum RemoteCapability: String, Codable, Sendable, CaseIterable, Equatable
                 // The first feature-aware 1.2 clients declared only desktop,
                 // but already understood all three input capability cases.
                 known.contains(capability.rawValue) || known.contains(Self.remoteDesktop.rawValue)
-            case .remoteDesktop, .dockGroups, .mediaControl:
+            case .remoteDesktop, .dockGroups, .mediaControl, .bleIdentityLearning:
                 known.contains(capability.rawValue)
             }
         }

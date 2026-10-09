@@ -20,7 +20,7 @@ import MacPilotRemoteTransport
 @MainActor
 final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate {
     /// Hands a newly opened channel to the remote control server.
-    var onChannel: ((CBL2CAPChannel) -> Void)?
+    var onChannel: ((CBL2CAPChannel, UUID) -> Void)?
     var onLog: ((String) -> Void)?
 
     private var manager: CBCentralManager?
@@ -268,6 +268,6 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         attemptWatchdog?.cancel()
         attemptWatchdog = nil
         onLog?("BLE L2CAP channel open")
-        onChannel?(channel)
+        onChannel?(channel, peripheral.identifier)
     }
 }

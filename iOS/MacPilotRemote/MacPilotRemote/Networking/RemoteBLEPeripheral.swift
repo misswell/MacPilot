@@ -23,6 +23,8 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
 
     private var manager: CBPeripheralManager?
     private var psm: CBL2CAPPSM?
+    private var isPublishing = false
+    private var publishedService: CBMutableService?
     private var wantsToRun = false
     private var isOnAir = false
     #if DEBUG
@@ -53,7 +55,8 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
         if let manager {
             // The manager is kept across restarts: recreating it is slow and the
             // state callback that triggers publishing only fires on a change.
-            if manager.state == .poweredOn, psm == nil {
+            if manager.state == .poweredOn, psm == nil, !isPublishing {
+                isPublishing = true
                 manager.publishL2CAPChannel(withEncryption: requiresEncryption)
             }
             return
@@ -79,6 +82,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
             self.psm = nil
         }
         manager.removeAllServices()
+        publishedService = nil
     }
 
     // MARK: - GATT
@@ -95,6 +99,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
         )
         let service = CBMutableService(type: RemoteBLEService.serviceUUID, primary: true)
         service.characteristics = [characteristic]
+        publishedService = service
         manager.add(service)
     }
 
@@ -111,8 +116,9 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         switch peripheral.state {
         case .poweredOn:
-            guard wantsToRun else { return }
+            guard wantsToRun, psm == nil, !isPublishing else { return }
             onLog?("BLE advertising: radio on; publishing L2CAP channel")
+            isPublishing = true
             peripheral.publishL2CAPChannel(withEncryption: requiresEncryption)
         case .unauthorized:
             onLog?("BLE unauthorized; the Bluetooth permission is required for the fallback link")
@@ -122,6 +128,9 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
             // powered off / resetting / unknown. Naming the raw value is the only
             // way to tell "waiting for the radio" from "advertising".
             isOnAir = false
+            psm = nil
+            isPublishing = false
+            publishedService = nil
             onLog?("BLE waiting for Bluetooth: state=\(peripheral.state.rawValue)")
         }
     }
@@ -131,8 +140,13 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
         didPublishL2CAPChannel PSM: CBL2CAPPSM,
         error: Error?
     ) {
+        isPublishing = false
         if let error {
             onLog?("BLE L2CAP publish failed error=\(error.localizedDescription)")
+            return
+        }
+        guard wantsToRun, peripheral.state == .poweredOn, psm == nil else {
+            peripheral.unpublishL2CAPChannel(PSM)
             return
         }
         psm = PSM
@@ -141,6 +155,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
+        guard wantsToRun, service === publishedService else { return }
         if let error {
             onLog?("BLE service add failed error=\(error.localizedDescription)")
             return
@@ -153,17 +168,22 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     /// system Bluetooth log, which is how a peripheral that published a PSM but
     /// never became discoverable stayed invisible.
     func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
+        guard wantsToRun else {
+            peripheral.stopAdvertising()
+            isOnAir = false
+            return
+        }
         if let error {
             isOnAir = false
             onLog?("BLE advertising failed error=\(error.localizedDescription)")
             return
         }
-        isOnAir = true
+        isOnAir = peripheral.isAdvertising
         onLog?("BLE advertising; waiting for the Mac to connect")
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
-        guard request.characteristic.uuid == RemoteBLEService.psmCharacteristicUUID, let psm else {
+        guard wantsToRun, request.characteristic.uuid == RemoteBLEService.psmCharacteristicUUID, let psm else {
             peripheral.respond(to: request, withResult: .requestNotSupported)
             return
         }
@@ -188,6 +208,11 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
             return
         }
         guard let channel else { return }
+        guard wantsToRun, channel.psm == psm else {
+            channel.inputStream.close()
+            channel.outputStream.close()
+            return
+        }
         onLog?("BLE L2CAP channel open psm=\(channel.psm) peer=\(String(describing: channel.peer))")
         #if DEBUG
         if isEchoDiagnostic {

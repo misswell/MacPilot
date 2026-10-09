@@ -110,6 +110,12 @@ final class RemoteConnectionManager {
     /// phone hides the section entirely — an unknown command rawValue would
     /// break an older Mac's decode of the request.
     var supportsDockGroups: Bool { serverCapabilities.contains(.dockGroups) }
+    /// Identity learning is usable only after the server has proved possession
+    /// of the pairing key. A capability from an unauthenticated hello must not
+    /// start a proximity identity probe.
+    var supportsBLEIdentityLearning: Bool {
+        isReady && serverCapabilities.contains(.bleIdentityLearning)
+    }
     /// True once the link is up, even if the handshake is still running. The
     /// race uses it to tell "still dialling" from "mid handshake", which decides
     /// whether an attempt may still be cut short.
@@ -502,7 +508,11 @@ final class RemoteConnectionManager {
         phase = .ready
         reportMetrics()
         onDeviceResolved?(deviceID, targetName, resolvedEndpoint)
+        // An identity-only candidate is closed synchronously by this callback.
+        // Do not resurrect its heartbeat or issue commands on the closed link.
+        guard isReady else { return }
         onStateChange?(.connected)
+        guard isReady else { return }
         startPing()
         Task { @MainActor in
             if let response = try? await self.send(.getState) {

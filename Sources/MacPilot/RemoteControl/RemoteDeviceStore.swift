@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import MacPilotRemoteProtocol
 
@@ -9,6 +10,7 @@ import MacPilotRemoteProtocol
 @MainActor
 final class RemoteDeviceStore: ObservableObject {
     @Published private(set) var settings: RemoteControlSettings
+    var onPairedIdentitiesChanged: (@MainActor () -> Void)?
 
     private let keychainService: String
     private let secretStore: SecretStore
@@ -38,6 +40,7 @@ final class RemoteDeviceStore: ObservableObject {
 
     func applyLoadedSettings(_ loaded: RemoteControlSettings) {
         settings = loaded
+        onPairedIdentitiesChanged?()
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -99,6 +102,7 @@ final class RemoteDeviceStore: ObservableObject {
             )
             log("paired device registered")
         }
+        onPairedIdentitiesChanged?()
         persistHandler()
     }
 
@@ -114,6 +118,7 @@ final class RemoteDeviceStore: ObservableObject {
     func removeDevice(clientID: String) {
         settings.pairedDevices.removeAll { $0.id == clientID }
         deletePairingKey(for: clientID)
+        onPairedIdentitiesChanged?()
         log("paired device removed; keychain key deleted")
         persistHandler()
     }
@@ -123,6 +128,7 @@ final class RemoteDeviceStore: ObservableObject {
             deletePairingKey(for: device.id)
         }
         settings.pairedDevices.removeAll()
+        onPairedIdentitiesChanged?()
         persistHandler()
     }
 
@@ -136,6 +142,22 @@ final class RemoteDeviceStore: ObservableObject {
         secretStore.read(service: keychainService, account: Self.account(clientID))
     }
 
+    /// A non-secret generation marker. Re-pairing must revoke aliases even
+    /// when the remote client keeps its old stable ID.
+    static func fingerprint(of key: Data) -> String {
+        SHA256.hash(data: key).map { String(format: "%02x", $0) }.joined()
+    }
+
+    var pairedIdentityFingerprints: [String: String] {
+        var identities: [String: String] = [:]
+        for device in settings.pairedDevices {
+            if let key = pairingKey(for: device.id) {
+                identities[device.id] = Self.fingerprint(of: key)
+            }
+        }
+        return identities
+    }
+
     @discardableResult
     func storePairingKey(_ key: Data, for clientID: String) -> Bool {
         let success = secretStore.write(
@@ -145,6 +167,7 @@ final class RemoteDeviceStore: ObservableObject {
             label: "MacPilot Remote Pairing"
         )
         log("pairing key stored success=\(success)")
+        if success { onPairedIdentitiesChanged?() }
         return success
     }
 

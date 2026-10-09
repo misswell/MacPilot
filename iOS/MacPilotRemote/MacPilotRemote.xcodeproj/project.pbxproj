@@ -28,6 +28,7 @@
 		4D83CC38723DADECD8C365DD /* TrackpadClickSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88731EE963FEAFE686E6DAF3 /* TrackpadClickSound.swift */; };
 		52E3E061673C185BCB2D7463 /* TrackpadSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCFB309710B660CAEDF2CF72 /* TrackpadSettingsView.swift */; };
 		534B34773F1A696B2114D81A /* TrackpadState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996A9B575EF823EFF98F1EB8 /* TrackpadState.swift */; };
+		561351D0B1E1B4630DFB5532 /* RemoteBLEIdentityProbePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7093562EFA1A9CB73661828 /* RemoteBLEIdentityProbePolicy.swift */; };
 		58102F1CE9508E1A18B14846 /* RemoteSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE506F7AEC00BC4D65847C12 /* RemoteSettingsView.swift */; };
 		6E9F62D64507C5CC4E50142A /* RemoteVideoDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73F668EDF35E69390AC04692 /* RemoteVideoDecoder.swift */; };
 		70EB80CE61981CAF16DD2B71 /* ScreenshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447CDE5B9C0AAC4C65F9D517 /* ScreenshotTests.swift */; };
@@ -36,6 +37,7 @@
 		7AD15026D75C2BBA62B0B152 /* RemoteTrackpadModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D31EAE82FAE4CB3CCAD7C9 /* RemoteTrackpadModel.swift */; };
 		7F9A392EE7B644AB9A987F7A /* RemoteBLEPeripheral.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7890B51F3A461DD34A2BF5C8 /* RemoteBLEPeripheral.swift */; };
 		8ABE53FBAA8C5E88D864E561 /* RemoteConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */; };
+		8AD72A94074F0EECBBBB3670 /* RemoteBLEIdentityProbePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66DDA158E305F0563D52F0AE /* RemoteBLEIdentityProbePolicyTests.swift */; };
 		8BCC090B7F4D8B0260BF0650 /* InputEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5B2D649254FA8EE4ED7FA7E /* InputEvent.swift */; };
 		921C9954593FA4F21A8FA466 /* VelocityCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CCEAC5B50B59CC42724C3 /* VelocityCalculator.swift */; };
 		97D7FA550D676240482EF5B6 /* RemoteDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */; };
@@ -100,6 +102,7 @@
 		4EF814DB36ABC4097BF2B12E /* RemoteDesktopState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopState.swift; sourceTree = "<group>"; };
 		56CECE3731CF9AC98621E660 /* RemoteVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoView.swift; sourceTree = "<group>"; };
 		5AE3A75BF934E7F7884ACA12 /* RemoteKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteKeychain.swift; sourceTree = "<group>"; };
+		66DDA158E305F0563D52F0AE /* RemoteBLEIdentityProbePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBLEIdentityProbePolicyTests.swift; sourceTree = "<group>"; };
 		6DD7E33EB369C3302C36BADA /* RemoteText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteText.swift; sourceTree = "<group>"; };
 		7152877F9A213F21809D5A07 /* RemoteDesktopView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopView.swift; sourceTree = "<group>"; };
 		73F668EDF35E69390AC04692 /* RemoteVideoDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoDecoder.swift; sourceTree = "<group>"; };
@@ -128,6 +131,7 @@
 		CE506F7AEC00BC4D65847C12 /* RemoteSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSettingsView.swift; sourceTree = "<group>"; };
 		D110E3CC36E64E72A3521A8C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D152E96DBE715090384BAA76 /* TouchProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchProcessor.swift; sourceTree = "<group>"; };
+		D7093562EFA1A9CB73661828 /* RemoteBLEIdentityProbePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBLEIdentityProbePolicy.swift; sourceTree = "<group>"; };
 		E21C2AB621EFBC8E6529C0E5 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		E36953057505FD14ED272AED /* PressGestureRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressGestureRecognizer.swift; sourceTree = "<group>"; };
 		F00C1B29E6E95D05262D3D9A /* RemoteControlPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlPreferencesTests.swift; sourceTree = "<group>"; };
@@ -207,6 +211,7 @@
 		5AD0C433F771B6DB57F8406B /* Networking */ = {
 			isa = PBXGroup;
 			children = (
+				D7093562EFA1A9CB73661828 /* RemoteBLEIdentityProbePolicy.swift */,
 				7890B51F3A461DD34A2BF5C8 /* RemoteBLEPeripheral.swift */,
 				4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */,
 				96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */,
@@ -319,6 +324,7 @@
 		CAC85CAEC020E53A0EBEB9BC /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				66DDA158E305F0563D52F0AE /* RemoteBLEIdentityProbePolicyTests.swift */,
 				3774E27F2A76D7C23AFC2393 /* RemoteConnectionHandshakeTests.swift */,
 				8ECA729F7E430578837002D2 /* RemoteConnectionRetryTests.swift */,
 				F00C1B29E6E95D05262D3D9A /* RemoteControlPreferencesTests.swift */,
@@ -510,6 +516,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8AD72A94074F0EECBBBB3670 /* RemoteBLEIdentityProbePolicyTests.swift in Sources */,
 				A285F69495332DCECE7A1F60 /* RemoteConnectionHandshakeTests.swift in Sources */,
 				3653E921D16C12BABE7A2B41 /* RemoteConnectionRetryTests.swift in Sources */,
 				76DE2646AF35A8E17A3CC3EA /* RemoteControlPreferencesTests.swift in Sources */,
@@ -540,6 +547,7 @@
 				B2072638812E9D738D98CA6F /* PressureSample.swift in Sources */,
 				E30CA50EFB637567B33E9A39 /* PressureScore.swift in Sources */,
 				2A4D3DB2192AC62F75C6B89D /* RemoteAppModel.swift in Sources */,
+				561351D0B1E1B4630DFB5532 /* RemoteBLEIdentityProbePolicy.swift in Sources */,
 				7F9A392EE7B644AB9A987F7A /* RemoteBLEPeripheral.swift in Sources */,
 				8ABE53FBAA8C5E88D864E561 /* RemoteConnectionManager.swift in Sources */,
 				B34AB35731C1146F2A3516C4 /* RemoteControlPreferences.swift in Sources */,
@@ -656,14 +664,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 30;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacPilotRemote/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.1;
+				MARKETING_VERSION = 1.2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.misswell.macpilot.remote;
 				PRODUCT_NAME = PilotNest;
 				SDKROOT = iphoneos;
@@ -677,14 +685,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 30;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacPilotRemote/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.1;
+				MARKETING_VERSION = 1.2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.misswell.macpilot.remote;
 				PRODUCT_NAME = PilotNest;
 				SDKROOT = iphoneos;

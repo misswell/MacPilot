@@ -583,6 +583,10 @@ enum AppText {
         "bleLockNow": "立即锁定屏幕", "turnOffScreenNow": "关闭屏幕", "bleDevice": "设备", "bleScanning": "正在扫描…", "bleSelectDevice": "选择设备",
         "bleDeviceHint": "打开设备菜单开始扫描附近的 BLE 设备，选择你的 iPhone、Apple Watch 或其他 BLE 设备。需要使用固定 MAC 地址的设备。",
         "bleSecondDevice": "第二设备（可选）", "bleSecondDeviceInfo": "可以再添加一个设备，并选择两个设备如何共同判断是否在范围内。",
+        "bleRemoteIdentity": "关联远程控制设备", "bleRemoteIdentityNone": "不关联（仅原 UUID）",
+        "bleRemoteIdentityHint": "确认是同一台设备后再关联。旧版 PilotNest 可照常使用，蓝牙远控认证成功时会学习新 UUID；新版打开后还会短暂主动检查。网络在线不会直接解锁，手机后台蓝牙信号不保证持续可见。",
+        "bleIdentityAliasCount": "已认证 UUID 别名：%d / 8（原 UUID 保留）",
+        "bleIdentityClearAliases": "清除学习的 UUID",
         "bleAddSecondDevice": "添加第二设备", "bleRemoveSecondDevice": "移除第二设备",
         "bleDeviceRelation": "设备关系", "bleRelationAny": "任意一个在范围内", "bleRelationAll": "两个都在范围内",
         "bleDeviceRelationInfo": "“任意一个”表示任一设备在范围内就保持解锁；“两个都在”表示只有两台设备都在范围内才保持解锁。",
@@ -1663,6 +1667,10 @@ enum AppText {
             "bleLockNow": "Lock Screen Now", "turnOffScreenNow": "Turn Off Screen", "bleDevice": "Device", "bleScanning": "Scanning…", "bleSelectDevice": "Select Device",
             "bleDeviceHint": "Open the device menu to scan for nearby BLE devices and pick your iPhone, Apple Watch, or other BLE device. The device must use a static MAC address.",
             "bleSecondDevice": "Second device (optional)", "bleSecondDeviceInfo": "Add one more device and choose how the two devices should determine presence together.",
+            "bleRemoteIdentity": "Link remote-control device", "bleRemoteIdentityNone": "Not linked (original UUID only)",
+            "bleRemoteIdentityHint": "Link only after confirming this is the same device. Existing PilotNest versions work unchanged and learn UUIDs after BLE remote authentication; updated versions also briefly check when opened. Network connectivity never directly unlocks, and background BLE visibility is not guaranteed.",
+            "bleIdentityAliasCount": "Authenticated UUID aliases: %d / 8 (original retained)",
+            "bleIdentityClearAliases": "Clear learned UUIDs",
             "bleAddSecondDevice": "Add second device", "bleRemoveSecondDevice": "Remove second device",
             "bleDeviceRelation": "Device relationship", "bleRelationAny": "Either device is near", "bleRelationAll": "Both devices are near",
             "bleDeviceRelationInfo": "“Either device” keeps the Mac unlocked when either device is near; “Both devices” requires both devices to be near.",
@@ -2308,6 +2316,7 @@ final class MacPilotModel: ObservableObject {
         updater.isVersionSwitchInProgress = { [weak self] in self?.isVersionSwitching ?? false }
         isLoading = true
         load()
+        ble.reconcileRemoteIdentities(remoteDeviceStore.pairedIdentityFingerprints)
         updater.setChannel(updateChannel)
         isLoading = false
         FeatureRegistry.shared.registerAll(model: self, in: featureLifecycle)
@@ -2319,6 +2328,16 @@ final class MacPilotModel: ObservableObject {
         }
         remoteControl.onRunningStateChanged = { [weak self] in
             self?.refreshScreenStateObservation()
+        }
+        remoteDeviceStore.onPairedIdentitiesChanged = { [weak self] in
+            guard let self else { return }
+            self.ble.reconcileRemoteIdentities(self.remoteDeviceStore.pairedIdentityFingerprints)
+        }
+        remoteControl.isBLEIdentityLearningEnabled = { [weak self] clientID, fingerprint in
+            self?.ble.hasIdentityBinding(clientID: clientID, keyFingerprint: fingerprint) ?? false
+        }
+        remoteControl.onAuthenticatedBLEIdentity = { [weak self] clientID, fingerprint, uuid in
+            self?.ble.learnAuthenticatedBLEIdentity(clientID: clientID, keyFingerprint: fingerprint, peripheralUUID: uuid)
         }
         // One observer owns every teardown path. `willTerminate` is delivered
         // synchronously on the main thread, so `shutdown()` must stay
@@ -5040,6 +5059,9 @@ struct BLEUnlockView: View {
                 ) {
                     openDevicePicker(forSecondary: false)
                 }
+                if let uuid = ble.settings.monitoredDeviceUUID {
+                    BLEIdentityBindingView(ble: ble, deviceStore: model.remoteDeviceStore, primaryUUID: uuid)
+                }
             }
             if !showPicker, ble.settings.monitoredDeviceUUID == nil {
                 Button { openDevicePicker(forSecondary: false) } label: {
@@ -5070,6 +5092,7 @@ struct BLEUnlockView: View {
                 ) {
                     openDevicePicker(forSecondary: true)
                 }
+                BLEIdentityBindingView(ble: ble, deviceStore: model.remoteDeviceStore, primaryUUID: uuid)
                 relationPicker
             } else if !showPicker, ble.settings.monitoredDeviceUUID != nil {
                 Button {

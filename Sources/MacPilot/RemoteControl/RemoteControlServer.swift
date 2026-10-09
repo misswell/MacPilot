@@ -51,9 +51,12 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
     /// Raised after the server starts or stops so the app can re-evaluate the
     /// shared screen-state observation (the remote unlock path needs it).
     var onRunningStateChanged: (@MainActor () -> Void)?
+    var isBLEIdentityLearningEnabled: (@MainActor (String, String) -> Bool)?
+    var onAuthenticatedBLEIdentity: (@MainActor (String, String, UUID) -> Void)?
 
     private var listener: NWListener?
     private var connections: [UUID: RemoteConnection] = [:]
+    private var blePeripheralIDs: [UUID: UUID] = [:]
     private var isUsingDynamicPort = false
     /// Whether the lazy BLE central was ever started, so `stop()` never
     /// instantiates a CoreBluetooth central just to shut it down.
@@ -71,7 +74,9 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
     private lazy var bleCentral: RemoteBLECentral = {
         let central = RemoteBLECentral()
         central.onLog = { [weak self] message in self?.log(message) }
-        central.onChannel = { [weak self] channel in self?.accept(channel: channel) }
+        central.onChannel = { [weak self] channel, peripheralID in
+            self?.accept(channel: channel, peripheralID: peripheralID)
+        }
         return central
     }()
 
@@ -150,6 +155,7 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
             connection.close()
         }
         connections.removeAll()
+        blePeripheralIDs.removeAll()
         connectedDeviceNames = []
         pairingManager.closeWindow()
         status = .stopped
@@ -256,7 +262,7 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
 
     /// A BLE client arrives as an already open L2CAP channel. Everything above
     /// the transport is the same code the TCP clients run.
-    private func accept(channel: CBL2CAPChannel) {
+    private func accept(channel: CBL2CAPChannel, peripheralID: UUID) {
         guard connections.count < maximumConcurrentConnections else {
             log("refusing BLE connection; \(connections.count) already active")
             channel.inputStream.close()
@@ -268,6 +274,7 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
         transport.onDiagnostic = { [weak self] message in self?.log("BLE [\(traceID)] \(message)") }
         let remote = RemoteConnection(transport: transport, host: self)
         connections[remote.id] = remote
+        blePeripheralIDs[remote.id] = peripheralID
         remote.start()
         log("incoming BLE connection accepted active=\(connections.count)")
     }
@@ -291,6 +298,11 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
 
     var dockGroupsHosting: (any RemoteDockGroupsHosting)? { dockGroups }
 
+    func supportsBLEIdentityLearning(clientID: String) -> Bool {
+        guard let fingerprint = deviceStore.pairedIdentityFingerprints[clientID] else { return false }
+        return isBLEIdentityLearningEnabled?(clientID, fingerprint) ?? false
+    }
+
     func remoteConnection(
         _ connection: RemoteConnection,
         didAuthenticate clientID: String,
@@ -298,11 +310,17 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
         address: String?
     ) {
         deviceStore.markConnected(clientID: clientID, address: address)
+        if let peripheralID = blePeripheralIDs[connection.id],
+           let fingerprint = connection.authenticatedPairingKeyFingerprint,
+           deviceStore.pairedIdentityFingerprints[clientID] == fingerprint {
+            onAuthenticatedBLEIdentity?(clientID, fingerprint, peripheralID)
+        }
         refreshConnectedNames()
     }
 
     func remoteConnectionDidClose(_ connection: RemoteConnection) {
         connections.removeValue(forKey: connection.id)
+        blePeripheralIDs.removeValue(forKey: connection.id)
         pairingManager.cancel(connectionID: connection.id)
         refreshConnectedNames()
         log("connection closed active=\(connections.count)")

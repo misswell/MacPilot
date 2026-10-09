@@ -74,6 +74,15 @@ struct RemoteVideoTests {
         #expect(RemoteCapability.negotiated(advertised, features: ["remoteDesktop", "dockGroups"]) == advertised)
     }
 
+    @Test func bleIdentityLearningIsNegotiatedOnlyWhenDeclared() {
+        #expect(!RemoteCapability.negotiated(RemoteCapability.allCases, features: ["remoteDesktop"])
+            .contains(.bleIdentityLearning))
+        #expect(RemoteCapability.negotiated(RemoteCapability.allCases, features: ["bleIdentityLearning"])
+            .contains(.bleIdentityLearning))
+        #expect(!RemoteCapability.negotiated(RemoteCapability.allCases, features: nil)
+            .contains(.bleIdentityLearning))
+    }
+
     /// Frozen vocabulary from the published 1.0/1.1 phone app, deliberately
     /// independent of today's enum so additions cannot silently weaken this test.
     private enum AppStoreCapability: String, Decodable {
@@ -111,7 +120,9 @@ struct RemoteVideoTests {
         #expect(RemoteCapability.negotiated(RemoteCapability.allCases, features: ["realtimeInput"]) ==
             [.lock, .displayOff, .wake, .unlock, .realtimeInput])
         #expect(RemoteCapability.negotiated(RemoteCapability.allCases, features: ["remoteDesktop"]) ==
-            RemoteCapability.allCases.filter { $0 != .dockGroups && $0 != .mediaControl })
+            RemoteCapability.allCases.filter {
+                $0 != .dockGroups && $0 != .mediaControl && $0 != .bleIdentityLearning
+            })
     }
 
     @Test func videoCapabilitiesNeverChangeExistingInputEventNumbers() {

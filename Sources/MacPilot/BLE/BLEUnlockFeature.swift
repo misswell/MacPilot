@@ -196,13 +196,29 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         log("\(event) enabled=\(settings.isEnabled) device=\(settings.monitoredDeviceName ?? "?") uuid=\(monitoredUUID?.uuidString ?? settings.monitoredDeviceUUID ?? "none") secondary=\(secondaryMonitoredUUID?.uuidString ?? settings.secondaryMonitoredDeviceUUID ?? "none") relation=\(settings.deviceRelation.rawValue) lockRSSI=\(settings.lockRSSI) unlockRSSI=\(settings.unlockRSSI) signalTimeout=\(settings.signalTimeout) wakeOnProximity=\(settings.wakeOnProximity) wakeWithoutUnlocking=\(settings.wakeWithoutUnlocking) passive=\(settings.passiveMode)")
     }
 
-    private var monitoredUUIDs: [UUID] {
+    private var logicalDeviceUUIDs: [UUID] {
         var result: [UUID] = []
         if let monitoredUUID { result.append(monitoredUUID) }
         if let secondaryMonitoredUUID, !result.contains(secondaryMonitoredUUID) {
             result.append(secondaryMonitoredUUID)
         }
         return result
+    }
+
+    private var monitoredUUIDs: [UUID] {
+        var result: [UUID] = []
+        for uuid in logicalDeviceUUIDs.flatMap({ settings.identityRegistry.uuids(for: $0) }) where !result.contains(uuid) {
+            result.append(uuid)
+        }
+        return result
+    }
+
+    /// UUID aliases are alternatives for ONE device, not additional devices
+    /// in the primary/secondary AND/OR relationship.
+    private func logicalDeviceStates(_ predicate: (BLEMonitoredDeviceRuntime) -> Bool) -> [Bool] {
+        settings.identityRegistry.logicalStates(primaryUUIDs: logicalDeviceUUIDs) { uuid in
+            monitoredRuntimes[uuid].map(predicate) ?? false
+        }
     }
 
     private var hasMonitoredDevice: Bool { !monitoredUUIDs.isEmpty }
@@ -234,7 +250,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private func recomputePresence(reason: String) {
         let oldPresence = presence
-        let devicePresences = monitoredUUIDs.map { monitoredRuntimes[$0]?.presence ?? false }
+        let devicePresences = logicalDeviceStates { $0.presence }
         let newPresence = BLEDevicePresencePolicy.isSatisfied(
             presences: devicePresences,
             relation: settings.deviceRelation
@@ -289,7 +305,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }
 
         presence = BLEDevicePresencePolicy.isSatisfied(
-            presences: uuids.map { monitoredRuntimes[$0]?.presence ?? false },
+            presences: logicalDeviceStates { $0.presence },
             relation: settings.deviceRelation
         )
         refreshPublishedMonitoringState()
@@ -304,6 +320,78 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     private func notifyChange() {
         objectWillChange.send()
         persist?()
+    }
+
+    func hasIdentityBinding(clientID: String, keyFingerprint: String) -> Bool {
+        settings.identityRegistry.bindings.contains {
+            logicalDeviceUUIDs.map(\.uuidString).contains($0.primaryUUID)
+                && $0.clientID == clientID && $0.keyFingerprint == keyFingerprint
+        }
+    }
+
+    func bindRemoteIdentity(primaryUUID: UUID, clientID: String?, keyFingerprint: String?) {
+        guard logicalDeviceUUIDs.contains(primaryUUID) else { return }
+        if let clientID, let keyFingerprint {
+            settings.identityRegistry.bind(primaryUUID: primaryUUID, clientID: clientID, keyFingerprint: keyFingerprint)
+        } else {
+            settings.identityRegistry.unbind(primaryUUID: primaryUUID)
+        }
+        settings.identityRegistry.normalize(primaryUUIDs: logicalDeviceUUIDs)
+        pruneUnmonitoredAliasRuntimes()
+        let manualLockWasSuppressed = manualLock
+        recomputePresence(reason: "identityBindingChanged")
+        manualLock = manualLockWasSuppressed
+        notifyChange()
+    }
+
+    func reconcileRemoteIdentities(_ identities: [String: String]) {
+        let previous = settings.identityRegistry
+        settings.identityRegistry.reconcile(identities: identities)
+        settings.identityRegistry.normalize(primaryUUIDs: logicalDeviceUUIDs)
+        guard previous != settings.identityRegistry else { return }
+        pruneUnmonitoredAliasRuntimes()
+        let manualLockWasSuppressed = manualLock
+        recomputePresence(reason: "identityRevoked")
+        manualLock = manualLockWasSuppressed
+        notifyChange()
+    }
+
+    func learnAuthenticatedBLEIdentity(clientID: String, keyFingerprint: String, peripheralUUID: UUID, now: Date = Date()) {
+        guard hasIdentityBinding(clientID: clientID, keyFingerprint: keyFingerprint) else { return }
+        let previousUUIDs = Set(monitoredUUIDs)
+        guard settings.identityRegistry.learn(
+            clientID: clientID, keyFingerprint: keyFingerprint, peripheralUUID: peripheralUUID,
+            now: now, reservedPrimaryUUIDs: logicalDeviceUUIDs
+        ) else { return }
+        pruneUnmonitoredAliasRuntimes()
+        if !previousUUIDs.subtracting(Set(monitoredUUIDs)).isEmpty {
+            // Bounded retention can evict an alias. Never leave its cached
+            // presence contributing after its runtime was removed.
+            let manualLockWasSuppressed = manualLock
+            recomputePresence(reason: "identityAliasPruned")
+            manualLock = manualLockWasSuppressed
+        }
+        let added = Set(monitoredUUIDs).subtracting(previousUUIDs)
+        // Authentication proves ownership, NOT proximity. New runtimes start
+        // absent and require the ordinary RSSI callback/threshold policy.
+        if settings.isEnabled {
+            for uuid in added {
+                _ = ensureRuntime(for: uuid)
+                resetSignalTimer(for: uuid)
+            }
+            if !added.isEmpty, let central = centralMgr, central.state == .poweredOn {
+                restoreKnownMonitoredPeripherals(using: central)
+                scanForPeripherals()
+            }
+        }
+        log("authenticated BLE identity learned uuid=\(peripheralUUID.uuidString) newAlias=\(!added.isEmpty)")
+        notifyChange()
+    }
+
+    private func pruneUnmonitoredAliasRuntimes() {
+        let retained = Set(monitoredUUIDs)
+        for uuid in Array(monitoredRuntimes.keys) where !retained.contains(uuid) { cancelRuntime(for: uuid) }
+        refreshPublishedMonitoringState()
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -393,12 +481,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         let selectedName = deviceMap[uuid]?.displayName
         log("selectDevice uuid=\(uuid.uuidString) name=\(selectedName ?? "?") rssi=\(deviceMap[uuid]?.rssi ?? 0)")
         stopScanning()
+        if let oldUUID = monitoredUUID, oldUUID != uuid { settings.identityRegistry.unbind(primaryUUID: oldUUID) }
         if secondaryMonitoredUUID == uuid {
             clearSecondaryDevice(notify: false)
         }
         settings.monitoredDeviceUUID = uuid.uuidString
         settings.monitoredDeviceName = selectedName
         monitoredUUID = uuid
+        settings.identityRegistry.normalize(primaryUUIDs: logicalDeviceUUIDs)
         ensureCentralManager(explicitUserAction: true)
         startConfiguredMonitoring(preservingExistingState: true)
         notifyChange()
@@ -414,11 +504,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         log("selectSecondaryDevice uuid=\(uuid.uuidString) name=\(selectedName ?? "?") rssi=\(deviceMap[uuid]?.rssi ?? 0)")
         stopScanning()
         if let oldUUID = secondaryMonitoredUUID, oldUUID != uuid {
+            settings.identityRegistry.unbind(primaryUUID: oldUUID)
             cancelRuntime(for: oldUUID)
         }
         secondaryMonitoredUUID = uuid
         settings.secondaryMonitoredDeviceUUID = uuid.uuidString
         settings.secondaryMonitoredDeviceName = selectedName
+        settings.identityRegistry.normalize(primaryUUIDs: logicalDeviceUUIDs)
         ensureCentralManager(explicitUserAction: true)
         startConfiguredMonitoring(preservingExistingState: true)
         notifyChange()
@@ -432,12 +524,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private func clearSecondaryDevice(notify: Bool) {
         if let uuid = secondaryMonitoredUUID {
+            settings.identityRegistry.unbind(primaryUUID: uuid)
             cancelRuntime(for: uuid)
         }
         secondaryMonitoredUUID = nil
         settings.secondaryMonitoredDeviceUUID = nil
         settings.secondaryMonitoredDeviceName = nil
         settings.deviceRelation = .any
+        settings.identityRegistry.normalize(primaryUUIDs: logicalDeviceUUIDs)
         if hasMonitoredDevice {
             startConfiguredMonitoring(preservingExistingState: true)
         } else {
@@ -463,6 +557,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             settings.secondaryMonitoredDeviceUUID = nil
             settings.secondaryMonitoredDeviceName = nil
         }
+        settings.identityRegistry.normalize(primaryUUIDs: logicalDeviceUUIDs)
         objectWillChange.send()
         logSettings("settings loaded")
     }
@@ -1558,7 +1653,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private var monitoringHasFreshSignal: Bool {
         BLEDevicePresencePolicy.isSatisfied(
-            presences: monitoredUUIDs.map { monitoredRuntimes[$0]?.lastRSSI != nil },
+            presences: logicalDeviceStates { $0.lastRSSI != nil },
             relation: settings.deviceRelation
         )
     }
@@ -1728,7 +1823,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
 
     private var monitoringNeedsWakeRestart: Bool {
-        monitoredUUIDs.contains { monitoredRuntimes[$0]?.lastRSSI == nil }
+        logicalDeviceStates { $0.lastRSSI != nil }.contains(false)
     }
 
     func startSystemWakeRecovery(using plan: BLEWakeRecoveryPlan) {

@@ -590,3 +590,44 @@ Allow the video connection as well when using remote desktop. Real-device
 acceptance: pair via Tailscale, move the phone to cellular, reconnect, test
 trackpad and video, then connect over LAN and confirm the manual address still
 works after returning to cellular. Test both direct and relayed tailnet paths.
+
+## Authenticated BLE UUID aliases
+
+BLE Unlock can explicitly associate each selected logical device with one
+already-paired Remote Control client. Names, model strings and network reachability
+are not identity evidence. Each association pins the pairing-key fingerprint;
+removing the pairing or replacing its key revokes the learned UUID aliases.
+The original selected UUID remains for configuration/downgrade compatibility.
+
+The Mac learns a UUID only after the existing nonce-bound mutual authentication
+succeeds on a BLE L2CAP connection. Its source is the local central's
+`CBPeripheral.identifier`, attached to that exact channel before authentication,
+never a UUID supplied by the phone. Authentication alone does not mark the BLE
+device present or unlock: the normal fresh RSSI thresholds, timeouts and manual
+lock suppression still apply.
+
+The negotiated `bleIdentityLearning` capability is sent only to a feature-aware
+phone whose authenticated pairing is explicitly associated with BLE Unlock.
+An updated PilotNest can briefly keep its BLE advertisement/authentication probe
+alive after the preferred LAN/AWDL session wins, without promoting the probe or
+interrupting the active network session. Old peers retain their existing behavior.
+An old PilotNest still learns aliases whenever its normal BLE remote connection
+authenticates successfully; the new capability is not required on that path.
+An updated PilotNest talking to an older Mac simply skips the optional probe.
+Neither learning nor successful probing is a prerequisite for remote commands,
+network connections or the existing BLE proximity policy.
+Probes stop on foreground-window expiry, authentication completion or backgrounding.
+No new commands or cryptographic handshake are introduced.
+
+At most eight learned aliases are retained per logical device, evicting the
+least-recently authenticated alias. Duplicate observations update metadata at
+most once per minute. UUIDs cannot belong to multiple logical devices. Within a
+logical device, original UUID and aliases are OR alternatives; primary/secondary
+devices retain their existing ANY/ALL relationship. The settings UI shows the
+learned list and allows clearing it without deleting the original device.
+
+This repairs authenticated UUID association, not iOS background availability.
+PilotNest still closes its peripheral service when backgrounded; an alias learned
+in the foreground is not a guarantee of advertisement or connection availability
+while the iPhone is locked. Automated acceptance must use isolated pure/mocked
+logic, never lock, blank or sleep the user's real screen.

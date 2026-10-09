@@ -84,6 +84,7 @@ final class RemoteAppModel: ObservableObject {
         let path: RacePath
         let manager: RemoteConnectionManager
         let method: RemoteConnectionMethod
+        let identityProbe: Bool
         let startedAt = Date()
     }
 
@@ -179,7 +180,7 @@ final class RemoteAppModel: ObservableObject {
     }
 
     private func pruneCandidates() {
-        for candidate in candidates where !shouldTry(candidate.method) {
+        for candidate in candidates where !candidate.identityProbe && !shouldTry(candidate.method) {
             removeCandidate(candidate.manager)
         }
     }
@@ -195,6 +196,10 @@ final class RemoteAppModel: ObservableObject {
     /// handle of a newer one.
     private var supervisorGeneration = 0
     private var isForeground = true
+    private var didAttemptBLEIdentityProbeThisForeground = false
+    private var isBLEIdentityProbeActive = false
+    private var bleIdentityProbeID: UUID?
+    private var bleIdentityProbeTask: Task<Void, Never>?
     private var hasEverConnected = false
     private var didStart = false
     private var discoveryStartedAt: Date?
@@ -278,6 +283,9 @@ final class RemoteAppModel: ObservableObject {
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            if !isForeground {
+                didAttemptBLEIdentityProbeThisForeground = false
+            }
             isForeground = true
             // iOS tears down the DNS-SD session behind the browse while the app
             // is suspended: the browser carried across either reports failed or
@@ -291,6 +299,7 @@ final class RemoteAppModel: ObservableObject {
             // connection, and the radio can have moved on while it was away.
             startBLEFallback()
             startConnectSupervisor()
+            startBLEIdentityProbeIfNeeded()
             // Brightness and volume can have moved while the app was away (the
             // keyboard's own keys), and the panel would otherwise show stale
             // values until the next keep-alive.
@@ -300,6 +309,7 @@ final class RemoteAppModel: ObservableObject {
             // the connection instead of waiting for a timeout.
             isForeground = false
             stopConnectSupervisor()
+            finishBLEIdentityProbe()
             stopBLEFallback()
             cancelCandidates()
             connection.disconnect(report: false)
@@ -336,6 +346,11 @@ final class RemoteAppModel: ObservableObject {
                 return
             }
             guard self.candidates.contains(where: { $0.manager === manager }) else { return }
+            if self.candidates.first(where: { $0.manager === manager })?.identityProbe == true {
+                self.raceLog("BLE identity probe authenticated for the selected Mac")
+                self.finishBLEIdentityProbe()
+                return
+            }
             self.raceLog("race won by \(path.rawValue)")
             let resolvedMethod: RemoteConnectionMethod = manager.transportKind == .bluetooth ? .bluetooth
                 : (manager.linkDescription.hasPrefix("awdl") ? .awdl : .localNetwork)
@@ -385,6 +400,7 @@ final class RemoteAppModel: ObservableObject {
                 }
                 return
             }
+            self.finishBLEIdentityProbe()
             self.errorKey = error.messageKey
             if self.pairingTarget != nil {
                 self.connectionState = .failed(self.text(error.messageKey))
@@ -478,13 +494,71 @@ final class RemoteAppModel: ObservableObject {
         bleFallbackAdvertising = false
     }
 
-    /// The Mac opened a channel to us. It joins the race immediately rather than
-    /// waiting for the network to fail: whichever link authenticates first wins,
-    /// and refusing to dial here would make the fastest path conditional on the
-    /// slowest one.
+    /// Runs one short BLE authentication window after an associated Mac has
+    /// authenticated over the network. The BLE proof lets the Mac record the
+    /// UUID it observed from CoreBluetooth; it never determines proximity.
+    private func startBLEIdentityProbeIfNeeded() {
+        let hasAuthenticatedNetworkSession = connection.isReady && connection.transportKind == .network
+        guard RemoteBLEIdentityProbePolicy.shouldStart(
+            isForeground: isForeground,
+            alreadyAttemptedThisForeground: didAttemptBLEIdentityProbeThisForeground,
+            hasAuthenticatedNetworkSession: hasAuthenticatedNetworkSession,
+            serverSupportsLearning: connection.supportsBLEIdentityLearning
+        ) else { return }
+
+        didAttemptBLEIdentityProbeThisForeground = true
+        // If the ordinary race left a BLE dial alive, close it and classify
+        // channels in this bounded window as identity-only. It must never
+        // replace the network session carrying remote control.
+        removeCandidate(path: .bluetooth)
+        isBLEIdentityProbeActive = true
+        let probeID = UUID()
+        bleIdentityProbeID = probeID
+        ble.start()
+        bleFallbackAdvertising = ble.isAdvertising
+        bleLog("BLE identity probe started; window=\(Int(RemoteBLEIdentityProbePolicy.windowDuration))s")
+
+        bleIdentityProbeTask?.cancel()
+        bleIdentityProbeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(RemoteBLEIdentityProbePolicy.windowDuration))
+            guard !Task.isCancelled, let self, self.bleIdentityProbeID == probeID else { return }
+            self.raceLog("BLE identity probe window expired")
+            self.finishBLEIdentityProbe()
+        }
+    }
+
+    private func finishBLEIdentityProbe(keepingBLESessionAlive: Bool = false) {
+        let wasActive = isBLEIdentityProbeActive
+        isBLEIdentityProbeActive = false
+        bleIdentityProbeID = nil
+        bleIdentityProbeTask?.cancel()
+        bleIdentityProbeTask = nil
+        let probeManagers = candidates.filter(\.identityProbe).map(\.manager)
+        for manager in probeManagers {
+            removeCandidate(manager)
+        }
+        if wasActive {
+            if keepingBLESessionAlive {
+                bleFallbackAdvertising = ble.isAdvertising
+            } else {
+                ble.stop()
+                bleFallbackAdvertising = false
+            }
+        }
+    }
+
+    /// The Mac opened a channel to us. Ordinary channels join the connection
+    /// race; during an identity probe they authenticate as a short-lived,
+    /// identity-only candidate and can never become the control session.
     private func adoptBLEChannel(_ channel: CBL2CAPChannel) {
         bleFallbackAdvertising = ble.isAdvertising
-        guard manualTarget == nil, shouldTry(.bluetooth) else {
+        let isIdentityProbeChannel = RemoteBLEIdentityProbePolicy.shouldAcceptChannel(
+            isForeground: isForeground,
+            isProbeWindowActive: isBLEIdentityProbeActive,
+            hasAuthenticatedNetworkSession: connection.isReady && connection.transportKind == .network,
+            serverSupportsLearning: connection.supportsBLEIdentityLearning
+        )
+        guard manualTarget == nil, isIdentityProbeChannel || shouldTry(.bluetooth) else {
             close(channel)
             return
         }
@@ -507,6 +581,21 @@ final class RemoteAppModel: ObservableObject {
         // A channel is single use and the Mac opens one per advertisement, so an
         // older Bluetooth candidate would only be holding a dead link.
         removeCandidate(path: .bluetooth)
+        if isIdentityProbeChannel {
+            guard pairingTarget == nil, target.deviceID == activeMac?.deviceID else {
+                close(channel)
+                return
+            }
+            bleLog("BLE identity probe channel delivered; authenticating the selected Mac")
+            addCandidate(
+                path: .bluetooth,
+                transport: makeBLETransport(channel),
+                deviceID: target.deviceID,
+                name: target.name,
+                identityProbe: true
+            )
+            return
+        }
         bleLog("BLE channel delivered; joining the race")
         addCandidate(
             path: .bluetooth,
@@ -754,12 +843,18 @@ final class RemoteAppModel: ObservableObject {
         deviceID: UUID?,
         name: String,
         method: RemoteConnectionMethod? = nil,
-        endpoint: String? = nil
+        endpoint: String? = nil,
+        identityProbe: Bool = false
     ) {
         let manager = RemoteConnectionManager()
         manager.dialEndpoint = endpoint
         wire(manager, path: path)
-        candidates.append(Candidate(path: path, manager: manager, method: method ?? (path == .bluetooth ? .bluetooth : .localNetwork)))
+        candidates.append(Candidate(
+            path: path,
+            manager: manager,
+            method: method ?? (path == .bluetooth ? .bluetooth : .localNetwork),
+            identityProbe: identityProbe
+        ))
         refreshRacingPaths()
         if !connectionState.isConnected,
            connectionState != .pairing,
@@ -773,7 +868,7 @@ final class RemoteAppModel: ObservableObject {
             name: name,
             clientID: store.clientID,
             clientName: store.clientName,
-            allowsPairing: isRacingFirstPairing
+            allowsPairing: !identityProbe && isRacingFirstPairing
         )
     }
 
@@ -807,6 +902,7 @@ final class RemoteAppModel: ObservableObject {
     /// Swaps only authenticated links; lower-ranked attempts cannot take over.
     private func promote(_ manager: RemoteConnectionManager) {
         guard let winner = candidates.first(where: { $0.manager === manager }) else { return }
+        finishBLEIdentityProbe(keepingBLESessionAlive: manager.transportKind == .bluetooth)
         let previous = connection
         let switching = previous.isReady
         if !manager.isReady { cancelCandidates(except: manager) }
@@ -829,7 +925,9 @@ final class RemoteAppModel: ObservableObject {
     }
 
     private func refreshRacingPaths() {
-        racingPaths = Array(Set(candidates.map(\.path.rawValue))).sorted().compactMap(RacePath.init(rawValue:))
+        racingPaths = Array(Set(candidates.filter { !$0.identityProbe }.map(\.path.rawValue)))
+            .sorted()
+            .compactMap(RacePath.init(rawValue:))
     }
 
     /// Re-adopts Macs whose long-term key is still in the Keychain but whose
@@ -921,9 +1019,11 @@ final class RemoteAppModel: ObservableObject {
         if wasPairing { store.preferredMacID = deviceID.uuidString }
         activeMac = store.mac(id: deviceID)
         startConnectSupervisor()
+        startBLEIdentityProbeIfNeeded()
     }
 
     private func handleDisconnected() {
+        finishBLEIdentityProbe()
         guard connectionState != .idle else { return }
         if pairingTarget != nil {
             pairingPrompt = nil
@@ -981,6 +1081,7 @@ final class RemoteAppModel: ObservableObject {
     private func resetConnectionForTarget() {
         manualTarget = nil
         stopConnectSupervisor()
+        finishBLEIdentityProbe()
         stopBLEFallback()
         cancelCandidates()
         connection.disconnect(report: false)

@@ -289,6 +289,7 @@ struct BLEUnlockSettings: Codable {
     var useScreensaver: Bool = false
     var turnOffScreen: Bool = false
     var screenLockHistory = ScreenLockHistory()
+    var identityRegistry = BLEIdentityRegistry()
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled
@@ -309,6 +310,7 @@ struct BLEUnlockSettings: Codable {
         case useScreensaver
         case turnOffScreen
         case screenLockHistory
+        case identityRegistry
     }
 
     init() {}
@@ -333,6 +335,7 @@ struct BLEUnlockSettings: Codable {
         useScreensaver = try container.decodeIfPresent(Bool.self, forKey: .useScreensaver) ?? false
         turnOffScreen = try container.decodeIfPresent(Bool.self, forKey: .turnOffScreen) ?? false
         screenLockHistory = try container.decodeIfPresent(ScreenLockHistory.self, forKey: .screenLockHistory) ?? ScreenLockHistory()
+        identityRegistry = (try? container.decode(BLEIdentityRegistry.self, forKey: .identityRegistry)) ?? BLEIdentityRegistry()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -355,6 +358,7 @@ struct BLEUnlockSettings: Codable {
         try container.encode(useScreensaver, forKey: .useScreensaver)
         try container.encode(turnOffScreen, forKey: .turnOffScreen)
         try container.encode(screenLockHistory, forKey: .screenLockHistory)
+        try container.encode(identityRegistry, forKey: .identityRegistry)
     }
 }
 
