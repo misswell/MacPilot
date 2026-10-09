@@ -13,7 +13,7 @@ struct RemoteControlPreferencesTests {
 
     @Test func visibilitySurvivesRelaunchAndHiddenControlsKeepTheirPositions() throws {
         try withPreferences { preferences, defaults in
-            #expect(RemoteControlFeature.allCases.allSatisfy(preferences.isEnabled))
+            #expect(RemoteControlFeature.allCases.filter { $0.group != .navigation }.allSatisfy(preferences.isEnabled))
             preferences.setEnabled(false, for: .mediaPrevious)
             preferences.setEnabled(false, for: .keyboard)
             preferences.moveFeatures(in: .media, fromOffsets: IndexSet(integer: 2), toOffset: 0)
@@ -44,8 +44,7 @@ struct RemoteControlPreferencesTests {
             #expect(preferences.orderedGroups == RemoteControlFeature.Group.allCases)
             #expect(preferences.homeSections == [
                 [.desktop, .trackpad], [.displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock],
-                [.mediaPrevious, .mediaPlayPause, .mediaNext], [.brightness, .volume, .mute],
-                [.pageUp, .pageDown, .home, .end]
+                [.mediaPrevious, .mediaPlayPause, .mediaNext], [.brightness, .volume, .mute]
             ])
         }
     }
@@ -67,6 +66,7 @@ struct RemoteControlPreferencesTests {
             defaults.set(["volume", "futureControl", "volume", "desktop"], forKey: "remoteControl.featureOrder")
             defaults.set(["media", "futureGroup", "media"], forKey: "remoteControl.groupOrder")
             defaults.set(["futureHidden"], forKey: "remoteControl.hiddenFeatures")
+            defaults.set(["futureEnabled"], forKey: "remoteControl.enabledFeatures")
             let preferences = RemoteControlPreferences(defaults: defaults)
             #expect(Set(preferences.orderedFeatures) == Set(RemoteControlFeature.allCases))
             #expect(preferences.orderedFeatures.count == RemoteControlFeature.allCases.count)
@@ -77,6 +77,7 @@ struct RemoteControlPreferencesTests {
             #expect(defaults.stringArray(forKey: "remoteControl.featureOrder")?.contains("futureControl") == true)
             #expect(defaults.stringArray(forKey: "remoteControl.groupOrder")?.contains("futureGroup") == true)
             #expect(defaults.stringArray(forKey: "remoteControl.hiddenFeatures")?.contains("futureHidden") == true)
+            #expect(defaults.stringArray(forKey: "remoteControl.enabledFeatures")?.contains("futureEnabled") == true)
         }
     }
 
@@ -88,7 +89,7 @@ struct RemoteControlPreferencesTests {
             #expect(preferences.orderedGroups == [.media, .levels, .input, .screen, .navigation])
             #expect(preferences.features(in: .media) == [.mediaNext, .mediaPrevious, .mediaPlayPause])
             #expect(preferences.features(in: .levels) == [.volume, .brightness, .mute])
-            #expect(preferences.homeSections.count == 5)
+            #expect(preferences.homeSections.count == 4)
             preferences.moveFeatures(in: .input, fromOffsets: IndexSet(integer: 0), toOffset: 2)
             #expect(RemoteControlPreferences(defaults: defaults).orderedGroups == [.media, .levels, .input, .screen, .navigation])
         }
@@ -135,6 +136,57 @@ struct RemoteControlPreferencesTests {
             #expect(RemoteControlFeature.end.navigationKey == .end)
             #expect(RemoteControlFeature.mute.navigationKey == nil)
             #expect(preferences.features(in: .screen) == [.displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock])
+        }
+    }
+
+    @Test func navigationStartsOffWithoutChangingOtherDefaultsOrWritingPreferences() throws {
+        try withPreferences { preferences, defaults in
+            #expect(RemoteControlFeature.Group.navigation.features.allSatisfy { !preferences.isEnabled($0) })
+            #expect(RemoteControlFeature.allCases.filter { $0.group != .navigation }.allSatisfy(preferences.isEnabled))
+            #expect(!preferences.homeSections.flatMap { $0 }.contains { $0.group == .navigation })
+            #expect(defaults.object(forKey: "remoteControl.hiddenFeatures") == nil)
+            #expect(defaults.object(forKey: "remoteControl.enabledFeatures") == nil)
+        }
+    }
+
+    @Test func legacyVisibilityAndUnrelatedChangesDoNotOptInToNavigation() throws {
+        try withPreferences { _, defaults in
+            defaults.set(["mediaNext", "futureHidden"], forKey: "remoteControl.hiddenFeatures")
+            let preferences = RemoteControlPreferences(defaults: defaults)
+            #expect(!preferences.isEnabled(.mediaNext))
+            #expect(preferences.isEnabled(.desktop))
+            preferences.setEnabled(true, for: .mute)
+            preferences.moveFeatures(in: .navigation, fromOffsets: IndexSet(integer: 3), toOffset: 0)
+            let reloaded = RemoteControlPreferences(defaults: defaults)
+            #expect(RemoteControlFeature.Group.navigation.features.allSatisfy { !reloaded.isEnabled($0) })
+            #expect(defaults.stringArray(forKey: "remoteControl.hiddenFeatures")?.contains("futureHidden") == true)
+        }
+    }
+
+    @Test func navigationOptInAndOptOutPersistIndividuallyWithoutLosingOrder() throws {
+        try withPreferences { preferences, defaults in
+            preferences.moveFeatures(in: .navigation, fromOffsets: IndexSet(integer: 3), toOffset: 0)
+            preferences.setEnabled(true, for: .home)
+            preferences.setEnabled(true, for: .end)
+            let reloaded = RemoteControlPreferences(defaults: defaults)
+            #expect(reloaded.homeSections.last == [.end, .home])
+            #expect(!reloaded.isEnabled(.pageUp))
+            #expect(!reloaded.isEnabled(.pageDown))
+            reloaded.setEnabled(false, for: .end)
+            let disabled = RemoteControlPreferences(defaults: defaults)
+            #expect(disabled.homeSections.last == [.home])
+            #expect(disabled.features(in: .navigation) == [.end, .pageUp, .pageDown, .home])
+            #expect(defaults.stringArray(forKey: "remoteControl.hiddenFeatures")?.contains("end") == true)
+            #expect(defaults.stringArray(forKey: "remoteControl.enabledFeatures")?.contains("end") == false)
+            #expect(defaults.stringArray(forKey: "remoteControl.enabledFeatures")?.contains("home") == true)
+        }
+    }
+
+    @Test func legacyHiddenPreferenceStillWinsOverAnExplicitOptIn() throws {
+        try withPreferences { preferences, defaults in
+            preferences.setEnabled(true, for: .pageUp)
+            defaults.set(["pageUp"], forKey: "remoteControl.hiddenFeatures")
+            #expect(!RemoteControlPreferences(defaults: defaults).isEnabled(.pageUp))
         }
     }
 }

@@ -110,3 +110,15 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - 隔离 iOS Simulator 上的分区排序 UI 回归 2/2 通过：入口可从顶部工具栏打开，分区顺序及组内排序在重启后保留；未触发远控按键或屏幕控制。19 项纯偏好/自动切换策略测试全部通过（0 failures）。
 - ASC Build ID：`7864f2b6-ca6d-4d93-b285-87300dea0adc`，处理状态 `VALID`，内部测试状态 `IN_BETA_TESTING`，`autoNotifyEnabled=true`。已核对现有内部组“内部”（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`，`isInternalGroup=true`、`hasAccessToAllBuilds=true`），group config 的 build relationship 包含本次构建；原 build 31、32 仍在组中。中英文 What to Test 已更新并读回。
 - 仅使用现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员。`VALID` 仅表示构建处理有效，不代表 App Store 审核批准。
+
+## 2026-10-10：1.2.2 / 构建 34 签名与发布门禁
+
+- 用户要求“翻页与导航”四个按键默认关闭，构建号增加到 34；没有提交构建 33 的 App Store 审核。其他功能默认值、已有隐藏偏好及排序保持不变。新增 append-only `remoteControl.enabledFeatures` 保存明确开启的选择，保存时仍向历史隐藏列表写入默认关闭项以兼容降级。
+- 最终 IPA：`/Users/guofeng/Downloads/PilotNest-1.2.2-34.ipa`，bundle `com.misswell.macpilot.remote`，版本/构建号 `1.2.2 (34)`，Team `U8U443D7ZL`。
+- IPA SHA-256：`c41d665154e863a78216313ddb33f29b47ea85bc42d88bf595c4ca3b331518e8`。深度严格签名与 ZIP 完整性校验通过，实际 signer 为 Apple Distribution；signer leaf 与 embedded profile 的证书 DER SHA-256 一致：`62e7580e4e86da3c0c5a015e89f2074bb8439ecc34148575ed3d88499a233704`。
+- Profile UUID `df12e579-3dec-4e63-b2df-86c5e2d37281`，ASC profile 状态 `ACTIVE`、类型 `IOS_APP_STORE`，有效至 `2027-07-20`；app-id/team 一致，`get-task-allow=false`，没有设备名单或企业分发标记，签名 entitlements 为 profile 授权子集，`ITSAppUsesNonExemptEncryption=false`。ASC 证书 serial `49C25FF7CF83CF4D27B7AC4B77D27A85`、有效期同日。
+- Release/generic iOS archive 成功。Automatic App Store export 实际尝试后因 `No Accounts / No profiles` 失败，再用任务临时目录中的一次性手动参数导出；仓库 automatic signing 配置不变，没有固定旧 profile UUID。
+- 23 项纯测试（偏好 13、自动选择 10）及 3 项隔离 iPhone UI 回归全部通过。UI 验证四键初始关闭、Home 单独开启、重启后保留、再关闭；分区入口与分区/组内排序持久化同时通过。测试必须点击 Toggle 行里的真实子 Switch，而非整行中点或拖动手柄；首次失败是测试定位问题，产品 UI 未因此修改。
+- Mac 安全测试 17 项、协议导航/命令纯测试 4 项通过；fresh Release `-Xswiftc -warnings-as-errors` 编译通过。只执行安全/mock 门禁，没有运行会触及真实屏幕状态的全量测试，也没有启动本机 MacPilot 或发送真实按键。
+- Canonical `metadata/version/1.2.2` 中英文更新说明包含默认关闭与按需开启说明；description、keywords、marketing/support URL 沿用 1.2.1。`asc metadata validate` 为 0 errors / 0 warnings；公开隐私标签核验不等于读取或修改 ASC 隐私问卷。
+- 本节记录发布门禁。处理有效、内部分发、等待审核、审核批准及上架必须分别以 ASC 中构建 34 的实际记录确认，不能由本地验签结果推断。

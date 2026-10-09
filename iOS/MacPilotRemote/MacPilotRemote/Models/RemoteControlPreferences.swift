@@ -11,6 +11,8 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var isEnabledByDefault: Bool { group != .navigation }
+
     enum Group: String, CaseIterable, Identifiable {
         case input, screen, media, levels, navigation
         var id: String { rawValue }
@@ -99,20 +101,23 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
 }
 
 /// Visibility and ordering are independent phone UI preferences, shared by all
-/// Macs. Unknown keys are retained so newer controls survive a downgrade.
+/// Macs. Navigation is opt-in; unknown keys are retained across downgrades.
 @MainActor
 final class RemoteControlPreferences: ObservableObject {
     private static let storageKey = "remoteControl.hiddenFeatures"
+    private static let enabledStorageKey = "remoteControl.enabledFeatures"
     private static let orderStorageKey = "remoteControl.featureOrder"
     private static let groupOrderStorageKey = "remoteControl.groupOrder"
     private let defaults: UserDefaults
     @Published private var hidden: Set<String>
+    @Published private var explicitlyEnabled: Set<String>
     @Published private var storedOrder: [String]
     @Published private var storedGroupOrder: [String]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.hidden = Set(defaults.stringArray(forKey: Self.storageKey) ?? [])
+        self.explicitlyEnabled = Set(defaults.stringArray(forKey: Self.enabledStorageKey) ?? [])
         self.storedOrder = defaults.stringArray(forKey: Self.orderStorageKey) ?? []
         self.storedGroupOrder = defaults.stringArray(forKey: Self.groupOrderStorageKey)
             ?? (defaults.stringArray(forKey: Self.orderStorageKey) ?? [])
@@ -179,12 +184,24 @@ final class RemoteControlPreferences: ObservableObject {
 
     func isEnabled(_ feature: RemoteControlFeature) -> Bool {
         !hidden.contains(feature.rawValue)
+            && (feature.isEnabledByDefault || explicitlyEnabled.contains(feature.rawValue))
     }
 
     func setEnabled(_ enabled: Bool, for feature: RemoteControlFeature) {
-        if enabled { hidden.remove(feature.rawValue) }
-        else { hidden.insert(feature.rawValue) }
-        defaults.set(hidden.sorted(), forKey: Self.storageKey)
+        if enabled {
+            hidden.remove(feature.rawValue)
+            explicitlyEnabled.insert(feature.rawValue)
+        } else {
+            hidden.insert(feature.rawValue)
+            explicitlyEnabled.remove(feature.rawValue)
+        }
+        // Mirror default-off choices into the historical key on save so older
+        // releases also keep them hidden without understanding the opt-in key.
+        let defaultHidden = RemoteControlFeature.allCases.filter {
+            !$0.isEnabledByDefault && !explicitlyEnabled.contains($0.rawValue)
+        }.map(\.rawValue)
+        defaults.set(hidden.union(defaultHidden).sorted(), forKey: Self.storageKey)
+        defaults.set(explicitlyEnabled.sorted(), forKey: Self.enabledStorageKey)
     }
 
     var hasHomeControls: Bool {

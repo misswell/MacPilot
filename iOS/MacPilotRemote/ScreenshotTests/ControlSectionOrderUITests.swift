@@ -5,6 +5,46 @@ import XCTest
 /// remote-control or screen-state action.
 final class ControlSectionOrderUITests: XCTestCase {
     @MainActor
+    func testNavigationControlsStartOffAndCanBeEnabledIndividually() {
+        let app = XCUIApplication()
+        app.launch()
+        openControlSettings(in: app)
+
+        let featureIDs = ["pageUp", "pageDown", "home", "end"]
+        let rows = featureIDs.map { app.switches["controlToggle.\($0)"] }
+        scrollUntilHittable(rows, in: app)
+        for row in rows {
+            XCTAssertTrue(row.exists && row.isHittable)
+            XCTAssertEqual(row.value as? String, "0", "Navigation controls should start off")
+        }
+
+        let homeRow = app.switches["controlToggle.home"]
+        let homeSwitch = homeRow.descendants(matching: .switch).firstMatch
+        XCTAssertTrue(homeSwitch.exists && homeSwitch.isHittable)
+        homeSwitch.tap()
+        XCTAssertEqual(homeRow.value as? String, "1")
+        for featureID in ["pageUp", "pageDown", "end"] {
+            XCTAssertEqual(app.switches["controlToggle.\(featureID)"].value as? String, "0")
+        }
+
+        app.terminate()
+        app.launch()
+        openControlSettings(in: app)
+        let persistedRows = featureIDs.map { app.switches["controlToggle.\($0)"] }
+        scrollUntilHittable(persistedRows, in: app)
+        let persistedHomeRow = app.switches["controlToggle.home"]
+        let persistedHomeSwitch = persistedHomeRow.descendants(matching: .switch).firstMatch
+        XCTAssertTrue(persistedHomeSwitch.exists && persistedHomeSwitch.isHittable)
+        XCTAssertEqual(persistedHomeRow.value as? String, "1")
+        for featureID in ["pageUp", "pageDown", "end"] {
+            XCTAssertEqual(app.switches["controlToggle.\(featureID)"].value as? String, "0")
+        }
+        // Return this isolated fixture to its initial visibility state.
+        persistedHomeSwitch.tap()
+        XCTAssertEqual(persistedHomeRow.value as? String, "0")
+    }
+
+    @MainActor
     func testSectionOrderEntryOpensItsDestination() {
         let app = XCUIApplication()
         app.launch()
