@@ -36,7 +36,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.misswell.macpilot.remote
         PRODUCT_NAME: PilotNest
         MARKETING_VERSION: "1.2.2"
-        CURRENT_PROJECT_VERSION: "31"
+        CURRENT_PROJECT_VERSION: "32"
         TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_FILE: MacPilotRemote/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO

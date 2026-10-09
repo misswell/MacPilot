@@ -153,12 +153,18 @@ final class RemoteAppModel: ObservableObject {
     let ble = RemoteBLEPeripheral()
 
     private var activeMac: PairedMac?
+    /// Set only by the authenticated device-resolution callback for `connection`.
+    private var authenticatedDeviceID: UUID?
     /// A Mac the user tapped in Devices that is not in the paired store yet, so
     /// it cannot be reached through `activeMac`.
     private var pairingTarget: DiscoveredMac?
     private var manualTarget: ManualMacAddress?
     /// Every dial still in flight. `connection` is never one of these.
     private var candidates: [Candidate] = []
+    /// A non-current dial may already be in its pairing/authentication exchange.
+    /// Automatic selection must not cancel that handshake just because the
+    /// selected Mac's Bonjour result is temporarily absent.
+    private var candidateHandshakeIDs = Set<ObjectIdentifier>()
     private var activeMethod: RemoteConnectionMethod?
     @Published private(set) var connectionGeneration = 0
 
@@ -195,6 +201,9 @@ final class RemoteAppModel: ObservableObject {
     /// Bumped on every start/stop so a finishing supervisor run cannot clear the
     /// handle of a newer one.
     private var supervisorGeneration = 0
+    private var automaticMacSelection = RemoteAutomaticMacSelection()
+    private var automaticMacSwitchTask: Task<Void, Never>?
+    private var automaticMacSwitchTaskGeneration: UInt64?
     private var isForeground = true
     private var didAttemptBLEIdentityProbeThisForeground = false
     private var isBLEIdentityProbeActive = false
@@ -285,6 +294,8 @@ final class RemoteAppModel: ObservableObject {
         case .active:
             if !isForeground {
                 didAttemptBLEIdentityProbeThisForeground = false
+                automaticMacSelection.resumeForeground()
+                cancelAutomaticMacSwitchTask()
             }
             isForeground = true
             // iOS tears down the DNS-SD session behind the browse while the app
@@ -293,6 +304,8 @@ final class RemoteAppModel: ObservableObject {
             // stale endpoints and the Mac would never be found again. Rebuild
             // discovery before the reconnect race starts.
             discovery.restart()
+            discoveredMacs = []
+            updateAutomaticMacSelection()
             appendLinkDiagnostic("foreground: discovery rebuilt")
             // Re-arm with a fresh, tight cadence and an immediate Bluetooth
             // advertisement: opening the app is exactly when the user expects a
@@ -308,11 +321,14 @@ final class RemoteAppModel: ObservableObject {
             // No background sockets in V1; close cleanly so the Mac releases
             // the connection instead of waiting for a timeout.
             isForeground = false
+            automaticMacSelection.suspendForeground()
+            cancelAutomaticMacSwitchTask()
             stopConnectSupervisor()
             finishBLEIdentityProbe()
             stopBLEFallback()
             cancelCandidates()
             connection.disconnect(report: false)
+            authenticatedDeviceID = nil
             connectionState = hasEverConnected ? .reconnecting : .idle
         default:
             break
@@ -328,13 +344,22 @@ final class RemoteAppModel: ObservableObject {
             self?.raceLog("\(path.rawValue): \(message)")
         }
         manager.onStateChange = { [weak self, weak manager] state in
-            guard let self, let manager, self.isCurrent(manager) else { return }
+            guard let self, let manager else { return }
+            guard self.isCurrent(manager) else {
+                guard self.candidates.contains(where: { $0.manager === manager }) else { return }
+                if state == .pairing || state == .authenticating {
+                    self.candidateHandshakeIDs.insert(ObjectIdentifier(manager))
+                    self.updateAutomaticMacSelection()
+                }
+                return
+            }
             // Only promote the visible state; failures and disconnects are
             // driven by the dedicated callbacks below. The connection already
             // asks for a fresh state as soon as the session is ready, so
             // brightness and volume arrive with the handshake.
             if state == .connected || state == .pairing || state == .authenticating {
                 self.connectionState = state
+                self.updateAutomaticMacSelection()
             }
         }
         manager.onDeviceResolved = { [weak self, weak manager] deviceID, name, endpoint in
@@ -381,6 +406,7 @@ final class RemoteAppModel: ObservableObject {
                 self.connectionState = .pairing
             }
             self.pairingPrompt = PairingPrompt(name: name)
+            self.updateAutomaticMacSelection()
         }
         manager.onLatency = { [weak self, weak manager] milliseconds in
             guard let self, let manager, self.isCurrent(manager) else { return }
@@ -401,6 +427,7 @@ final class RemoteAppModel: ObservableObject {
                 return
             }
             self.finishBLEIdentityProbe()
+            self.authenticatedDeviceID = nil
             self.errorKey = error.messageKey
             if self.pairingTarget != nil {
                 self.connectionState = .failed(self.text(error.messageKey))
@@ -415,6 +442,7 @@ final class RemoteAppModel: ObservableObject {
                 self.startBLEFallback()
                 self.restartConnectSupervisor()
             }
+            self.updateAutomaticMacSelection()
         }
         manager.onDisconnected = { [weak self, weak manager] in
             guard let self, let manager else { return }
@@ -873,29 +901,43 @@ final class RemoteAppModel: ObservableObject {
     }
 
     private func removeCandidate(_ manager: RemoteConnectionManager) {
-        guard let index = candidates.firstIndex(where: { $0.manager === manager }) else { return }
+        guard let index = candidates.firstIndex(where: { $0.manager === manager }) else {
+            let removedHandshake = candidateHandshakeIDs.remove(ObjectIdentifier(manager)) != nil
+            if removedHandshake { updateAutomaticMacSelection() }
+            return
+        }
         let candidate = candidates.remove(at: index)
+        candidateHandshakeIDs.remove(ObjectIdentifier(manager))
         refreshRacingPaths()
         pendingMetrics.removeValue(forKey: ObjectIdentifier(candidate.manager))
         candidate.manager.disconnect(report: false)
+        updateAutomaticMacSelection()
     }
 
     private func removeCandidate(path: RacePath) {
         guard let index = candidates.firstIndex(where: { $0.path == path }) else { return }
         let candidate = candidates.remove(at: index)
+        candidateHandshakeIDs.remove(ObjectIdentifier(candidate.manager))
         refreshRacingPaths()
         pendingMetrics.removeValue(forKey: ObjectIdentifier(candidate.manager))
         candidate.manager.disconnect(report: false)
+        updateAutomaticMacSelection()
     }
 
     /// Ends every dial except `keeper`, which stays in the race.
     private func cancelCandidates(except keeper: RemoteConnectionManager? = nil) {
+        let hadCandidateHandshake = !candidateHandshakeIDs.isEmpty
         let doomed = candidates.filter { $0.manager !== keeper }
         candidates.removeAll { $0.manager !== keeper }
         refreshRacingPaths()
         for candidate in doomed {
+            candidateHandshakeIDs.remove(ObjectIdentifier(candidate.manager))
             pendingMetrics.removeValue(forKey: ObjectIdentifier(candidate.manager))
             candidate.manager.disconnect(report: false)
+        }
+        if keeper == nil { candidateHandshakeIDs.removeAll() }
+        if !doomed.isEmpty || (hadCandidateHandshake && keeper == nil) {
+            updateAutomaticMacSelection()
         }
     }
 
@@ -907,6 +949,7 @@ final class RemoteAppModel: ObservableObject {
         let switching = previous.isReady
         if !manager.isReady { cancelCandidates(except: manager) }
         candidates.removeAll { $0.manager === manager }
+        candidateHandshakeIDs.remove(ObjectIdentifier(manager))
         connection = manager
         activeMethod = manager.transportKind == .bluetooth ? .bluetooth
             : (manager.linkDescription.hasPrefix("awdl") ? .awdl : .localNetwork)
@@ -948,6 +991,7 @@ final class RemoteAppModel: ObservableObject {
         localNetworkDenied = discovery.isPermissionDenied
         unrecognizedServiceCount = discovery.unrecognizedServiceCount
         adoptAlreadyPairedMacs(from: macs)
+        updateAutomaticMacSelection()
         if metrics.discoveryLatencyMs == nil, !macs.isEmpty, let started = discoveryStartedAt {
             metrics.discoveryLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
         }
@@ -978,6 +1022,7 @@ final class RemoteAppModel: ObservableObject {
         let enteredAddress = manualTarget
         manualTarget = nil
         let wasPairing = pairingTarget != nil
+        authenticatedDeviceID = deviceID
         hasEverConnected = true
         pairingTarget = nil
         // The winner measured its transport and handshake just before it was
@@ -1020,9 +1065,11 @@ final class RemoteAppModel: ObservableObject {
         activeMac = store.mac(id: deviceID)
         startConnectSupervisor()
         startBLEIdentityProbeIfNeeded()
+        updateAutomaticMacSelection()
     }
 
     private func handleDisconnected() {
+        authenticatedDeviceID = nil
         finishBLEIdentityProbe()
         guard connectionState != .idle else { return }
         if pairingTarget != nil {
@@ -1030,6 +1077,7 @@ final class RemoteAppModel: ObservableObject {
             errorKey = "errorNetwork"
             connectionState = .failed(text("errorNetwork"))
             stopConnectSupervisor()
+            updateAutomaticMacSelection()
             return
         }
         connectionState = hasEverConnected ? .reconnecting : .failed(text("errorNetwork"))
@@ -1041,10 +1089,83 @@ final class RemoteAppModel: ObservableObject {
         ) {
             restartConnectSupervisor()
         }
+        updateAutomaticMacSelection()
+    }
+
+    private func noteManualMacSelection() {
+        automaticMacSelection.manualSelectionStarted()
+        cancelAutomaticMacSwitchTask()
+    }
+
+    private func cancelAutomaticMacSwitchTask() {
+        automaticMacSwitchTask?.cancel()
+        automaticMacSwitchTask = nil
+        automaticMacSwitchTaskGeneration = nil
+    }
+
+    /// The policy is driven by discovery and connection-state events. A single
+    /// cancellable deadline is scheduled only after a unique paired candidate
+    /// appears; there is no polling loop for automatic switching.
+    private func updateAutomaticMacSelection(now: Date = Date()) {
+        let selectedID = selectedMacID
+        // The Keychain key is the proof of an existing pairing. A stale visible
+        // row must never turn this automatic path into a first-pairing prompt.
+        let pairedIDs = Set(store.pairedMacs.compactMap { mac in
+            RemoteKeychain.hasPairingKey(for: mac.id) ? mac.id : nil
+        })
+        let discoveredIDs = Set(discoveredMacs.map { $0.id.uuidString })
+        let selectedHasAuthenticatedSession = connection.isReady
+            && authenticatedDeviceID?.uuidString == selectedID
+        let isPairingOrAuthenticating = connectionState == .pairing
+            || connectionState == .authenticating
+            || !candidateHandshakeIDs.isEmpty
+
+        switch automaticMacSelection.observe(
+            selectedMacID: selectedID,
+            pairedMacIDs: pairedIDs,
+            discoveredMacIDs: discoveredIDs,
+            selectedHasAuthenticatedSession: selectedHasAuthenticatedSession,
+            isPairingOrAuthenticating: isPairingOrAuthenticating,
+            now: now
+        ) {
+        case .none:
+            cancelAutomaticMacSwitchTask()
+        case let .waiting(targetID, generation, deadline):
+            if automaticMacSwitchTaskGeneration == generation, automaticMacSwitchTask != nil {
+                return
+            }
+            cancelAutomaticMacSwitchTask()
+            automaticMacSwitchTaskGeneration = generation
+            let delay = max(0, deadline.timeIntervalSince(now))
+            automaticMacSwitchTask = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(for: .seconds(delay))
+                } catch {
+                    return
+                }
+                guard let self,
+                      !Task.isCancelled,
+                      self.automaticMacSwitchTaskGeneration == generation,
+                      self.automaticMacSelection.isCurrent(targetID: targetID, generation: generation) else {
+                    return
+                }
+                self.automaticMacSwitchTask = nil
+                self.automaticMacSwitchTaskGeneration = nil
+                self.updateAutomaticMacSelection()
+            }
+        case let .switchTo(targetID, generation):
+            cancelAutomaticMacSwitchTask()
+            guard let target = store.pairedMacs.first(where: { $0.id == targetID }),
+                  RemoteKeychain.hasPairingKey(for: targetID) else { return }
+            guard automaticMacSelection.consumeSwitch(targetID: targetID, generation: generation) else { return }
+            appendLinkDiagnostic("automatic Mac selection: \(target.name) remained the only visible paired Mac for 10 seconds")
+            selectPairedMac(target, manually: false)
+        }
     }
 
     /// User driven connect from the Devices tab, used for first-time pairing.
     func pair(with mac: DiscoveredMac) {
+        noteManualMacSelection()
         resetConnectionForTarget()
         pairingTarget = mac
         activeMac = store.mac(id: mac.id)
@@ -1055,6 +1176,7 @@ final class RemoteAppModel: ObservableObject {
 
     /// Identity is learned from the authenticated handshake, never from the entered address.
     func connect(to address: ManualMacAddress) {
+        noteManualMacSelection()
         resetConnectionForTarget()
         manualTarget = address
         pairingTarget = DiscoveredMac(id: UUID(), name: address.host, endpoint: address.endpoint,
@@ -1067,6 +1189,11 @@ final class RemoteAppModel: ObservableObject {
     var pairingTargetID: UUID? { pairingTarget?.id }
 
     func connect(to mac: PairedMac) {
+        selectPairedMac(mac, manually: true)
+    }
+
+    private func selectPairedMac(_ mac: PairedMac, manually: Bool) {
+        if manually { noteManualMacSelection() }
         guard mac.deviceID != nil else { return }
         if activeMac?.id == mac.id, connectionState.isConnected { return }
         resetConnectionForTarget()
@@ -1076,15 +1203,18 @@ final class RemoteAppModel: ObservableObject {
         connectionState = .connecting
         startBLEFallback()
         startConnectSupervisor()
+        updateAutomaticMacSelection()
     }
 
     private func resetConnectionForTarget() {
+        cancelAutomaticMacSwitchTask()
         manualTarget = nil
         stopConnectSupervisor()
         finishBLEIdentityProbe()
         stopBLEFallback()
         cancelCandidates()
         connection.disconnect(report: false)
+        authenticatedDeviceID = nil
         // A fresh manager makes late callbacks from the previous Mac irrelevant.
         connection = RemoteConnectionManager()
         activeMethod = nil
@@ -1121,6 +1251,7 @@ final class RemoteAppModel: ObservableObject {
         // race would never dial and the link would stay dead. Step the state
         // down first.
         connectionState = hasEverConnected ? .reconnecting : .connecting
+        authenticatedDeviceID = nil
         stopConnectSupervisor()
         startConnectSupervisor()
     }
@@ -1160,6 +1291,7 @@ final class RemoteAppModel: ObservableObject {
     func isDefault(_ mac: PairedMac) -> Bool { store.preferredMacID == mac.id }
 
     func setDefault(_ mac: PairedMac) {
+        noteManualMacSelection()
         store.preferredMacID = mac.id
     }
 
@@ -1175,6 +1307,7 @@ final class RemoteAppModel: ObservableObject {
                 connectionState = .discovering
             }
         }
+        updateAutomaticMacSelection()
     }
 
     func removeAllPairings() {
@@ -1183,6 +1316,7 @@ final class RemoteAppModel: ObservableObject {
         activeMac = nil
         pairingTarget = nil
         connectionState = .discovering
+        updateAutomaticMacSelection()
     }
 
     func status(for mac: PairedMac) -> MacPresence {

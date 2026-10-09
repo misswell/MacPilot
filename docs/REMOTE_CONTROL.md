@@ -275,14 +275,16 @@ PilotNest Settings → Control features provides individual switches for remote
 screen, trackpad, keyboard, all four screen actions, all three media keys,
 brightness, volume, and mute. They default to visible and persist on the phone
 across launches and Mac switches. The native settings list supports long-press
-drag reordering across categories, with permanent reorder handles. Order is
-stored separately from visibility; hidden controls retain their positions and
-new controls are appended in their default order. Unknown visibility/order keys
-survive downgrades. Keyboard off also suppresses automatic editable-field probes;
-its position does not create a separate home entry. Volume and mute can be shown
-and ordered independently. The home screen keeps the Mac switcher first, then
-renders visible controls in the saved order, grouping only adjacent controls of
-the same kind into a card. Screen
+drag reordering within each of the four sections, with permanent reorder handles.
+The separate Section order page reorders whole sections. Section order, feature
+order and visibility are stored independently; hidden controls retain their
+positions and new controls are appended in their section's default order. Unknown
+visibility/order keys survive downgrades; the previous flat feature order is
+migrated to whole sections. Keyboard off also suppresses automatic editable-field
+probes; its position does not create a separate home entry. Volume and mute can
+be shown independently, but mute is anchored to the volume slider's right edge
+and cannot be dragged to a standalone row. The home screen keeps the Mac switcher
+first, then renders entire sections and their controls in the saved order. Screen
 key content is centered in equal-height, Dynamic Type-scaled keys; single-line
 captions do not reserve an invisible second line. Input, screen, media, and mute
 keys reuse the same surfaces and press feedback, and all groups share one
@@ -296,6 +298,17 @@ unknown levels show an unavailable indicator rather than a guessed zero. The
 and scrolling; default-size controls fit even an iPhone SE portrait viewport.
 Empty groups are omitted, and a Settings shortcut remains when all home controls
 are hidden.
+
+When the selected Mac is absent, PilotNest can automatically select another
+already-paired Mac only after that Mac remains the sole discovered paired identity
+for ten continuous seconds. Multiple visible Macs, candidate disappearance,
+pairing/authentication (including a racing connection), or an authenticated live
+session to the selected Mac reset the observation window. A Keychain pairing key
+is required; automatic selection never starts first-time pairing. Manual device,
+address or default selection cancels the pending switch and disables automatic
+selection for that foreground-use cycle. Returning from background starts a
+fresh ten-second observation; cancelled or old-generation tasks cannot switch
+devices later. This selection policy does not send any screen-control commands.
 
 ## Dock groups (launch a work set from the phone)
 

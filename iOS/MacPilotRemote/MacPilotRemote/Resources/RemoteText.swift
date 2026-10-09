@@ -30,7 +30,9 @@ enum RemoteText {
 
     private static let chinese: [String: String] = [
         "controlsSettings": "控制功能",
-        "controlsSortHint": "长按功能行或右侧拖动手柄调整顺序，首页会按此顺序显示。键盘开关只影响遥控页面。",
+        "controlsSortHint": "长按功能行或右侧手柄调整分区内顺序。分区顺序可在「分区排序」调整。静音固定在音量滑块右侧；键盘开关只影响遥控页面。",
+        "controlsGroupOrder": "分区排序",
+        "controlsGroupOrderHint": "长按分区行或拖动右侧手柄调整分区顺序，首页和控制功能设置同步生效。",
         "controlsSettingsHint": "选择要显示的控制功能，关闭后会隐藏对应控件。设置保存在本机，对所有 Mac 生效。",
         "controlsGroupInput": "触控与键盘",
         "controlsGroupScreen": "屏幕操作",
@@ -257,7 +259,9 @@ enum RemoteText {
 
     private static let english: [String: String] = [
         "controlsSettings": "Control features",
-        "controlsSortHint": "Touch and hold a row or drag its handle to reorder controls on the home screen. The keyboard switch only affects the remote view.",
+        "controlsSortHint": "Touch and hold a row or drag its handle to reorder within a section. Use Section order to rearrange sections. Mute stays beside the volume slider; the keyboard switch only affects the remote view.",
+        "controlsGroupOrder": "Section order",
+        "controlsGroupOrderHint": "Touch and hold a section or drag its handle to reorder sections on the home screen and in control settings.",
         "controlsSettingsHint": "Choose which controls to show. Turning a feature off hides its controls. Preferences are saved on this device and apply to all Macs.",
         "controlsGroupInput": "Trackpad & keyboard",
         "controlsGroupScreen": "Screen actions",

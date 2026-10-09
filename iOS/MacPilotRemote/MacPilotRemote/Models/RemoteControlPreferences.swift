@@ -84,14 +84,23 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
 final class RemoteControlPreferences: ObservableObject {
     private static let storageKey = "remoteControl.hiddenFeatures"
     private static let orderStorageKey = "remoteControl.featureOrder"
+    private static let groupOrderStorageKey = "remoteControl.groupOrder"
     private let defaults: UserDefaults
     @Published private var hidden: Set<String>
     @Published private var storedOrder: [String]
+    @Published private var storedGroupOrder: [String]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.hidden = Set(defaults.stringArray(forKey: Self.storageKey) ?? [])
         self.storedOrder = defaults.stringArray(forKey: Self.orderStorageKey) ?? []
+        self.storedGroupOrder = defaults.stringArray(forKey: Self.groupOrderStorageKey)
+            ?? (defaults.stringArray(forKey: Self.orderStorageKey) ?? [])
+                .compactMap(RemoteControlFeature.init(rawValue:)).map { $0.group.rawValue }
+        if defaults.object(forKey: Self.groupOrderStorageKey) == nil,
+           defaults.object(forKey: Self.orderStorageKey) != nil {
+            defaults.set(storedGroupOrder, forKey: Self.groupOrderStorageKey)
+        }
     }
 
     var orderedFeatures: [RemoteControlFeature] {
@@ -100,31 +109,52 @@ final class RemoteControlPreferences: ObservableObject {
                 + RemoteControlFeature.allCases).filter { seen.insert($0).inserted }
     }
 
-    /// Adjacent controls of the same kind share a card, without overriding a
-    /// user's cross-category order. Keyboard is an option inside the remote UI.
-    var homeSections: [[RemoteControlFeature]] {
-        var sections: [[RemoteControlFeature]] = []
-        for feature in orderedFeatures where feature != .keyboard && isEnabled(feature) {
-            if sections.last?.last?.group == feature.group {
-                sections[sections.count - 1].append(feature)
-            } else {
-                sections.append([feature])
-            }
-        }
-        return sections
+    var orderedGroups: [RemoteControlFeature.Group] {
+        var seen = Set<RemoteControlFeature.Group>()
+        return (storedGroupOrder.compactMap(RemoteControlFeature.Group.init(rawValue:))
+                + RemoteControlFeature.Group.allCases).filter { seen.insert($0).inserted }
     }
 
-    func moveFeatures(fromOffsets offsets: IndexSet, toOffset destination: Int) {
-        var features = orderedFeatures
+    func features(in group: RemoteControlFeature.Group) -> [RemoteControlFeature] {
+        let features = orderedFeatures.filter { $0.group == group }
+        // Mute is attached to the volume slider, not a standalone home row.
+        return group == .levels ? features.filter { $0 != .mute } + [.mute] : features
+    }
+
+    var homeSections: [[RemoteControlFeature]] {
+        orderedGroups.map { group in
+            features(in: group).filter { $0 != .keyboard && isEnabled($0) }
+        }.filter { !$0.isEmpty }
+    }
+
+    func moveFeatures(in group: RemoteControlFeature.Group, fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        var features = features(in: group)
         guard !offsets.isEmpty, destination >= 0, destination <= features.count,
               offsets.allSatisfy({ features.indices.contains($0) }) else { return }
+        guard !offsets.contains(where: { features[$0] == .mute }) else { return }
         let moving = offsets.map { features[$0] }
         let insertion = destination - offsets.filter { $0 < destination }.count
         for index in offsets.reversed() { features.remove(at: index) }
         features.insert(contentsOf: moving, at: insertion)
+        if group == .levels { features = features.filter { $0 != .mute } + [.mute] }
         let unknown = storedOrder.filter { RemoteControlFeature(rawValue: $0) == nil }
-        storedOrder = features.map(\.rawValue) + unknown
+        storedOrder = RemoteControlFeature.Group.allCases.flatMap {
+            $0 == group ? features : self.features(in: $0)
+        }.map(\.rawValue) + unknown
         defaults.set(storedOrder, forKey: Self.orderStorageKey)
+    }
+
+    func moveGroups(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        var groups = orderedGroups
+        guard !offsets.isEmpty, destination >= 0, destination <= groups.count,
+              offsets.allSatisfy({ groups.indices.contains($0) }) else { return }
+        let moving = offsets.map { groups[$0] }
+        let insertion = destination - offsets.filter { $0 < destination }.count
+        for index in offsets.reversed() { groups.remove(at: index) }
+        groups.insert(contentsOf: moving, at: insertion)
+        let unknown = storedGroupOrder.filter { RemoteControlFeature.Group(rawValue: $0) == nil }
+        storedGroupOrder = groups.map(\.rawValue) + unknown
+        defaults.set(storedGroupOrder, forKey: Self.groupOrderStorageKey)
     }
 
     func isEnabled(_ feature: RemoteControlFeature) -> Bool {

@@ -328,40 +328,24 @@ struct HomeView: View {
     /// a guessed zero or an interactive slider. The deck stays stable as the
     /// first state arrives after connecting.
     private func levelsPanel(_ features: [RemoteControlFeature]) -> some View {
-        VStack(spacing: 4) {
-            ForEach(features) { feature in
-                if feature == .mute {
-                    muteControl
-                } else {
-                    let kind: RemoteLevelKind = feature == .brightness ? .brightness : .volume
-                    LevelSliderRow(kind: kind, value: kind.value(in: appModel.macState))
-                }
-                if feature != features.last { Divider() }
+        let kinds: [RemoteLevelKind] = features.compactMap { feature in
+            switch feature {
+            case .brightness: .brightness
+            case .volume: .volume
+            case .mute: features.contains(.volume) ? nil : .volume
+            default: nil
+            }
+        }
+        return VStack(spacing: 4) {
+            ForEach(kinds, id: \.self) { kind in
+                LevelSliderRow(kind: kind, value: kind.value(in: appModel.macState))
+                if kind != kinds.last { Divider() }
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .controlDeckCard()
-    }
-
-    private var muteControl: some View {
-        let volume = RemoteLevelKind.volume.value(in: appModel.macState)
-        let available = appModel.connectionState.isConnected
-            && volume != nil && appModel.volumeMuted != nil
-        let isMuted = appModel.volumeMuted == true
-        return Button {
-            guard let volume, available else { return }
-            appModel.setLevel(.volume, value: volume, muted: !isMuted)
-            Haptics.impact()
-        } label: {
-            ControlKeyLabel(title: appModel.text(isMuted ? "unmute" : "mute"),
-                            icon: isMuted ? "speaker.slash" : "speaker.wave.2",
-                            enabled: available, tint: isMuted ? .orange : .accentColor)
-        }
-        .buttonStyle(ControlKeyStyle(prominent: false))
-        .disabled(!available)
-        .accessibilityIdentifier("control.mute")
     }
 
     private func hint(_ text: String) -> some View {
@@ -499,6 +483,7 @@ private struct LevelSliderRow: View {
     /// The value the Mac last reported, used whenever the finger is up.
     let value: Double?
 
+    @ScaledMetric(relativeTo: .subheadline) private var muteKeyWidth: CGFloat = 84
     @ScaledMetric(relativeTo: .subheadline) private var levelIconWidth: CGFloat = 20
 
     @State private var draft: Double = 0
@@ -506,6 +491,10 @@ private struct LevelSliderRow: View {
 
     private var isMuted: Bool {
         kind == .volume && appModel.volumeMuted == true
+    }
+
+    private var showsSlider: Bool {
+        kind != .volume || appModel.controlPreferences.isEnabled(.volume)
     }
 
     var body: some View {
@@ -519,7 +508,7 @@ private struct LevelSliderRow: View {
                     .font(.subheadline)
                     .frame(width: levelIconWidth)
                     .foregroundStyle(isMuted ? Color.orange : Color.accentColor)
-                if value != nil {
+                if showsSlider, value != nil {
                     Slider(value: $draft, in: 0...1, step: 0.01) { editing in
                         isEditing = editing
                         if !editing { send(draft) }
@@ -538,11 +527,21 @@ private struct LevelSliderRow: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
-                    Text("—").foregroundStyle(.tertiary)
-                        .accessibilityLabel(appModel.text("levelsUnavailableShort"))
+                    if showsSlider {
+                        Text("—").foregroundStyle(.tertiary)
+                            .accessibilityLabel(appModel.text("levelsUnavailableShort"))
+                    }
+                }
+                if kind == .volume, appModel.controlPreferences.isEnabled(.mute),
+                   !dynamicTypeSize.isAccessibilitySize {
+                    muteButton.disabled(value == nil || appModel.volumeMuted == nil)
                 }
             }
             .frame(minHeight: 44)
+            if kind == .volume, appModel.controlPreferences.isEnabled(.mute),
+               dynamicTypeSize.isAccessibilitySize {
+                muteButton.disabled(value == nil || appModel.volumeMuted == nil)
+            }
         }
         .onAppear { if let value { draft = value } }
         .onChange(of: draft) { _, newValue in
@@ -553,6 +552,22 @@ private struct LevelSliderRow: View {
             guard !isEditing, let newValue else { return }
             draft = newValue
         }
+    }
+
+    private var muteButton: some View {
+        let available = value != nil && appModel.volumeMuted != nil
+        return Button {
+            appModel.setLevel(kind, value: draft, muted: !isMuted)
+            Haptics.impact()
+        } label: {
+            ControlKeyLabel(title: appModel.text(isMuted ? "unmute" : "mute"),
+                            icon: isMuted ? "speaker.slash" : "speaker.wave.2",
+                            enabled: available, tint: isMuted ? .orange : .accentColor)
+                .frame(width: dynamicTypeSize.isAccessibilitySize ? nil : muteKeyWidth)
+        }
+        .buttonStyle(ControlKeyStyle(prominent: false))
+        .accessibilityLabel(appModel.text(isMuted ? "unmute" : "mute"))
+        .accessibilityIdentifier("control.mute")
     }
 
     /// Raising the volume clears mute, exactly like the Mac's own volume keys;

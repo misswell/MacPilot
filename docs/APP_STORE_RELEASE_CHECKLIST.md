@@ -91,3 +91,12 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - Generic iOS Simulator `build-for-testing` 编译通过（未启动模拟器或 App）；隔离 SwiftPM harness 对实际 `RemoteControlPreferences.swift` 与测试源码运行 8 项偏好排序纯测试，全部通过（0 failures）。
 - ASC Build ID：`c2e84358-c900-4254-9db8-71c4eedfa263`，处理状态 `VALID`，内部测试状态 `IN_BETA_TESTING`，`autoNotifyEnabled=true`。已核对现有内部组“内部”（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`）的 build relationship 包含本次构建，中英文 What to Test 已更新并读回。
 - 仅分发给现有内部组；未提交 App Store Review，未发起外部 Beta Review，也未新增测试员。`VALID` 表示构建处理成功，不代表 App Store 审核批准。
+
+## 2026-10-09：1.2.2 / 构建 32 上传前验证
+
+- 最终 IPA：`/Users/guofeng/Downloads/PilotNest-1.2.2-32.ipa`；bundle `com.misswell.macpilot.remote`，版本/构建号 `1.2.2 (32)`，Team ID `U8U443D7ZL`。
+- IPA SHA-256：`b454bc4a041cf95c675fcd70d5e8805cf88999863b57b07dffdd2ccff91a7940`。
+- Signer leaf DER SHA-256：`62e7580e4e86da3c0c5a015e89f2074bb8439ecc34148575ed3d88499a233704`；profile UUID：`df12e579-3dec-4e63-b2df-86c5e2d37281`，有效至 `2027-07-20T01:28:32Z`。IPA 签名叶证书 DER 与 profile 的 `DeveloperCertificates[0]` 完全相同；ASC 分发证书仍有效，serial `49C25FF7CF83CF4D27B7AC4B77D27A85`。
+- `codesign --verify --deep --strict` 通过；bundle/team/application identifier 一致，profile 的 `get-task-allow=false`、无设备名单、无企业分发标记，签名 entitlements 由 profile 授权；`ITSAppUsesNonExemptEncryption=false`。Xcode 自动导出因本机无 Xcode 账户/profile 失败，使用重新核验过的有效 App Store profile 一次性手动导出，仓库自动签名设置未改。
+- Generic iOS Simulator `build-for-testing` 编译通过（未启动模拟器或 App；仅有 `TrackpadContainerView.swift:47` 已知 LocalizedString 插值警告）；隔离 SwiftPM harness 对实际偏好模型、自动选择策略及两组测试运行 18 项纯测试，全部通过（0 failures）。
+- 记录时 TestFlight 上传尚未完成；ASC 尚无本次 build ID 或处理状态。安全构建号为 32；已上传 build 31 保留在原内部组中，没有移除或替换。上传后另行核验 `VALID`、内部测试状态及组关系；不提交 App Store Review、不发起外部 Beta Review、不新增测试员。此预上传记录不得解读为 TestFlight 已可用。

@@ -166,26 +166,27 @@ struct RemoteSettingsView: View {
     private var controlSettings: some View {
         List {
             Section {
-                ForEach(appModel.controlPreferences.orderedFeatures) { feature in
-                    Toggle(isOn: Binding(
-                        get: { appModel.controlPreferences.isEnabled(feature) },
-                        set: { appModel.controlPreferences.setEnabled($0, for: feature) }
-                    )) {
-                        Label {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(appModel.text(feature.titleKey))
-                                Text(appModel.text(feature.group.titleKey))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        } icon: {
-                            Image(systemName: feature.icon)
-                        }
-                    }
-                    .toggleStyle(.switch)
-                    .accessibilityIdentifier("controlToggle.\(feature.rawValue)")
+                NavigationLink(appModel.text("controlsGroupOrder")) {
+                    groupOrderSettings
                 }
-                .onMove(perform: appModel.controlPreferences.moveFeatures)
+            }
+            ForEach(appModel.controlPreferences.orderedGroups) { group in
+                Section(appModel.text(group.titleKey)) {
+                    ForEach(appModel.controlPreferences.features(in: group)) { feature in
+                        Toggle(isOn: Binding(
+                            get: { appModel.controlPreferences.isEnabled(feature) },
+                            set: { appModel.controlPreferences.setEnabled($0, for: feature) }
+                        )) {
+                            Label(appModel.text(feature.titleKey), systemImage: feature.icon)
+                        }
+                        .toggleStyle(.switch)
+                        .accessibilityIdentifier("controlToggle.\(feature.rawValue)")
+                        .moveDisabled(feature == .mute)
+                    }
+                    .onMove { offsets, destination in
+                        appModel.controlPreferences.moveFeatures(in: group, fromOffsets: offsets, toOffset: destination)
+                    }
+                }
             }
             Section {
                 Text(appModel.text("controlsSortHint"))
@@ -199,6 +200,24 @@ struct RemoteSettingsView: View {
         .listStyle(.insetGrouped)
         .environment(\.editMode, .constant(.active))
         .navigationTitle(appModel.text("controlsSettings"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var groupOrderSettings: some View {
+        List {
+            Section {
+                ForEach(appModel.controlPreferences.orderedGroups) { group in
+                    Text(appModel.text(group.titleKey))
+                        .accessibilityIdentifier("controlGroup.\(group.rawValue)")
+                }
+                .onMove(perform: appModel.controlPreferences.moveGroups)
+            } footer: {
+                Text(appModel.text("controlsGroupOrderHint"))
+            }
+        }
+        .listStyle(.insetGrouped)
+        .environment(\.editMode, .constant(.active))
+        .navigationTitle(appModel.text("controlsGroupOrder"))
         .navigationBarTitleDisplayMode(.inline)
     }
 
