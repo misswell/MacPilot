@@ -440,6 +440,126 @@ enum BLEActiveConnectionPolicy {
         !wakeOnProximity && (displayAsleep || systemAsleep)
     }
 
+    static func shouldPauseForUserInactivity(wakeOnProximity: Bool, userIsActive: Bool) -> Bool {
+        !wakeOnProximity && !userIsActive
+    }
+}
+
+/// Tracks real input independently of IOPM's global idle timer, which can be
+/// refreshed by Bluetooth HID activity even when the user is not present.
+@MainActor
+final class BLEUserActivityMonitor {
+    static let startupGrace: TimeInterval = 30
+    static let idleThreshold: TimeInterval = 30
+    static let displayWakeGrace: TimeInterval = 10
+    private static let automaticUnlockMarker: Int64 = 0x4D_50_42_4C_45_55_4E // "MPBLEUN"
+
+    private let uptime: () -> TimeInterval
+    private let observesEvents: Bool
+    private(set) var startedAt: TimeInterval
+    private(set) var lastInputAt: TimeInterval?
+    private var wakeGraceDeadline: TimeInterval?
+    private var wakeGraceConsumed = false
+    private var monitorTokens: [Any] = []
+    private var hasStarted = false
+    var onInput: (() -> Void)?
+
+    init(
+        uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        observesEvents: Bool = true
+    ) {
+        self.uptime = uptime
+        self.observesEvents = observesEvents
+        self.startedAt = uptime()
+    }
+
+    var isMonitoring: Bool { hasStarted }
+    var now: TimeInterval { uptime() }
+
+    func start() {
+        guard !hasStarted else { return }
+        hasStarted = true
+        startedAt = uptime()
+        lastInputAt = nil
+        wakeGraceDeadline = nil
+        wakeGraceConsumed = false
+        guard observesEvents else { return }
+        let inputEvents: NSEvent.EventTypeMask = [
+            .keyDown, .keyUp, .flagsChanged,
+            .leftMouseDown, .rightMouseDown, .otherMouseDown,
+            .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+            .scrollWheel, .beginGesture, .endGesture, .magnify, .rotate, .swipe
+        ]
+        if let local = NSEvent.addLocalMonitorForEvents(matching: inputEvents, handler: { [weak self] event in
+            self?.record(event)
+            return event
+        }) {
+            monitorTokens.append(local)
+        }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: inputEvents, handler: { [weak self] event in
+            self?.record(event)
+        }) {
+            monitorTokens.append(global)
+        }
+    }
+
+    func stop() {
+        for token in monitorTokens { NSEvent.removeMonitor(token) }
+        monitorTokens.removeAll()
+        hasStarted = false
+    }
+
+    func record(_ event: NSEvent, at time: TimeInterval? = nil) {
+        guard Self.isGenuineUserInput(event) else { return }
+        recordInput(at: time ?? uptime())
+    }
+
+    func recordInput(at time: TimeInterval) {
+        lastInputAt = time
+        wakeGraceDeadline = nil
+        wakeGraceConsumed = false
+        onInput?()
+    }
+
+    /// A display wake can be caused by a manual key press that the lock screen
+    /// does not expose through global NSEvent monitoring. Give it one bounded
+    /// active-connection window per idle period; repeated wake notifications
+    /// cannot renew the allowance.
+    func noteDisplayWake(fromSleep: Bool, at time: TimeInterval? = nil) {
+        guard fromSleep else { return }
+        let time = time ?? uptime()
+        guard !isUserActive(at: time), !wakeGraceConsumed else { return }
+        wakeGraceConsumed = true
+        wakeGraceDeadline = time + Self.displayWakeGrace
+    }
+
+    func isUserActive(at time: TimeInterval) -> Bool {
+        guard hasStarted else { return true }
+        if time - startedAt < Self.startupGrace { return true }
+        if let lastInputAt, time - lastInputAt < Self.idleThreshold { return true }
+        if let wakeGraceDeadline, time < wakeGraceDeadline { return true }
+        return false
+    }
+
+    static func isGenuineUserInput(_ event: NSEvent) -> Bool {
+        guard let cgEvent = event.cgEvent,
+              cgEvent.getIntegerValueField(.eventSourceUserData) != automaticUnlockMarker
+        else { return false }
+        switch event.type {
+        case .keyDown, .keyUp, .flagsChanged,
+             .leftMouseDown, .rightMouseDown, .otherMouseDown,
+             .scrollWheel, .beginGesture, .endGesture, .magnify, .rotate, .swipe:
+            return true
+        case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+            return event.deltaX != 0 || event.deltaY != 0
+        default:
+            return false
+        }
+    }
+
+    static func markAutomaticUnlockEvent(_ event: CGEvent) {
+        event.setIntegerValueField(.eventSourceUserData, value: automaticUnlockMarker)
+    }
 }
 
 /// Detects prolonged silence while monitoring is active. Duplicate filtering

@@ -57,12 +57,19 @@ struct ScreenUnlockExecutor {
         postKey(0x35) // Escape
     }
 
-    func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags = []) {
+    func postKey(
+        _ keyCode: CGKeyCode,
+        flags: CGEventFlags = [],
+        shouldContinue: @MainActor () -> Bool = { true }
+    ) {
         let src = CGEventSource(stateID: .hidSystemState)
+        guard shouldContinue() else { return }
         let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true)
+        if let down { BLEUserActivityMonitor.markAutomaticUnlockEvent(down) }
         down?.flags = flags
         down?.post(tap: .cghidEventTap)
         let up = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false)
+        if let up { BLEUserActivityMonitor.markAutomaticUnlockEvent(up) }
         up?.flags = flags
         up?.post(tap: .cghidEventTap)
     }
@@ -79,8 +86,11 @@ struct ScreenUnlockExecutor {
     /// the field. An unlocked session stops the keystrokes instantly, which is
     /// what keeps a fast manual unlock from pasting the password into the
     /// user's own text field.
-    func postPassword(_ password: String) async {
-        guard await waitForPasswordField(maxWait: 1.2) else { return }
+    func postPassword(
+        _ password: String,
+        shouldContinue: @escaping @MainActor () -> Bool = { true }
+    ) async {
+        guard shouldContinue(), await waitForPasswordField(maxWait: 1.2, shouldContinue: shouldContinue) else { return }
 
         log("preparing password field for key events")
 
@@ -88,12 +98,12 @@ struct ScreenUnlockExecutor {
         // (Touch ID, Auto Unlock, avatar transitions) are still settling.
         // Normalize any surviving text before every retry so a late attempt
         // cannot append a second password to a partially handled first one.
-        postKey(0x00, flags: .maskCommand) // Command-A
+        postKey(0x00, flags: .maskCommand, shouldContinue: shouldContinue) // Command-A
         try? await Task.sleep(for: .milliseconds(80))
-        guard !Task.isCancelled, mayKeepTyping(stage: "select") else { return }
-        postKey(0x33) // Delete
+        guard !Task.isCancelled, mayKeepTyping(stage: "select", shouldContinue: shouldContinue) else { return }
+        postKey(0x33, shouldContinue: shouldContinue) // Delete
         try? await Task.sleep(for: .milliseconds(120))
-        guard !Task.isCancelled, mayKeepTyping(stage: "clear") else { return }
+        guard !Task.isCancelled, mayKeepTyping(stage: "clear", shouldContinue: shouldContinue) else { return }
 
         log("posting password key events")
         let src = CGEventSource(stateID: .hidSystemState)
@@ -111,18 +121,21 @@ struct ScreenUnlockExecutor {
                 index = utf16.index(after: index)
             }
             let down = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: true)
+            if let down { BLEUserActivityMonitor.markAutomaticUnlockEvent(down) }
             down?.keyboardSetUnicodeString(stringLength: len, unicodeString: buffer)
-            down?.post(tap: .cghidEventTap)
+            let mayPostGroup = shouldContinue()
+            if mayPostGroup { down?.post(tap: .cghidEventTap) }
             let up = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: false)
+            if let up { BLEUserActivityMonitor.markAutomaticUnlockEvent(up) }
             up?.keyboardSetUnicodeString(stringLength: len, unicodeString: buffer)
-            up?.post(tap: .cghidEventTap)
+            if mayPostGroup { up?.post(tap: .cghidEventTap) }
             buffer.deallocate()
             try? await Task.sleep(for: .milliseconds(30))
-            guard !Task.isCancelled, mayKeepTyping(stage: "type") else { return }
+            guard !Task.isCancelled, mayKeepTyping(stage: "type", shouldContinue: shouldContinue) else { return }
         }
         try? await Task.sleep(for: .milliseconds(180))
-        guard !Task.isCancelled, mayKeepTyping(stage: "return") else { return }
-        postKey(0x24) // Return
+        guard !Task.isCancelled, mayKeepTyping(stage: "return", shouldContinue: shouldContinue) else { return }
+        postKey(0x24, shouldContinue: shouldContinue) // Return
     }
 
     // MARK: - Typing gate
@@ -130,9 +143,13 @@ struct ScreenUnlockExecutor {
     /// Waits until the lock screen's password field can actually receive the
     /// keystrokes. While the clock screen is showing, Escape brings the field
     /// up; the wait is bounded so a caller's retry schedule keeps running.
-    private func waitForPasswordField(maxWait: TimeInterval) async -> Bool {
+    private func waitForPasswordField(
+        maxWait: TimeInterval,
+        shouldContinue: @MainActor () -> Bool
+    ) async -> Bool {
         let deadline = Date().addingTimeInterval(maxWait)
         while true {
+            guard shouldContinue(), !Task.isCancelled else { return false }
             switch typingGate() {
             case .type:
                 return true
@@ -146,7 +163,7 @@ struct ScreenUnlockExecutor {
                 }
                 // The nudge is safe exactly because the field is not up: on
                 // the clock screen Escape only reveals password entry.
-                postKey(0x35) // Escape
+                postKey(0x35, shouldContinue: shouldContinue) // Escape
                 try? await Task.sleep(for: .milliseconds(250))
             }
         }
@@ -161,7 +178,11 @@ struct ScreenUnlockExecutor {
 
     /// The gate must stay `.abort`-free to keep posting. Returns false — after
     /// logging — the moment the session is no longer locked.
-    private func mayKeepTyping(stage: String) -> Bool {
+    private func mayKeepTyping(stage: String, shouldContinue: @MainActor () -> Bool) -> Bool {
+        guard shouldContinue() else {
+            log("password typing aborted stage=\(stage) reason=automaticUnlockPolicyChanged")
+            return false
+        }
         guard typingGate() != .abort else {
             log("password typing aborted stage=\(stage) reason=sessionNoLongerLocked")
             return false

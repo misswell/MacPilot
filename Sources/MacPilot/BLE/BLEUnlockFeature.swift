@@ -21,7 +21,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     var diagnosticTaskCount: Int {
         [deviceRefreshTask != nil, wakeRetryTask != nil, systemWakeRecoveryTask != nil,
          monitoringRecoveryTask != nil, unlockAttemptTask != nil].filter { $0 }.count
-            + [scanCleanupTimer, livenessTimer, mediaResumeTask, screenUnlockConfirmationTask]
+            + [scanCleanupTimer, livenessTimer, mediaResumeTask, screenUnlockConfirmationTask, userActivityPolicyTimer]
                 .filter { $0?.isRunning == true }.count
     }
     var diagnosticObserverCount: Int { observers.count }
@@ -42,7 +42,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     /// service so the iPhone remote control reuses the exact same code.
     let screenControl = MacScreenControlService()
 
-    override init() {
+    private let userActivityMonitor: BLEUserActivityMonitor
+    private var userActivityPolicyTimer: BackgroundTask?
+
+    init(userActivityMonitor: BLEUserActivityMonitor = BLEUserActivityMonitor()) {
+        self.userActivityMonitor = userActivityMonitor
         super.init()
         screenControl.willLock = { [weak self] source in
             guard let self else { return }
@@ -116,6 +120,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
     var workspaceNotificationCenterOverride: NotificationCenter?
     var heldBlankNotificationCenterOverride: NotificationCenter?
+    var screenLockStateProbe: () -> BLEScreenLockState = { ScreenLockStateReader.current() }
     private var manualLock = false
     private var pendingLockSource: ScreenLockHistorySource?
     private var pendingLockSourceExpiresAt = Date.distantPast
@@ -134,7 +139,24 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             displayAsleep: displayUnavailable,
             systemAsleep: systemSleep,
             wakeOnProximity: settings.wakeOnProximity
+        ) || BLEActiveConnectionPolicy.shouldPauseForUserInactivity(
+            wakeOnProximity: settings.wakeOnProximity,
+            userIsActive: userActivityMonitor.isUserActive(at: userActivityMonitor.now)
         )
+    }
+
+    private var activeConnectionPauseReason: String {
+        if !settings.wakeOnProximity, displayUnavailable || systemSleep { return "displayUnavailable" }
+        if BLEActiveConnectionPolicy.shouldPauseForUserInactivity(
+            wakeOnProximity: settings.wakeOnProximity,
+            userIsActive: userActivityMonitor.isUserActive(at: userActivityMonitor.now)
+        ) { return "userInputIdle" }
+        return "none"
+    }
+
+    private var automaticUnlockAllowed: Bool {
+        settings.isEnabled && presence && !manualLock && !systemSleep
+            && (settings.wakeOnProximity || !activeConnectionsPaused)
     }
     var screenLockHistory: [ScreenLockHistoryEntry] { settings.screenLockHistory.entries }
 
@@ -555,7 +577,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         log("active connection policy paused=\(paused) reason=\(reason) displaySleep=\(displaySleep) heldBlank=\(DisplayPower.isDisplayBlanked) systemSleep=\(systemSleep) wakeOnProximity=\(settings.wakeOnProximity)")
 
         if paused {
-            cancelUnlockAttempt(reason: "displayUnavailable")
+            let pauseReason = activeConnectionPauseReason
+            cancelUnlockAttempt(reason: pauseReason)
             wakeRetryTask?.cancel()
             wakeRetryTask = nil
             for runtime in monitoredRuntimes.values {
@@ -596,6 +619,26 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             }
         }
         scanForPeripherals()
+    }
+
+    func recordUserInput(at time: TimeInterval? = nil) {
+        userActivityMonitor.recordInput(at: time ?? userActivityMonitor.now)
+    }
+
+    private func handleObservedUserInput() {
+        let wasPaused = lastActiveConnectionPauseState ?? activeConnectionsPaused
+        reconcileActiveConnectionPolicy(reason: "userInput")
+        guard wasPaused else { return }
+        if !activeConnectionsPaused { tryUnlockScreen(trigger: "userInput") }
+    }
+
+    func evaluateUserActivityPolicy() {
+        let isActive = userActivityMonitor.isUserActive(at: userActivityMonitor.now)
+        let pauseReason = BLEActiveConnectionPolicy.shouldPauseForUserInactivity(
+            wakeOnProximity: settings.wakeOnProximity,
+            userIsActive: isActive
+        ) ? "userInputIdle" : "userInputActive"
+        reconcileActiveConnectionPolicy(reason: pauseReason)
     }
 
     private func applyPassiveMode() {
@@ -1064,7 +1107,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
 
     private func screenLockState() -> BLEScreenLockState {
-        ScreenLockStateReader.current()
+        screenLockStateProbe()
     }
 
     func isScreenLocked() -> Bool {
@@ -1094,6 +1137,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }
         if !settings.wakeOnProximity, displayUnavailable {
             log("unlock skipped trigger=\(trigger) reason=displayUnavailable wakeOnProximity=false")
+            return
+        }
+        if !automaticUnlockAllowed {
+            log("unlock skipped trigger=\(trigger) reason=\(activeConnectionPauseReason)")
             return
         }
         log("unlock requested trigger=\(trigger) displaySleep=\(displaySleep) inScreensaver=\(inScreensaver) lastRSSI=\(lastRSSI.map(String.init) ?? "none")")
@@ -1249,8 +1296,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 case .exhausted:
                     self.log("unlock attempt exhausted before posting deadline=\(deadline)")
                 case .postPassword(let attemptDeadline):
-                    if !self.settings.wakeOnProximity && self.displayUnavailable {
-                        self.log("unlock attempt stopped deadline=\(attemptDeadline) reason=displayUnavailable wakeOnProximity=false")
+                    guard self.automaticUnlockAllowed else {
+                        self.log("unlock attempt stopped deadline=\(attemptDeadline) reason=\(self.activeConnectionPauseReason)")
                         self.unlockAttemptSlot.release(generation: generation)
                         return
                     }
@@ -1328,7 +1375,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     private func fakeKeyStrokes(_ string: String) async {
         // The implementation lives in ScreenUnlockExecutor so the BLE proximity
         // unlock and the iPhone remote unlock type the same keystrokes.
-        await screenControl.executor.postPassword(string)
+        await screenControl.executor.postPassword(string, shouldContinue: { [weak self] in
+            self?.automaticUnlockAllowed == true
+        })
     }
 
     // MARK: Keychain password
@@ -1699,6 +1748,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             return
         }
         log("installing system observers")
+        userActivityMonitor.onInput = { [weak self] in self?.handleObservedUserInput() }
+        userActivityMonitor.start()
+        userActivityPolicyTimer = BackgroundTask.repeating(every: 5) { [weak self] in
+            self?.evaluateUserActivityPolicy()
+        }
         let nc = workspaceNotificationCenter
         observers.add(nc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -1711,14 +1765,17 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }, center: nc)
         observers.add(nc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.log("display wake notification received")
-                self?.displaySleep = false
-                self?.screenControl.noteDisplaySleeping(false)
-                self?.reconcileActiveConnectionPolicy(reason: "screensDidWake", force: true)
-                self?.recoveringFromSystemSleep = false
-                self?.wakeRetryTask?.cancel()
-                self?.startMonitoringRecovery(reason: "displayWake", restartImmediately: true)
-                self?.tryUnlockScreen(trigger: "screensDidWake")
+                guard let self else { return }
+                let hadSleepTransition = self.displaySleep || self.systemSleep
+                self.log("display wake notification received")
+                self.displaySleep = false
+                self.screenControl.noteDisplaySleeping(false)
+                self.userActivityMonitor.noteDisplayWake(fromSleep: hadSleepTransition)
+                self.reconcileActiveConnectionPolicy(reason: "screensDidWake", force: true)
+                self.recoveringFromSystemSleep = false
+                self.wakeRetryTask?.cancel()
+                self.startMonitoringRecovery(reason: "displayWake", restartImmediately: true)
+                self.tryUnlockScreen(trigger: "screensDidWake")
             }
         }, center: nc)
         observers.add(heldBlankNotificationCenter.addObserver(
@@ -1789,6 +1846,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     /// Removes the observers installed by `startObservingSystemState()`. Safe to
     /// call repeatedly; used when BLE is switched off and on app termination.
     func stopObservingSystemState() {
+        userActivityPolicyTimer?.stop()
+        userActivityPolicyTimer = nil
+        userActivityMonitor.onInput = nil
+        userActivityMonitor.stop()
         mediaResumeTask?.stop()
         mediaResumeTask = nil
         screenUnlockConfirmationTask?.stop()

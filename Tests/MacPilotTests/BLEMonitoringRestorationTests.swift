@@ -8,7 +8,7 @@ struct BLEMonitoringRestorationTests {
     @Test func absentSecondaryDoesNotResetAFreshPrimaryInAnyDeviceMode() {
         let primary = UUID()
         let secondary = UUID()
-        let model = BLEUnlockModel()
+        let model = BLEUnlockModel(userActivityMonitor: BLEUserActivityMonitor(observesEvents: false))
         defer { model.shutdown() }
         model.settings.isEnabled = true
         model.settings.deviceRelation = .any
@@ -90,10 +90,136 @@ struct BLEMonitoringRestorationTests {
             systemAsleep: false,
             wakeOnProximity: true
         ))
+        #expect(!BLEActiveConnectionPolicy.shouldPauseForUserInactivity(
+            wakeOnProximity: true,
+            userIsActive: false
+        ))
+    }
+
+    @Test func startupAndRecentInputPreventIdlePauseUntilThirtySecondsPass() {
+        var now: TimeInterval = 100
+        let monitor = BLEUserActivityMonitor(uptime: { now }, observesEvents: false)
+        monitor.start()
+        #expect(monitor.isUserActive(at: 129.9))
+        #expect(!monitor.isUserActive(at: 130))
+
+        monitor.recordInput(at: 140)
+        #expect(monitor.isUserActive(at: 169.9))
+        #expect(!monitor.isUserActive(at: 170))
+        now = 171
+        #expect(!monitor.isUserActive(at: now))
+        monitor.stop()
+        now = 200
+        monitor.start()
+        #expect(monitor.isUserActive(at: 229.9), "Re-enabling BLE starts a fresh grace window")
+    }
+
+    @Test func idleModelCancelsUnlockAndObservedInputResumesIt() {
+        var now: TimeInterval = 100
+        let activity = BLEUserActivityMonitor(uptime: { now }, observesEvents: false)
+        let model = BLEUnlockModel(userActivityMonitor: activity)
+        defer { model.shutdown() }
+        let workspaceCenter = NotificationCenter()
+        model.workspaceNotificationCenterOverride = workspaceCenter
+        model.displayUnavailableProbe = { false }
+        model.screenLockStateProbe = { .locked }
+        model.settings.isEnabled = true
+        model.settings.unlockRSSI = -70
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.startObservingSystemState()
+        #expect(activity.isMonitoring)
+        let monitored = UUID()
+        model.startMonitor(monitored)
+        model.updateMonitoredPeripheral(-50, for: monitored)
+        model.updatePresence(presence: true, reason: "test-before-idle")
+        #expect(model.isUnlockAttemptScheduled)
+
+        now = 131
+        model.evaluateUserActivityPolicy()
+        #expect(model.activeConnectionsPaused)
+        #expect(!model.isUnlockAttemptScheduled)
+
+        model.handleMonitoredSignalTimeout(for: monitored)
+        model.updateMonitoredPeripheral(-50, for: monitored)
+        #expect(model.presence)
+        #expect(!model.isUnlockAttemptScheduled, "A new presence edge during idle must not schedule unlock")
+
+        model.recordUserInput(at: now)
+        #expect(!model.activeConnectionsPaused)
+        #expect(model.isUnlockAttemptScheduled)
+
+        let taskCountBeforeObserverStop = model.diagnosticTaskCount
+        model.stopObservingSystemState()
+        #expect(!activity.isMonitoring)
+        #expect(model.diagnosticTaskCount < taskCountBeforeObserverStop)
+    }
+
+    @Test func repeatedDisplayWakeNotificationsCannotRenewIdleAllowance() {
+        var now: TimeInterval = 100
+        let activity = BLEUserActivityMonitor(uptime: { now }, observesEvents: false)
+        let model = BLEUnlockModel(userActivityMonitor: activity)
+        defer { model.shutdown() }
+        let workspaceCenter = NotificationCenter()
+        model.workspaceNotificationCenterOverride = workspaceCenter
+        model.displayUnavailableProbe = { false }
+        model.settings.isEnabled = true
+        model.startObservingSystemState()
+
+        now = 131
+        model.evaluateUserActivityPolicy()
+        #expect(model.activeConnectionsPaused)
+        workspaceCenter.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        workspaceCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        #expect(!model.activeConnectionsPaused, "A real sleep/wake transition gets one short allowance")
+
+        now = 141
+        model.evaluateUserActivityPolicy()
+        #expect(model.activeConnectionsPaused)
+        workspaceCenter.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        workspaceCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        #expect(model.activeConnectionsPaused, "A second wake in this idle epoch cannot renew the allowance")
+
+        model.recordUserInput(at: now)
+        #expect(!model.activeConnectionsPaused, "Real input restores the active connection policy")
+    }
+
+    @Test func displayWakeAllowanceIsFiniteAndCannotRenewUntilActualInput() {
+        var now: TimeInterval = 100
+        let monitor = BLEUserActivityMonitor(uptime: { now }, observesEvents: false)
+        monitor.start()
+        now = 131
+        #expect(!monitor.isUserActive(at: now))
+
+        monitor.noteDisplayWake(fromSleep: true)
+        #expect(monitor.isUserActive(at: now))
+        now = 141
+        #expect(!monitor.isUserActive(at: now))
+        monitor.noteDisplayWake(fromSleep: true)
+        #expect(!monitor.isUserActive(at: now), "Repeated wake notifications must not extend the allowance")
+
+        monitor.recordInput(at: now)
+        now = 172
+        #expect(!monitor.isUserActive(at: now))
+        monitor.noteDisplayWake(fromSleep: true)
+        #expect(monitor.isUserActive(at: now), "Actual input begins a new idle epoch")
+    }
+
+    @Test func noOpPointerAndMarkedUnlockEventsDoNotCountAsUserInput() throws {
+        let source = CGEventSource(stateID: .hidSystemState)
+        let noOp = try #require(CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: .zero, mouseButton: .left))
+        #expect(!BLEUserActivityMonitor.isGenuineUserInput(try #require(NSEvent(cgEvent: noOp))))
+
+        let movement = try #require(CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: .zero, mouseButton: .left))
+        movement.setDoubleValueField(.mouseEventDeltaX, value: 1)
+        #expect(BLEUserActivityMonitor.isGenuineUserInput(try #require(NSEvent(cgEvent: movement))))
+
+        let synthetic = try #require(CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true))
+        BLEUserActivityMonitor.markAutomaticUnlockEvent(synthetic)
+        #expect(!BLEUserActivityMonitor.isGenuineUserInput(try #require(NSEvent(cgEvent: synthetic))))
     }
 
     @Test func heldBlankNotificationPausesConnectionsCancelsUnlockAndResumesOnUnblank() {
-        let model = BLEUnlockModel()
+        let model = BLEUnlockModel(userActivityMonitor: BLEUserActivityMonitor(observesEvents: false))
         defer { model.shutdown() }
         var isBlanked = false
         let blankCenter = NotificationCenter()
@@ -138,7 +264,7 @@ struct BLEMonitoringRestorationTests {
     }
 
     @Test func systemDisplaySleepAndWakeNotificationsToggleTheModelConnectionPolicy() {
-        let model = BLEUnlockModel()
+        let model = BLEUnlockModel(userActivityMonitor: BLEUserActivityMonitor(observesEvents: false))
         defer { model.shutdown() }
         let workspaceCenter = NotificationCenter()
         model.workspaceNotificationCenterOverride = workspaceCenter
