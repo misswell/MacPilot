@@ -78,17 +78,53 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
     }
 }
 
-/// Only hidden controls are saved. New controls default to visible, and unknown
-/// keys survive a downgrade. This is a phone UI preference, shared by all Macs.
+/// Visibility and ordering are independent phone UI preferences, shared by all
+/// Macs. Unknown keys are retained so newer controls survive a downgrade.
 @MainActor
 final class RemoteControlPreferences: ObservableObject {
     private static let storageKey = "remoteControl.hiddenFeatures"
+    private static let orderStorageKey = "remoteControl.featureOrder"
     private let defaults: UserDefaults
     @Published private var hidden: Set<String>
+    @Published private var storedOrder: [String]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.hidden = Set(defaults.stringArray(forKey: Self.storageKey) ?? [])
+        self.storedOrder = defaults.stringArray(forKey: Self.orderStorageKey) ?? []
+    }
+
+    var orderedFeatures: [RemoteControlFeature] {
+        var seen = Set<RemoteControlFeature>()
+        return (storedOrder.compactMap(RemoteControlFeature.init(rawValue:))
+                + RemoteControlFeature.allCases).filter { seen.insert($0).inserted }
+    }
+
+    /// Adjacent controls of the same kind share a card, without overriding a
+    /// user's cross-category order. Keyboard is an option inside the remote UI.
+    var homeSections: [[RemoteControlFeature]] {
+        var sections: [[RemoteControlFeature]] = []
+        for feature in orderedFeatures where feature != .keyboard && isEnabled(feature) {
+            if sections.last?.last?.group == feature.group {
+                sections[sections.count - 1].append(feature)
+            } else {
+                sections.append([feature])
+            }
+        }
+        return sections
+    }
+
+    func moveFeatures(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        var features = orderedFeatures
+        guard !offsets.isEmpty, destination >= 0, destination <= features.count,
+              offsets.allSatisfy({ features.indices.contains($0) }) else { return }
+        let moving = offsets.map { features[$0] }
+        let insertion = destination - offsets.filter { $0 < destination }.count
+        for index in offsets.reversed() { features.remove(at: index) }
+        features.insert(contentsOf: moving, at: insertion)
+        let unknown = storedOrder.filter { RemoteControlFeature(rawValue: $0) == nil }
+        storedOrder = features.map(\.rawValue) + unknown
+        defaults.set(storedOrder, forKey: Self.orderStorageKey)
     }
 
     func isEnabled(_ feature: RemoteControlFeature) -> Bool {

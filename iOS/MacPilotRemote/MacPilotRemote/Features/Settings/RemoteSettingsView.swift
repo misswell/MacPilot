@@ -164,27 +164,40 @@ struct RemoteSettingsView: View {
     }
 
     private var controlSettings: some View {
-        Form {
-            ForEach(RemoteControlFeature.Group.allCases) { group in
-                Section(appModel.text(group.titleKey)) {
-                    ForEach(group.features) { feature in
-                        Toggle(isOn: Binding(
-                            get: { appModel.controlPreferences.isEnabled(feature) },
-                            set: { appModel.controlPreferences.setEnabled($0, for: feature) }
-                        )) {
-                            Label(appModel.text(feature.titleKey), systemImage: feature.icon)
+        List {
+            Section {
+                ForEach(appModel.controlPreferences.orderedFeatures) { feature in
+                    Toggle(isOn: Binding(
+                        get: { appModel.controlPreferences.isEnabled(feature) },
+                        set: { appModel.controlPreferences.setEnabled($0, for: feature) }
+                    )) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(appModel.text(feature.titleKey))
+                                Text(appModel.text(feature.group.titleKey))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: feature.icon)
                         }
-                        .toggleStyle(.switch)
-                        .accessibilityIdentifier("controlToggle.\(feature.rawValue)")
                     }
+                    .toggleStyle(.switch)
+                    .accessibilityIdentifier("controlToggle.\(feature.rawValue)")
                 }
+                .onMove(perform: appModel.controlPreferences.moveFeatures)
             }
             Section {
+                Text(appModel.text("controlsSortHint"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Text(appModel.text("controlsSettingsHint"))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
+        .listStyle(.insetGrouped)
+        .environment(\.editMode, .constant(.active))
         .navigationTitle(appModel.text("controlsSettings"))
         .navigationBarTitleDisplayMode(.inline)
     }

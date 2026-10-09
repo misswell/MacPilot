@@ -30,6 +30,7 @@ enum RemoteText {
 
     private static let chinese: [String: String] = [
         "controlsSettings": "控制功能",
+        "controlsSortHint": "长按功能行或右侧拖动手柄调整顺序，首页会按此顺序显示。键盘开关只影响遥控页面。",
         "controlsSettingsHint": "选择要显示的控制功能，关闭后会隐藏对应控件。设置保存在本机，对所有 Mac 生效。",
         "controlsGroupInput": "触控与键盘",
         "controlsGroupScreen": "屏幕操作",
@@ -256,6 +257,7 @@ enum RemoteText {
 
     private static let english: [String: String] = [
         "controlsSettings": "Control features",
+        "controlsSortHint": "Touch and hold a row or drag its handle to reorder controls on the home screen. The keyboard switch only affects the remote view.",
         "controlsSettingsHint": "Choose which controls to show. Turning a feature off hides its controls. Preferences are saved on this device and apply to all Macs.",
         "controlsGroupInput": "Trackpad & keyboard",
         "controlsGroupScreen": "Screen actions",

@@ -30,10 +30,15 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 6) {
                     deviceCard
-                    inputTools
-                    actionGrid
-                    mediaPanel
-                    if hasEnabledLevels { levelsPanel }
+                    ForEach(appModel.controlPreferences.homeSections, id: \.first) { features in
+                        switch features.first?.group {
+                        case .input: inputTools(features)
+                        case .screen: actionGrid(features)
+                        case .media: mediaPanel(features)
+                        case .levels: levelsPanel(features)
+                        case nil: EmptyView()
+                        }
+                    }
                     if !appModel.controlPreferences.hasHomeControls {
                         VStack(spacing: 12) {
                             hint(appModel.text("controlsEmpty"))
@@ -97,8 +102,7 @@ struct HomeView: View {
     }
 
     @ViewBuilder
-    private var inputTools: some View {
-        let tools = [RemoteControlFeature.desktop, .trackpad].filter(isEnabled)
+    private func inputTools(_ tools: [RemoteControlFeature]) -> some View {
         if !tools.isEmpty {
             let layout = dynamicTypeSize.isAccessibilitySize
                 ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
@@ -244,13 +248,8 @@ struct HomeView: View {
 
     // MARK: - Actions
 
-    private func isEnabled(_ feature: RemoteControlFeature) -> Bool {
-        appModel.controlPreferences.isEnabled(feature)
-    }
-
     @ViewBuilder
-    private var actionGrid: some View {
-        let actions = RemoteControlFeature.Group.screen.features.filter(isEnabled)
+    private func actionGrid(_ actions: [RemoteControlFeature]) -> some View {
         if !actions.isEmpty {
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(actions) { feature in
@@ -263,8 +262,7 @@ struct HomeView: View {
     }
 
     @ViewBuilder
-    private var mediaPanel: some View {
-        let actions = RemoteControlFeature.Group.media.features.filter(isEnabled)
+    private func mediaPanel(_ actions: [RemoteControlFeature]) -> some View {
         if !actions.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 let layout = dynamicTypeSize.isAccessibilitySize
@@ -291,7 +289,8 @@ struct HomeView: View {
         } label: {
             ControlKeyLabel(title: appModel.text(feature.titleKey), icon: feature.icon,
                             enabled: commandEnabled(feature),
-                            running: appModel.runningCommand == feature.command)
+                            running: appModel.runningCommand == feature.command,
+                            showsTitle: feature != .mediaPlayPause)
         }
         .buttonStyle(ControlKeyStyle(prominent: feature == .mediaPlayPause))
         .disabled(!commandEnabled(feature))
@@ -328,25 +327,41 @@ struct HomeView: View {
     /// Unknown levels retain a labeled row with an unavailable indicator, never
     /// a guessed zero or an interactive slider. The deck stays stable as the
     /// first state arrives after connecting.
-    private var enabledLevelKinds: [RemoteLevelKind] {
-        RemoteLevelKind.allCases.filter { kind in
-            kind == .volume ? (isEnabled(.volume) || isEnabled(.mute)) : isEnabled(.brightness)
-        }
-    }
-
-    private var hasEnabledLevels: Bool { !enabledLevelKinds.isEmpty }
-
-    private var levelsPanel: some View {
+    private func levelsPanel(_ features: [RemoteControlFeature]) -> some View {
         VStack(spacing: 4) {
-            ForEach(enabledLevelKinds, id: \.self) { kind in
-                LevelSliderRow(kind: kind, value: kind.value(in: appModel.macState))
-                if kind != enabledLevelKinds.last { Divider() }
+            ForEach(features) { feature in
+                if feature == .mute {
+                    muteControl
+                } else {
+                    let kind: RemoteLevelKind = feature == .brightness ? .brightness : .volume
+                    LevelSliderRow(kind: kind, value: kind.value(in: appModel.macState))
+                }
+                if feature != features.last { Divider() }
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .controlDeckCard()
+    }
+
+    private var muteControl: some View {
+        let volume = RemoteLevelKind.volume.value(in: appModel.macState)
+        let available = appModel.connectionState.isConnected
+            && volume != nil && appModel.volumeMuted != nil
+        let isMuted = appModel.volumeMuted == true
+        return Button {
+            guard let volume, available else { return }
+            appModel.setLevel(.volume, value: volume, muted: !isMuted)
+            Haptics.impact()
+        } label: {
+            ControlKeyLabel(title: appModel.text(isMuted ? "unmute" : "mute"),
+                            icon: isMuted ? "speaker.slash" : "speaker.wave.2",
+                            enabled: available, tint: isMuted ? .orange : .accentColor)
+        }
+        .buttonStyle(ControlKeyStyle(prominent: false))
+        .disabled(!available)
+        .accessibilityIdentifier("control.mute")
     }
 
     private func hint(_ text: String) -> some View {
@@ -484,7 +499,6 @@ private struct LevelSliderRow: View {
     /// The value the Mac last reported, used whenever the finger is up.
     let value: Double?
 
-    @ScaledMetric(relativeTo: .subheadline) private var muteKeyWidth: CGFloat = 84
     @ScaledMetric(relativeTo: .subheadline) private var levelIconWidth: CGFloat = 20
 
     @State private var draft: Double = 0
@@ -492,10 +506,6 @@ private struct LevelSliderRow: View {
 
     private var isMuted: Bool {
         kind == .volume && appModel.volumeMuted == true
-    }
-
-    private var showsSlider: Bool {
-        kind != .volume || appModel.controlPreferences.isEnabled(.volume)
     }
 
     var body: some View {
@@ -509,7 +519,7 @@ private struct LevelSliderRow: View {
                     .font(.subheadline)
                     .frame(width: levelIconWidth)
                     .foregroundStyle(isMuted ? Color.orange : Color.accentColor)
-                if showsSlider, value != nil {
+                if value != nil {
                     Slider(value: $draft, in: 0...1, step: 0.01) { editing in
                         isEditing = editing
                         if !editing { send(draft) }
@@ -528,21 +538,11 @@ private struct LevelSliderRow: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
-                    if showsSlider {
-                        Text("—").foregroundStyle(.tertiary)
-                            .accessibilityLabel(appModel.text("levelsUnavailableShort"))
-                    }
-                }
-                if kind == .volume, appModel.controlPreferences.isEnabled(.mute),
-                   !dynamicTypeSize.isAccessibilitySize {
-                    muteButton.disabled(value == nil || appModel.volumeMuted == nil)
+                    Text("—").foregroundStyle(.tertiary)
+                        .accessibilityLabel(appModel.text("levelsUnavailableShort"))
                 }
             }
             .frame(minHeight: 44)
-            if kind == .volume, appModel.controlPreferences.isEnabled(.mute),
-               dynamicTypeSize.isAccessibilitySize {
-                muteButton.disabled(value == nil || appModel.volumeMuted == nil)
-            }
         }
         .onAppear { if let value { draft = value } }
         .onChange(of: draft) { _, newValue in
@@ -553,22 +553,6 @@ private struct LevelSliderRow: View {
             guard !isEditing, let newValue else { return }
             draft = newValue
         }
-    }
-
-    private var muteButton: some View {
-        let available = value != nil && appModel.volumeMuted != nil
-        return Button {
-            appModel.setLevel(kind, value: draft, muted: !isMuted)
-            Haptics.impact()
-        } label: {
-            ControlKeyLabel(title: appModel.text(isMuted ? "unmute" : "mute"),
-                            icon: isMuted ? "speaker.slash" : "speaker.wave.2",
-                            enabled: available, tint: isMuted ? .orange : .accentColor)
-                .frame(width: dynamicTypeSize.isAccessibilitySize ? nil : muteKeyWidth)
-        }
-        .buttonStyle(ControlKeyStyle(prominent: false))
-        .accessibilityLabel(appModel.text(isMuted ? "unmute" : "mute"))
-        .accessibilityIdentifier("control.mute")
     }
 
     /// Raising the volume clears mute, exactly like the Mac's own volume keys;
@@ -589,21 +573,26 @@ private struct ControlKeyLabel: View {
     let icon: String
     let enabled: Bool
     var running = false
+    var showsTitle = true
     var tint: Color = .accentColor
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
             ZStack {
+                Image(systemName: icon)
+                    .font(.system(size: iconSize, weight: .medium))
+                    .opacity(running ? 0.35 : 1)
                 if running { ProgressView() }
-                else { Image(systemName: icon).font(.system(size: iconSize, weight: .medium)) }
             }
             .frame(width: iconSize, height: iconSize)
             .foregroundStyle(enabled ? tint : .secondary)
-            Text(title)
-                .font(.subheadline.weight(.medium))
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .foregroundStyle(enabled ? Color.primary : .secondary)
+            if showsTitle {
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(enabled ? Color.primary : .secondary)
+            }
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)

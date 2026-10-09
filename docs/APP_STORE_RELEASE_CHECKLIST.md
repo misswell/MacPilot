@@ -81,3 +81,13 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - `codesign --verify --deep --strict` 通过；profile 的 `get-task-allow=false`、无设备名单、无企业分发标记；bundle/team/application identifier 一致，签名 entitlements 由 profile 授权。Xcode 自动导出因本机没有 Xcode 账户/profile 而失败，沿用本机重新验证过的有效 App Store profile 做一次性手动导出；仓库自动签名设置未更改。
 - ASC Build ID：`e1dfded8-ae02-4474-9638-717d080e2be9`，处理状态 `VALID`，TestFlight `internalBuildState=IN_BETA_TESTING`。已核对内部组“内部”（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`，`isInternalGroup=true`、`hasAccessToAllBuilds=true`），build relationship 中包含此 Build ID。
 - 仅加入现有内部 TestFlight 组；未提交 App Store Review，未发起外部 Beta Review，也未新增测试员。`VALID` 只表示构建处理成功，不代表 App Store 审核通过。
+
+## 2026-10-09：1.2.2 / 构建 31 TestFlight 内部分发
+
+- 最终 IPA：`/Users/guofeng/Downloads/PilotNest-1.2.2-31.ipa`；bundle `com.misswell.macpilot.remote`，版本/构建号 `1.2.2 (31)`，Team ID `U8U443D7ZL`。
+- IPA SHA-256：`ada87b8b47c34292af0bcab0472d6cdb0637abbc3e8482503c01cd493aa99915`。
+- Signer leaf DER SHA-256：`62e7580e4e86da3c0c5a015e89f2074bb8439ecc34148575ed3d88499a233704`；profile UUID：`df12e579-3dec-4e63-b2df-86c5e2d37281`，有效至 `2027-07-20T01:28:32Z`。最终 IPA 的签名叶证书 DER 与 profile 内 `DeveloperCertificates[0]` 完全相同。
+- `codesign --verify --deep --strict` 通过；profile 的 `get-task-allow=false`、无设备名单、无企业分发标记；bundle/team/application identifier 一致，签名 entitlements 由 profile 授权。`ITSAppUsesNonExemptEncryption=false`。Xcode 自动导出因本机没有 Xcode 账户/profile 而失败，使用重新验证过的有效 App Store profile 做一次性手动导出；仓库自动签名设置未更改。
+- Generic iOS Simulator `build-for-testing` 编译通过（未启动模拟器或 App）；隔离 SwiftPM harness 对实际 `RemoteControlPreferences.swift` 与测试源码运行 8 项偏好排序纯测试，全部通过（0 failures）。
+- ASC Build ID：`c2e84358-c900-4254-9db8-71c4eedfa263`，处理状态 `VALID`，内部测试状态 `IN_BETA_TESTING`，`autoNotifyEnabled=true`。已核对现有内部组“内部”（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`）的 build relationship 包含本次构建，中英文 What to Test 已更新并读回。
+- 仅分发给现有内部组；未提交 App Store Review，未发起外部 Beta Review，也未新增测试员。`VALID` 表示构建处理成功，不代表 App Store 审核批准。

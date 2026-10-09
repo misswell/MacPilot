@@ -264,16 +264,25 @@ The Mac advertises `mediaControl` only to clients that declare that feature.
 channel and dispatch a system media-key down/up pair. They require Accessibility
 permission and control the Mac's active media app, like a keyboard's media keys.
 A successful response acknowledges event dispatch; it does not claim that a
-player has started or stopped. Phones connected to older Macs disable the keys
+player has started or stopped. The play/pause button therefore always shows the
+combined icon without a visible caption; its full VoiceOver label remains. Do
+not infer playback state from button presses. A future reliable state source
+may show the state-specific icon and text, but unknown state must remain icon-only.
+Phones connected to older Macs disable the keys
 and show an update hint without sending unfamiliar command values.
 
 PilotNest Settings → Control features provides individual switches for remote
 screen, trackpad, keyboard, all four screen actions, all three media keys,
 brightness, volume, and mute. They default to visible and persist on the phone
-across launches and Mac switches. Hidden-key storage preserves unknown keys
-across downgrades. Keyboard off also suppresses automatic editable-field probes.
-Volume and mute can be shown independently. The home screen separates the Mac
-switcher from input tools and places four compact screen keys in a row. Screen
+across launches and Mac switches. The native settings list supports long-press
+drag reordering across categories, with permanent reorder handles. Order is
+stored separately from visibility; hidden controls retain their positions and
+new controls are appended in their default order. Unknown visibility/order keys
+survive downgrades. Keyboard off also suppresses automatic editable-field probes;
+its position does not create a separate home entry. Volume and mute can be shown
+and ordered independently. The home screen keeps the Mac switcher first, then
+renders visible controls in the saved order, grouping only adjacent controls of
+the same kind into a card. Screen
 key content is centered in equal-height, Dynamic Type-scaled keys; single-line
 captions do not reserve an invisible second line. Input, screen, media, and mute
 keys reuse the same surfaces and press feedback, and all groups share one
