@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreImage.CIFilterBuiltins
 
 /// MacPilot settings page for the iPhone local-network remote control.
 ///
@@ -20,6 +21,7 @@ struct RemoteControlSettingsView: View {
             VStack(alignment: .leading, spacing: 24) {
                 header
                 deviceCard
+                mobileAppCard
                 if deviceStore.settings.isEnabled {
                     pairingCard
                     devicesCard
@@ -63,6 +65,45 @@ struct RemoteControlSettingsView: View {
                     .disabled(deviceNameDraft.trimmingCharacters(in: .whitespacesAndNewlines) == deviceStore.deviceName)
             }
             Text(t("remoteDeviceNameHint")).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - PilotNest for iPhone
+
+    private var mobileAppCard: some View {
+        SettingsCard {
+            HStack(alignment: .center, spacing: 16) {
+                if let qrCode = PilotNestAppStoreInfo.qrCode {
+                    Image(nsImage: qrCode)
+                        .resizable()
+                        .interpolation(.none)
+                        .frame(width: 112, height: 112)
+                        .padding(8)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .accessibilityLabel(t("remoteMobileAppQRCodeLabel"))
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(t("remoteMobileAppTitle")).font(.headline)
+                    Text(t("remoteMobileAppHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Link(destination: PilotNestAppStoreInfo.appStoreURL) {
+                        Label(t("remoteMobileAppStoreLink"), systemImage: "arrow.up.right.square")
+                    }
+                    .buttonStyle(.bordered)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(t("remoteMobileAppSearchLabel"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(t("remoteMobileAppSearchTerms"))
+                            .font(.caption)
+                            .textSelection(.enabled)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -253,4 +294,19 @@ struct RemoteControlSettingsView: View {
     private func t(_ key: String, _ arguments: CVarArg...) -> String {
         AppText.value(key, language: model.language, arguments: arguments)
     }
+}
+
+enum PilotNestAppStoreInfo {
+    static let appStoreURL = URL(string: "https://apps.apple.com/app/pilotnest/id6811335132")!
+
+    static let qrCode: NSImage? = {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(appStoreURL.absoluteString.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage,
+              let cgImage = CIContext().createCGImage(output, from: output.extent) else {
+            return nil
+        }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }()
 }

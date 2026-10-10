@@ -51,7 +51,7 @@ jobs:
           echo "Building MacPilot $version ($build_number)"
 
       - name: Run tests
-        run: swift test --filter 'UpdateChannelTests|SoftwareUpdateTests|SigningRequirementTests|ScreenRecordingTests|Awake|ClosedLid|SleepDisabledPlannerTests|BLEIdentity|ConfigurationSchemaContractTests|BLEUnlockPerformanceTests|BLEAdvertisementLivenessTests|RemoteBLEBackoffTests|ScreenControlSafetyTests|RemoteNavigationControlTests|Clipboard|SecondarySelectionRegressionTests'
+        run: swift test --filter 'UpdateChannelTests|SoftwareUpdateTests|SigningRequirementTests|ScreenRecordingTests|Awake|ClosedLid|SleepDisabledPlannerTests|BLEIdentity|ConfigurationSchemaContractTests|BLEUnlockPerformanceTests|BLEAdvertisementLivenessTests|RemoteBLEBackoffTests|ScreenControlSafetyTests|RemoteNavigationControlTests|Clipboard|SecondarySelectionRegressionTests|RemoteControlAppStoreInfoTests'
 
       - name: Package app bundle
         env:
