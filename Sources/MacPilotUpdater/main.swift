@@ -148,7 +148,7 @@ private func install(_ arguments: UpdaterArguments) throws {
     let backupName = ".MacPilot-backup-\(token).app"
     let backup = parent.appendingPathComponent(backupName)
     let journal = FinderSyncRecoveryJournal.standard
-    var rollbackFailed = false
+    var applicationRollbackFailed = false
 
     do {
         try FinderSyncRegistration.withSuspendedElection(
@@ -188,14 +188,18 @@ private func install(_ arguments: UpdaterArguments) throws {
                             } else {
                                 try fileManager.moveItem(at: backup, to: arguments.destinationApplication)
                             }
+                        } catch {
+                            applicationRollbackFailed = true
+                            appendLog("Application update rollback failed: \(error.localizedDescription)", to: arguments.logURL)
+                            throw error
+                        }
+                        do {
                             try refreshFinderSyncRegistration(
                                 at: arguments.destinationApplication,
                                 logURL: arguments.logURL
                             )
                         } catch {
-                            rollbackFailed = true
-                            appendLog("FinderSync update rollback failed: \(error.localizedDescription)", to: arguments.logURL)
-                            throw error
+                            appendLog("FinderSync rollback registration failed: \(error.localizedDescription)", to: arguments.logURL)
                         }
                     }
                     throw installationError
@@ -205,8 +209,10 @@ private func install(_ arguments: UpdaterArguments) throws {
     } catch {
         appendLog("Update failed: \(error.localizedDescription)", to: arguments.logURL)
         let recoveryPending = fileManager.fileExists(atPath: journal.fileURL.path)
-        if !rollbackFailed,
-           fileManager.fileExists(atPath: arguments.destinationApplication.path) {
+        if UpdaterLaunchPlan.shouldRelaunchAfterFailedUpdate(
+            destinationExists: fileManager.fileExists(atPath: arguments.destinationApplication.path),
+            applicationRollbackFailed: applicationRollbackFailed
+        ) {
             if recoveryPending {
                 appendLog(
                     "Launching MacPilot with pending FinderSync recovery; extension restoration remains unconfirmed.",

@@ -6,6 +6,13 @@ import Foundation
 /// the shared target makes the updater's relaunch contract directly testable
 /// without launching a real application from a test.
 public enum UpdaterLaunchPlan {
+    public static func shouldRelaunchAfterFailedUpdate(
+        destinationExists: Bool,
+        applicationRollbackFailed: Bool
+    ) -> Bool {
+        destinationExists && !applicationRollbackFailed
+    }
+
     public static func directExecutableURL(
         for application: URL,
         executableName: String = "MacPilot"

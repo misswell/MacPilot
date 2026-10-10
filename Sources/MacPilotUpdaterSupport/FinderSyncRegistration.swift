@@ -209,7 +209,7 @@ public enum FinderSyncRegistration {
 
         var pathsToRemove: [String] = []
         var seen = Set<String>()
-        for path in registeredExtensionPaths + [extensionPath] {
+        for path in registeredExtensionPaths {
             let path = path.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !path.isEmpty, seen.insert(path).inserted else { continue }
             pathsToRemove.append(path)

@@ -17,6 +17,27 @@ struct UpdaterLaunchPlanTests {
             ).path == "/Applications/OctoPilot.app/Contents/MacOS/OctoPilot"
         )
     }
+
+    @Test func finderSyncRecoveryFailureDoesNotBlockRelaunchOfRestoredApplication() {
+        #expect(
+            UpdaterLaunchPlan.shouldRelaunchAfterFailedUpdate(
+                destinationExists: true,
+                applicationRollbackFailed: false
+            )
+        )
+        #expect(
+            !UpdaterLaunchPlan.shouldRelaunchAfterFailedUpdate(
+                destinationExists: true,
+                applicationRollbackFailed: true
+            )
+        )
+        #expect(
+            !UpdaterLaunchPlan.shouldRelaunchAfterFailedUpdate(
+                destinationExists: false,
+                applicationRollbackFailed: false
+            )
+        )
+    }
 }
 
 struct FinderSyncRegistrationTests {
@@ -219,14 +240,16 @@ struct FinderSyncRegistrationTests {
 
     @Test func enabledExtensionRestoresUseElectionAfterReplacement() {
         let appURL = URL(fileURLWithPath: "/Applications/MacPilot.app")
+        let extensionPath = "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"
 
         #expect(
             FinderSyncRegistration.registrationArguments(
                 for: appURL,
+                registeredExtensionPaths: [extensionPath],
                 restoreEnabledElection: true
             ) == [
-                ["-r", "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"],
-                ["-a", "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"],
+                ["-r", extensionPath],
+                ["-a", extensionPath],
                 ["-e", "use", "-i", FinderSyncRegistration.extensionBundleIdentifier]
             ]
         )
@@ -234,15 +257,28 @@ struct FinderSyncRegistrationTests {
 
     @Test func disabledExtensionIsNotSilentlyReenabled() {
         let appURL = URL(fileURLWithPath: "/Applications/MacPilot.app")
+        let extensionPath = "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"
 
         #expect(
             FinderSyncRegistration.registrationArguments(
                 for: appURL,
                 restoreEnabledElection: false
             ) == [
-                ["-r", "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"],
-                ["-a", "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"]
+                ["-a", extensionPath]
             ]
+        )
+    }
+
+    @Test func unregisteredExtensionIsAddedWithoutTryingToRemoveIt() {
+        let appURL = URL(fileURLWithPath: "/Applications/MacPilot.app")
+        let extensionPath = "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"
+
+        #expect(
+            FinderSyncRegistration.registrationArguments(
+                for: appURL,
+                registeredExtensionPaths: [],
+                restoreEnabledElection: false
+            ) == [["-a", extensionPath]]
         )
     }
 
