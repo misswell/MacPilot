@@ -451,7 +451,16 @@ struct ScreenCaptureTests {
         context.setFillColor(NSColor.systemBlue.cgColor)
         context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
         let pasteboard = NSPasteboard(name: .init("MacPilotTests-\(UUID().uuidString)"))
-        SmartCaptureClipboard.copy(image: try #require(context.makeImage()), to: pasteboard)
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacPilotTests-\(UUID().uuidString)", isDirectory: true)
+        let cacheURL = cacheDirectory.appendingPathComponent("LastScreenCapture.png")
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+
+        SmartCaptureClipboard.copy(
+            image: try #require(context.makeImage()),
+            to: pasteboard,
+            cacheURL: cacheURL
+        )
         #expect(pasteboard.data(forType: .png) != nil)
         #expect(pasteboard.pasteboardItems?.contains { $0.types.contains(.fromMacPilot) } == true)
     }

@@ -122,6 +122,15 @@ Everything persisted under `StoredConfiguration` (`config.json` + sidecar files)
 - **Section isolation:** `StoredConfiguration.init(from:)` decodes every section through its `section(...)` helper; one unreadable section falls back to that section's defaults and is recorded in `unreadableSections` so `load()` quarantines the raw file before any save. Do not bypass this helper for persisted sections.
 - **The tripwire test** `Tests/MacPilotTests/ConfigurationSchemaContractTests.swift` asserts every persisted type still encodes its historical key set (append-only). A failing contract means your change would strand downgrades — keep the key, don't delete the assertion.
 
+## Clipboard history and preview (invariant)
+
+- Pass the configured `storageLimit` into `ClipboardHistory` before it loads/trims persisted records. Applying a limit after initialization can permanently discard history and its content files using the default limit.
+- History does not expire solely because of age. Keep count/2 GiB content limits and duplicate merging; disclose those behaviors in both UI languages. Do not remove persisted settings keys.
+- Preview visibility changes resize only the panel's right edge without AppKit or SwiftUI animation. Keep the one-second hover delay and the short row-to-preview grace period; do not retain a second delayed collapse layout.
+- Validate with the isolated `Clipboard` suites, including Model settings → first history load → flush/reload. Never modify the user's live history or general pasteboard during tests.
+- Multi-display selection tests must reach `SnapzyAreaSelectionController` and `FrozenAreaCaptureSession`, not only legacy crop helpers. Inject presentation/cursor effects so test windows stay hidden. A passing direct-handler test does not establish that WindowServer's real pointer-event routing is correct.
+- Smart-element resolvers return screen coordinates; overlay selection delegates accept view-local coordinates. Convert exactly once at each boundary, including content-view insets. Cover recognized-element single clicks as well as manual/smart drags on a nonzero-origin display.
+
 ## Project Summary
 
 The repo-root `SUMMARY.md` is the project's Chinese development summary (features, release flow, pitfalls). Consult it for fuller context beyond this contributor guide.

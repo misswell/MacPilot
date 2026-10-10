@@ -27,7 +27,7 @@ final class ClipboardHistory: ObservableObject {
         didSet { updateFilteredItems() }
     }
 
-    var storageLimit: Int = 100 {
+    var storageLimit: Int {
         didSet {
             guard storageLimit != oldValue else { return }
             trimToLimit()
@@ -46,8 +46,11 @@ final class ClipboardHistory: ObservableObject {
 
     private let storage: ClipboardHistoryStorage
 
-    init(storageURL: URL? = nil) {
+    init(storageURL: URL? = nil, storageLimit: Int = 100) {
         self.storage = ClipboardHistoryStorage(storageURL: storageURL)
+        // Loading can evict records and their files. Apply the user's limit
+        // before that first trim, not after destructive initialization.
+        self.storageLimit = ClipboardSettings.clampedStorageLimit(storageLimit)
         load()
     }
 
@@ -97,6 +100,7 @@ final class ClipboardHistory: ObservableObject {
         storage.flush(allItems)
     }
 
+    /// Enforce count/byte bounds during idle time too; age alone never expires history.
     func pruneExpiredContent(now: Date = .now) {
         let previousCount = allItems.count
         trimToLimit(now: now)

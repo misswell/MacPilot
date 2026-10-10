@@ -104,11 +104,56 @@ struct ClipboardPreviewTests {
 
         clock.fireNext()
         #expect(signals == [true, false])
-        // 详情列要等收起动画放完才从布局里移除，窗口才不会突然缺一块。
-        #expect(controller.item?.id == item.id)
-
-        clock.fireNext()
         #expect(controller.item == nil)
+    }
+
+    @Test func detailsAreRemovedAsSoonAsTheHideGracePeriodEnds() {
+        let (controller, clock) = makeController()
+        let item = makeTextItem("hello")
+        var visibilityChanges: [Bool] = []
+        controller.onVisibilityChange = { visibilityChanges.append($0) }
+
+        controller.beginHover(item)
+        clock.fireNext()
+        controller.endHover(item)
+        clock.fireNext()
+
+        #expect(visibilityChanges == [true, false])
+        #expect(controller.item == nil)
+    }
+
+    @Test func previewResizingKeepsListOriginAndHeightStableOnNarrowDisplays() {
+        let wideFrame = NSRect(x: -1_000, y: 140, width: ClipboardPanelLayout.listColumnWidth, height: 340)
+        let wideVisibleFrame = NSRect(x: -1_920, y: 0, width: 3_840, height: 1_080)
+        let expanded = ClipboardPanelLayout.resizedFrame(
+            wideFrame,
+            showsPreview: true,
+            visibleFrame: wideVisibleFrame
+        )
+
+        #expect(expanded.origin == wideFrame.origin)
+        #expect(expanded.height == wideFrame.height)
+        #expect(expanded.width == ClipboardPanelLayout.width(showsPreview: true))
+
+        let collapsed = ClipboardPanelLayout.resizedFrame(
+            expanded,
+            showsPreview: false,
+            visibleFrame: wideVisibleFrame
+        )
+        #expect(collapsed.origin == wideFrame.origin)
+        #expect(collapsed.size == wideFrame.size)
+
+        let narrowFrame = NSRect(x: -200, y: 90, width: ClipboardPanelLayout.listColumnWidth, height: 320)
+        let narrowVisibleFrame = NSRect(x: -400, y: 0, width: 700, height: 800)
+        let narrowExpanded = ClipboardPanelLayout.resizedFrame(
+            narrowFrame,
+            showsPreview: true,
+            visibleFrame: narrowVisibleFrame
+        )
+
+        #expect(narrowExpanded.origin == narrowFrame.origin)
+        #expect(narrowExpanded.height == narrowFrame.height)
+        #expect(narrowExpanded.width == narrowVisibleFrame.maxX - narrowFrame.minX - 12)
     }
 
     @Test func slidingToTheNextRecordRetargetsThePreview() {
@@ -127,7 +172,7 @@ struct ClipboardPreviewTests {
         controller.beginHover(second)
         controller.endHover(first)
         #expect(signals == [true, false])
-        #expect(controller.item?.id == first.id)
+        #expect(controller.item == nil)
 
         clock.fireAll()
         #expect(controller.item?.id == second.id)

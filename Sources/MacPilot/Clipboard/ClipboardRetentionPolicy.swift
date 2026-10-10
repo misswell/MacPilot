@@ -1,20 +1,18 @@
 import Foundation
 
 enum ClipboardRetentionPolicy {
-    static let maximumAge: TimeInterval = 30 * 24 * 60 * 60
     static let maximumBytes: UInt64 = 2 * 1_024 * 1_024 * 1_024
 
     static func retainedIDs(
         from items: [ClipboardItem],
         countLimit: Int,
-        now: Date = .now,
+        now _: Date = .now,
         maximumBytes: UInt64 = maximumBytes
     ) -> Set<UUID> {
-        let cutoff = now.addingTimeInterval(-maximumAge)
-        // Pins survive the age limit, but the overall size limit remains hard.
-        let eligible = items.filter { $0.isPinned || $0.lastCopiedAt >= cutoff }
-        let pinned = eligible.filter(\.isPinned)
-        let unpinned = eligible.filter { !$0.isPinned }
+        // The setting is a record-count limit, not an undisclosed expiry date.
+        // Keep older history until count/byte bounds require eviction.
+        let pinned = items.filter(\.isPinned)
+        let unpinned = items.filter { !$0.isPinned }
         let countBounded = pinned + unpinned.prefix(max(0, countLimit - pinned.count))
         var retained = Set(countBounded.map(\.id))
         var totalBytes = countBounded.reduce(UInt64.zero) { $0 &+ byteCount(of: $1) }

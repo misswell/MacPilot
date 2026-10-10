@@ -2406,10 +2406,7 @@ final class AreaSelectionOverlayView: NSView {
 
     let screenPoint: CGPoint
     if let window {
-      screenPoint = CGPoint(
-        x: window.frame.minX + point.x,
-        y: window.frame.minY + point.y
-      )
+      screenPoint = window.convertPoint(toScreen: convert(point, to: nil))
     } else {
       screenPoint = point
     }
@@ -2839,7 +2836,8 @@ final class AreaSelectionOverlayView: NSView {
       } else {
         updateElementHover(at: point, immediately: true)
         if let hoveredElementRect {
-          delegate?.overlayView(self, didSelectRect: hoveredElementRect)
+          // The resolver returns screen coordinates; the delegate accepts view coordinates.
+          delegate?.overlayView(self, didSelectRect: convertToLocalRect(hoveredElementRect))
         }
       }
     case .applicationWindow:

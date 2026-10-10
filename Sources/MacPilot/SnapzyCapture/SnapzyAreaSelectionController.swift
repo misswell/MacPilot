@@ -41,6 +41,20 @@ nonisolated struct SmartCaptureOutputStyle: Equatable, Sendable {
 final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate {
     static let shared = SnapzyAreaSelectionController()
 
+    /// Tests exercise real multi-display selection without presenting windows
+    /// or changing the user's cursor. The shipping instance uses AppKit.
+    private let presentationEffect: (([AreaSelectionWindow]) -> Void)?
+    private let cursorSetEffect: (NSCursor) -> Void
+
+    init(
+        presentationEffect: (([AreaSelectionWindow]) -> Void)? = nil,
+        cursorSetEffect: @escaping (NSCursor) -> Void = { $0.set() }
+    ) {
+        self.presentationEffect = presentationEffect
+        self.cursorSetEffect = cursorSetEffect
+        super.init()
+    }
+
     private var windows: [AreaSelectionWindow] = []
     private var completion: AreaSelectionResultCompletion?
     private var selectionPreview: ((AreaSelectionResult) -> Void)?
@@ -76,6 +90,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
     }
 
     private override init() {
+        presentationEffect = nil
+        cursorSetEffect = { $0.set() }
         super.init()
     }
 
@@ -161,18 +177,22 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             }
         }
 
-        let pointer = NSEvent.mouseLocation
-        let activeWindow = windows.first(where: { $0.frame.contains(pointer) }) ?? windows.first
-        // Order the non-active display panels first, then present the panel
-        // under the pointer with one combined order+key operation. Keeping
-        // those operations together avoids a WindowServer composition frame
-        // where the shortcut overlay is visible but not yet the key window.
-        for window in windows where window !== activeWindow {
-            window.orderFrontRegardless()
+        if let presentationEffect {
+            presentationEffect(windows)
+        } else {
+            let pointer = NSEvent.mouseLocation
+            let activeWindow = windows.first(where: { $0.frame.contains(pointer) }) ?? windows.first
+            // Order the non-active display panels first, then present the panel
+            // under the pointer with one combined order+key operation. Keeping
+            // those operations together avoids a WindowServer composition frame
+            // where the shortcut overlay is visible but not yet the key window.
+            for window in windows where window !== activeWindow {
+                window.orderFrontRegardless()
+            }
+            activeWindow?.makeKeyAndOrderFront(nil)
+            activeWindow?.activateKeyboardInputIfNeeded()
         }
-        activeWindow?.makeKeyAndOrderFront(nil)
-        activeWindow?.activateKeyboardInputIfNeeded()
-        NSCursor.crosshair.set()
+        cursorSetEffect(.crosshair)
         return sessionID
     }
 
@@ -220,7 +240,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             window.orderOut(nil)
             window.close()
         }
-        NSCursor.arrow.set()
+        cursorSetEffect(.arrow)
     }
 
     /// Closes a post-selection HUD after an action has been handed to the
@@ -247,7 +267,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             window.orderOut(nil)
             window.close()
         }
-        NSCursor.arrow.set()
+        cursorSetEffect(.arrow)
     }
 
     private func complete(_ result: AreaSelectionResult?) {
@@ -276,7 +296,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             window.orderOut(nil)
             window.close()
         }
-        NSCursor.arrow.set()
+        cursorSetEffect(.arrow)
         completion(result)
     }
 

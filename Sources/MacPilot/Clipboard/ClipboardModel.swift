@@ -51,10 +51,10 @@ final class ClipboardModel: ObservableObject, ManagedFeature, FeatureResourceRep
     var language: AppLanguage = .system
 
     private var historyStorage: ClipboardHistory?
+    private let historyStorageURL: URL?
     var history: ClipboardHistory {
         if let historyStorage { return historyStorage }
-        let loaded = ClipboardHistory()
-        loaded.storageLimit = settings.storageLimit
+        let loaded = ClipboardHistory(storageURL: historyStorageURL, storageLimit: settings.storageLimit)
         loaded.pinsAtTop = settings.pinsAtTop
         historyObservation = loaded.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
@@ -84,7 +84,8 @@ final class ClipboardModel: ObservableObject, ManagedFeature, FeatureResourceRep
     private var observations: [AnyCancellable] = []
     private var historyObservation: AnyCancellable?
 
-    init() {
+    init(historyStorageURL: URL? = nil) {
+        self.historyStorageURL = historyStorageURL
         // The history JSON and image references are loaded on first use, not
         // every time a menu-bar process launches with Clipboard disabled.
         observations = [preview.objectWillChange.sink { [weak self] _ in

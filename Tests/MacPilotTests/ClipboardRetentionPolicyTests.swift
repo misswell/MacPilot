@@ -15,15 +15,15 @@ struct ClipboardRetentionPolicyTests {
         return item
     }
 
-    @Test func oldUnpinnedHistoryExpiresButPinsRemain() {
+    @Test func oldUnpinnedHistoryRemainsBelowCountAndByteLimits() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let old = item(ageInDays: 31, size: 10)
         let pinned = item(ageInDays: 31, size: 10, pinned: true)
         let recent = item(ageInDays: 1, size: 10)
         let kept = ClipboardRetentionPolicy.retainedIDs(
-            from: [old, pinned, recent], countLimit: 10, now: now
+            from: [old, pinned, recent], countLimit: 10, now: now, maximumBytes: 1_024
         )
-        #expect(kept == [pinned.id, recent.id])
+        #expect(kept == [old.id, pinned.id, recent.id])
     }
 
     @Test func sizeLimitEvictsOldestUnpinnedFirst() {

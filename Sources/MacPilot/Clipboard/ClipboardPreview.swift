@@ -135,9 +135,6 @@ final class ClipboardPreviewController: ObservableObject {
     /// 指针离开某一行后给一点余量：划进右侧详情列不该把详情收掉（那里可以选文字），
     /// 但划向另一行会立刻收起并重新计时，所以余量不会被感知成迟钝。
     static let hideGrace: TimeInterval = 0.15
-    /// 与 `NSWindow.setFrame(animate:)` 的时长对齐：收起动画放完后才把详情列从
-    /// 布局里移除，否则内容会在窗口缩回去之前突然消失。
-    static let collapseDuration: TimeInterval = 0.25
 
     /// 到点后要执行的动作。
     typealias Work = @MainActor @Sendable () -> Void
@@ -164,7 +161,6 @@ final class ClipboardPreviewController: ObservableObject {
     /// 对不上就自行作废。注入的计时器因此只需要「延时后调用」，不需要支持取消。
     private var openToken = UUID()
     private var hideToken = UUID()
-    private var collapseToken = UUID()
 
     // MARK: Rows
 
@@ -192,12 +188,10 @@ final class ClipboardPreviewController: ObservableObject {
 
     // MARK: Preview surface
 
-    /// 指针进入详情列：保持当前详情。划得慢时收起可能已经启动，那就把窗口重新
-    /// 撑开，而不是让它缩掉再重开一次。
+    /// 指针进入详情列：取消离开行时的宽限计时，保持当前详情。
     func beginPreviewSurfaceHover() {
         hideToken = UUID()
         guard item != nil else { return }
-        collapseToken = UUID()
         setExpanded(true)
     }
 
@@ -227,7 +221,6 @@ final class ClipboardPreviewController: ObservableObject {
         hoveredID = nil
         openToken = UUID()
         hideToken = UUID()
-        collapseToken = UUID()
         item = nil
         setExpanded(false)
     }
@@ -235,7 +228,6 @@ final class ClipboardPreviewController: ObservableObject {
     // MARK: - Private
 
     private func show(_ item: ClipboardItem) {
-        collapseToken = UUID()
         hideToken = UUID()
         self.item = item
         setExpanded(true)
@@ -254,14 +246,10 @@ final class ClipboardPreviewController: ObservableObject {
 
     private func hide() {
         guard item != nil else { return }
+        // Window resizing is immediate too: never leave a second, delayed
+        // layout change that can replay the whole panel's presentation.
+        item = nil
         setExpanded(false)
-        let duration = Self.collapseDuration
-        let token = UUID()
-        collapseToken = token
-        schedule(duration) { [weak self] in
-            guard let self, self.collapseToken == token else { return }
-            self.item = nil
-        }
     }
 
     private func setExpanded(_ value: Bool) {

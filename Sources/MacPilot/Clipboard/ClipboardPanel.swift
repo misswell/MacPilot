@@ -24,6 +24,18 @@ enum ClipboardPanelLayout {
     static func width(showsPreview: Bool) -> CGFloat {
         showsPreview ? listColumnWidth + previewColumnWidth : listColumnWidth
     }
+
+    /// Resize only the right edge. Screen changes or a narrow display must
+    /// clip the detail column instead of moving the list under the pointer.
+    static func resizedFrame(_ frame: NSRect, showsPreview: Bool, visibleFrame: NSRect?) -> NSRect {
+        var next = frame
+        let room = visibleFrame.map { max(0, $0.maxX - frame.minX - 12) }
+        next.size.width = max(
+            min(listColumnWidth, frame.width),
+            min(width(showsPreview: showsPreview), room ?? width(showsPreview: showsPreview))
+        )
+        return next
+    }
 }
 
 // MARK: - Panel
@@ -114,17 +126,16 @@ final class ClipboardPanel: NSPanel {
     /// 详情列展开/收起时同步窗口宽度：左边缘钉住，列表原地不动，详情列向右生长。
     func resize(showsPreview: Bool) {
         guard isPresented else { return }
-        let available = (screen ?? NSScreen.main)?.visibleFrame
-        var next = frame
-        next.size.width = min(
-            ClipboardPanelLayout.width(showsPreview: showsPreview),
-            (available?.width ?? next.width) - 24
+        let next = ClipboardPanelLayout.resizedFrame(
+            frame,
+            showsPreview: showsPreview,
+            visibleFrame: (screen ?? NSScreen.main)?.visibleFrame
         )
         guard abs(next.width - frame.width) > 0.5 else { return }
-        if let limit = available.map({ $0.maxX - 12 }), next.maxX > limit {
-            next.origin.x = limit - next.width
-        }
-        setFrame(next, display: true, animate: true)
+        // AppKit's animated resize re-composites the material-backed hosting
+        // view and can replay a slide-in of the whole panel. Keep this a
+        // single immediate frame change; opening/closing the panel is separate.
+        setFrame(next, display: true, animate: false)
     }
 
     private func positionOnScreen() {
@@ -272,9 +283,12 @@ struct ClipboardPanelContent: View {
             RoundedRectangle(cornerRadius: ClipboardPanelLayout.cornerRadius, style: .continuous)
                 .strokeBorder(.white.opacity(0.16), lineWidth: 1)
         }
-        // 窗口逐帧变宽时，内容始终按自己的完整宽度排版并左对齐，超出窗口的部分被裁掉，
-        // 于是列表纹丝不动，详情列像被「揭开」一样出现。
+        // 列表始终左对齐。详情立即展开/收起，不把这一变更变成整个面板的转场。
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
         .ignoresSafeArea(.container)
         .onChange(of: searchFocused) { _, focused in
             if let panel = windowPanel {

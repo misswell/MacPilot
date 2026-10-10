@@ -88,7 +88,40 @@ struct ClipboardHistoryTests {
         #expect(history.allItems.contains { $0.pin == "a" })
     }
 
-    @Test func retentionCanExpireHistoryWithoutAnotherCopy() {
+    @Test func configuredModelLoadsAndPersistsMoreThanDefaultHistoryLimit() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipboard-loaded-limit-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let contentStore = ClipboardContentStoreIsolation.isolate()
+        defer { ClipboardContentStoreIsolation.restore(contentStore) }
+
+        let originalItems = (0..<150).map { index in
+            makeItem("loaded-\(index)", date: Date(timeIntervalSinceNow: -Double(index)))
+        }
+        try JSONEncoder().encode(originalItems).write(to: url)
+
+        // Keep direct initializer coverage for callers that already know the
+        // user's configured limit before loading the JSON.
+        let directHistory = ClipboardHistory(storageURL: url, storageLimit: 1_000)
+        #expect(directHistory.allItems.count == originalItems.count)
+        directHistory.flush()
+
+        // Exercise the app's lazy history path with its loaded setting and an
+        // isolated JSON URL, then verify the persisted record count survives a reload.
+        let model = ClipboardModel(historyStorageURL: url)
+        model.applyLoadedSettings(ClipboardSettings(storageLimit: 1_000), activate: false)
+        let history = model.history
+
+        #expect(history.allItems.count == originalItems.count)
+        history.flush()
+        model.shutdown()
+
+        let reloadedHistory = ClipboardHistory(storageURL: url, storageLimit: 1_000)
+        #expect(reloadedHistory.allItems.count == originalItems.count)
+        reloadedHistory.flush()
+    }
+
+    @Test func pruningDoesNotExpireHistoryBasedOnlyOnAge() {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipboard-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -99,7 +132,7 @@ struct ClipboardHistoryTests {
         history.add(makeItem("old", date: Date().addingTimeInterval(-29 * 24 * 60 * 60)))
         #expect(history.allItems.count == 1)
         history.pruneExpiredContent(now: Date().addingTimeInterval(2 * 24 * 60 * 60))
-        #expect(history.allItems.isEmpty)
+        #expect(history.allItems.count == 1)
     }
 
     @Test func searchFiltersItemsCaseInsensitively() async throws {

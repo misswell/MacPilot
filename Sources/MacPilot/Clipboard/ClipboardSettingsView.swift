@@ -59,6 +59,9 @@ struct ClipboardSettingsView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    Text(model.t("clipboardRetentionHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
                     Divider()
 
