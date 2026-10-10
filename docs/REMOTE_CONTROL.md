@@ -469,6 +469,23 @@ the network is declined and closed.
 that won, and the full connection log — including the paths that lost, which is
 the only way to tell "it picked the slower link" from "it had no choice".
 
+Bonjour permission errors also arrive while the browser is `waiting`, without
+any discovery results. PilotNest reports DNS-SD `PolicyDenied` (`-65570`) in
+that state and updates the permission indicator independently of the Mac list;
+`NoAuth` (`-65555`) is not that error. A waiting browser stays alive for recovery.
+Manual **Retry** recreates the Bonjour/AWDL browse as well as the connection race,
+discarding stale discovered endpoints without deleting the selected Mac or its
+pairing key. An allowed Local Network toggle is not proof of a working AWDL
+broadcast: macOS can still reject Bonjour registration with `PolicyDenied`.
+
+The Bluetooth PSM characteristic is dynamic: it returns the currently published
+channel number, and returns no value after that publication is stopped. The Mac
+backs off repeated channel-open failures (2/4/8/16/30 seconds) until a channel
+opens, rather than continuously disconnecting and rescanning. Error logs include
+the error domain and code; this does not remove L2CAP encryption or bypass the
+authenticated remote-control handshake. These recovery safeguards are not proof
+that an operating-system channel-open error has been resolved on real hardware.
+
 ## Performance
 
 - **Fast path.** The iPhone still stores the host and port it last reached the Mac

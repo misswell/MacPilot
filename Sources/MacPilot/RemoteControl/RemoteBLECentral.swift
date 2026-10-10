@@ -29,6 +29,8 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     private var isScanning = false
     private var wantsToRun = false
     private var attemptWatchdog: Task<Void, Never>?
+    private var retryTask: Task<Void, Never>?
+    private var channelOpenRetryPolicy = RemoteBLEChannelOpenRetryPolicy()
 
     /// How long a single discovery attempt may take before it is restarted.
     /// Connecting, discovering and opening a channel are each a round trip, and
@@ -77,6 +79,9 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         consecutiveStalls = 0
         attemptWatchdog?.cancel()
         attemptWatchdog = nil
+        retryTask?.cancel()
+        retryTask = nil
+        channelOpenRetryPolicy = RemoteBLEChannelOpenRetryPolicy()
         isScanning = false
         manager?.stopScan()
         if let peripheral {
@@ -102,6 +107,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
             onLog?("BLE idle; the fallback is not needed")
             return
         }
+        guard retryTask == nil else { return }
         guard let manager else {
             onLog?("BLE waiting for the central manager")
             return
@@ -178,6 +184,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        guard wantsToRun, self.peripheral === peripheral else { return }
         peripheral.discoverServices([RemoteBLEService.serviceUUID])
     }
 
@@ -186,6 +193,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         didFailToConnect peripheral: CBPeripheral,
         error: Error?
     ) {
+        guard wantsToRun, self.peripheral === peripheral else { return }
         onLog?("BLE connect failed error=\(error?.localizedDescription ?? "unknown")")
         resetAttempt()
     }
@@ -209,6 +217,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     // MARK: - CBPeripheralDelegate
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard wantsToRun, self.peripheral === peripheral else { return }
         guard error == nil,
               let service = peripheral.services?.first(where: { $0.uuid == RemoteBLEService.serviceUUID })
         else {
@@ -224,6 +233,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         didDiscoverCharacteristicsFor service: CBService,
         error: Error?
     ) {
+        guard wantsToRun, self.peripheral === peripheral else { return }
         guard error == nil,
               let characteristic = service.characteristics?.first(where: { $0.uuid == RemoteBLEService.psmCharacteristicUUID })
         else {
@@ -240,6 +250,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         didUpdateValueFor characteristic: CBCharacteristic,
         error: Error?
     ) {
+        guard wantsToRun, self.peripheral === peripheral else { return }
         guard error == nil,
               characteristic.uuid == RemoteBLEService.psmCharacteristicUUID,
               let data = characteristic.value,
@@ -258,16 +269,57 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         didOpen channel: CBL2CAPChannel?,
         error: Error?
     ) {
+        guard wantsToRun, self.peripheral === peripheral else {
+            channel?.inputStream.close()
+            channel?.outputStream.close()
+            return
+        }
         guard error == nil, let channel else {
-            onLog?("BLE L2CAP open failed error=\(error?.localizedDescription ?? "unknown")")
-            resetAttempt()
+            let delay = channelOpenRetryPolicy.recordOpenFailure()
+            onLog?("BLE L2CAP open failed error=\(Self.errorSummary(error)); retrying in \(Int(delay))s")
+            scheduleRetryAfterChannelOpenFailure(delay: delay)
             return
         }
         // The GATT link stays up: the L2CAP channel belongs to this peripheral,
         // so tearing the peripheral down would close the stream with it.
         attemptWatchdog?.cancel()
         attemptWatchdog = nil
+        channelOpenRetryPolicy.recordOpenSuccess()
         onLog?("BLE L2CAP channel open")
         onChannel?(channel, peripheral.identifier)
+    }
+
+    private static func errorSummary(_ error: Error?) -> String {
+        guard let error else { return "unknown" }
+        let cocoaError = error as NSError
+        let summary = "\(cocoaError.domain)/\(cocoaError.code): \(cocoaError.localizedDescription)"
+        guard let underlying = cocoaError.userInfo[NSUnderlyingErrorKey] as? NSError else {
+            return summary
+        }
+        return "\(summary); underlying=\(underlying.domain)/\(underlying.code)"
+    }
+
+    private func scheduleRetryAfterChannelOpenFailure(delay: TimeInterval) {
+        attemptWatchdog?.cancel()
+        attemptWatchdog = nil
+        isScanning = false
+        manager?.stopScan()
+        if let peripheral {
+            manager?.cancelPeripheralConnection(peripheral)
+        }
+        peripheral = nil
+        psmCharacteristic = nil
+
+        retryTask?.cancel()
+        retryTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled, self.wantsToRun else { return }
+            self.retryTask = nil
+            self.beginScanningIfPossible()
+        }
     }
 }

@@ -22,7 +22,8 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     var onLog: ((String) -> Void)?
 
     private var manager: CBPeripheralManager?
-    private var psm: CBL2CAPPSM?
+    private var psmReadState = RemoteBLEPSMReadState()
+    private var psm: CBL2CAPPSM? { psmReadState.currentPSM }
     private var isPublishing = false
     private var publishedService: CBMutableService?
     private var wantsToRun = false
@@ -79,8 +80,8 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
         manager.stopAdvertising()
         if let psm {
             manager.unpublishL2CAPChannel(psm)
-            self.psm = nil
         }
+        psmReadState.clear()
         manager.removeAllServices()
         publishedService = nil
     }
@@ -89,14 +90,10 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
 
     /// The service is built only once the PSM exists, because the characteristic
     /// carries it. Order matters: publish the channel, then the service, then
-    /// advertise.
-    private func publishService(on manager: CBPeripheralManager, psm: CBL2CAPPSM) {
-        let characteristic = CBMutableCharacteristic(
-            type: RemoteBLEService.psmCharacteristicUUID,
-            properties: [.read],
-            value: RemoteBLEService.encodePSM(psm),
-            permissions: [.readable]
-        )
+    /// advertise. The characteristic value stays dynamic; reads are answered
+    /// from the current publication state below.
+    private func publishService(on manager: CBPeripheralManager) {
+        let characteristic = RemoteBLEPSMCharacteristic.make()
         let service = CBMutableService(type: RemoteBLEService.serviceUUID, primary: true)
         service.characteristics = [characteristic]
         publishedService = service
@@ -128,7 +125,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
             // powered off / resetting / unknown. Naming the raw value is the only
             // way to tell "waiting for the radio" from "advertising".
             isOnAir = false
-            psm = nil
+            psmReadState.clear()
             isPublishing = false
             publishedService = nil
             onLog?("BLE waiting for Bluetooth: state=\(peripheral.state.rawValue)")
@@ -149,9 +146,9 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
             peripheral.unpublishL2CAPChannel(PSM)
             return
         }
-        psm = PSM
+        psmReadState.publish(PSM)
         onLog?("BLE L2CAP channel published psm=\(PSM) encryption=\(requiresEncryption)")
-        publishService(on: peripheral, psm: PSM)
+        publishService(on: peripheral)
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
@@ -183,16 +180,18 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
-        guard wantsToRun, request.characteristic.uuid == RemoteBLEService.psmCharacteristicUUID, let psm else {
+        guard wantsToRun,
+              request.characteristic.uuid == RemoteBLEService.psmCharacteristicUUID,
+              psmReadState.currentPSM != nil
+        else {
             peripheral.respond(to: request, withResult: .requestNotSupported)
             return
         }
-        let value = RemoteBLEService.encodePSM(psm)
-        guard request.offset <= value.count else {
+        guard let value = psmReadState.response(offset: request.offset) else {
             peripheral.respond(to: request, withResult: .invalidOffset)
             return
         }
-        request.value = value.subdata(in: request.offset..<value.count)
+        request.value = value
         onLog?("BLE the Mac read the PSM; opening the L2CAP channel")
         peripheral.respond(to: request, withResult: .success)
     }

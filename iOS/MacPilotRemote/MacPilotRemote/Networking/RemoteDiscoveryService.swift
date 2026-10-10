@@ -26,6 +26,9 @@ final class RemoteDiscoveryService: ObservableObject {
 
     /// Raised whenever the visible Mac list changes.
     var onResultsChanged: (@MainActor ([DiscoveredMac]) -> Void)?
+    /// State changes can arrive without results (notably PolicyDenied).
+    var onStateChanged: (@MainActor () -> Void)?
+    var onDiagnostic: (@MainActor (String) -> Void)?
 
     private var networkPaths: [UUID: [(method: RemoteConnectionMethod, endpoint: NWEndpoint)]] = [:]
 
@@ -106,6 +109,7 @@ final class RemoteDiscoveryService: ObservableObject {
         discovered = []
         networkPaths = [:]
         unrecognizedServiceCount = 0
+        onStateChanged?()
     }
 
     /// The online endpoint for a known Mac, if Bonjour currently sees it.
@@ -113,28 +117,46 @@ final class RemoteDiscoveryService: ObservableObject {
         discovered.first { $0.id == deviceID }
     }
 
-    private func handleState(_ state: NWBrowser.State) {
+    // Internal so the real delegate adapter can be exercised without starting
+    // a browser or requiring access to a physical Wi-Fi interface.
+    func handleState(_ state: NWBrowser.State) {
         switch state {
         case .ready:
             isBrowserUsable = true
             isBrowsing = true
             lastError = nil
             isPermissionDenied = false
+            onDiagnostic?("Bonjour/AWDL browser ready")
+        case .waiting(let error):
+            // Waiting is recoverable: keep this browser alive so granting
+            // permission or restoring an interface can take it back to ready.
+            isBrowserUsable = true
+            isBrowsing = true
+            record(error, state: "waiting")
         case .failed(let error):
             isBrowserUsable = false
             isBrowsing = false
-            lastError = error.localizedDescription
-            Self.log.error("browser failed: \(error.localizedDescription, privacy: .public)")
-            if case let .dns(code) = error, code == -65555 {
-                // kDNSServiceErr_PolicyDenied: the user declined Local Network.
-                isPermissionDenied = true
-            }
+            record(error, state: "failed")
         case .cancelled:
             isBrowserUsable = false
             isBrowsing = false
         default:
             break
         }
+        onStateChanged?()
+    }
+
+    private func record(_ error: NWError, state: String) {
+        lastError = error.localizedDescription
+        if case .dns(-65570) = error {
+            // kDNSServiceErr_PolicyDenied. -65555 is NoAuth, not PolicyDenied.
+            isPermissionDenied = true
+        } else {
+            isPermissionDenied = false
+        }
+        let message = "Bonjour/AWDL browser \(state): \(error)"
+        Self.log.error("\(message, privacy: .public)")
+        onDiagnostic?(message)
     }
 
     private func handle(_ results: Set<NWBrowser.Result>) {

@@ -262,6 +262,13 @@ final class RemoteAppModel: ObservableObject {
         discovery.onResultsChanged = { [weak self] macs in
             self?.handleDiscovery(macs)
         }
+        discovery.onStateChanged = { [weak self] in
+            guard let self else { return }
+            self.localNetworkDenied = self.discovery.isPermissionDenied
+        }
+        discovery.onDiagnostic = { [weak self] message in
+            self?.appendLinkDiagnostic(message)
+        }
         discoveryStartedAt = Date()
         discovery.start()
 
@@ -1256,6 +1263,15 @@ final class RemoteAppModel: ObservableObject {
         connectionState = hasEverConnected ? .reconnecting : .connecting
         authenticatedDeviceID = nil
         stopConnectSupervisor()
+        // A user retry must also discard the old DNS-SD browse and endpoints,
+        // even when a waiting browser has not emitted new results. The selected
+        // device and its authenticated pairing remain unchanged.
+        discoveredMacs = []
+        unrecognizedServiceCount = 0
+        discoveryStartedAt = Date()
+        discovery.restart()
+        updateAutomaticMacSelection()
+        raceLog("manual retry rebuilt Bonjour/AWDL discovery")
         startConnectSupervisor()
     }
 

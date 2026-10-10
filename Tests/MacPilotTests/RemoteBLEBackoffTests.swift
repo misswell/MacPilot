@@ -30,4 +30,17 @@ struct RemoteBLEBackoffTests {
             previous = current
         }
     }
+
+    @Test func repeatedL2CAPOpenFailuresBackOffAndRecoverAfterSuccess() {
+        var policy = RemoteBLEChannelOpenRetryPolicy(baseDelay: 2, maximumDelay: 30)
+
+        #expect(policy.recordOpenFailure() == 2)
+        #expect(policy.recordOpenFailure() == 4)
+        #expect(policy.recordOpenFailure() == 8)
+        #expect(policy.recordOpenFailure() == 16)
+        #expect(policy.recordOpenFailure() == 30)
+
+        policy.recordOpenSuccess()
+        #expect(policy.recordOpenFailure() == 2)
+    }
 }
