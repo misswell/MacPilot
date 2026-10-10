@@ -33,6 +33,9 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
     /// 心跳任务，主程序退出后必须停止（Finder 扩展进程会长期驻留）
     private var heartbeatTask: Task<Void, Never>?
 
+    /// Coordinates heartbeat task lifetime with main-app lifecycle messages.
+    @MainActor private lazy var heartbeatLifecycle = FinderSyncHeartbeatLifecycle()
+
     /// 文件类型图标提供者
     private let iconProvider = FileTypeIconProvider.shared
 
@@ -58,10 +61,14 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
         setupMessageHandlers()
 
         // 启动心跳机制
-        startHeartbeat()
-
-        // 主动请求菜单配置
-        requestMenuConfig()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.heartbeatLifecycle.extensionDidLaunch {
+                self.startHeartbeat()
+            } requestConfiguration: {
+                self.requestMenuConfig()
+            }
+        }
     }
 
     // MARK: - Directory Observing
@@ -102,13 +109,26 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
             if let payload = self.messager.decodeSignedData(data, as: RunningPayload.self) {
                 logger.info("Received running notification: \(payload.directories)")
                 // 可以根据 payload 更新监听目录
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.heartbeatLifecycle.mainAppDidStart(
+                        startHeartbeat: { self.startHeartbeat() },
+                        requestConfiguration: { self.requestMenuConfig() }
+                    )
+                }
             }
         }
 
         // 处理主程序发送的退出通知
-        messager.onMainMessage(.quit) { _ in
+        messager.onMainMessage(.quit) { [weak self] _ in
+            guard let self = self else { return }
             logger.info("Received quit notification from main app")
-            self.stopHeartbeat()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.heartbeatLifecycle.mainAppDidQuit {
+                    self.stopHeartbeat()
+                }
+            }
         }
     }
 
@@ -128,6 +148,7 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
     // MARK: - Heartbeat
 
     /// 启动心跳机制（每 10 秒发送一次）
+    @MainActor
     private func startHeartbeat() {
         heartbeatTask?.cancel()
         heartbeatTask = Task { @MainActor [weak self] in
@@ -140,6 +161,7 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
     }
 
     /// 停止心跳。主程序退出后继续发送毫无意义，只会让扩展进程一直醒着。
+    @MainActor
     private func stopHeartbeat() {
         heartbeatTask?.cancel()
         heartbeatTask = nil

@@ -39,3 +39,44 @@ probe that path.
 The startup path also no longer probes OctoPilot/OctoQuit configuration files
 or preference suites. Those legacy imports must be user-initiated if they are
 needed; signed updates must not silently inspect another app's data.
+
+## Finder menus disappearing after restart or replacement
+
+Run `zsh Scripts/verify-findersync.sh` for a read-only check of the installed
+extension, signature, election, and elected bundle path. This does not restart
+Finder, modify permissions, or prove that a visible context menu was rendered.
+Use an ordinary local folder such as Downloads for visual acceptance;
+FileProvider-backed locations are a separate FinderSync limitation.
+
+On 2026-10-10, the app's right-click feature was enabled, but PlugInKit reported
+`- com.misswell.macpilot.finder-sync` (the user election was **ignore**). The
+installed extension's path and signature were valid. Startup recovery logged
+`repaired=false` on three app launches because it only repaired `+` elections.
+With the user's repair request, electing this one extension for use immediately
+started its host, resolved the shared container, read a valid IPC key, and
+requested menu configuration from the existing main app. Finder was not restarted.
+The user confirmed that the actual context menu had returned in a local folder.
+There is no surviving updater log proving who originally set this ignore election;
+do not infer that every disabled extension is a failed update.
+
+Two lifecycle hazards need regression coverage: a temporary ignore election
+must be recoverable after interruption, and a resident extension that stops its
+heartbeat on main-app quit must resume it on the next authenticated running
+notification. A signed configuration request also proves that the extension is
+alive; waiting for the first periodic heartbeat must not cause needless
+re-registration. Recovery must never override an unmarked user-disabled extension.
+
+Temporary registration transactions now use the independent per-user sidecar
+`Library/Application Support/MacPilot/FinderSyncRecovery.json`. An atomic intent
+is written before `ignore`; a nonblocking cross-process lock prevents startup
+and updater transactions from racing. Only a valid, versioned intent for the
+same app/extension target authorizes recovery of an ignored election. Invalid,
+unknown, or mismatched records are not overwritten or used as authorization.
+The intent is cleared only after a fresh query confirms `+` **at the current
+installed extension path**. Command exit status alone is insufficient. The
+successful update/rollback path restores and verifies election before launching
+the app. If restoration fails, it retains the intent and reports failure; only
+after the transaction and lock have ended may the intact app be relaunched to
+retry journal recovery. A Finder repair failure must not prevent the entire app
+from returning, and is never declared a successful extension restoration.
+No persisted configuration keys or menu preferences are changed.

@@ -104,6 +104,15 @@ Every build embeds one **designated requirement** (DR) in the app bundle, and ma
 - **Never weaken the requirement to make a build pass.** Fix the signing path instead; an already-installed app cannot be talked into accepting a package it does not recognise.
 - Formal releases still have to be Developer ID signed and notarized via `Scripts/distribute-app.sh`. Local Apple Development builds share the same identity for TCC/updates but are not distributable (Gatekeeper rejects them).
 
+## FinderSync lifecycle recovery (invariant)
+
+- Never temporarily elect the Finder extension `ignore` without first recording a valid, target-bound `FinderSyncRecoveryJournal` intent under its cross-process lock. Use `FinderSyncRegistration` rather than open-coding election changes.
+- Clear a recovery intent only after a fresh PlugInKit query confirms `+` at the current app's exact `Contents/PlugIns/FinderSync.appex` path. Command success or an enabled stale copy is not confirmation.
+- Recover an ignored election automatically only when a valid matching intent proves MacPilot's own unfinished transaction; preserve unmarked user-disabled extensions and refuse invalid/mismatched intents.
+- Successful update/rollback transactions must restore and verify before app launch. Failure retains its journal; relaunching an intact app for recovery happens only after the registration transaction/lock ends, and must not be reported as successful restoration.
+- The resident extension must resume heartbeat and request current configuration on every authenticated main-app `running` notification. Repeated notifications must not create duplicate timers, and delayed initialization must not undo `quit`.
+- Run the mocked `FinderSyncRegistrationTests`, `FinderSyncRecoveryJournalTests`, and `FinderSyncHeartbeatLifecycleTests` after lifecycle changes. Use `zsh Scripts/verify-findersync.sh` for a read-only installed-state check; it is not visual menu acceptance. Never restart Finder or reset permissions automatically.
+
 ## Configuration compatibility (invariant)
 
 Everything persisted under `StoredConfiguration` (`config.json` + sidecar files) must survive upgrades **and downgrades**. In v1.1.482-beta.5, removing one struct field made older releases unable to decode the file, and the fallback-to-defaults path wiped every feature's configuration on downgrade. The rules below are hard invariants:

@@ -120,51 +120,25 @@ private func runPlugInKit(arguments: [String]) throws -> String {
     return output
 }
 
-private func finderSyncRegistrationOutput(includeAllVersions: Bool = false) -> String? {
-    try? runPlugInKit(arguments: FinderSyncRegistration.queryArguments(includeAllVersions: includeAllVersions))
-}
-
-private func finderSyncWasEnabled() -> Bool {
-    guard let output = finderSyncRegistrationOutput() else { return false }
-    return FinderSyncRegistration.isElectedForUse(in: output)
-}
-
 private func refreshFinderSyncRegistration(
     at applicationURL: URL,
-    restoreEnabledElection: Bool,
     logURL: URL
-) {
-    let registeredPaths = finderSyncRegistrationOutput(includeAllVersions: true)
-        .map(FinderSyncRegistration.registeredExtensionPaths(in:)) ?? []
+) throws {
+    let inventory = try runPlugInKit(
+        arguments: FinderSyncRegistration.queryArguments(includeAllVersions: true)
+    )
     let commands = FinderSyncRegistration.registrationArguments(
         for: applicationURL,
-        registeredExtensionPaths: registeredPaths,
-        restoreEnabledElection: restoreEnabledElection
+        registeredExtensionPaths: FinderSyncRegistration.registeredExtensionPaths(in: inventory),
+        restoreEnabledElection: false
     )
-    var succeeded = 0
-
     for arguments in commands {
-        do {
-            _ = try runPlugInKit(arguments: arguments)
-            succeeded += 1
-        } catch {
-            appendLog(
-                "FinderSync registration command failed (\(arguments.joined(separator: " "))): \(error.localizedDescription)",
-                to: logURL
-            )
-        }
+        _ = try runPlugInKit(arguments: arguments)
     }
-
-    if succeeded == commands.count {
-        appendLog(
-            "FinderSync registration refreshed (use election restored: \(restoreEnabledElection))",
-            to: logURL
-        )
-    }
+    appendLog("FinderSync registration refreshed", to: logURL)
 }
 
 private func install(_ arguments: UpdaterArguments) throws {
-    let finderSyncWasEnabled = finderSyncWasEnabled()
     try waitForParent(arguments.parentPID)
 
     let fileManager = FileManager.default
@@ -173,77 +147,128 @@ private func install(_ arguments: UpdaterArguments) throws {
     let incoming = parent.appendingPathComponent(".MacPilot-update-\(token).app")
     let backupName = ".MacPilot-backup-\(token).app"
     let backup = parent.appendingPathComponent(backupName)
+    let journal = FinderSyncRecoveryJournal.standard
+    var rollbackFailed = false
 
-    try FinderSyncRegistration.withSuspendedElection(
-        wasEnabled: finderSyncWasEnabled,
-        execute: { command in
-            _ = try runPlugInKit(arguments: command)
-            appendLog("FinderSync election command succeeded: \(command.joined(separator: " "))", to: arguments.logURL)
-        },
-        restorationFailed: { error in
-            appendLog("FinderSync election restoration failed: \(error.localizedDescription)", to: arguments.logURL)
-        },
-        operation: {
-            do {
-                try fileManager.copyItem(at: arguments.sourceApplication, to: incoming)
-                _ = try fileManager.replaceItemAt(
-                    arguments.destinationApplication,
-                    withItemAt: incoming,
-                    backupItemName: backupName,
-                    options: .withoutDeletingBackupItem
-                )
-                refreshFinderSyncRegistration(
-                    at: arguments.destinationApplication,
-                    restoreEnabledElection: false,
-                    logURL: arguments.logURL
-                )
+    do {
+        try FinderSyncRegistration.withSuspendedElection(
+            applicationURL: arguments.destinationApplication,
+            journal: journal,
+            execute: { command in
+                _ = try runPlugInKit(arguments: command)
+                appendLog("FinderSync election command succeeded: \(command.joined(separator: " "))", to: arguments.logURL)
+            },
+            query: { try runPlugInKit(arguments: $0) },
+            restorationFailed: { error in
+                appendLog("FinderSync election restoration failed: \(error.localizedDescription)", to: arguments.logURL)
+            },
+            operation: {
                 do {
-                    try launch(arguments.destinationApplication, logURL: arguments.logURL)
+                    try fileManager.copyItem(at: arguments.sourceApplication, to: incoming)
+                    _ = try fileManager.replaceItemAt(
+                        arguments.destinationApplication,
+                        withItemAt: incoming,
+                        backupItemName: backupName,
+                        options: .withoutDeletingBackupItem
+                    )
+                    try refreshFinderSyncRegistration(
+                        at: arguments.destinationApplication,
+                        logURL: arguments.logURL
+                    )
                 } catch {
+                    let installationError = error
+                    try? fileManager.removeItem(at: incoming)
                     if fileManager.fileExists(atPath: backup.path) {
-                        _ = try? fileManager.replaceItemAt(arguments.destinationApplication, withItemAt: backup)
-                        refreshFinderSyncRegistration(
-                            at: arguments.destinationApplication,
-                            restoreEnabledElection: false,
-                            logURL: arguments.logURL
-                        )
-                        try? launch(arguments.destinationApplication, logURL: arguments.logURL)
+                        do {
+                            if fileManager.fileExists(atPath: arguments.destinationApplication.path) {
+                                _ = try fileManager.replaceItemAt(
+                                    arguments.destinationApplication,
+                                    withItemAt: backup
+                                )
+                            } else {
+                                try fileManager.moveItem(at: backup, to: arguments.destinationApplication)
+                            }
+                            try refreshFinderSyncRegistration(
+                                at: arguments.destinationApplication,
+                                logURL: arguments.logURL
+                            )
+                        } catch {
+                            rollbackFailed = true
+                            appendLog("FinderSync update rollback failed: \(error.localizedDescription)", to: arguments.logURL)
+                            throw error
+                        }
                     }
-                    throw error
+                    throw installationError
                 }
-                // "The process started" is not "the new version runs". When a success
-                // token path was supplied, keep the backup and record it: the
-                // relaunched app deletes the backup only after it has loaded its
-                // configuration and initialized. Without a token (older callers) the
-                // previous behaviour stands.
-                if let successTokenURL = arguments.successTokenURL {
-                    UpdateSuccessToken.write(
-                        to: successTokenURL,
-                        backupPath: backup.path,
-                        targetVersion: arguments.sourceApplication.path
-                    )
-                    appendLog(
-                        "Update installed; rollback bundle kept at \(backup.path)",
-                        to: arguments.logURL
-                    )
-                } else {
-                    try? fileManager.removeItem(at: backup)
-                    appendLog("Update installed at \(arguments.destinationApplication.path)", to: arguments.logURL)
-                }
+            }
+        )
+    } catch {
+        appendLog("Update failed: \(error.localizedDescription)", to: arguments.logURL)
+        let recoveryPending = fileManager.fileExists(atPath: journal.fileURL.path)
+        if !rollbackFailed,
+           fileManager.fileExists(atPath: arguments.destinationApplication.path) {
+            if recoveryPending {
+                appendLog(
+                    "Launching MacPilot with pending FinderSync recovery; extension restoration remains unconfirmed.",
+                    to: arguments.logURL
+                )
+            }
+            do {
+                try launch(arguments.destinationApplication, logURL: arguments.logURL)
             } catch {
-                try? fileManager.removeItem(at: incoming)
-                if !fileManager.fileExists(atPath: arguments.destinationApplication.path),
-                   fileManager.fileExists(atPath: backup.path) {
-                    try? fileManager.moveItem(at: backup, to: arguments.destinationApplication)
-                }
-                appendLog("Update failed: \(error.localizedDescription)", to: arguments.logURL)
-                if fileManager.fileExists(atPath: arguments.destinationApplication.path) {
-                    try? launch(arguments.destinationApplication, logURL: arguments.logURL)
-                }
-                throw error
+                appendLog("Could not relaunch after update failure: \(error.localizedDescription)", to: arguments.logURL)
             }
         }
-    )
+        throw error
+    }
+
+    do {
+        try launch(arguments.destinationApplication, logURL: arguments.logURL)
+    } catch {
+        let launchError = error
+        guard fileManager.fileExists(atPath: backup.path) else { throw launchError }
+
+        try FinderSyncRegistration.withSuspendedElection(
+            applicationURL: arguments.destinationApplication,
+            journal: journal,
+            execute: { _ = try runPlugInKit(arguments: $0) },
+            query: { try runPlugInKit(arguments: $0) },
+            restorationFailed: { error in
+                appendLog("FinderSync rollback restoration failed: \(error.localizedDescription)", to: arguments.logURL)
+            },
+            operation: {
+                if fileManager.fileExists(atPath: arguments.destinationApplication.path) {
+                    _ = try fileManager.replaceItemAt(
+                        arguments.destinationApplication,
+                        withItemAt: backup
+                    )
+                } else {
+                    try fileManager.moveItem(at: backup, to: arguments.destinationApplication)
+                }
+                try refreshFinderSyncRegistration(
+                    at: arguments.destinationApplication,
+                    logURL: arguments.logURL
+                )
+            }
+        )
+        try launch(arguments.destinationApplication, logURL: arguments.logURL)
+        throw launchError
+    }
+
+    // "The process started" is not "the new version runs". When a success
+    // token path was supplied, keep the backup and record it: the relaunched
+    // app deletes the backup only after it has loaded its configuration.
+    if let successTokenURL = arguments.successTokenURL {
+        UpdateSuccessToken.write(
+            to: successTokenURL,
+            backupPath: backup.path,
+            targetVersion: arguments.sourceApplication.path
+        )
+        appendLog("Update installed; rollback bundle kept at \(backup.path)", to: arguments.logURL)
+    } else {
+        try? fileManager.removeItem(at: backup)
+        appendLog("Update installed at \(arguments.destinationApplication.path)", to: arguments.logURL)
+    }
 }
 
 do {

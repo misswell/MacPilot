@@ -21,121 +21,183 @@ struct UpdaterLaunchPlanTests {
 
 struct FinderSyncRegistrationTests {
     @Test func enabledExtensionIsPausedBeforeReplacementAndResumedAfterRegistration() throws {
-        var events: [String] = []
-        try FinderSyncRegistration.withSuspendedElection(
-            wasEnabled: true,
-            execute: { events.append($0.joined(separator: " ")) },
-            operation: {
-                events.append("replace bundle")
-                events.append("refresh registration")
-            }
-        )
-        #expect(events == [
-            "-e ignore -i com.misswell.macpilot.finder-sync",
-            "replace bundle",
-            "refresh registration",
-            "-e use -i com.misswell.macpilot.finder-sync"
-        ])
+        try withTemporaryJournal { journal in
+            var elected = true
+            var events: [String] = []
+            try FinderSyncRegistration.withSuspendedElection(
+                applicationURL: URL(fileURLWithPath: "/Applications/MacPilot.app"),
+                journal: journal,
+                execute: { arguments in
+                    events.append(arguments.joined(separator: " "))
+                    if arguments.contains("ignore") { elected = false }
+                    if arguments.contains("use") { elected = true }
+                },
+                query: { _ in finderSyncOutput(enabled: elected, at: URL(fileURLWithPath: "/Applications/MacPilot.app")) },
+                operation: {
+                    events.append("replace bundle")
+                    events.append("refresh registration")
+                }
+            )
+            #expect(events == [
+                "-e ignore -i com.misswell.macpilot.finder-sync",
+                "replace bundle",
+                "refresh registration",
+                "-e use -i com.misswell.macpilot.finder-sync"
+            ])
+        }
     }
 
     @Test func failedReplacementRestoresElectionAndPreservesTheOriginalError() {
         enum Failure: Error { case replacement }
-        var events: [String] = []
         do {
-            try FinderSyncRegistration.withSuspendedElection(
-                wasEnabled: true,
-                execute: { events.append($0.joined(separator: " ")) },
-                operation: { throw Failure.replacement }
-            )
-            Issue.record("Replacement failure must propagate")
+            try withTemporaryJournal { journal in
+                var elected = true
+                var events: [String] = []
+                do {
+                    try FinderSyncRegistration.withSuspendedElection(
+                        applicationURL: URL(fileURLWithPath: "/Applications/MacPilot.app"),
+                        journal: journal,
+                        execute: { arguments in
+                            events.append(arguments.joined(separator: " "))
+                            if arguments.contains("ignore") { elected = false }
+                            if arguments.contains("use") { elected = true }
+                        },
+                        query: { _ in finderSyncOutput(enabled: elected, at: URL(fileURLWithPath: "/Applications/MacPilot.app")) },
+                        operation: { throw Failure.replacement }
+                    )
+                    Issue.record("Replacement failure must propagate")
+                } catch {
+                    #expect(error is Failure)
+                }
+                #expect(events == [
+                    "-e ignore -i com.misswell.macpilot.finder-sync",
+                    "-e use -i com.misswell.macpilot.finder-sync"
+                ])
+            }
         } catch {
-            #expect(error is Failure)
+            Issue.record("Temporary journal setup failed: \(error)")
         }
-        #expect(events == [
-            "-e ignore -i com.misswell.macpilot.finder-sync",
-            "-e use -i com.misswell.macpilot.finder-sync"
-        ])
     }
 
     @Test func disabledElectionIsLeftDisabledThroughoutReplacement() throws {
-        var replaced = false
-        try FinderSyncRegistration.withSuspendedElection(
-            wasEnabled: false,
-            execute: { _ in Issue.record("A disabled extension must not be elected") },
-            operation: { replaced = true }
-        )
-        #expect(replaced)
+        try withTemporaryJournal { journal in
+            var replaced = false
+            try FinderSyncRegistration.withSuspendedElection(
+                applicationURL: URL(fileURLWithPath: "/Applications/MacPilot.app"),
+                journal: journal,
+                execute: { _ in Issue.record("A disabled extension must not be elected") },
+                query: { _ in finderSyncOutput(enabled: false, at: URL(fileURLWithPath: "/Applications/MacPilot.app")) },
+                operation: { replaced = true }
+            )
+            #expect(replaced)
+        }
     }
 
     @Test func failedSuspensionPreventsBundleReplacement() {
         enum Failure: Error { case suspension }
-        var replaced = false
-        #expect(throws: Failure.self) {
-            try FinderSyncRegistration.withSuspendedElection(
-                wasEnabled: true,
-                execute: { _ in throw Failure.suspension },
-                operation: { replaced = true }
-            )
+        do {
+            try withTemporaryJournal { journal in
+                var elected = true
+                var replaced = false
+                #expect(throws: Failure.self) {
+                    try FinderSyncRegistration.withSuspendedElection(
+                        applicationURL: URL(fileURLWithPath: "/Applications/MacPilot.app"),
+                        journal: journal,
+                        execute: { arguments in
+                            if arguments.contains("ignore") {
+                                elected = false
+                                throw Failure.suspension
+                            }
+                            if arguments.contains("use") { elected = true }
+                        },
+                        query: { _ in finderSyncOutput(enabled: elected, at: URL(fileURLWithPath: "/Applications/MacPilot.app")) },
+                        operation: { replaced = true }
+                    )
+                }
+                #expect(!replaced)
+            }
+        } catch {
+            Issue.record("Temporary journal setup failed: \(error)")
         }
-        #expect(!replaced)
     }
 
     @Test func restorationFailureIsReportedWithoutMaskingReplacementFailure() {
         enum Failure: Error, Equatable { case replacement, restoration }
-        var reported: Failure?
         do {
-            try FinderSyncRegistration.withSuspendedElection(
-                wasEnabled: true,
-                execute: { if $0.contains("use") { throw Failure.restoration } },
-                restorationFailed: { reported = $0 as? Failure },
-                operation: { throw Failure.replacement }
-            )
-            Issue.record("Replacement failure must propagate")
+            try withTemporaryJournal { journal in
+                var elected = true
+                var reported: Failure?
+                do {
+                    try FinderSyncRegistration.withSuspendedElection(
+                        applicationURL: URL(fileURLWithPath: "/Applications/MacPilot.app"),
+                        journal: journal,
+                        execute: { arguments in
+                            if arguments.contains("ignore") { elected = false }
+                            if arguments.contains("use") { throw Failure.restoration }
+                        },
+                        query: { _ in finderSyncOutput(enabled: elected, at: URL(fileURLWithPath: "/Applications/MacPilot.app")) },
+                        restorationFailed: { reported = $0 as? Failure },
+                        operation: { throw Failure.replacement }
+                    )
+                    Issue.record("Replacement failure must propagate")
+                } catch {
+                    #expect((error as? Failure) == .replacement)
+                }
+                #expect(reported == .restoration)
+            }
         } catch {
-            #expect((error as? Failure) == .replacement)
+            Issue.record("Temporary journal setup failed: \(error)")
         }
-        #expect(reported == .restoration)
     }
 
     @Test func startupRecoveryDoesNotOverrideADisabledSystemExtension() throws {
-        var commands: [[String]] = []
-        let recovered = try FinderSyncRegistration.recoverIfEnabled(
-            at: URL(fileURLWithPath: "/Applications/MacPilot.app"),
-            execute: {
-                commands.append($0)
-                return "-    com.misswell.macpilot.finder-sync(1.1.501)"
-            }
-        )
-        #expect(!recovered)
-        #expect(commands == [FinderSyncRegistration.queryArguments()])
+        try withTemporaryJournal { journal in
+            var commands: [[String]] = []
+            let recovered = try FinderSyncRegistration.recoverIfEnabled(
+                at: URL(fileURLWithPath: "/Applications/MacPilot.app"),
+                journal: journal,
+                execute: {
+                    commands.append($0)
+                    return "-    com.misswell.macpilot.finder-sync(1.1.501)"
+                }
+            )
+            #expect(!recovered)
+            #expect(commands == [FinderSyncRegistration.queryArguments()])
+        }
     }
 
     @Test func startupRecoveryRemovesStaleVersionsWhileLaunchesAreSuspended() throws {
         let app = URL(fileURLWithPath: "/Applications/MacPilot.app")
         let current = "/Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex"
         let stale = "/Users/developer/Code/MacPilot.app/Contents/PlugIns/FinderSync.appex"
-        var commands: [[String]] = []
-        let recovered = try FinderSyncRegistration.recoverIfEnabled(at: app, execute: {
-            commands.append($0)
-            if $0 == FinderSyncRegistration.queryArguments() {
-                return "+    com.misswell.macpilot.finder-sync(1.1.501)"
-            }
-            if $0 == FinderSyncRegistration.queryArguments(includeAllVersions: true) {
-                return """
-                + com.misswell.macpilot.finder-sync(1.1.469)\tOLD\t\(stale)
-                + com.misswell.macpilot.finder-sync(1.1.501)\tNEW\t\(current)
-                """
-            }
-            return ""
-        })
-        #expect(recovered)
-        #expect(commands == [
-            FinderSyncRegistration.queryArguments(),
-            FinderSyncRegistration.queryArguments(includeAllVersions: true),
-            ["-e", "ignore", "-i", FinderSyncRegistration.extensionBundleIdentifier],
-            ["-r", stale], ["-r", current], ["-a", current],
-            ["-e", "use", "-i", FinderSyncRegistration.extensionBundleIdentifier]
-        ])
+        try withTemporaryJournal { journal in
+            var commands: [[String]] = []
+            var elected = true
+            let recovered = try FinderSyncRegistration.recoverIfEnabled(at: app, journal: journal, execute: {
+                commands.append($0)
+                if $0 == FinderSyncRegistration.queryArguments() {
+                    return finderSyncOutput(enabled: elected, at: app)
+                }
+                if $0 == FinderSyncRegistration.queryArguments(includeAllVersions: true) {
+                    return """
+                    + com.misswell.macpilot.finder-sync(1.1.469)\tOLD\t\(stale)
+                    + com.misswell.macpilot.finder-sync(1.1.501)\tNEW\t\(current)
+                    """
+                }
+                if $0.contains("ignore") { elected = false }
+                if $0.contains("use") { elected = true }
+                return ""
+            })
+            #expect(recovered)
+            #expect(commands == [
+                FinderSyncRegistration.queryArguments(),
+                FinderSyncRegistration.queryArguments(includeAllVersions: true),
+                ["-e", "ignore", "-i", FinderSyncRegistration.extensionBundleIdentifier],
+                ["-r", stale], ["-r", current], ["-a", current],
+                ["-e", "use", "-i", FinderSyncRegistration.extensionBundleIdentifier],
+                FinderSyncRegistration.queryArguments()
+            ])
+        }
     }
 
     @Test func refreshRemovesTheExistingExtensionBeforeAddingTheReplacement() {
@@ -210,4 +272,20 @@ struct FinderSyncRegistrationTests {
             ]
         )
     }
+
+    private func withTemporaryJournal<T>(_ body: (FinderSyncRecoveryJournal) throws -> T) throws -> T {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FinderSyncRegistrationTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        return try body(FinderSyncRecoveryJournal(fileURL: directory.appendingPathComponent("journal.json")))
+    }
+}
+
+private func finderSyncOutput(enabled: Bool, at applicationURL: URL) -> String {
+    let status = enabled ? "+" : "-"
+    let extensionPath = applicationURL
+        .appendingPathComponent("Contents/PlugIns/FinderSync.appex")
+        .path
+    return "\(status)\tcom.misswell.macpilot.finder-sync(1.1.501)\tTEST-UUID\t\(extensionPath)"
 }

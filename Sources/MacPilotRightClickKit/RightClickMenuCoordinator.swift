@@ -83,6 +83,7 @@ public final class RightClickMenuCoordinator {
                 let context = ModelContext(SharedDataManager.sharedModelContainer)
                 await SharedDataManager.initializeDefaultData(context: context)
             }
+            guard !Task.isCancelled, !self.isStopped else { return }
 
             // Register message handlers using type-safe API
             logger.info("Registering message handlers")
@@ -98,18 +99,26 @@ public final class RightClickMenuCoordinator {
             }
 
             messager.onExtensionMessage(.heartbeat) { [weak self] _ in
-                guard let self = self else { return }
-                logger.debug("Received heartbeat from extension")
-                pluginRunning = true
-                // 心跳只做保活；配置未变化时不重复推送。
-                configPublisher.publish(force: false)
+                Task { @MainActor [weak self] in
+                    guard let self, !self.isStopped else { return }
+                    self.logger.debug("Received heartbeat from extension")
+                    self.pluginRunning = true
+                    // 心跳只做保活；配置未变化时不重复推送。
+                    self.configPublisher.publish(force: false)
+                }
             }
 
             // 处理 Extension 请求菜单配置
             messager.onExtensionMessage(.requestConfig) { [weak self] _ in
-                guard let self = self else { return }
-                logger.info("Received menu config request from extension")
-                self.sendMenuConfigurationUpdate()
+                Task { @MainActor [weak self] in
+                    guard let self, !self.isStopped else { return }
+                    self.logger.info("Received menu config request from extension")
+                    // A signed config request proves the extension is already alive.
+                    // Do not re-register a healthy host while waiting for its first
+                    // periodic heartbeat after the main app has restarted.
+                    self.pluginRunning = true
+                    self.sendMenuConfigurationUpdate()
+                }
             }
 
             // 启动心跳超时检测

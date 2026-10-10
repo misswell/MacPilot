@@ -24,13 +24,22 @@ extension MacPilotModel {
             guard FileManager.default.fileExists(atPath: application
                 .appendingPathComponent("Contents/PlugIns/FinderSync.appex").path) else { return }
             do {
-                let recovered = try await Task.detached(priority: .utility) {
-                    try FinderSyncRegistration.recoverIfEnabled(
+                let recovery = Task.detached(priority: .utility) {
+                    try Task.checkCancellation()
+                    return try FinderSyncRegistration.recoverIfEnabled(
                         at: application,
+                        journal: .standard,
                         execute: FinderSyncRecoveryRunner.run
                     )
-                }.value
+                }
+                let recovered = try await withTaskCancellationHandler {
+                    try await recovery.value
+                } onCancel: {
+                    recovery.cancel()
+                }
                 DiagnosticLog.write("FinderSync", "startup registration recovery completed repaired=\(recovered)")
+            } catch is CancellationError {
+                DiagnosticLog.write("FinderSync", "startup registration recovery cancelled with feature shutdown")
             } catch {
                 DiagnosticLog.write("FinderSync", "startup registration recovery failed error=\(error.localizedDescription)")
             }
