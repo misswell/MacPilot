@@ -354,26 +354,31 @@ struct BLEIdentityRegistryTests {
         #expect(historicalKeys.isSubset(of: Set(object.keys)))
     }
 
-    /// The reverse-role fallback is an addition, not a replacement: it must stay
-    /// off for anyone who never opted in, and a file written before the key
-    /// existed must still decode with the default.
+    /// The reverse-role fallback is an addition, not a replacement. A fresh
+    /// default stays off until a phone is bound, a deliberate opt-out survives
+    /// reloads, and a file written before either key existed must still decode.
     @Test func reverseGATTPresenceDefaultsOffAndDecodesFromOlderFiles() throws {
         #expect(BLEUnlockSettings().reverseGATTPresenceEnabled == false)
+        #expect(BLEUnlockSettings().reverseGATTPresenceExplicitlyDisabled == false)
 
         let withoutKey = """
         {"isEnabled": true, "unlockRSSI": -60}
         """
         let decoded = try JSONDecoder().decode(BLEUnlockSettings.self, from: Data(withoutKey.utf8))
         #expect(decoded.reverseGATTPresenceEnabled == false)
+        #expect(decoded.reverseGATTPresenceExplicitlyDisabled == false)
 
         var enabled = BLEUnlockSettings()
         enabled.reverseGATTPresenceEnabled = true
+        enabled.reverseGATTPresenceExplicitlyDisabled = true
         let encoded = try JSONEncoder().encode(enabled)
         let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         #expect(object["reverseGATTPresenceEnabled"] as? Bool == true)
+        #expect(object["reverseGATTPresenceExplicitlyDisabled"] as? Bool == true)
 
         let roundTripped = try JSONDecoder().decode(BLEUnlockSettings.self, from: encoded)
         #expect(roundTripped.reverseGATTPresenceEnabled)
+        #expect(roundTripped.reverseGATTPresenceExplicitlyDisabled)
     }
 
     private func uuid(_ value: String) -> UUID {

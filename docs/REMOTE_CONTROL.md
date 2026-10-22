@@ -967,14 +967,17 @@ reverse sample never cancels legacy reconnection, scan retries or the
 advertisements. Each link must recover itself; either direction may still satisfy
 the unlock gate.
 
-Mac production starts only when BLE Unlock and the reverse toggle are both
-enabled, the session is on the console, a stable device ID exists, at least one
-configured identity binding exists, and `remotePairingKeyProvider` is
-available. Turning the feature off, unbinding, leaving the console session or
-quitting stops advertising, clears pending challenges and retries, and drops
-reverse runtime. If an iPhone stays connected while production is off, its
-subscription is remembered but granted nothing; re-enabling production
-challenges it again without waiting for a resubscribe iOS would not send.
+Mac production starts only when BLE Unlock is enabled, the session is on the
+console, a stable device ID exists, at least one configured identity binding
+exists, and `remotePairingKeyProvider` is available. The reverse switch turns on
+automatically the first time a phone is bound, because pairing is the user's
+opt-in; an explicit switch-off is stored in `reverseGATTPresenceExplicitlyDisabled`
+and is never overridden by a later binding. Turning the feature off, unbinding,
+leaving the console session or quitting stops advertising, clears pending
+challenges and retries, and drops reverse runtime. If an iPhone stays connected
+while production is off, its subscription is remembered but granted nothing;
+re-enabling production challenges it again without waiting for a resubscribe iOS
+would not send.
 
 PilotNest keeps a separate `CBCentralManager` for production with restoration
 identifier `com.misswell.macpilot.reverse-presence.central`. Its intent keys are

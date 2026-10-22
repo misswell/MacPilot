@@ -477,6 +477,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     /// monitoring scanner already owns that moment, and pairing a phone is
     /// what makes a challenge meaningful.
     private func updatePresenceAuthentication() {
+        enableReversePresenceForBoundDeviceIfNeeded()
         let shouldRun = settings.isEnabled
             && sessionIsOnConsole
             && centralMgr != nil
@@ -494,6 +495,21 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             && !configuredReverseIdentities().isEmpty
             && remotePairingKeyProvider != nil
         updateReverseGATTPresence(shouldRun: reverseShouldRun)
+    }
+
+    /// A bound phone is the opt-in signal for the reverse link: pairing already
+    /// proves the user wants proximity unlock from that device. A deliberate
+    /// switch-off records `reverseGATTPresenceExplicitlyDisabled` and is never
+    /// overridden here.
+    private func enableReversePresenceForBoundDeviceIfNeeded() {
+        guard settings.isEnabled,
+              !settings.reverseGATTPresenceEnabled,
+              !settings.reverseGATTPresenceExplicitlyDisabled,
+              !settings.identityRegistry.bindings.isEmpty else { return }
+        settings.reverseGATTPresenceEnabled = true
+        objectWillChange.send()
+        persist?()
+        log("reverse presence enabled automatically for a bound device")
     }
 
     /// Bindings that may authenticate the reverse link. Only configured logical
@@ -934,10 +950,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     /// Extra recognition path for rotated phone addresses. Turning it on only
     /// adds the reverse-role GATT challenge beside the existing authenticator;
-    /// turning it off stops that probe and leaves every other link untouched.
+    /// turning it off stops that probe, leaves every other link untouched and
+    /// records an opt-out that automatic enabling must respect.
     func setReverseGATTPresenceEnabled(_ value: Bool) {
         log("setReverseGATTPresenceEnabled from=\(settings.reverseGATTPresenceEnabled) to=\(value)")
         settings.reverseGATTPresenceEnabled = value
+        settings.reverseGATTPresenceExplicitlyDisabled = !value
         updatePresenceAuthentication()
         // Turning the path off drops its evidence immediately, but an explicit
         // settings change must not lock the screen the user is looking at.

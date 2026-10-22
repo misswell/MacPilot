@@ -163,6 +163,10 @@ iOS 新增默认关闭、重复停止、清理日志与独立 UserDefaults 意�
   `(clientID, keyFingerprint, primaryUUID, rssi, sampledAt)`。生产停止会清空
   pending challenge、挑战任务与重试；仍连接的订阅会被记住，重新开启时直接向
   它发新挑战。诊断 Stop 只停止诊断意图，生产开关与诊断按钮互不控制。
+  绑定第一台 iPhone 即视为用户开启：只要 BLE 解锁与身份绑定同时成立，
+  `reverseGATTPresenceEnabled` 会自动打开并立即开始生产广播；用户在设置页
+  手动关闭会写入 `reverseGATTPresenceExplicitlyDisabled`，此后重新绑定也不会
+  自动打开，直到用户自己再打开。
 - Mac 解锁模型：反向信号按逻辑主设备 `primaryUUID` 独立保存在
   `BLEReversePresenceRuntime`，与原有 alias 信号分别处理，只在逻辑设备层用
   “任一方向有 Presence” 合并，再应用 `.any` / `.all`；两个方向的 RSSI 不混入
@@ -187,8 +191,9 @@ iOS 新增默认关闭、重复停止、清理日志与独立 UserDefaults 意�
 - 共享协议包 `swift test --package-path Packages/MacPilotRemoteProtocol`：
   134 tests / 22 suites 通过，包含正确样本、篡改 RSSI/时间戳、nonce 不匹配、
   错误密钥、跨 Mac、过期、未来时间、错误长度/版本、越界 RSSI、重放与域隔离。
-- Mac `swift test --filter BLEReversePresenceTests`：15/15 通过，覆盖绑定
-  接受/拒绝、撤销绑定、旧指纹、未认证 RSSI 不解锁、阈值、离开超时、信号超时、
+- Mac `swift test --filter BLEReversePresenceTests`：17/17 通过，覆盖绑定
+  接受/拒绝、绑定后自动开启、显式关闭不被后续绑定覆盖、撤销绑定、旧指纹、
+  未认证 RSSI 不解锁、阈值、离开超时、信号超时、
   `.any` / `.all`、双向并行不混合、反向链路有信号时旧链路仍执行必要恢复、
   manualLock、睡眠、后台、功能关闭、`wakeWithoutUnlocking`、生产启停与诊断隔离、
   停止后 timer 清理。

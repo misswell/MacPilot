@@ -90,7 +90,7 @@ struct BLEReversePresenceTests {
     }
 
     @Test func disabledFeatureToggleSleepAndBackgroundConsoleAllReject() {
-        let toggledOff = Harness(reverseEnabled: false)
+        let toggledOff = Harness(reverseEnabled: false, explicitOptOut: true)
         defer { toggledOff.model.shutdown() }
         #expect(!freshSample(toggledOff))
         #expect(!toggledOff.model.presence)
@@ -273,11 +273,24 @@ struct BLEReversePresenceTests {
         #expect(h.model.reverseRuntime(for: h.phone) == nil)
     }
 
-    @Test func theToggleControlsProductionWithoutTouchingTheDiagnosticSession() {
-        let h = Harness(reverseEnabled: false)
+    @Test func bindingAPhoneTurnsOnReversePresenceByDefault() {
+        let h = Harness(bindIdentity: false, reverseEnabled: false)
         defer { h.model.shutdown() }
-        h.model.startMonitor(h.phone)
+        #expect(!h.model.settings.reverseGATTPresenceEnabled)
+        #expect(h.peripheral.productionStarts.isEmpty)
+
         h.model.bindRemoteIdentity(primaryUUID: h.phone, clientID: "phone", keyFingerprint: "fp")
+        #expect(h.model.settings.reverseGATTPresenceEnabled)
+        #expect(h.peripheral.productionStarts == [h.macID])
+        #expect(h.peripheral.productionRunning)
+    }
+
+    @Test func anExplicitOptOutSurvivesLaterBindings() {
+        let h = Harness(bindIdentity: false, reverseEnabled: false)
+        defer { h.model.shutdown() }
+        h.model.setReverseGATTPresenceEnabled(false)
+        h.model.bindRemoteIdentity(primaryUUID: h.phone, clientID: "phone", keyFingerprint: "fp")
+        #expect(!h.model.settings.reverseGATTPresenceEnabled, "A deliberate switch-off is not overridden")
         #expect(h.peripheral.productionStarts.isEmpty)
 
         h.model.setReverseGATTPresenceEnabled(true)
@@ -316,7 +329,7 @@ struct BLEReversePresenceTests {
         var signalActions: [(delay: TimeInterval, action: @MainActor () -> Void)] = []
         var proximityActions: [(delay: TimeInterval, action: @MainActor () -> Void)] = []
 
-        init(bindIdentity: Bool = true, reverseEnabled: Bool = true, onConsole: Bool = true) {
+        init(bindIdentity: Bool = true, reverseEnabled: Bool = true, onConsole: Bool = true, explicitOptOut: Bool = false) {
             model = BLEUnlockModel(
                 userActivityMonitor: BLEUserActivityMonitor(uptime: { [weak self] in self?.now ?? 0 }, observesEvents: false),
                 bluetoothScanner: scanner,
@@ -332,6 +345,7 @@ struct BLEReversePresenceTests {
             model.settings.lockRSSI = -80
             model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
             model.settings.reverseGATTPresenceEnabled = reverseEnabled
+            model.settings.reverseGATTPresenceExplicitlyDisabled = explicitOptOut
             model.settings.pauseNowPlaying = false
             model.reversePresencePeripheralOverride = peripheral
             model.sessionOnConsoleProbe = { onConsole }
