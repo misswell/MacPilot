@@ -49,6 +49,7 @@ iOS 只新增独立测试开关 `reverseGATTTest.wantsToRun`（UserDefaults）�
 | `iOS/MacPilotRemote/ScreenshotTests/ReverseGATTHardwareUITests.swift` | 默认跳过、显式启用的真机前台/重复/后台回环测试 |
 | `Tests/Hardware/ReverseGATT/` | 复制并校验生产 Peripheral 的隔离宿主准备工具和操作说明 |
 | `.github/workflows/build.yml` | 主分支增加 GATT 文案与共享协议回归门禁 |
+| `Packages/MacPilotRemoteProtocol/Tests/MacPilotRemoteProtocolTests/RemoteInputPacketTests.swift` | 等价拆分两条数值断言，兼容 CI Xcode 26.3 的宏类型检查 |
 | `docs/REMOTE_CONTROL.md`、本报告 | 行为、操作、系统限制与真实验证记录 |
 
 ## 自动化验证
@@ -68,7 +69,14 @@ iOS 新增默认关闭、重复停止、清理日志与独立 UserDefaults 意�
 
 - 专用硬件 UI 测试：`MacPilotRemoteScreenshots` scheme 的 `generic/platform=iOS` 签名 `build-for-testing` 通过，包含默认 skip 的 `ReverseGATTHardwareUITests`。
 - 隔离 Mac 宿主：生产 Peripheral 源码 SHA-256 与复制源一致，fresh release warnings-as-errors 编译、Developer ID 签名及 strict codesign 校验通过。
-- 无线执行当前受环境阻塞：AgentUse 蓝牙隐私页只有 `agentspace-worker` 项且关闭，宿主实际返回 `Bluetooth unauthorized`；AgentSpace 工具要求隐私权限由人亲自授予，不能代点。宿主已正常收尾，没有成功广播。手机在运行器探路测试后再次变为 `unavailable`，无线 UI 测试尚未开始。
+- 首次无线执行受环境阻塞：AgentUse 蓝牙隐私页只有 `agentspace-worker` 项且关闭，宿主返回 `Bluetooth unauthorized`；没有代点隐私授权，已正常收尾。用户随后明确要求本机调试并重新连接、解锁手机，后续真机结果见下节。
+
+- 按用户“直接在本机调试”的要求，改用本机独立 AppKit 宿主。补齐标准 AppKit 运行循环后，2026-10-22 18:11:31 CST 启动成功，实际日志确认 `radio on`、`GATT service added`、`advertising started`，服务 UUID 正确。该阶段只有广播证据；手机重新接入后的完整回环另列。
+- CI 新增共享协议门禁首次触发 Xcode 26.3 的既有压力断言宏类型检查超时；把相同容差和误差运算提到宏外显式 Double 后，本地共享包 115/115 再次通过，不更改协议或断言阈值。
+
+- CI `39760590832`（提交 `59c3967`）通过，包括主测试、共享 GATT 回归、签名与 designated requirement。最终提交和 Beta 发布仍须各自通过精确 SHA 的门禁。
+- 真机 UI 使用本机已安装的 Xcode 27 beta（27A5209h），仅对本次命令设置 `DEVELOPER_DIR`，不修改全局 Xcode 选择。Xcode 26.6 的 UI 调试器不能匹配该 iOS 27 设备，因此切换工具链；纯逻辑测试曾通过不代表其 UI 调试器可用。
+- 实测修复了测试设施的 AppKit 主循环、父级 accessibilityIdentifier 覆盖子控件、NSPredicateExpectation 未传入目标元素三处问题；没有为通过驱动修改 GATT 协议或旧 BLE 行为。
 
 已保留的 PilotNest 开发测试 App：`/Users/guofeng/Code/solo/OctoPilot/build/reverse-gatt-validation/PilotNest.app`。
 它不是 App Store/TestFlight 分发包；此次没有上传 TestFlight。
@@ -77,21 +85,44 @@ iOS 新增默认关闭、重复停止、清理日志与独立 UserDefaults 意�
 
 最初 iPhone 15 Pro为 `unavailable`；用户随后连接了设备，状态变为 `available (paired)`。
 设备系统为 iOS 27.0.1（24A446），Developer Mode Enabled。用户确认旧 MacPilot 的实验服务原本未广播。
-硬件验收使用 AgentSpace 中独立 bundle ID 的测试宿主，复制并核对实际生产 Peripheral 源码，
+最初准备在 AgentSpace 使用独立 bundle ID 的测试宿主；其蓝牙权限被拒绝后，用户明确要求“直接在本机调试”，
+因此后续切换到本机账户运行相同的已签名独立宿主。复制并核对实际生产 Peripheral 源码，
 不启动另一个完整 MacPilot，不替换/退出用户已安装的 MacPilot。
 用户提供的截图证明旧实验版本曾记录订阅和 16 字节通知入队，不能证明本次修改后的后台恢复或完整回环。
 没有把模拟器编译、纯逻辑测试或这张旧截图计为以下真机验收通过。
 
 | 验收项 | 本次状态 | 需要的证据 |
 | --- | --- | --- |
-| 前台连接、16 字节匹配回环 | 待真机 | 本次构建两端日志、iPhone verified 计数 |
-| iPhone 锁屏维持与断连恢复 | 待真机 | 锁屏期间真实事件及恢复延迟 |
-| iPhone 后台连接与回环 | 待真机 | background 标记后的新回环、实际耗时 |
+| 前台连接、16 字节匹配回环 | 通过；再次发送通过 | 本次 iPhone 日志 verified 51/135/73 ms，Mac 对应收到/回传 16 字节 |
+| iPhone 锁屏维持与断连恢复 | 通过；锁屏期间重连并完成 3 次新回环 | `passcodeRequired=True` 区间 18:34:41–18:35:57；同期 Mac 记录三次 `received 16 bytes` |
+| iPhone 后台连接与回环 | 通过 | 18:24:23–18:25:29 后台区间，服务恢复后的新回环分别 75/92 ms；回前台后 48 ms |
 | 任一端蓝牙关闭/开启 | 待真机 | 关闭诊断、poweredOn 后自动恢复 |
-| Mac 停止/重新广播 | 待真机 | service removed/断连、重新发现与新回环 |
+| Mac 停止/重新广播 | 通过；后台连续两次恢复 | 宿主每 30 秒撤销服务 4 秒，手机记录 service removed、重新订阅和新 verified |
 | 原 RSSI/锁屏解锁/远程/L2CAP 回归 | 自动化结果另列，真机待测 | 授权隔离会话的实际行为 |
 | 新旧链路并行及独立停止 | 待真机 | 同时运行与停止测试后旧链路日志 |
-| 失败/重复/满队列/多次启停 | 纯逻辑已测；CoreBluetooth 运行时待测 | 模拟逻辑结果及真实委托/缓冲区事件 |
+| 失败/重复/满队列/多次启停 | 纯逻辑通过；真机重复发送/多次启停通过 | 真实通知缓冲区饱和、连接超时等故障注入尚未全覆盖 |
+
+真机 UI 方法 `testForegroundRepeatAndBackgroundRecovery`：1 test / 0 failures，约 216 秒。
+结果包 `/tmp/octopilot-rgatt-hardware-xcode27-run2-20261022.xcresult` 含前台、返回前台截图与
+`reverse-gatt-device-events` 日志附件。它要求后台标记和前台标记之间出现新 `round-trip verified`，
+不能用返回前台后的刷新代替后台成功。宿主使用已核验的生产 Peripheral 源码，
+周期重启只影响该测试服务。
+
+物理锁屏证据来自同一方法的另外两次运行，均以真实设备状态判定，不用测试日志推断：
+
+- 180 秒后台窗口（18:33:00–18:36:01，结果包 `…-lock180-20261022.xcresult`）。设备 lockState 每 15 秒采样，
+  18:34:41–18:35:57 连续 6 次报告 `passcodeRequired=True`，18:36:13 起恢复 `False`；测试录屏在 18:36
+  显示锁屏界面。同一区间内 Mac 宿主在 18:34:51、18:35:18、18:35:50 三次记录 `central subscribed`
+  与新 `received 16 bytes; writes=1`，即手机在锁定状态下仍完成重连、订阅和写入。
+  该轮在窗口结束时因设备仍锁着而无法 `activate()` 取回手机日志；失败点是被测 App 无法前台启动，
+  不是链路失败。测试设施随后改为先等待前台、再读取日志，避免把这种情形记成回归。
+- 修复后重跑 120 秒后台窗口（18:54:31–18:56:31，结果包 `…-lockfinal-20261022.xcresult`）：
+  1 test / 0 failures，约 304 秒。手机日志确认后台区间内新 `round-trip verified` 为 63/97/64/62 ms
+  （count 3→6），回前台后 70 ms（count 7）。此轮设备未锁屏（`passcodeRequired` 始终为 `False`），
+  只计为后台恢复的第二次独立复验，不计为锁屏证据。
+
+锁屏项按“维持与断连恢复”通过：已有连接被系统断开后，手机在锁定期间仍能重新发现、订阅并完成新回环。
+没有观察到“锁屏时连接完全不断”的情形，也不把零断连当作验收要求。
 
 操作步骤见 [REMOTE_CONTROL.md](REMOTE_CONTROL.md#on-device-acceptance)。
 本次不停止、不替换、不重启用户 `/Applications/MacPilot.app`，也不操作用户锁屏或登录界面。

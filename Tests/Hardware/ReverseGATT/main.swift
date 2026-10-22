@@ -6,10 +6,21 @@ import Foundation
 @main
 struct ReverseGATTHardwareHost {
     @MainActor
-    static func main() async {
+    static func main() {
+        let app = NSApplication.shared
+        Task { @MainActor in
+            await run()
+            app.terminate(nil)
+        }
+        // CoreBluetooth/TCC needs a normal AppKit run loop, including launch
+        // events, even though this isolated accessory has no visible window.
+        app.run()
+    }
+
+    @MainActor
+    private static func run() async {
         guard ProcessInfo.processInfo.environment["MACPILOT_GATT_HARDWARE"] == "1",
               CommandLine.arguments.count == 2 else { return }
-        _ = NSApplication.shared
         let commandFile = CommandLine.arguments[1]
         let peripheral = ProximityBLEPeripheral()
         let deviceID = UUID(uuidString: "AF07681C-5639-4776-875A-6FB41EA01922")!

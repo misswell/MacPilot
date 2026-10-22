@@ -29,7 +29,6 @@ struct ProximityGATTTestView: View {
                         .accessibilityIdentifier("proximityGATTStart")
                     }
                 }
-                .accessibilityIdentifier("proximityGATTStartStop")
             } footer: {
                 Text(appModel.text("proximityGATTSubtitle"))
             }

@@ -25,12 +25,13 @@ final class ReverseGATTHardwareUITests: XCTestCase {
         XCTAssertTrue(entry.isHittable)
         entry.tap()
         defer {
-            if app.state != .runningForeground { app.activate() }
-            for _ in 0..<16 {
-                if app.buttons["proximityGATTStop"].isHittable { break }
-                app.swipeDown()
+            if app.state == .runningForeground || waitForForeground(in: app, timeout: 30, allowingActivate: true) {
+                for _ in 0..<16 {
+                    if app.buttons["proximityGATTStop"].isHittable { break }
+                    app.swipeDown()
+                }
+                if app.buttons["proximityGATTStop"].isHittable { app.buttons["proximityGATTStop"].tap() }
             }
-            if app.buttons["proximityGATTStop"].isHittable { app.buttons["proximityGATTStop"].tap() }
         }
         if app.buttons["proximityGATTStop"].exists { app.buttons["proximityGATTStop"].tap() }
         app.buttons["proximityGATTStart"].tap()
@@ -52,17 +53,23 @@ final class ReverseGATTHardwareUITests: XCTestCase {
             app.swipeDown()
         }
         waitForVerified(in: app, timeout: 60)
+        // A lock-screen run backgrounds the app with the side button instead of
+        // Home, so unlocking returns you straight to it. Never call activate()
+        // there: it fails outright while the device is still locked, which used
+        // to discard the log the controller had already written.
+        let lockScreenRun = ProcessInfo.processInfo.environment["MACPILOT_GATT_LOCK_SCREEN"] == "1"
         NSLog("GATT_HARDWARE_BACKGROUND_BEGIN")
-        XCUIDevice.shared.press(.home)
+        if !lockScreenRun { XCUIDevice.shared.press(.home) }
         let duration = Double(ProcessInfo.processInfo.environment["MACPILOT_GATT_BACKGROUND_SECONDS"] ?? "65") ?? 65
         // The host cycles only its test service while the phone is backgrounded.
         // The controller must make a new verified probe before foregrounding.
         Thread.sleep(forTimeInterval: min(180, max(35, duration)))
         NSLog("GATT_HARDWARE_BACKGROUND_END")
-        app.activate()
+        XCTAssertTrue(waitForForeground(in: app, timeout: 120, allowingActivate: !lockScreenRun),
+                      "The app did not return to the foreground; unlock the iPhone to collect the log")
         waitForVerified(in: app, timeout: 60)
         attachScreen("after-background")
-        app.buttons["proximityGATTStop"].tap()
+        if app.buttons["proximityGATTStop"].isHittable { app.buttons["proximityGATTStop"].tap() }
         let lines = collectLog(in: app)
         let attachment = XCTAttachment(string: lines.joined(separator: "\n"))
         attachment.name = "reverse-gatt-device-events"
@@ -82,8 +89,21 @@ final class ReverseGATTHardwareUITests: XCTestCase {
     private func waitForVerified(in app: XCUIApplication, timeout: TimeInterval) {
         let status = app.staticTexts["proximityGATTStatus"]
         let predicate = NSPredicate(format: "label CONTAINS '回环成功' OR label CONTAINS[c] 'echo verified'")
-        let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: timeout)
+        let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: status)], timeout: timeout)
         XCTAssertEqual(result, .completed, "No fresh verified echo: \(status.exists ? status.label : "missing status")")
+    }
+
+    /// Waits for the app to come forward without throwing. `activate()` throws
+    /// while the device is still locked, so a lock-screen run must not call it.
+    @MainActor
+    private func waitForForeground(in app: XCUIApplication, timeout: TimeInterval, allowingActivate: Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if app.state == .runningForeground { return true }
+            if allowingActivate, app.state == .runningBackground { app.activate() }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        return app.state == .runningForeground
     }
 
     @MainActor
