@@ -183,6 +183,18 @@ final class AwakeSessionManager: ObservableObject, ManagedFeature {
         startManualSession(endCondition: .date(date))
     }
 
+    /// Menu-bar quick action: keep the screen lit for the chosen span. The
+    /// saved default policy may allow display sleep, so this session forces
+    /// both sleep guards without changing that persisted default.
+    @discardableResult
+    func startScreenOnSession(duration: TimeInterval?) -> UUID {
+        var policy = settings.defaultPolicy
+        policy.preventSystemSleep = true
+        policy.preventDisplaySleep = true
+        let endCondition: SessionEndCondition = duration.map { .duration(max(0, $0)) } ?? .manual
+        return startSession(source: .manual, endCondition: endCondition, policy: policy)
+    }
+
     /// Starts the default session: the persisted default duration (or
     /// manual end when unlimited) with the shared default policy.
     @discardableResult

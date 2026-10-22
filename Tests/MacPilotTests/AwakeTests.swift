@@ -16,6 +16,31 @@ struct AwakeTests {
         #expect(!SessionPolicy.standard.preventClosedLidSleep)
     }
 
+    @Test func screenOnQuickActionKeepsTheDisplayAwakeWithoutChangingTheDefaultPolicy() {
+        let assertionController = TestAssertionController()
+        let manager = AwakeSessionManager(
+            assertionController: assertionController,
+            powerStateProvider: TestPowerStateProvider()
+        )
+        defer { manager.shutdown() }
+
+        // The saved default allows display sleep; the quick action must not.
+        #expect(!manager.settings.defaultPolicy.preventDisplaySleep)
+
+        let id = manager.startScreenOnSession(duration: 30 * 60)
+        let session = manager.activeSessions.first { $0.id == id }
+
+        #expect(session?.policy.preventDisplaySleep == true)
+        #expect(session?.policy.preventSystemSleep == true)
+        #expect(session?.endCondition == .duration(30 * 60))
+        #expect(assertionController.lastState.preventDisplaySleep)
+        #expect(assertionController.lastState.preventSystemSleep)
+        #expect(!manager.settings.defaultPolicy.preventDisplaySleep)
+
+        let unlimited = manager.startScreenOnSession(duration: nil)
+        #expect(manager.activeSessions.first { $0.id == unlimited }?.endCondition == .manual)
+    }
+
     @Test func sessionModelsRoundTripAllP0EndConditions() throws {
         let startedAt = Date(timeIntervalSince1970: 1_000)
         let sessions = [
@@ -148,6 +173,8 @@ struct AwakeTests {
         #expect(AppText.value("awake", language: .english) == "Awake")
         #expect(AppText.value("awakeDisplaySleepAllowed", language: .simplifiedChinese) == "允许显示器休眠")
         #expect(AppText.value("awakeDisplaySleepAllowed", language: .english) == "Allow display sleep")
+        #expect(AppText.value("awakeDuration", language: .simplifiedChinese) == "亮屏时长")
+        #expect(AppText.value("awakeDuration", language: .english) == "Screen-On Duration")
         #expect(AppText.value("awakeStopSession", language: .simplifiedChinese) == "停止此 Session")
         #expect(AppText.value("awakeStopSession", language: .english) == "Stop this session")
         #expect(AppText.value("awakeActiveSessions", language: .simplifiedChinese) == "活跃 Session")

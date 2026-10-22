@@ -1247,11 +1247,11 @@ struct AwakeMenuView: View {
             }
 
             Menu(model.t("awakeDuration")) {
-                Button(model.t("awake30Minutes")) { _ = awake.startManualSession(duration: 30 * 60) }
-                Button(model.t("awakeOneHour")) { _ = awake.startManualSession(duration: 60 * 60) }
-                Button(model.t("awakeTwoHours")) { _ = awake.startManualSession(duration: 2 * 60 * 60) }
-                Button(model.t("awakeFourHours")) { _ = awake.startManualSession(duration: 4 * 60 * 60) }
-                Button(model.t("awakeUnlimited")) { _ = awake.startManualSession() }
+                Button(model.t("awake30Minutes")) { _ = awake.startScreenOnSession(duration: 30 * 60) }
+                Button(model.t("awakeOneHour")) { _ = awake.startScreenOnSession(duration: 60 * 60) }
+                Button(model.t("awakeTwoHours")) { _ = awake.startScreenOnSession(duration: 2 * 60 * 60) }
+                Button(model.t("awakeFourHours")) { _ = awake.startScreenOnSession(duration: 4 * 60 * 60) }
+                Button(model.t("awakeUnlimited")) { _ = awake.startScreenOnSession(duration: nil) }
             }
 
             if awake.hasInteractiveSession {
