@@ -142,3 +142,45 @@ iOS 新增默认关闭、重复停止、清理日志与独立 UserDefaults 意�
 参考 Apple [Core Bluetooth 后台处理](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)、
 [TN3115 恢复启动规则](https://developer.apple.com/documentation/technotes/tn3115-bluetooth-state-restoration-app-relaunch-rules)
 和 [ATT 写入批次响应要求](https://developer.apple.com/documentation/corebluetooth/cbperipheralmanagerdelegate/peripheralmanager(_:didreceivewrite:))。
+
+## 2026-10-22 晚：反向 GATT 作为自动解锁的额外识别链路
+
+BLE 地址轮换的正式修复早在 `1.2.4` 就已存在：`BLEPresenceAuthenticator` 用
+`RemoteBLEPresenceChallenge` 在 GATT 上让手机用长期配对密钥回答，Mac 验证后把新地址
+学习为别名。现场 `Diagnostics.log` 当天记录 34 次 `rotated phone address authenticated`，
+说明该路径在真机上确实工作。
+
+本节新增的是一条**独立的第二识别路径**，方向相反（Mac 广播、手机连接），用于在原有
+路径跟不上时兜底。它不是替换：`RemoteBLECentral`、`RemoteBLEPeripheral`、
+`RemoteBLEService`、`BLEUnlockModel`、RSSI 监控、身份绑定、配对认证与 L2CAP 全部未改动。
+
+### 实现
+
+- 共享协议：`ProximityGATTService.presenceChallengeCharacteristicUUID`（`…0005`）与
+  `ProximityGATTPresence`；直接复用 `RemoteBLEPresenceChallenge` 的 HMAC 证明，不引入第二套密钥。
+- Mac：`ProximityBLEPeripheral` 在原有 4 项服务里增加可读写特征。每次读下发一个**新的** nonce，
+  只接受对应 nonce 的密钥证明，且证明一次性使用（读完即清），因此重放无效。
+- 验证通过后只调用既有的 `learnAuthenticatedBLEIdentity`，与原有路径共用别名学习；
+  RSSI 阈值、`manualLock`、解锁尝试门控全部照旧生效。认证只证明身份，不证明距离。
+- iOS：`ProximityBLECentral` 连接后发现该特征就读取并应答，使用与原有
+  `onPresenceChallenge` 相同的 Keychain 配对密钥。
+- 默认关闭（`reverseGATTPresenceEnabled`，append-only 键），现有用户行为零变化。
+
+### 验证
+
+- 共享协议包：122 tests / 21 suites 通过（新增 7 项存在性证明测试）。
+- 配置契约：`ConfigurationSchemaContractTests` + `ConfigStoreTests` 8/8 通过；
+  新增测试固定「默认关闭」与「旧文件无该键仍可解码」。
+- BLE 相关 11 个套件 140/140 通过。
+- Mac 全量 1610 项中 1 项失败：`RemoteControlTests` 的亮度往返断言，在**未改动的干净基线**上
+  同样失败（依赖真实显示器亮度硬件），与本次改动无关。
+- Release `-Xswiftc -warnings-as-errors` 构建通过，0 warning。
+- 独立端到端演练（真实生产类型、无 mock）：诚实握手被接受；错误密钥、重放、跨 Mac 证明、
+  空证明四条路径全部被拒绝；16 字节回环探针不受影响。
+
+### 仍需真机确认
+
+- 真机上开启「反向 GATT 兜底识别」后，确认手机轮换地址时新地址被学习为别名，且
+  `Diagnostics.log` 出现 `presence authenticated central=…`。
+- 确认关闭该开关后行为与旧版完全一致。
+- 原有 RSSI 判定、手动锁定、锁屏解锁与远程控制回归。
