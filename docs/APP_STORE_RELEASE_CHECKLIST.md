@@ -310,3 +310,17 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - ASC Build ID：`cca0c5fd-7570-498b-b284-6dd62ce071de`，上传后直接 `processingState=VALID`，过期日 2027-01-20；内部组「内部」（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`，`isInternalGroup=true`、`hasAccessToAllBuilds=true`）的 builds relationship 已包含本次构建（`asc testflight config export --include-builds` 读回）。
 - 中英文 What to Test 已写入并读回：zh-Hans 466 字符、en-US 1348 字符，覆盖开关位置、前台验证步骤、阈值/手动锁定边界、日志导出，并明确后台与锁屏仍需真机验收、不承诺强制退出后自动重启。
 - 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 46 附加到 1.2.5 版本、未执行 `asc metadata push`。`VALID` 不代表 Apple 已审核批准；真机后台/锁屏与自动解锁仍未通过验收。
+
+## 2026-10-23：1.2.5 / 构建 47 TestFlight 内部分发
+
+- 构建 46 上传约一小时后，用户要求再次上传手机端 TestFlight；代码无新增改动（`git log f25ef53..HEAD -- iOS Packages` 只有构建号提交），因此仅把 `CURRENT_PROJECT_VERSION` 46 → 47，`MARKETING_VERSION` 保持 1.2.5。
+- 上传前 `asc builds next-build-number` 返回 47（processed/upload/observed 均为 46）；`xcodegen generate` 后 `CODE_SIGN_STYLE=Automatic`、`DEVELOPMENT_TEAM=U8U443D7ZL` 未变，`PROVISIONING_PROFILE_SPECIFIER` 出现 0 次。
+- 最终 IPA：`/tmp/PilotNest-export-47/PilotNest.ipa`（2,758,485 字节）；bundle `com.misswell.macpilot.remote`，`1.2.5 (47)`，Team `U8U443D7ZL`，`MinimumOSVersion=17.0`，`ITSAppUsesNonExemptEncryption=false`；`unzip -t` 无错误。
+- IPA SHA-256：`0387b43dcac87cdf4bfec1983f1c55aeb99a4e180d4634f1b4b8c04ffeb919a7`。
+- `codesign --verify --deep --strict` 通过；`Authority=Apple Distribution: Guofeng Liu (U8U443D7ZL)`。Signer leaf DER SHA-256 `c9f379c6ec0ebf40e7fd5c3034849bc40b466c3ab78a595b3de09f81d2d17040`，与 embedded profile 的 `DeveloperCertificates[0]` 相同。
+- Profile：Xcode 管理的 `iOS Team Store Provisioning Profile: com.misswell.macpilot.remote`，UUID `b6b2e034-9cf1-4475-8cc9-dda1fff53fe7`，有效至 2027-09-06；`get-task-allow=false`，无设备名单、无企业分发标记，app-id 一致。
+- `openssl cms -verify` 返回 `CMS Verification successful`，已认证内层 DER 中 `STORE` 与 profile UUID 一致；翻转字节的对照样本验证失败。
+- IPA 内字符串确认包含本轮生产代码标识：`com.misswell.macpilot.reverse-presence.central`、`reversePresence.wantsToRun`、`macInfoReadFailed`、`MacPilotRemote-v1-reverse-presence`。
+- ASC Build ID：`3c5c6918-d3f0-4287-a526-b98d1c5826bb`，`processingState=VALID`，`internalBuildState=IN_BETA_TESTING`，`autoNotifyEnabled=true`。上传后 `asc testflight groups list --app` 与 `asc apps list` 一度返回空/500（ASC 服务端抖动），改用 `asc builds upload` 上传、`asc publish testflight --build <id>` 分发，并以全局组列表与 `asc testflight config export --include-builds` 读回确认内部组「内部」已包含构建 47；显式 `add-groups` 对内部组返回 `Cannot add internal group to a build`，因为内部组本就自动接收全部构建。
+- 中英文 What to Test 已写入并读回：zh-Hans 466 字符、en-US 1348 字符，内容与构建 46 相同。
+- 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 47 附加到 1.2.5 版本、未执行 `asc metadata push`。`VALID` 不代表 Apple 已审核批准。
