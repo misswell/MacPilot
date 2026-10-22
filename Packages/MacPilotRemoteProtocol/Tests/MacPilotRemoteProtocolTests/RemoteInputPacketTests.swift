@@ -51,13 +51,17 @@ struct RemoteInputBatchCodecTests {
             Issue.record("expected a press event")
             return
         }
+        // Keep arithmetic outside the macro for Xcode 26.3's type checker.
         // One byte of resolution: 0.62 must survive to within half a step.
-        #expect(abs(firstPressure - 0.62) < 1.0 / 255.0 / 2 + 0.001)
+        let pressureTolerance: Double = 1.0 / 255.0 / 2 + 0.001
+        let firstPressureError = abs(firstPressure - 0.62)
+        #expect(firstPressureError < pressureTolerance)
         guard case let .press(_, _, upPressure) = decoded.events[1] else {
             Issue.record("expected a press event")
             return
         }
-        #expect(abs(upPressure - 0.62) < 1.0 / 255.0 / 2 + 0.001)
+        let upPressureError = abs(upPressure - 0.62)
+        #expect(upPressureError < pressureTolerance)
         #expect(decoded.events[2] == .press(button: .right, action: .down, pressure: 1.0))
     }
 
