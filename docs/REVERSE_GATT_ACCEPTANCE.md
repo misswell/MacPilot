@@ -48,6 +48,7 @@ iOS 只新增独立测试开关 `reverseGATTTest.wantsToRun`（UserDefaults）�
 | `iOS/MacPilotRemote/MacPilotRemote.xcodeproj/project.pbxproj` | xcodegen 生成的测试文件登记 |
 | `iOS/MacPilotRemote/ScreenshotTests/ReverseGATTHardwareUITests.swift` | 默认跳过、显式启用的真机前台/重复/后台回环测试 |
 | `Tests/Hardware/ReverseGATT/` | 复制并校验生产 Peripheral 的隔离宿主准备工具和操作说明 |
+| `.github/workflows/build.yml` | 主分支增加 GATT 文案与共享协议回归门禁 |
 | `docs/REMOTE_CONTROL.md`、本报告 | 行为、操作、系统限制与真实验证记录 |
 
 ## 自动化验证
@@ -57,9 +58,9 @@ iOS 只新增独立测试开关 `reverseGATTTest.wantsToRun`（UserDefaults）�
 过期/取消订阅/停止清理、连续失败退避上限与重置。双语测试包含所有新增界面文案。
 iOS 新增默认关闭、重复停止、清理日志与独立 UserDefaults 意图测试，不启动真实蓝牙。
 
-- Mac fresh release：`swift build -c release -Xswiftc -warnings-as-errors --scratch-path /tmp/octopilot-release-20261022` 通过，无 warning/error。产物：`/tmp/octopilot-release-20261022/arm64-apple-macosx/release/MacPilot`。
+- Mac fresh release：`swift build -c release -Xswiftc -warnings-as-errors --scratch-path /tmp/octopilot-release-20261022` 通过，无 warning/error。产物已保留：`/Users/guofeng/Code/solo/OctoPilot/build/reverse-gatt-validation/MacPilot`。
 - iOS generic device `build-for-testing`（`CODE_SIGNING_ALLOWED=NO`）通过。产物：`/tmp/octopilot-ios-device-20261022/Build/Products/Debug-iphoneos/PilotNest.app`，仅供编译验证，未签名、未安装、未上传 TestFlight。
-- Mac 首次完整测试：1609 tests / 187 suites，13 issues。已知计时波动 9 issues，另有 ClosedLid 三项心跳测试的 4 issues；后者整个套件隔离运行 15/15 通过，仍保留首次失败记录，待完整复验。
+- Mac 首次完整测试：1609 tests / 187 suites，13 issues。已知计时波动 9 issues，另有 ClosedLid 三项心跳测试的 4 issues；后者整个套件隔离运行 15/15 通过，最终完整复验结果见下方。
 
 - Mac 最终完整复验：`env -u MACPILOT_TEST_DISPLAY_BLANK swift test --jobs 1 --no-parallel`，1609 tests / 187 suites，0 failures。此前失败项目均通过；不改动原测试或屏幕行为。
 - iOS AgentSpace 模拟器（iPhone 17 Pro / iOS 26.5）：新增 GATT opt-in/localization 与 3 个已有 BLE 套件共 12/12 通过。
@@ -67,7 +68,10 @@ iOS 新增默认关闭、重复停止、清理日志与独立 UserDefaults 意�
 
 - 专用硬件 UI 测试：`MacPilotRemoteScreenshots` scheme 的 `generic/platform=iOS` 签名 `build-for-testing` 通过，包含默认 skip 的 `ReverseGATTHardwareUITests`。
 - 隔离 Mac 宿主：生产 Peripheral 源码 SHA-256 与复制源一致，fresh release warnings-as-errors 编译、Developer ID 签名及 strict codesign 校验通过。
-- 无线执行当前受环境阻塞：AgentUse 蓝牙隐私页只有 `agentspace-worker` 项且关闭，宿主实际返回 `Bluetooth unauthorized`；系统不允许工具替代人工授权。宿主已正常收尾，没有成功广播。手机在运行器探路测试后再次变为 `unavailable`，无线 UI 测试尚未开始。
+- 无线执行当前受环境阻塞：AgentUse 蓝牙隐私页只有 `agentspace-worker` 项且关闭，宿主实际返回 `Bluetooth unauthorized`；AgentSpace 工具要求隐私权限由人亲自授予，不能代点。宿主已正常收尾，没有成功广播。手机在运行器探路测试后再次变为 `unavailable`，无线 UI 测试尚未开始。
+
+已保留的 PilotNest 开发测试 App：`/Users/guofeng/Code/solo/OctoPilot/build/reverse-gatt-validation/PilotNest.app`。
+它不是 App Store/TestFlight 分发包；此次没有上传 TestFlight。
 
 ## 真机验收状态
 
