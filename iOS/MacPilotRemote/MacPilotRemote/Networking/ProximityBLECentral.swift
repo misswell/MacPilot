@@ -44,6 +44,11 @@ final class ProximityBLECentral: NSObject, ObservableObject, @preconcurrency CBC
     private var macInfoCharacteristic: CBCharacteristic?
     private var echoCharacteristic: CBCharacteristic?
     private var responseCharacteristic: CBCharacteristic?
+    private var presenceCharacteristic: CBCharacteristic?
+    /// Answers a Mac's presence challenge with the long-term pairing key. Only
+    /// set when a paired Mac exists; leaving it nil keeps this a pure
+    /// round-trip test that can never authenticate anything.
+    var presenceChallengeResponder: (@MainActor (RemoteBLEPresenceChallenge) -> Data?)?
     @Published private(set) var probe = ProximityGATTProbe()
     @Published private(set) var lastVerifiedAt: Date?
     @Published private(set) var isConnected = false
@@ -411,6 +416,15 @@ final class ProximityBLECentral: NSObject, ObservableObject, @preconcurrency CBC
         macInfoCharacteristic = macInfo
         echoCharacteristic = echo
         responseCharacteristic = response
+        presenceCharacteristic = characteristics.first {
+            $0.uuid == ProximityGATTService.presenceChallengeCharacteristicUUID
+        }
+        // Reading the challenge is what makes the reverse link useful as a
+        // proximity fallback: the Mac then learns this rotated address. It is a
+        // plain read, so an older Mac without the characteristic is unaffected.
+        if let presenceCharacteristic {
+            peripheral.readValue(for: presenceCharacteristic)
+        }
         timings.discoverMs = elapsedMs(since: discoverStartedAt)
         log("characteristics found in \(timings.discoverMs ?? 0) ms; reading Mac info")
         readStartedAt = .now
@@ -423,7 +437,32 @@ final class ProximityBLECentral: NSObject, ObservableObject, @preconcurrency CBC
             handleMacInfo(characteristic, error: error)
         } else if characteristic === echoCharacteristic, isSubscribed {
             handleEcho(characteristic, error: error)
+        } else if characteristic === presenceCharacteristic {
+            handlePresenceChallenge(characteristic, error: error)
         }
+    }
+
+    /// Answers the Mac's nonce with the long-term pairing key. Nothing is sent
+    /// when there is no responder or no challenge, so a lost key can never be
+    /// replaced by an empty proof the Mac would accept.
+    private func handlePresenceChallenge(_ characteristic: CBCharacteristic, error: Error?) {
+        if let error {
+            log("presence challenge read failed: \(error.localizedDescription)")
+            return
+        }
+        guard let data = characteristic.value,
+              let challenge = RemoteBLEPresenceChallenge(encoded: data) else {
+            log("presence challenge decode failed (\(characteristic.value?.count ?? 0) bytes)")
+            return
+        }
+        guard let responder = presenceChallengeResponder,
+              let proof = responder(challenge), !proof.isEmpty else {
+            log("presence challenge unanswered: no pairing key for mac=\(challenge.macID.uuidString)")
+            return
+        }
+        guard let peripheral = self.peripheral else { return }
+        peripheral.writeValue(proof, for: characteristic, type: .withResponse)
+        log("presence challenge answered mac=\(challenge.macID.uuidString)")
     }
 
     private func handleMacInfo(_ characteristic: CBCharacteristic, error: Error?) {

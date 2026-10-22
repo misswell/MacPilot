@@ -354,6 +354,28 @@ struct BLEIdentityRegistryTests {
         #expect(historicalKeys.isSubset(of: Set(object.keys)))
     }
 
+    /// The reverse-role fallback is an addition, not a replacement: it must stay
+    /// off for anyone who never opted in, and a file written before the key
+    /// existed must still decode with the default.
+    @Test func reverseGATTPresenceDefaultsOffAndDecodesFromOlderFiles() throws {
+        #expect(BLEUnlockSettings().reverseGATTPresenceEnabled == false)
+
+        let withoutKey = """
+        {"isEnabled": true, "unlockRSSI": -60}
+        """
+        let decoded = try JSONDecoder().decode(BLEUnlockSettings.self, from: Data(withoutKey.utf8))
+        #expect(decoded.reverseGATTPresenceEnabled == false)
+
+        var enabled = BLEUnlockSettings()
+        enabled.reverseGATTPresenceEnabled = true
+        let encoded = try JSONEncoder().encode(enabled)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(object["reverseGATTPresenceEnabled"] as? Bool == true)
+
+        let roundTripped = try JSONDecoder().decode(BLEUnlockSettings.self, from: encoded)
+        #expect(roundTripped.reverseGATTPresenceEnabled)
+    }
+
     private func uuid(_ value: String) -> UUID {
         UUID(uuidString: value)!
     }

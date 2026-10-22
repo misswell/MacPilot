@@ -23,6 +23,10 @@ public enum ProximityGATTService {
     /// Write-only. The phone writes a fresh random payload and expects it back
     /// on the echo characteristic.
     public nonisolated(unsafe) static let responseCharacteristicUUID = CBUUID(string: "6D616350-696C-6F74-0002-000000000004")
+    /// Read + write. Carries the authenticated presence challenge used by the
+    /// proximity fallback. Optional: an older phone simply has no such
+    /// characteristic, and the round-trip test above keeps working without it.
+    public nonisolated(unsafe) static let presenceChallengeCharacteristicUUID = CBUUID(string: "6D616350-696C-6F74-0002-000000000005")
 }
 
 /// The read-only payload that tells the phone which Mac it reached.
@@ -83,5 +87,35 @@ public enum ProximityGATTEcho {
         sent.count == length
             && echoed.count == length
             && RemoteCrypto.constantTimeEquals(echoed, sent)
+    }
+}
+
+/// Authenticates a reverse-GATT central before its address may be treated as a
+/// proximity observation.
+///
+/// The reverse link exists because iOS rotates its advertised address, which
+/// makes the Mac see a new peripheral each time. Without a challenge, echoing
+/// sixteen bytes would only prove *some* device is nearby, so any phone running
+/// PilotNest could stand in for the paired one. This reuses the very same
+/// `RemoteBLEPresenceChallenge` proof as the existing phone-as-peripheral path:
+/// only a device holding the long-term pairing key can answer, and the answer
+/// is bound to this Mac's identity and a fresh nonce.
+///
+/// Authentication proves identity, never proximity: the caller must still take
+/// ordinary RSSI samples before the address may unlock anything.
+public enum ProximityGATTPresence {
+    /// Mac writes a `RemoteBLEPresenceChallenge`; the phone answers with the
+    /// keyed proof on the same characteristic. Both directions are length
+    /// checked, and the encoded challenge already carries its own version byte.
+    public static func response(for challenge: RemoteBLEPresenceChallenge, pairingKey: Data) -> Data {
+        challenge.response(pairingKey: pairingKey)
+    }
+
+    public static func isValidResponse(
+        _ response: Data,
+        challenge: RemoteBLEPresenceChallenge,
+        pairingKey: Data
+    ) -> Bool {
+        challenge.isValidResponse(response, pairingKey: pairingKey)
     }
 }

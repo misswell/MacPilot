@@ -646,6 +646,8 @@ enum AppText {
         "bleWakeOnProximity": "接近时唤醒", "bleWakeWithoutUnlocking": "唤醒但不解锁", "blePauseNowPlaying": "锁定时暂停播放",
         "bleUseScreensaver": "用屏幕保护程序锁定", "bleTurnOffScreen": "锁定时关闭屏幕", "blePassiveMode": "被动模式",
         "blePassiveModeInfo": "默认主动连接设备读取 RSSI，更稳定。若与其他蓝牙设备相互干扰，可开启被动模式仅靠扫描。",
+        "bleReverseGATT": "反向 GATT 兜底识别",
+        "bleReverseGATTInfo": "手机轮换蓝牙地址后，原有识别偶尔跟不上。开启后 Mac 会额外广播一条反向 GATT 测试服务，用已配对的密钥验证新地址并作为别名补充；只增加一条识别路径，不改变原有扫描、RSSI 判定、手动锁定或解锁流程。需要 PilotNest 1.2.5 或更新版本。",
         "bleSetPassword": "设置密码…",
         "bleBluetoothOff": "蓝牙未打开", "bleEnterPassword": "请输入登录密码", "blePasswordInfo": "密码将安全保存在钥匙串中，仅在屏幕锁定时用于解锁。",
         "blePasswordStored": "密码已保存到钥匙串。", "blePasswordFailed": "无法保存密码：%@", "blePasswordNotSet": "尚未设置登录密码。请使用“设置密码…”。",
@@ -1930,6 +1932,8 @@ enum AppText {
             "bleWakeOnProximity": "Wake on Proximity", "bleWakeWithoutUnlocking": "Wake without Unlocking", "blePauseNowPlaying": "Pause “Now Playing” while Locked",
             "bleUseScreensaver": "Use Screensaver to Lock", "bleTurnOffScreen": "Turn Off Screen on Lock", "blePassiveMode": "Passive Mode",
             "blePassiveModeInfo": "By default it actively connects to the device and reads RSSI, which is more stable. If it interferes with other Bluetooth devices, enable Passive Mode to scan only.",
+            "bleReverseGATT": "Reverse GATT fallback recognition",
+            "bleReverseGATTInfo": "After the phone rotates its Bluetooth address, the existing recognition can occasionally lag behind. When enabled, the Mac additionally advertises a reverse GATT test service and verifies the new address with the paired key, adding it as another alias. This only adds one recognition path; it does not change scanning, RSSI thresholds, manual lock, or the unlock flow. Requires PilotNest 1.2.5 or newer.",
             "bleSetPassword": "Set Password…",
             "bleBluetoothOff": "Bluetooth is off", "bleEnterPassword": "Enter your login password", "blePasswordInfo": "It will be securely stored in Keychain and used only to unlock the locked screen.",
             "blePasswordStored": "Password saved to Keychain.", "blePasswordFailed": "Couldn’t save password: %@", "blePasswordNotSet": "Login password is not set. Use Set Password….",
@@ -5677,6 +5681,9 @@ struct BLEUnlockView: View {
                 toggleRow(model.t("bleTurnOffScreen"), isOn: Binding(get: { ble.settings.turnOffScreen }, set: { ble.setTurnOffScreen($0) }))
                 toggleRow(model.t("blePassiveMode"), isOn: Binding(get: { ble.settings.passiveMode }, set: { ble.setPassiveMode($0) }))
                 Text(model.t("blePassiveModeInfo")).font(.caption).foregroundStyle(.secondary)
+                Divider()
+                toggleRow(model.t("bleReverseGATT"), isOn: Binding(get: { ble.settings.reverseGATTPresenceEnabled }, set: { ble.setReverseGATTPresenceEnabled($0) }))
+                Text(model.t("bleReverseGATTInfo")).font(.caption).foregroundStyle(.secondary)
             }
             Divider()
             sectionTitle(model.t("bleSecurity"))

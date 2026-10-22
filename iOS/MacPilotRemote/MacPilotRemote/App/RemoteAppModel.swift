@@ -315,6 +315,16 @@ final class RemoteAppModel: ObservableObject {
             }
             return challenge.response(pairingKey: key)
         }
+        // The reverse-role fallback asks the same question in the other
+        // direction: the Mac advertises and this phone answers. Reusing the
+        // identical keyed proof means one pairing key covers both paths and no
+        // second secret is introduced.
+        ProximityBLECentral.shared.presenceChallengeResponder = { challenge in
+            guard let key = RemoteKeychain.pairingKey(for: challenge.macID.uuidString) else {
+                return nil
+            }
+            return challenge.response(pairingKey: key)
+        }
 
         if let preferred = store.preferredMac {
             activeMac = preferred

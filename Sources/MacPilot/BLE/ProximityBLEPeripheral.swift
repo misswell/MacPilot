@@ -33,6 +33,19 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
     private var publishedService: CBMutableService?
     private var echoCharacteristic: CBMutableCharacteristic?
     private var responseCharacteristic: CBMutableCharacteristic?
+    private var presenceCharacteristic: CBMutableCharacteristic?
+    /// Holds the challenge this Mac handed out most recently. The phone must
+    /// answer exactly this nonce; a replay of an older proof fails because the
+    /// challenge is replaced on every read.
+    private var outstandingPresenceChallenge: RemoteBLEPresenceChallenge?
+    /// Supplies this Mac's own identity for a challenge, or nil when remote
+    /// control was never enabled. Set by the unlock feature.
+    var presenceMacIDProvider: (@MainActor () -> UUID?)?
+    /// Verifies the phone's keyed proof against every configured pairing key.
+    /// Returns the matching binding so the caller can learn the address.
+    var presenceVerifier: (@MainActor (RemoteBLEPresenceChallenge, Data) -> (clientID: String, keyFingerprint: String)?)?
+    /// Fires after a central proved it holds the long-term pairing key.
+    var onPresenceAuthenticated: (@MainActor (_ centralID: UUID, _ clientID: String, _ keyFingerprint: String) -> Void)?
     private var subscribedCentrals: [UUID: CBCentral] = [:]
     private var wantsToRun = false
     private var isPublishing = false
@@ -118,11 +131,21 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
             value: nil,
             permissions: [.writeable]
         )
+        // Only advertised when a pairing key exists, so a Mac without unlock
+        // configured does not hand strangers a challenge to grind against. The
+        // round-trip test above never needs it.
+        let presence = CBMutableCharacteristic(
+            type: ProximityGATTService.presenceChallengeCharacteristicUUID,
+            properties: [.read, .write],
+            value: nil,
+            permissions: [.readable, .writeable]
+        )
         let service = CBMutableService(type: ProximityGATTService.serviceUUID, primary: true)
-        service.characteristics = [macInfoCharacteristic, echo, response]
+        service.characteristics = [macInfoCharacteristic, echo, response, presence]
         publishedService = service
         echoCharacteristic = echo
         responseCharacteristic = response
+        presenceCharacteristic = presence
         log("publishing GATT service \(ProximityGATTService.serviceUUID.uuidString)")
         manager.add(service)
     }
@@ -246,13 +269,31 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
         guard peripheral === manager, wantsToRun,
-              request.characteristic.service === publishedService,
-              request.characteristic.uuid == ProximityGATTService.macInfoCharacteristicUUID else {
+              request.characteristic.service === publishedService else {
             peripheral.respond(to: request, withResult: .requestNotSupported)
             return
         }
         guard request.offset == 0 else {
             peripheral.respond(to: request, withResult: .invalidOffset)
+            return
+        }
+        if request.characteristic.uuid == ProximityGATTService.presenceChallengeCharacteristicUUID {
+            // Mac is the peripheral here, so the Mac issues the nonce and the
+            // phone answers it on the next write. A fresh challenge per read
+            // keeps a captured proof from authenticating a later connection.
+            guard let macID = presenceMacIDProvider?() else {
+                peripheral.respond(to: request, withResult: .insufficientAuthentication)
+                return
+            }
+            let challenge = RemoteBLEPresenceChallenge(macID: macID)
+            outstandingPresenceChallenge = challenge
+            request.value = challenge.encoded
+            log("issued presence challenge nonce=\(challenge.nonce.count) bytes")
+            peripheral.respond(to: request, withResult: .success)
+            return
+        }
+        guard request.characteristic.uuid == ProximityGATTService.macInfoCharacteristicUUID else {
+            peripheral.respond(to: request, withResult: .requestNotSupported)
             return
         }
         request.value = macInfo
@@ -262,6 +303,13 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         guard let first = requests.first else { return }
+        // A presence challenge is its own transaction: it is not an echo probe
+        // and must never enter the echo queue or be answered with an echo.
+        if requests.count == 1, let request = requests.first,
+           request.characteristic === presenceCharacteristic {
+            handlePresenceChallenge(peripheral: peripheral, request: request)
+            return
+        }
         // CoreBluetooth requires one ATT response for the entire batch. Validate
         // into a copy first so a rejected batch cannot partially echo data.
         var staged = echoQueue
@@ -297,6 +345,44 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
         log("received 16 bytes; writes=\(requests.count)")
         peripheral.respond(to: first, withResult: .success)
         deliverEchoes(on: peripheral)
+    }
+
+    /// Verifies the phone's proof for the challenge this Mac last issued. Only a
+    /// keyed answer makes the central's current address eligible to become an
+    /// alias; anything else leaves the monitored set untouched, so a stranger
+    /// running PilotNest can never be treated as the paired phone.
+    private func handlePresenceChallenge(peripheral: CBPeripheralManager, request: CBATTRequest) {
+        guard peripheral === manager, wantsToRun else {
+            peripheral.respond(to: request, withResult: .requestNotSupported)
+            return
+        }
+        guard request.offset == 0 else {
+            peripheral.respond(to: request, withResult: .invalidOffset)
+            return
+        }
+        guard let challenge = outstandingPresenceChallenge else {
+            log("rejected presence answer: no outstanding challenge")
+            peripheral.respond(to: request, withResult: .unlikelyError)
+            return
+        }
+        guard let response = request.value,
+              response.count == RemoteBLEPresenceChallenge.responseLength else {
+            log("rejected presence answer: invalid length \(request.value?.count ?? 0)")
+            peripheral.respond(to: request, withResult: .invalidAttributeValueLength)
+            return
+        }
+        guard let verifier = presenceVerifier,
+              let binding = verifier(challenge, response) else {
+            log("rejected presence answer: no matching pairing key central=\(request.central.identifier)")
+            outstandingPresenceChallenge = nil
+            peripheral.respond(to: request, withResult: .insufficientAuthentication)
+            return
+        }
+        // Single use: a replayed answer cannot authenticate a later connection.
+        outstandingPresenceChallenge = nil
+        log("presence authenticated central=\(request.central.identifier) client=\(binding.clientID)")
+        peripheral.respond(to: request, withResult: .success)
+        onPresenceAuthenticated?(request.central.identifier, binding.clientID, binding.keyFingerprint)
     }
 
     private func deliverEchoes(on peripheral: CBPeripheralManager) {

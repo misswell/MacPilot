@@ -290,6 +290,12 @@ struct BLEUnlockSettings: Codable {
     var turnOffScreen: Bool = false
     var screenLockHistory = ScreenLockHistory()
     var identityRegistry = BLEIdentityRegistry()
+    /// Extra fallback for rotated phone addresses: while an identity binding
+    /// exists, also advertise the reverse-role GATT service and accept an alias
+    /// learned over it. Off by default so existing users see no change; turning
+    /// it on only adds a second recognition path and never bypasses pairing,
+    /// the RSSI threshold or the manual-lock rules.
+    var reverseGATTPresenceEnabled: Bool = false
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled
@@ -311,6 +317,7 @@ struct BLEUnlockSettings: Codable {
         case turnOffScreen
         case screenLockHistory
         case identityRegistry
+        case reverseGATTPresenceEnabled
     }
 
     init() {}
@@ -336,6 +343,7 @@ struct BLEUnlockSettings: Codable {
         turnOffScreen = try container.decodeIfPresent(Bool.self, forKey: .turnOffScreen) ?? false
         screenLockHistory = try container.decodeIfPresent(ScreenLockHistory.self, forKey: .screenLockHistory) ?? ScreenLockHistory()
         identityRegistry = (try? container.decode(BLEIdentityRegistry.self, forKey: .identityRegistry)) ?? BLEIdentityRegistry()
+        reverseGATTPresenceEnabled = try container.decodeIfPresent(Bool.self, forKey: .reverseGATTPresenceEnabled) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -359,6 +367,7 @@ struct BLEUnlockSettings: Codable {
         try container.encode(turnOffScreen, forKey: .turnOffScreen)
         try container.encode(screenLockHistory, forKey: .screenLockHistory)
         try container.encode(identityRegistry, forKey: .identityRegistry)
+        try container.encode(reverseGATTPresenceEnabled, forKey: .reverseGATTPresenceEnabled)
     }
 }
 

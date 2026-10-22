@@ -5,6 +5,8 @@ import Darwin
 import Foundation
 import IOKit
 import IOKit.pwr_mgt
+import MacPilotRemoteProtocol
+import MacPilotRemoteTransport
 import Security
 
 nonisolated(unsafe) private let deviceInformationUUID = CBUUID(string: "180A")
@@ -396,6 +398,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         logSettings("monitoring started")
     }
 
+    private lazy var reverseGATTProbe = ProximityBLEPeripheral.shared
+
     /// The authenticator exists only while an identity binding is configured.
     /// It never creates its radio just because the feature is enabled: the
     /// monitoring scanner already owns that moment, and pairing a phone is
@@ -408,6 +412,53 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             && remoteOwnDeviceIDProvider != nil
             && remotePairingKeyProvider != nil
         presenceAuthenticator.setActive(shouldRun)
+        // Opt-in only: with the toggle off this is a no-op, so the existing
+        // authenticator above remains the single behavior for current users.
+        updateReverseGATTPresence(shouldRun: shouldRun && settings.reverseGATTPresenceEnabled)
+    }
+
+    /// Runs the reverse-role link as an *additional* way to recognise a rotated
+    /// phone address. The existing phone-as-peripheral authenticator stays
+    /// untouched and keeps running; this only adds a second, independent path
+    /// for the same claim, so losing either one still leaves a working fallback.
+    ///
+    /// It never starts a radio on its own: the probe only advertises while an
+    /// identity binding exists, exactly like the existing authenticator.
+    private func updateReverseGATTPresence(shouldRun: Bool) {
+        let probe = reverseGATTProbe
+        guard shouldRun else {
+            probe.presenceMacIDProvider = nil
+            probe.presenceVerifier = nil
+            probe.onPresenceAuthenticated = nil
+            if probe.isRunning { probe.stop() }
+            return
+        }
+        probe.presenceMacIDProvider = { [weak self] in
+            self?.remoteOwnDeviceIDProvider?()
+        }
+        probe.presenceVerifier = { [weak self] challenge, response in
+            guard let self else { return nil }
+            for binding in self.settings.identityRegistry.bindings {
+                guard let key = self.remotePairingKeyProvider?(binding.clientID) else { continue }
+                if ProximityGATTPresence.isValidResponse(response, challenge: challenge, pairingKey: key) {
+                    return (binding.clientID, binding.keyFingerprint)
+                }
+            }
+            return nil
+        }
+        probe.onPresenceAuthenticated = { [weak self] centralID, clientID, keyFingerprint in
+            // Reuses the exact alias path the existing authenticator uses, so
+            // the learned address is subject to the same RSSI threshold and
+            // manual-lock rules as any other alias.
+            self?.learnAuthenticatedBLEIdentity(
+                clientID: clientID,
+                keyFingerprint: keyFingerprint,
+                peripheralUUID: centralID
+            )
+        }
+        if !probe.isRunning {
+            probe.start(macDeviceID: remoteOwnDeviceIDProvider?())
+        }
     }
 
     // MARK: Settings mutations
@@ -633,6 +684,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         log("setPassiveMode from=\(settings.passiveMode) to=\(value)")
         settings.passiveMode = value
         applyPassiveMode()
+        notifyChange()
+    }
+
+    /// Extra recognition path for rotated phone addresses. Turning it on only
+    /// adds the reverse-role GATT challenge beside the existing authenticator;
+    /// turning it off stops that probe and leaves every other link untouched.
+    func setReverseGATTPresenceEnabled(_ value: Bool) {
+        log("setReverseGATTPresenceEnabled from=\(settings.reverseGATTPresenceEnabled) to=\(value)")
+        settings.reverseGATTPresenceEnabled = value
+        updatePresenceAuthentication()
         notifyChange()
     }
 
