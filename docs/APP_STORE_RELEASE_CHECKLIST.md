@@ -295,3 +295,18 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - ASC Build ID：`c88ebaed-1868-48ea-8702-2b5cb0b6c6e8`，`processingState=VALID`。内部组「内部」（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`）自动接收。
 - 中英文 What to Test 已写入并读回：zh-Hans 445 字符、en-US 1095 字符，说明背景、开关位置、验证步骤与「不绕过配对/RSSI/手动锁定」的边界。
 - 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 45 附加到 1.2.5 版本、未执行 `asc metadata push`。`VALID` 不代表 Apple 已审核批准。
+
+## 2026-10-23：1.2.5 / 构建 46 TestFlight 内部分发（反向 Presence 生产链路）
+
+- 目的是把 iOS 端真正的反向靠近链路发到手机，配合 Mac `v1.2.2-beta.45`。构建 45 只有测试页应答；本轮新增独立的生产 `ReversePresenceCentral`：独立恢复标识与 UserDefaults 键、配对后自动启用且尊重显式关闭、旧用户迁移一次、只为“启用意图 + Keychain 仍有密钥”恢复、未知 Mac/已删除密钥/非法 Mac info 一律拒绝、后台清空 pending challenge、最多 4 台 Mac，并在设置页提供状态、样本数、最近 RSSI、错误与日志。
+- 上传前 `asc versions list` 确认 1.2.5 train（`3ff9dbeb-fcb1-418b-baf6-e2b4c62dd007`）仍为 `PREPARE_FOR_SUBMISSION`，1.2.4 及更早 `READY_FOR_SALE`；`asc builds next-build-number` 返回 `46`（processed/upload/observed 均为 45）。`project.yml` 保持 `MARKETING_VERSION 1.2.5`、`CURRENT_PROJECT_VERSION` 45 → 46；`xcodegen generate` 后 `CODE_SIGN_STYLE=Automatic`、`DEVELOPMENT_TEAM=U8U443D7ZL` 保持不变，`PROVISIONING_PROFILE_SPECIFIER` 出现 0 次。
+- 最终 IPA：`/tmp/PilotNest-export-46/PilotNest.ipa`（2,758,484 字节）；bundle `com.misswell.macpilot.remote`，版本/构建号 `1.2.5 (46)`，Team `U8U443D7ZL`，`MinimumOSVersion=17.0`，`ITSAppUsesNonExemptEncryption=false`；`unzip -t` → `No errors detected`。
+- IPA SHA-256：`f55afd43fd87a3aed2c64ef8310f45ed91f1ddfbfbe89ea2473e13fc17fc9df6`。
+- `codesign --verify --deep --strict`：`valid on disk` + `satisfies its Designated Requirement`；`Authority=Apple Distribution: Guofeng Liu (U8U443D7ZL)`，`TeamIdentifier=U8U443D7ZL`。
+- 本次 Xcode 自动导出成功，嵌入的是 Xcode 管理的 `iOS Team Store Provisioning Profile: com.misswell.macpilot.remote`（UUID `b6b2e034-9cf1-4475-8cc9-dda1fff53fe7`，有效至 2027-09-06）。这类 profile 不会出现在 `asc profiles list`，缺失不是缺陷。
+- Signer leaf DER SHA-256：`c9f379c6ec0ebf40e7fd5c3034849bc40b466c3ab78a595b3de09f81d2d17040`，与 embedded profile 的 `DeveloperCertificates[0]` 完全相同（该 profile 同时包含旧分发证书 `62e7580e…`）。
+- Profile 的 `get-task-allow=false`，顶层无 `ProvisionedDevices`、无 `ProvisionsAllDevices`，app-id `U8U443D7ZL.com.misswell.macpilot.remote` 一致；签名 entitlements 四项（`application-identifier`、`beta-reports-active=true`、`get-task-allow=false`、`com.apple.developer.team-identifier`）均被授权且取值一致。
+- `openssl cms -verify -CAfile <Apple Root + WWDR> -purpose any` 返回 `CMS Verification successful`；已认证内层 DER 中确认 `ProfileDistributionType=STORE`、`Platform=iOS/xrOS/visionOS`、UUID 一致，且不含设备名单或企业分发标记。反向对照：翻转 `embedded.mobileprovision` 中间一字节后同一命令报 `CMS_SignerInfo_verify_content: verification failure`。
+- ASC Build ID：`cca0c5fd-7570-498b-b284-6dd62ce071de`，上传后直接 `processingState=VALID`，过期日 2027-01-20；内部组「内部」（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`，`isInternalGroup=true`、`hasAccessToAllBuilds=true`）的 builds relationship 已包含本次构建（`asc testflight config export --include-builds` 读回）。
+- 中英文 What to Test 已写入并读回：zh-Hans 466 字符、en-US 1348 字符，覆盖开关位置、前台验证步骤、阈值/手动锁定边界、日志导出，并明确后台与锁屏仍需真机验收、不承诺强制退出后自动重启。
+- 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 46 附加到 1.2.5 版本、未执行 `asc metadata push`。`VALID` 不代表 Apple 已审核批准；真机后台/锁屏与自动解锁仍未通过验收。
