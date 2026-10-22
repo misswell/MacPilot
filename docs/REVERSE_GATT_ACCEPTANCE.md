@@ -143,44 +143,103 @@ iOS 新增默认关闭、重复停止、清理日志与独立 UserDefaults 意�
 [TN3115 恢复启动规则](https://developer.apple.com/documentation/technotes/tn3115-bluetooth-state-restoration-app-relaunch-rules)
 和 [ATT 写入批次响应要求](https://developer.apple.com/documentation/corebluetooth/cbperipheralmanagerdelegate/peripheralmanager(_:didreceivewrite:))。
 
-## 2026-10-22 晚：反向 GATT 作为自动解锁的额外识别链路
+## 2026-10-22 晚：反向 GATT 接入自动解锁（生产路径）
 
-BLE 地址轮换的正式修复早在 `1.2.4` 就已存在：`BLEPresenceAuthenticator` 用
-`RemoteBLEPresenceChallenge` 在 GATT 上让手机用长期配对密钥回答，Mac 验证后把新地址
-学习为别名。现场 `Diagnostics.log` 当天记录 34 次 `rotated phone address authenticated`，
-说明该路径在真机上确实工作。
-
-本节新增的是一条**独立的第二识别路径**，方向相反（Mac 广播、手机连接），用于在原有
-路径跟不上时兜底。它不是替换：`RemoteBLECentral`、`RemoteBLEPeripheral`、
-`RemoteBLEService`、`BLEUnlockModel`、RSSI 监控、身份绑定、配对认证与 L2CAP 全部未改动。
+上一节记录的是“实验链路 + 身份别名”阶段；本节起，反向 GATT 已成为正式的
+靠近信号来源，不再向 `identityRegistry.aliases` 写入任何内容。
 
 ### 实现
 
-- 共享协议：`ProximityGATTService.presenceChallengeCharacteristicUUID`（`…0005`）与
-  `ProximityGATTPresence`；直接复用 `RemoteBLEPresenceChallenge` 的 HMAC 证明，不引入第二套密钥。
-- Mac：`ProximityBLEPeripheral` 在原有 4 项服务里增加可读写特征。每次读下发一个**新的** nonce，
-  只接受对应 nonce 的密钥证明，且证明一次性使用（读完即清），因此重放无效。
-- 验证通过后只调用既有的 `learnAuthenticatedBLEIdentity`，与原有路径共用别名学习；
-  RSSI 阈值、`manualLock`、解锁尝试门控全部照旧生效。认证只证明身份，不证明距离。
-- iOS：`ProximityBLECentral` 连接后发现该特征就读取并应答，使用与原有
-  `onPresenceChallenge` 相同的 Keychain 配对密钥。
-- 默认关闭（`reverseGATTPresenceEnabled`，append-only 键），现有用户行为零变化。
+- 共享协议：新增 `RemoteBLEReversePresenceSample`，字段为 version、16 字节
+  nonce、Mac ID、RSSI（-127...0）、big-endian 毫秒时间戳与 HMAC-SHA256，
+  域标签 `MacPilotRemote-v1-reverse-presence`。最高年龄 12 秒、允许 3 秒
+  未来时钟偏差；任何字段被篡改、nonce 不匹配、错误密钥、错误长度/版本或
+  超界 RSSI 都拒绝。旧 `RemoteBLEPresenceChallenge.response(pairingKey:)`
+  编码、旧身份证明路径和诊断 16 字节回环完全未改。
+- Mac：`ProximityBLEPeripheral` 在同一管理器上区分诊断与生产两种意图。生产
+  模式每个 Central 只保留一个 15 秒 TTL 的 pending nonce，只通知该 Central；
+  约 2.5 秒轮换一次，通知缓冲区满时保留同一 nonce 等待 ready 回调；只有校验
+  通过的样本才消费 nonce 并上报
+  `(clientID, keyFingerprint, primaryUUID, rssi, sampledAt)`。生产停止会清空
+  pending challenge、挑战任务与重试；仍连接的订阅会被记住，重新开启时直接向
+  它发新挑战。诊断 Stop 只停止诊断意图，生产开关与诊断按钮互不控制。
+- Mac 解锁模型：反向信号按逻辑主设备 `primaryUUID` 独立保存在
+  `BLEReversePresenceRuntime`，与原有 alias 信号分别处理，只在逻辑设备层用
+  “任一方向有 Presence” 合并，再应用 `.any` / `.all`；两个方向的 RSSI 不混入
+  同一条曲线。`acceptReversePresenceSample` 会再次校验功能开关、console
+  会话、系统睡眠、时间、RSSI、`clientID + keyFingerprint + primaryUUID`
+  绑定和密钥可用性，然后才进入既有阈值、`proximityTimeout`、信号超时、
+  `manualLock` 和解锁尝试门控。
+- 恢复路径只以旧链路的信号判断旧链路是否已恢复：反向链路的新鲜样本不会取消
+  `signalTimeout` / 显示唤醒后的重连与扫描重试。两条链路并行工作，任一链路
+  的故障只能由它自己恢复；解锁门控与 `automaticUnlockAllowed` 仍接受任一方向。
+- iOS：新增独立的 `ReversePresenceCentral`，使用独立恢复标识
+  `com.misswell.macpilot.reverse-presence.central` 和独立 UserDefaults 键；
+  配对成功后自动启用（用户显式关闭后不再自动打开），已配对旧用户升级时迁移
+  一次；启动时只有“启用意图 + Keychain 仍有密钥”才恢复。未知 Mac、已删除
+  密钥、非法 Mac info 一律断开且不产生 Presence；扫描不会因拒绝而停止，
+  最多同时连接 4 台 Mac。后台进入时清空所有 pending challenge，只有此后收到
+  的新 challenge 才能生成样本。设置页提供生产开关、状态、最近 RSSI/样本数、
+  错误和日志；诊断测试页保持独立。
 
-### 验证
+### 自动化验证
 
-- 共享协议包：122 tests / 21 suites 通过（新增 7 项存在性证明测试）。
-- 配置契约：`ConfigurationSchemaContractTests` + `ConfigStoreTests` 8/8 通过；
-  新增测试固定「默认关闭」与「旧文件无该键仍可解码」。
-- BLE 相关 11 个套件 140/140 通过。
-- Mac 全量 1610 项中 1 项失败：`RemoteControlTests` 的亮度往返断言，在**未改动的干净基线**上
-  同样失败（依赖真实显示器亮度硬件），与本次改动无关。
-- Release `-Xswiftc -warnings-as-errors` 构建通过，0 warning。
-- 独立端到端演练（真实生产类型、无 mock）：诚实握手被接受；错误密钥、重放、跨 Mac 证明、
-  空证明四条路径全部被拒绝；16 字节回环探针不受影响。
+- 共享协议包 `swift test --package-path Packages/MacPilotRemoteProtocol`：
+  134 tests / 22 suites 通过，包含正确样本、篡改 RSSI/时间戳、nonce 不匹配、
+  错误密钥、跨 Mac、过期、未来时间、错误长度/版本、越界 RSSI、重放与域隔离。
+- Mac `swift test --filter BLEReversePresenceTests`：15/15 通过，覆盖绑定
+  接受/拒绝、撤销绑定、旧指纹、未认证 RSSI 不解锁、阈值、离开超时、信号超时、
+  `.any` / `.all`、双向并行不混合、反向链路有信号时旧链路仍执行必要恢复、
+  manualLock、睡眠、后台、功能关闭、`wakeWithoutUnlocking`、生产启停与诊断隔离、
+  停止后 timer 清理。
+- Mac `swift build` 通过；fresh release
+  `swift build -c release -Xswiftc -warnings-as-errors` 通过（0 warning/error），
+  产物 `/tmp/octopilot-rgatt-release-20261022/release/MacPilot`
+  （sha256 前缀 `676f7faf86b872e6`）。
+- iOS 模拟器单元测试 87 tests / 17 suites 通过，含新增的自动启用/退出尊重/迁移/忘记/
+  独立意图/challenge gate/双语字符串测试。
+- iOS `generic/platform=iOS` 的 `build-for-testing`（`CODE_SIGNING_ALLOWED=NO`）
+  通过，产物 `/tmp/octopilot-ios-device-rgatt/Build/Products/Debug-iphoneos/PilotNest.app`；
+  未签名、未安装、未上传 TestFlight，仅证明可编译。
+- Mac 完整 `swift test`：1525 tests / 170 suites，11 issues。全部落在已知的
+  shared-main-actor 时序类：`ScreenCaptureTests` 两项、`RemoteVideoTransportTests`、
+  `PictureInPictureTests` 与 `RemoteControlTests` 的配对码窗口过期测试都在
+  76 秒的同一饥饿窗口内失败。失败项单独运行通过
+  （`RemoteControlTests` 49 tests / 9 suites，配对码用例 0.296 秒对完整运行的
+  76.5 秒）；本轮未改动 RemoteControl/配对路径。改动前的同一份完整套件
+  1625 tests / 0 failures，改动后的定向 BLE 套件 64/64 与本地化 3/3 通过。
+- 未运行真实屏幕控制测试；没有锁屏、登录或输入注入。
 
-### 仍需真机确认
+### 真机验收状态
 
-- 真机上开启「反向 GATT 兜底识别」后，确认手机轮换地址时新地址被学习为别名，且
-  `Diagnostics.log` 出现 `presence authenticated central=…`。
-- 确认关闭该开关后行为与旧版完全一致。
-- 原有 RSSI 判定、手动锁定、锁屏解锁与远程控制回归。
+**待真机验收，未通过。** 本轮只完成编译、单元测试和独立测试宿主的历史诊断
+验证；下列生产路径项目均尚未在真实 Mac + iPhone 上执行，旧实验回环结果不能
+替代。
+
+| # | 验收项 | 状态 |
+| --- | --- | --- |
+| 1 | 完成一次正常配对和 Mac 端身份绑定 | 待真机 |
+| 2 | PilotNest 退到后台并锁屏，Mac 广播、手机自动发现/连接/绑定匹配/新鲜挑战应答 | 待真机 |
+| 3 | Mac 锁屏后手机靠近，经既有授权路径完成自动解锁 | 待真机；需要用户明确授权的隔离会话 |
+| 4 | 手机移远后信号衰减/超时并遵循原有离开与自动锁定策略 | 待真机 |
+| 5 | 再次靠近，经新挑战恢复 Presence | 待真机 |
+| 6 | 手动锁定 Mac 后，附近手机不会立即反向解锁 | 待真机 |
+| 7 | 两端分别关闭/开启蓝牙，恢复、退避与过期 challenge 清理 | 待真机 |
+| 8 | 删除手机配对密钥或 Mac 端撤销 binding，后续 Presence 立即被拒 | 待真机 |
+| 9 | 旧扫描、RSSI、锁屏解锁与 L2CAP 远程控制并行无回归 | 待真机 |
+| 10 | 停止 BLE 解锁功能，生产广播、挑战循环、队列和 timer 全部停止 | 待真机 |
+| 11 | 强制退出 PilotNest 的负向行为；重新打开后可恢复 | 待真机；不承诺系统自动重启 |
+
+### 系统限制
+
+- iOS 的 `bluetooth-central` 只保证系统按调度交付蓝牙事件，不保证后台扫描、
+  重试或采样延迟；本地 Task 可被挂起。进入后台后本实现要求新的
+  challenge/response，但无法保证旧 challenge 具体何时被投递。
+- 用户强制退出 App 后不保证系统自动重启；再次打开 App 时按保存的启用意图
+  恢复。设置页和文档均不承诺更强的后台行为。
+- Mac Peripheral 看不到 Central 的物理连接全过程；GATT “已连接/已订阅”本身
+  不是靠近证据，只有新鲜、已认证的 RSSI 样本才进入 Presence 状态机。
+- 本轮没有覆盖真实通知缓冲区饱和、少量时钟漂移、系统重启后的
+  Keychain 可访问性和多台 iPhone 同时连接同一 Mac 的硬件行为；这些只能由
+  真机验收确认。任何异常路径的设计目标都是“不解锁”。
+

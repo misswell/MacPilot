@@ -33,6 +33,41 @@ struct BLEMonitoringRestorationTests {
         #expect(!model.presence)
     }
 
+    @Test func eachBoundDevicePublishesItsOwnSignalForTheDeviceRows() throws {
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: RecordingBluetoothScanner(),
+            eventScriptRunner: { _ in }
+        )
+        defer { model.shutdown() }
+        model.displayUnavailableProbe = { false }
+        model.screenLockStateProbe = { .unlocked }
+        model.settings.isEnabled = true
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
+
+        let phone = UUID()
+        let watch = UUID()
+        model.secondaryMonitoredUUID = watch
+        model.startMonitor(phone)
+
+        model.updateMonitoredPeripheral(-50, for: phone)
+        model.updateMonitoredPeripheral(-72, for: watch)
+
+        #expect(model.deviceRSSI[phone] == -50)
+        #expect(model.deviceRSSI[watch] == -72)
+        #expect(model.lastRSSI == -50, "The header gauge keeps the strongest aggregate sample")
+
+        model.updateMonitoredPeripheral(-88, for: phone)
+        let phoneRSSI = try #require(model.runtime(for: phone)?.lastRSSI)
+        #expect(model.deviceRSSI[phone] == phoneRSSI)
+        #expect(model.deviceRSSI[watch] == model.runtime(for: watch)?.lastRSSI)
+        #expect(model.deviceRSSI[phone] != model.deviceRSSI[watch])
+
+        model.setEnabled(false)
+        #expect(model.deviceRSSI.isEmpty)
+    }
+
     @Test func enablingProximityLockWhileIdleResumesMonitoringButCannotWakeABlankedDisplay() {
         var now: TimeInterval = 100
         var isBlanked = false

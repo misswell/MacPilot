@@ -646,8 +646,16 @@ enum AppText {
         "bleWakeOnProximity": "接近时唤醒", "bleWakeWithoutUnlocking": "唤醒但不解锁", "blePauseNowPlaying": "锁定时暂停播放",
         "bleUseScreensaver": "用屏幕保护程序锁定", "bleTurnOffScreen": "锁定时关闭屏幕", "blePassiveMode": "被动模式",
         "blePassiveModeInfo": "默认主动连接设备读取 RSSI，更稳定。若与其他蓝牙设备相互干扰，可开启被动模式仅靠扫描。",
-        "bleReverseGATT": "反向 GATT 兜底识别",
-        "bleReverseGATTInfo": "手机轮换蓝牙地址后，原有识别偶尔跟不上。开启后 Mac 会额外广播一条反向 GATT 测试服务，用已配对的密钥验证新地址并作为别名补充；只增加一条识别路径，不改变原有扫描、RSSI 判定、手动锁定或解锁流程。需要 PilotNest 1.2.5 或更新版本。",
+        "bleReverseGATT": "反向 GATT 靠近识别",
+        "bleReverseGATTInfo": "启用后，Mac 会在控制台会话中广播反向 GATT 服务：已绑定的 iPhone 连接并订阅，Mac 每次发出一次性挑战，iPhone 用配对密钥对当时测得的 RSSI 和时间戳签名回传。只有挑战、密钥和设备绑定全部校验通过的样本才作为该已绑定设备的靠近证据；未认证、过期、重复或未知设备的样本一律忽略。反向信号与手机广播信号分别维护，不混入同一条 RSSI 曲线，也不会写入身份别名。需要支持反向靠近的 PilotNest 1.2.5 或更新版本。",
+        "bleReverseGATTStatus": "反向靠近链路",
+        "bleReverseGATTStatusOff": "已关闭",
+        "bleReverseGATTStatusWaiting": "等待已绑定手机连接",
+        "bleReverseGATTStatusActive": "已收到经过认证的距离",
+        "bleReverseGATTSource": "当前距离来源",
+        "bleReverseGATTSourceLegacy": "手机广播",
+        "bleReverseGATTSourceReverse": "反向链路",
+        "bleReverseGATTSourceNone": "暂无",
         "bleSetPassword": "设置密码…",
         "bleBluetoothOff": "蓝牙未打开", "bleEnterPassword": "请输入登录密码", "blePasswordInfo": "密码将安全保存在钥匙串中，仅在屏幕锁定时用于解锁。",
         "blePasswordStored": "密码已保存到钥匙串。", "blePasswordFailed": "无法保存密码：%@", "blePasswordNotSet": "尚未设置登录密码。请使用“设置密码…”。",
@@ -1932,8 +1940,16 @@ enum AppText {
             "bleWakeOnProximity": "Wake on Proximity", "bleWakeWithoutUnlocking": "Wake without Unlocking", "blePauseNowPlaying": "Pause “Now Playing” while Locked",
             "bleUseScreensaver": "Use Screensaver to Lock", "bleTurnOffScreen": "Turn Off Screen on Lock", "blePassiveMode": "Passive Mode",
             "blePassiveModeInfo": "By default it actively connects to the device and reads RSSI, which is more stable. If it interferes with other Bluetooth devices, enable Passive Mode to scan only.",
-            "bleReverseGATT": "Reverse GATT fallback recognition",
-            "bleReverseGATTInfo": "After the phone rotates its Bluetooth address, the existing recognition can occasionally lag behind. When enabled, the Mac additionally advertises a reverse GATT test service and verifies the new address with the paired key, adding it as another alias. This only adds one recognition path; it does not change scanning, RSSI thresholds, manual lock, or the unlock flow. Requires PilotNest 1.2.5 or newer.",
+            "bleReverseGATT": "Reverse GATT proximity recognition",
+            "bleReverseGATTInfo": "When enabled during a console session, the Mac advertises a reverse GATT service. A bound iPhone connects and subscribes; the Mac issues a one-time challenge and the phone signs the RSSI it measured at that moment together with a timestamp using the pairing key. Only a sample whose challenge, key and device binding all verify counts as proximity evidence for that bound device; unauthenticated, expired, replayed or unknown-device samples are ignored. The reverse signal is kept apart from the phone's advertisements, never mixed into the same RSSI series and never written as an identity alias. Requires a PilotNest 1.2.5 or newer build with reverse proximity support.",
+            "bleReverseGATTStatus": "Reverse proximity link",
+            "bleReverseGATTStatusOff": "Off",
+            "bleReverseGATTStatusWaiting": "Waiting for a bound phone",
+            "bleReverseGATTStatusActive": "Authenticated distance received",
+            "bleReverseGATTSource": "Current distance source",
+            "bleReverseGATTSourceLegacy": "Phone advertisements",
+            "bleReverseGATTSourceReverse": "Reverse link",
+            "bleReverseGATTSourceNone": "None yet",
             "bleSetPassword": "Set Password…",
             "bleBluetoothOff": "Bluetooth is off", "bleEnterPassword": "Enter your login password", "blePasswordInfo": "It will be securely stored in Keychain and used only to unlock the locked screen.",
             "blePasswordStored": "Password saved to Keychain.", "blePasswordFailed": "Couldn’t save password: %@", "blePasswordNotSet": "Login password is not set. Use Set Password….",
@@ -5233,6 +5249,48 @@ struct ActionSetting: View {
 
 private enum DeviceSortMode { case added, name, signal }
 
+/// Circular RSSI gauge shared by the aggregate header and each bound-device
+/// row, so the strength is read the same way everywhere.
+private struct BLESignalGauge: View {
+    let rssi: Int?
+    var caption: String? = nil
+    var diameter: CGFloat = 88
+    var lineWidth: CGFloat = 10
+    var valueFont: Font = .system(.title3, design: .rounded).bold()
+    var includesUnitInValue = false
+
+    private var progress: CGFloat {
+        guard let rssi else { return 0 }
+        return CGFloat(max(0, min(1, Double(rssi + 100) / 70)))
+    }
+
+    private var tint: Color {
+        guard let rssi else { return .secondary.opacity(0.35) }
+        return rssi >= -60 ? .green : (rssi >= -80 ? .yellow : .red)
+    }
+
+    private var valueText: String {
+        guard let rssi else { return "—" }
+        return includesUnitInValue ? "\(rssi)dBm" : "\(rssi)"
+    }
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.secondary.opacity(0.15), lineWidth: lineWidth)
+            Circle().trim(from: 0, to: progress)
+                .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            VStack(spacing: 0) {
+                Text(valueText).font(valueFont)
+                if let caption {
+                    Text(caption).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(width: diameter, height: diameter)
+    }
+}
+
 struct BLEUnlockView: View {
     @EnvironmentObject private var model: MacPilotModel
     @ObservedObject var ble: BLEUnlockModel
@@ -5300,20 +5358,11 @@ struct BLEUnlockView: View {
     }
 
     private var signalGauge: some View {
-        let rssi = ble.lastRSSI ?? -100
-        let progress = max(0, min(1, Double(rssi + 100) / 70))
-        let color: Color = rssi >= -60 ? .green : (rssi >= -80 ? .yellow : .red)
-        return ZStack {
-            Circle().stroke(Color.secondary.opacity(0.15), lineWidth: 10)
-            Circle().trim(from: 0, to: progress)
-                .stroke(color, style: StrokeStyle(lineWidth: 10, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-            VStack(spacing: 0) {
-                Text(ble.lastRSSI.map { model.t("bleRSSIDBm", $0) } ?? "—").font(.system(.title3, design: .rounded).bold())
-                Text(proximityLabel).font(.caption2).foregroundStyle(.secondary)
-            }
-        }
-        .frame(width: 88, height: 88)
+        BLESignalGauge(
+            rssi: ble.lastRSSI,
+            caption: proximityLabel,
+            includesUnitInValue: true
+        )
     }
 
     private var proximityLabel: String {
@@ -5477,11 +5526,15 @@ struct BLEUnlockView: View {
         actionTitle: String,
         action: @escaping () -> Void
     ) -> some View {
+        let rssi = configuredDeviceRSSI(for: uuid)
         HStack(spacing: 14) {
-            ZStack {
-                Circle().fill(Color.blue.opacity(0.12)).frame(width: 42, height: 42)
-                Image(systemName: "antenna.radiowaves.left.and.right").foregroundStyle(.blue).font(.title3)
-            }
+            BLESignalGauge(
+                rssi: rssi,
+                caption: rssi == nil ? nil : "dBm",
+                diameter: 56,
+                lineWidth: 7,
+                valueFont: .system(size: 14, weight: .bold, design: .rounded)
+            )
             VStack(alignment: .leading, spacing: 2) {
                 Text(name.flatMap { $0.isEmpty ? nil : $0 } ?? model.t("bleDevice"))
                     .font(.body.weight(.medium))
@@ -5490,6 +5543,11 @@ struct BLEUnlockView: View {
             Spacer()
             Button(actionTitle, action: action)
         }
+    }
+
+    private func configuredDeviceRSSI(for uuid: String?) -> Int? {
+        guard let uuid, let deviceUUID = UUID(uuidString: uuid) else { return nil }
+        return ble.deviceRSSI[deviceUUID]
     }
 
     private var relationPicker: some View {
@@ -5684,6 +5742,10 @@ struct BLEUnlockView: View {
                 Divider()
                 toggleRow(model.t("bleReverseGATT"), isOn: Binding(get: { ble.settings.reverseGATTPresenceEnabled }, set: { ble.setReverseGATTPresenceEnabled($0) }))
                 Text(model.t("bleReverseGATTInfo")).font(.caption).foregroundStyle(.secondary)
+                if ble.settings.reverseGATTPresenceEnabled {
+                    LabeledContent(model.t("bleReverseGATTStatus"), value: model.t(reverseGATTStatusKey))
+                    LabeledContent(model.t("bleReverseGATTSource"), value: model.t(reverseGATTSourceKey))
+                }
             }
             Divider()
             sectionTitle(model.t("bleSecurity"))
@@ -5695,6 +5757,23 @@ struct BLEUnlockView: View {
                 Spacer()
                 Button(model.t("bleLockNow")) { ble.lockNow() }.buttonStyle(.borderedProminent)
             }
+        }
+    }
+
+    private var reverseGATTStatusKey: String {
+        guard ble.settings.reverseGATTPresenceEnabled else { return "bleReverseGATTStatusOff" }
+        guard ble.settings.isEnabled,
+              !ble.settings.identityRegistry.bindings.isEmpty else {
+            return "bleReverseGATTStatusWaiting"
+        }
+        return ble.reverseLinkActive ? "bleReverseGATTStatusActive" : "bleReverseGATTStatusWaiting"
+    }
+
+    private var reverseGATTSourceKey: String {
+        switch ble.lastRSSISource {
+        case .legacy: return "bleReverseGATTSourceLegacy"
+        case .reverse: return "bleReverseGATTSourceReverse"
+        case .none: return "bleReverseGATTSourceNone"
         }
     }
 

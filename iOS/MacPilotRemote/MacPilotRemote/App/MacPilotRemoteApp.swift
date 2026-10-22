@@ -14,6 +14,7 @@ struct MacPilotRemoteApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active || phase == .background {
                         ProximityBLECentral.shared.applicationStateChanged(isActive: phase == .active)
+                        ReversePresenceCentral.shared.applicationStateChanged(isActive: phase == .active)
                     }
                 }
         }

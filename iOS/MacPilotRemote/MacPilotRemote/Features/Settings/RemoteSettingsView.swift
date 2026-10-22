@@ -3,8 +3,10 @@ import SwiftUI
 /// This iPhone's identity, permission status and pairing reset.
 struct RemoteSettingsView: View {
     @EnvironmentObject private var appModel: RemoteAppModel
+    @ObservedObject private var reversePresence = ReversePresenceCentral.shared
     @State private var showResetConfirmation = false
     @State private var showGroupOrder = false
+    @State private var showReverseLog = false
 
     var body: some View {
         NavigationStack {
@@ -129,6 +131,69 @@ struct RemoteSettingsView: View {
                                 .textSelection(.enabled)
                         }
                     }
+                }
+
+                Section {
+                    Toggle(isOn: Binding(
+                        get: { reversePresence.isEnabled },
+                        set: { reversePresence.setEnabled($0) }
+                    )) {
+                        Label(appModel.text("reversePresenceTitle"), systemImage: "dot.radiowaves.left.and.right")
+                    }
+                    .accessibilityIdentifier("reversePresenceToggle")
+                    HStack {
+                        Text(appModel.text("reversePresenceStatus"))
+                        Spacer()
+                        Text(reversePresenceStatusText)
+                            .foregroundStyle(.secondary)
+                    }
+                    if reversePresence.acceptedSampleCount > 0 {
+                        HStack {
+                            Text(appModel.text("reversePresenceAcceptedSamples"))
+                            Spacer()
+                            Text("\(reversePresence.acceptedSampleCount)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let lastSampleAt = reversePresence.lastSampleAt {
+                        HStack {
+                            Text(appModel.text("reversePresenceLastSample"))
+                            Spacer()
+                            Text(lastSampleAt.formatted(date: .omitted, time: .standard))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let lastRSSI = reversePresence.lastRSSI {
+                        HStack {
+                            Text(appModel.text("reversePresenceLastRSSI"))
+                            Spacer()
+                            Text("\(lastRSSI) dBm")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let lastError = reversePresence.lastError {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(appModel.text("reversePresenceLastError"))
+                            Spacer()
+                            Text(lastError)
+                                .foregroundStyle(.orange)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                    if !reversePresence.logLines.isEmpty {
+                        DisclosureGroup(isExpanded: $showReverseLog) {
+                            Text(reversePresence.logLines.joined(separator: "\n"))
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                            Button(appModel.text("reversePresenceClearLog")) {
+                                reversePresence.clearLog()
+                            }
+                        } label: {
+                            Text(appModel.text("reversePresenceLog"))
+                        }
+                    }
+                } footer: {
+                    Text(appModel.text("reversePresenceFooter"))
                 }
 
                 Section {
@@ -274,6 +339,17 @@ struct RemoteSettingsView: View {
                     .font(.system(.footnote, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var reversePresenceStatusText: String {
+        switch reversePresence.status {
+        case .off: return appModel.text("reversePresenceStatusOff")
+        case .waitingForPairing: return appModel.text("reversePresenceStatusWaiting")
+        case .starting: return appModel.text("reversePresenceStatusStarting")
+        case .scanning: return appModel.text("reversePresenceStatusScanning")
+        case .connected: return appModel.text("reversePresenceStatusConnected")
+        case .bluetoothUnavailable: return appModel.text("reversePresenceStatusUnavailable")
         }
     }
 

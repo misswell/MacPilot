@@ -325,6 +325,12 @@ final class RemoteAppModel: ObservableObject {
             }
             return challenge.response(pairingKey: key)
         }
+        // Reverse presence is a separate, always-on production link. Existing
+        // paired users opt in once at upgrade; an explicit opt-out is kept.
+        ReversePresenceCentral.shared.importPairedMacs(
+            store.pairedMacs.compactMap { UUID(uuidString: $0.id) }
+        )
+        ReversePresenceCentral.shared.resumeAtLaunch()
 
         if let preferred = store.preferredMac {
             activeMac = preferred
@@ -1171,6 +1177,9 @@ final class RemoteAppModel: ObservableObject {
         // otherwise stay listed as new forever and never become the default.
         store.ensurePaired(id: deviceID, name: name)
         store.setWantsBLEProximity(connection.supportsBLEIdentityLearning, id: deviceID)
+        // The long-term key is now in the Keychain, which is what authorizes
+        // the reverse link. The user's Settings opt-out still wins.
+        ReversePresenceCentral.shared.handlePairedMac(deviceID)
         if let enteredAddress, var mac = store.mac(id: deviceID) {
             mac.manualHost = enteredAddress.host
             mac.manualPort = enteredAddress.port
@@ -1445,7 +1454,11 @@ final class RemoteAppModel: ObservableObject {
 
     func forget(_ mac: PairedMac) {
         let wasActive = activeMac?.id == mac.id
-        store.remove(id: UUID(uuidString: mac.id) ?? UUID())
+        let removedID = UUID(uuidString: mac.id)
+        store.remove(id: removedID ?? UUID())
+        if let removedID {
+            ReversePresenceCentral.shared.forgetMac(removedID)
+        }
         if wasActive {
             if let next = store.preferredMac {
                 connect(to: next)
@@ -1461,6 +1474,7 @@ final class RemoteAppModel: ObservableObject {
     func removeAllPairings() {
         resetConnectionForTarget()
         store.removeAll()
+        ReversePresenceCentral.shared.forgetAllMacs()
         activeMac = nil
         pairingTarget = nil
         connectionState = .discovering

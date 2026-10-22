@@ -82,6 +82,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     @Published private(set) var devices: [BLEUnlockDevice] = []
     @Published private(set) var presence = false
     @Published private(set) var lastRSSI: Int?
+    /// Latest trusted RSSI for each configured logical device. The header
+    /// gauge keeps the aggregate value; these per-device samples let each
+    /// bound-device row show which one is actually in range.
+    @Published private(set) var deviceRSSI: [UUID: Int] = [:]
+    /// Which link produced `lastRSSI`. The two directions never share an
+    /// average; this only labels the freshest trusted sample for display.
+    @Published private(set) var lastRSSISource: BLEPresenceSignalSource = .none
+    @Published private(set) var reverseLinkActive = false
     @Published private(set) var connected = false
     @Published private(set) var activeMode = false
     @Published private(set) var bluetoothPoweredOn = false
@@ -116,6 +124,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     var monitoredUUID: UUID?
     var secondaryMonitoredUUID: UUID?
     private var monitoredRuntimes: [UUID: BLEMonitoredDeviceRuntime] = [:]
+    /// Reverse-GATT evidence keyed by the configured logical device UUID.
+    private var reverseRuntimes: [UUID: BLEReversePresenceRuntime] = [:]
     private var wakeRetryTask: Task<Void, Never>?
     private var systemWakeRecoveryTask: Task<Void, Never>?
     private var monitoringRecoveryTask: Task<Void, Never>?
@@ -314,17 +324,66 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private func refreshPublishedMonitoringState() {
         let runtimes = monitoredUUIDs.compactMap { monitoredRuntimes[$0] }
-        let latestRSSI = runtimes.compactMap(\.lastRSSI).max()
+        let latestLegacyRSSI = runtimes.compactMap(\.lastRSSI).max()
+        let latestReverseRSSI = reverseRuntimes
+            .filter { logicalDeviceUUIDs.contains($0.key) }
+            .values.compactMap(\.lastRSSI).max()
+        // Display one trusted sample. Never average legacy and reverse values:
+        // each direction keeps its own evidence and timers.
+        let latestRSSI = latestLegacyRSSI ?? latestReverseRSSI
+        let source: BLEPresenceSignalSource = latestLegacyRSSI != nil
+            ? .legacy : (latestReverseRSSI != nil ? .reverse : .none)
+        let perDeviceRSSI = logicalDeviceUUIDs.reduce(into: [UUID: Int]()) { result, logical in
+            let rssi = settings.identityRegistry.uuids(for: logical)
+                .compactMap { monitoredRuntimes[$0]?.lastRSSI }
+                .max()
+            if let rssi { result[logical] = rssi }
+        }
+        if deviceRSSI != perDeviceRSSI { deviceRSSI = perDeviceRSSI }
         let isConnected = runtimes.contains { $0.peripheral?.state == .connected }
         let isActive = runtimes.contains { $0.activeMode }
-        if lastRSSI != latestRSSI { lastRSSI = latestRSSI }
+        let hasReverseEvidence = reverseRuntimes.values.contains {
+            $0.lastAcceptedAt != nil || $0.presence
+        }
+        if self.lastRSSI != latestRSSI { self.lastRSSI = latestRSSI }
+        if lastRSSISource != source { lastRSSISource = source }
         if connected != isConnected { connected = isConnected }
         if activeMode != isActive { activeMode = isActive }
+        if reverseLinkActive != hasReverseEvidence { reverseLinkActive = hasReverseEvidence }
     }
 
-    private func recomputePresence(reason: String, confirmedDeparture: Bool = false) {
+    /// One logical device is present when either direction has fresh presence.
+    /// Aliases remain alternatives for the same logical device; direction does
+    /// not create an extra device.
+    private func logicalDevicePresenceStates() -> [Bool] {
+        logicalDeviceUUIDs.map { logical in
+            let legacy = settings.identityRegistry.uuids(for: logical).contains {
+                monitoredRuntimes[$0]?.presence == true
+            }
+            let reverse = reverseRuntimes[logical]?.presence == true
+            return legacy || reverse
+        }
+    }
+
+    /// A fresh signal from either link satisfies that logical device. The
+    /// any/all relation still applies across logical devices.
+    private func logicalDeviceFreshSignalStates() -> [Bool] {
+        logicalDeviceUUIDs.map { logical in
+            let legacy = settings.identityRegistry.uuids(for: logical).contains {
+                monitoredRuntimes[$0]?.lastRSSI != nil
+            }
+            let reverse = reverseRuntimes[logical]?.lastRSSI != nil
+            return legacy || reverse
+        }
+    }
+
+    private func recomputePresence(
+        reason: String,
+        confirmedDeparture: Bool = false,
+        deliverAction: Bool = true
+    ) {
         let oldPresence = presence
-        let devicePresences = logicalDeviceStates { $0.presence }
+        let devicePresences = logicalDevicePresenceStates()
         let newPresence = BLEDevicePresencePolicy.isSatisfied(
             presences: devicePresences,
             relation: settings.deviceRelation
@@ -338,6 +397,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             return
         }
         presence = newPresence
+        guard deliverAction else {
+            log("combined presence changed value=\(newPresence) reason=\(reason) action=suppressed devices=\(devicePresences)")
+            return
+        }
         updatePresence(presence: newPresence, reason: reason)
     }
 
@@ -358,6 +421,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             return
         }
         cancelUnlockAttempt(reason: "monitoring-restarted")
+        pruneReversePresenceRuntimes()
         let uuids = monitoredUUIDs
         let initialPresence = uuids.count == 1
 
@@ -386,7 +450,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }
 
         presence = BLEDevicePresencePolicy.isSatisfied(
-            presences: logicalDeviceStates { $0.presence },
+            presences: logicalDevicePresenceStates(),
             relation: settings.deviceRelation
         )
         refreshPublishedMonitoringState()
@@ -398,7 +462,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         logSettings("monitoring started")
     }
 
-    private lazy var reverseGATTProbe = ProximityBLEPeripheral.shared
+    /// Test seam: production tests must not open a real Bluetooth radio.
+    var reversePresencePeripheralOverride: ProximityBLEPeripheral?
+    private var reverseGATTProbe: ProximityBLEPeripheral {
+        reversePresencePeripheralOverride ?? ProximityBLEPeripheral.shared
+    }
 
     /// The authenticator exists only while an identity binding is configured.
     /// It never creates its radio just because the feature is enabled: the
@@ -412,53 +480,224 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             && remoteOwnDeviceIDProvider != nil
             && remotePairingKeyProvider != nil
         presenceAuthenticator.setActive(shouldRun)
-        // Opt-in only: with the toggle off this is a no-op, so the existing
-        // authenticator above remains the single behavior for current users.
-        updateReverseGATTPresence(shouldRun: shouldRun && settings.reverseGATTPresenceEnabled)
+        // The reverse link does not depend on the phone-as-peripheral
+        // authenticator, so it has its own start conditions. It also does not
+        // need the Mac's central manager: its radio is a CBPeripheralManager.
+        let reverseShouldRun = settings.isEnabled
+            && settings.reverseGATTPresenceEnabled
+            && sessionIsOnConsole
+            && remoteOwnDeviceIDProvider?() != nil
+            && !configuredReverseIdentities().isEmpty
+            && remotePairingKeyProvider != nil
+        updateReverseGATTPresence(shouldRun: reverseShouldRun)
     }
 
-    /// Runs the reverse-role link as an *additional* way to recognise a rotated
-    /// phone address. The existing phone-as-peripheral authenticator stays
-    /// untouched and keeps running; this only adds a second, independent path
-    /// for the same claim, so losing either one still leaves a working fallback.
-    ///
-    /// It never starts a radio on its own: the probe only advertises while an
-    /// identity binding exists, exactly like the existing authenticator.
-    private func updateReverseGATTPresence(shouldRun: Bool) {
-        let probe = reverseGATTProbe
-        guard shouldRun else {
-            probe.presenceMacIDProvider = nil
-            probe.presenceVerifier = nil
-            probe.onPresenceAuthenticated = nil
-            if probe.isRunning { probe.stop() }
-            return
-        }
-        probe.presenceMacIDProvider = { [weak self] in
-            self?.remoteOwnDeviceIDProvider?()
-        }
-        probe.presenceVerifier = { [weak self] challenge, response in
-            guard let self else { return nil }
-            for binding in self.settings.identityRegistry.bindings {
-                guard let key = self.remotePairingKeyProvider?(binding.clientID) else { continue }
-                if ProximityGATTPresence.isValidResponse(response, challenge: challenge, pairingKey: key) {
-                    return (binding.clientID, binding.keyFingerprint)
-                }
-            }
-            return nil
-        }
-        probe.onPresenceAuthenticated = { [weak self] centralID, clientID, keyFingerprint in
-            // Reuses the exact alias path the existing authenticator uses, so
-            // the learned address is subject to the same RSSI threshold and
-            // manual-lock rules as any other alias.
-            self?.learnAuthenticatedBLEIdentity(
-                clientID: clientID,
-                keyFingerprint: keyFingerprint,
-                peripheralUUID: centralID
+    /// Bindings that may authenticate the reverse link. Only configured logical
+    /// devices qualify; a stale binding for a removed device is ignored.
+    private func configuredReverseIdentities() -> [ProximityReversePresenceIdentity] {
+        let logical = Set(logicalDeviceUUIDs)
+        return settings.identityRegistry.bindings.compactMap { binding in
+            guard let primary = UUID(uuidString: binding.primaryUUID),
+                  logical.contains(primary) else { return nil }
+            return ProximityReversePresenceIdentity(
+                clientID: binding.clientID,
+                keyFingerprint: binding.keyFingerprint,
+                primaryUUID: primary
             )
         }
-        if !probe.isRunning {
-            probe.start(macDeviceID: remoteOwnDeviceIDProvider?())
+    }
+
+    /// Runs the reverse-role link as an *additional* proximity path. The
+    /// existing phone-as-peripheral authenticator stays untouched and keeps
+    /// running; losing either path leaves the other working.
+    ///
+    /// This is the only place that starts or stops the production peripheral.
+    /// The manual diagnostic session is a different role of the same manager,
+    /// so stopping production here never stops an explicitly started test.
+    private func updateReverseGATTPresence(shouldRun: Bool) {
+        let probe = reverseGATTProbe
+        guard shouldRun, let macDeviceID = remoteOwnDeviceIDProvider?() else {
+            probe.productionIdentityProvider = nil
+            probe.productionPairingKeyProvider = nil
+            probe.onReversePresenceSample = nil
+            probe.stopProduction()
+            clearReversePresenceRuntimes(reason: "productionStopped")
+            return
         }
+        pruneReversePresenceRuntimes()
+        probe.productionIdentityProvider = { [weak self] in
+            self?.configuredReverseIdentities() ?? []
+        }
+        probe.productionPairingKeyProvider = { [weak self] clientID in
+            self?.remotePairingKeyProvider?(clientID)
+        }
+        probe.onReversePresenceSample = { [weak self] report in
+            // The peripheral already verified the HMAC. The model revalidates
+            // the binding, timing and RSSI before any presence state changes.
+            self?.acceptReversePresenceSample(
+                clientID: report.clientID,
+                keyFingerprint: report.keyFingerprint,
+                primaryUUID: report.primaryUUID,
+                rssi: report.rssi,
+                sampledAt: report.sampledAt
+            )
+        }
+        probe.startProduction(macDeviceID: macDeviceID)
+    }
+
+    func reverseRuntime(for primaryUUID: UUID) -> BLEReversePresenceRuntime? {
+        reverseRuntimes[primaryUUID]
+    }
+
+    private func ensureReverseRuntime(
+        primaryUUID: UUID,
+        clientID: String,
+        keyFingerprint: String
+    ) -> BLEReversePresenceRuntime {
+        if let runtime = reverseRuntimes[primaryUUID],
+           runtime.clientID == clientID,
+           runtime.keyFingerprint == keyFingerprint {
+            return runtime
+        }
+        reverseRuntimes[primaryUUID]?.invalidateTimers()
+        let runtime = BLEReversePresenceRuntime(
+            primaryUUID: primaryUUID,
+            clientID: clientID,
+            keyFingerprint: keyFingerprint
+        )
+        reverseRuntimes[primaryUUID] = runtime
+        return runtime
+    }
+
+    /// Drops reverse evidence whose binding disappeared or changed identity.
+    private func pruneReversePresenceRuntimes() {
+        let identities = Dictionary(
+            uniqueKeysWithValues: configuredReverseIdentities().map { ($0.primaryUUID, $0) }
+        )
+        for (primary, runtime) in reverseRuntimes {
+            guard let identity = identities[primary],
+                  identity.clientID == runtime.clientID,
+                  identity.keyFingerprint == runtime.keyFingerprint else {
+                runtime.invalidateTimers()
+                reverseRuntimes.removeValue(forKey: primary)
+                continue
+            }
+        }
+    }
+
+    /// Explicit stop (feature off, console loss, app teardown). Timers and
+    /// evidence are discarded so a later enable cannot inherit old presence.
+    private func clearReversePresenceRuntimes(reason: String) {
+        guard !reverseRuntimes.isEmpty else {
+            reverseLinkActive = false
+            return
+        }
+        log("reverse presence cleared reason=\(reason) devices=\(reverseRuntimes.count)")
+        for runtime in reverseRuntimes.values {
+            runtime.invalidateTimers()
+        }
+        reverseRuntimes.removeAll(keepingCapacity: false)
+        reverseLinkActive = false
+        refreshPublishedMonitoringState()
+    }
+
+    /// Accepts a sample that already passed the GATT-layer challenge check.
+    /// Revalidates everything the model owns: feature state, console session,
+    /// binding identity/fingerprint, key availability, freshness and range.
+    /// Any mismatch returns false and leaves presence untouched.
+    @discardableResult
+    func acceptReversePresenceSample(
+        clientID: String,
+        keyFingerprint: String,
+        primaryUUID: UUID,
+        rssi: Int,
+        sampledAt: Date,
+        now: Date = Date()
+    ) -> Bool {
+        guard settings.isEnabled, settings.reverseGATTPresenceEnabled else {
+            log("reverse sample rejected reason=featureDisabled")
+            return false
+        }
+        guard sessionIsOnConsole else {
+            log("reverse sample rejected reason=backgroundSession")
+            return false
+        }
+        guard !systemSleep else {
+            log("reverse sample rejected reason=systemSleep")
+            return false
+        }
+        guard RemoteBLEReversePresenceSample.isValidRSSI(rssi) else {
+            log("reverse sample rejected reason=rssiRange value=\(rssi)")
+            return false
+        }
+        let age = now.timeIntervalSince(sampledAt)
+        guard age.isFinite,
+              age >= -RemoteBLEReversePresenceSample.maximumFutureSkew,
+              age <= RemoteBLEReversePresenceSample.maximumAge else {
+            log("reverse sample rejected reason=staleTimestamp ageMs=\(Int(age * 1000))")
+            return false
+        }
+        guard logicalDeviceUUIDs.contains(primaryUUID),
+              settings.identityRegistry.bindings.contains(where: {
+                  UUID(uuidString: $0.primaryUUID) == primaryUUID
+                      && $0.clientID == clientID
+                      && $0.keyFingerprint == keyFingerprint
+              }),
+              remotePairingKeyProvider?(clientID) != nil else {
+            log("reverse sample rejected reason=bindingMismatch client=\(clientID)")
+            return false
+        }
+
+        let runtime = ensureReverseRuntime(
+            primaryUUID: primaryUUID,
+            clientID: clientID,
+            keyFingerprint: keyFingerprint
+        )
+        runtime.lastError = nil
+        runtime.lastRSSI = rssi
+        runtime.lastRSSISampledAt = userActivityMonitor.now
+        runtime.lastAcceptedAt = now
+        runtime.sampleCount += 1
+        runtime.signalObservationIsContinuous = !activeConnectionsPaused && !systemSleep
+
+        let unlockThreshold = settings.unlockRSSI == Self.unlockDisabled
+            ? settings.lockRSSI : settings.unlockRSSI
+        if rssi >= unlockThreshold && !runtime.presence {
+            log("reverse RSSI crossed threshold rssi=\(rssi) threshold=\(unlockThreshold) device=\(primaryUUID.uuidString)")
+            runtime.presence = true
+            recomputePresence(reason: "reverseClose")
+        }
+
+        let lockThreshold = settings.lockRSSI == Self.lockDisabled
+            ? settings.unlockRSSI : settings.lockRSSI
+        if rssi >= lockThreshold {
+            if runtime.proximityTimer != nil {
+                log("reverse RSSI recovered above lock threshold rssi=\(rssi) threshold=\(lockThreshold); cancelling away timer")
+            }
+            runtime.cancelProximityTimer()
+        } else if (runtime.presence || manualLock) && runtime.proximityTimer == nil {
+            scheduleReverseProximityTimer(for: runtime)
+        }
+
+        resetReverseSignalTimer(for: runtime)
+        refreshPublishedMonitoringState()
+        log("reverse RSSI sample rssi=\(rssi) ageMs=\(Int(age * 1000)) device=\(primaryUUID.uuidString) presence=\(runtime.presence)")
+
+        // The sample enters the same unlock gate as a legacy advertisement.
+        // Authentication only proves identity; this RSSI must still clear the
+        // configured unlock threshold and every existing suppression rule.
+        let unlockConditionsAreEligible = settings.unlockRSSI != Self.unlockDisabled
+            && !settings.wakeWithoutUnlocking
+            && rssi >= settings.unlockRSSI
+            && automaticUnlockAllowed
+        if unlockConditionsAreEligible || unlockSignalTrigger.hasScheduledForLock {
+            let triggerAllowsAttempt = unlockSignalTrigger.allowsAttempt(screenState: screenLockState())
+            if unlockConditionsAreEligible && triggerAllowsAttempt {
+                updatePresence(presence: true, reason: "reverseNearbySignal")
+                if unlockAttemptSlot.isOccupied { unlockSignalTrigger.noteScheduled() }
+            }
+        }
+        return true
     }
 
     // MARK: Settings mutations
@@ -484,6 +723,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }
         settings.identityRegistry.normalize(primaryUUIDs: logicalDeviceUUIDs)
         pruneUnmonitoredAliasRuntimes()
+        pruneReversePresenceRuntimes()
         let manualLockWasSuppressed = manualLock
         recomputePresence(reason: "identityBindingChanged")
         manualLock = manualLockWasSuppressed
@@ -497,6 +737,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         settings.identityRegistry.normalize(primaryUUIDs: logicalDeviceUUIDs)
         guard previous != settings.identityRegistry else { return }
         pruneUnmonitoredAliasRuntimes()
+        pruneReversePresenceRuntimes()
         let manualLockWasSuppressed = manualLock
         recomputePresence(reason: "identityRevoked")
         manualLock = manualLockWasSuppressed
@@ -694,6 +935,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         log("setReverseGATTPresenceEnabled from=\(settings.reverseGATTPresenceEnabled) to=\(value)")
         settings.reverseGATTPresenceEnabled = value
         updatePresenceAuthentication()
+        // Turning the path off drops its evidence immediately, but an explicit
+        // settings change must not lock the screen the user is looking at.
+        recomputePresence(reason: "reversePresenceToggled", deliverAction: false)
         notifyChange()
     }
 
@@ -767,6 +1011,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         monitoredUUID = nil
         secondaryMonitoredUUID = nil
         monitoredRuntimes.removeAll(keepingCapacity: false)
+        deviceRSSI.removeAll(keepingCapacity: false)
+        for runtime in reverseRuntimes.values { runtime.invalidateTimers() }
+        reverseRuntimes.removeAll(keepingCapacity: false)
         if let uuidString = loaded.monitoredDeviceUUID, let uuid = UUID(uuidString: uuidString) {
             monitoredUUID = uuid
         }
@@ -855,6 +1102,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         monitoredRuntimes.removeAll(keepingCapacity: false)
         presence = false
         lastRSSI = nil
+        deviceRSSI.removeAll(keepingCapacity: false)
         connected = false
         activeMode = false
         recoveringFromSystemSleep = false
@@ -865,6 +1113,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         advertisementStreamStalled = false
         otherInstanceCount = 0
         presenceAuthenticator.setActive(false)
+        // The reverse link is production-only; disabling the feature must end
+        // its advertisement, pending challenges and retries too.
+        updateReverseGATTPresence(shouldRun: false)
+        lastRSSISource = .none
         // Drop the CoreBluetooth central too: holding it keeps a Bluetooth XPC
         // session (and its delegate graph) alive for nothing while the feature
         // is off. `ensureCentralManager()` recreates it on the next enable.
@@ -1139,8 +1391,144 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }
         // In "any device" mode an absent secondary must not tear down
         // the healthy primary's connection every signal-timeout interval.
-        if !monitoringHasFreshSignal {
+        // Only a legacy signal proves the legacy link recovered.
+        if !monitoringHasLegacyFreshSignal {
             startMonitoringRecovery(reason: "signalTimeout", restartImmediately: true)
+        }
+    }
+
+    private func resetReverseSignalTimer(
+        for runtime: BLEReversePresenceRuntime,
+        minimumDelay: TimeInterval = 0,
+        delayOverride: TimeInterval? = nil
+    ) {
+        let delay = delayOverride ?? max(TimeInterval(settings.signalTimeout), minimumDelay)
+        let now = userActivityMonitor.now
+        let deadline = now + delay
+        runtime.signalTimeoutDeadline = deadline
+
+        if let timer = runtime.signalTimer,
+           timer.isRunning,
+           let scheduledDeadline = runtime.signalTimerScheduledDeadline,
+           scheduledDeadline <= deadline {
+            return
+        }
+
+        runtime.signalTimer?.stop()
+        runtime.signalTimer = nil
+        runtime.signalTimerScheduledDeadline = nil
+        runtime.signalTimerGeneration &+= 1
+        scheduleReverseSignalTimer(
+            for: runtime,
+            generation: runtime.signalTimerGeneration,
+            delay: delay,
+            deadline: deadline
+        )
+    }
+
+    private func scheduleReverseSignalTimer(
+        for runtime: BLEReversePresenceRuntime,
+        generation: UInt64,
+        delay: TimeInterval,
+        deadline: TimeInterval
+    ) {
+        let primaryUUID = runtime.primaryUUID
+        runtime.signalTimerScheduledDeadline = deadline
+        runtime.signalTimer = signalTimeoutScheduler(delay) { [weak self, weak runtime] in
+            guard let self, let runtime else { return }
+            guard self.reverseRuntimes[primaryUUID] === runtime,
+                  runtime.signalTimerGeneration == generation else {
+                self.log("reverse signal timeout ignored reason=superseded device=\(primaryUUID.uuidString)")
+                return
+            }
+            runtime.signalTimer = nil
+            runtime.signalTimerScheduledDeadline = nil
+            runtime.signalTimerGeneration &+= 1
+            guard let latestDeadline = runtime.signalTimeoutDeadline else {
+                self.log("reverse signal timeout ignored reason=noDeadline device=\(primaryUUID.uuidString)")
+                return
+            }
+            let now = self.userActivityMonitor.now
+            guard now >= latestDeadline else {
+                self.scheduleReverseSignalTimer(
+                    for: runtime,
+                    generation: runtime.signalTimerGeneration,
+                    delay: latestDeadline - now,
+                    deadline: latestDeadline
+                )
+                return
+            }
+            self.handleReverseSignalTimeout(for: primaryUUID)
+        }
+    }
+
+    /// Reverse samples are the only evidence for this runtime. When they stop,
+    /// freshness expires even if the GATT link still reports "connected"; a
+    /// connected link alone must never keep the Mac unlocked indefinitely.
+    func handleReverseSignalTimeout(for primaryUUID: UUID) {
+        guard let runtime = reverseRuntimes[primaryUUID] else { return }
+        if runtime.signalTimer != nil || runtime.signalTimerScheduledDeadline != nil {
+            runtime.signalTimer?.stop()
+            runtime.signalTimer = nil
+            runtime.signalTimerScheduledDeadline = nil
+            runtime.signalTimerGeneration &+= 1
+        }
+        log("reverse signal timeout fired device=\(primaryUUID.uuidString) timeout=\(settings.signalTimeout) presence=\(runtime.presence)")
+        if runtime.presence, !runtime.verifyingSignalLoss,
+           settings.lockRSSI != Self.lockDisabled, !isScreenLocked(),
+           !activeConnectionsPaused, !systemSleep {
+            let lastRSSI = runtime.lastRSSI
+            runtime.verifyingSignalLoss = true
+            runtime.lastRSSI = nil
+            runtime.cancelProximityTimer()
+            refreshPublishedMonitoringState()
+            let delay = BLEScanPolicy.signalLossVerificationDelay(
+                signalTimeout: settings.signalTimeout,
+                lastRSSI: lastRSSI
+            )
+            resetReverseSignalTimer(for: runtime, minimumDelay: 0, delayOverride: delay)
+            log("reverse signal loss verification started device=\(primaryUUID.uuidString) seconds=\(delay)")
+            return
+        }
+        let confirmedDeparture = manualLock && runtime.signalObservationIsContinuous
+            && runtime.lastRSSI != nil && !activeConnectionsPaused && !systemSleep
+            && runtime.signalTimeoutDeadline.map { userActivityMonitor.now >= $0 } == true
+        runtime.signalObservationIsContinuous = false
+        runtime.verifyingSignalLoss = false
+        runtime.signalTimeoutDeadline = nil
+        runtime.signalTimer = nil
+        runtime.signalTimerScheduledDeadline = nil
+        runtime.lastRSSI = nil
+        runtime.lastRSSISampledAt = nil
+        if runtime.presence || confirmedDeparture {
+            runtime.presence = false
+            recomputePresence(reason: "reverseLost", confirmedDeparture: confirmedDeparture)
+        } else {
+            refreshPublishedMonitoringState()
+        }
+    }
+
+    private func scheduleReverseProximityTimer(for runtime: BLEReversePresenceRuntime) {
+        let primaryUUID = runtime.primaryUUID
+        runtime.proximityTimerGeneration &+= 1
+        let generation = runtime.proximityTimerGeneration
+        runtime.proximityTimer = proximityTimeoutScheduler(TimeInterval(settings.proximityTimeout)) { [weak self, weak runtime] in
+            guard let self, let runtime,
+                  self.reverseRuntimes[primaryUUID] === runtime,
+                  runtime.proximityTimerGeneration == generation else { return }
+            runtime.proximityTimerGeneration &+= 1
+            let currentThreshold = self.settings.lockRSSI == Self.lockDisabled
+                ? self.settings.unlockRSSI : self.settings.lockRSSI
+            let sampleAge = runtime.lastRSSISampledAt.map { self.userActivityMonitor.now - $0 }
+            let sampleIsFresh = sampleAge.map { $0 >= 0 && $0 < TimeInterval(self.settings.signalTimeout) } == true
+            let confirmedDeparture = sampleIsFresh && runtime.lastRSSI.map { $0 < currentThreshold } == true
+            runtime.proximityTimer = nil
+            guard confirmedDeparture else {
+                self.log("reverse away timer ignored device=\(primaryUUID.uuidString) reason=noFreshDistantSignal")
+                return
+            }
+            runtime.presence = false
+            self.recomputePresence(reason: "reverseAway", confirmedDeparture: true)
         }
     }
 
@@ -1342,10 +1730,20 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         // Each logical device needs its own working observation path. A fresh
         // phone must not suppress rediscovery of the missing watch in OR mode;
         // an unknown alias must not cause scans if that same phone is healthy.
-        let observed = logicalDeviceStates { runtime in
-            guard runtime.lastRSSI != nil, let sampled = runtime.lastRSSISampledAt else { return false }
-            let age = now - sampled
-            return age >= 0 && age < interval
+        let observed = logicalDeviceUUIDs.map { logical -> Bool in
+            let legacy = settings.identityRegistry.uuids(for: logical).contains { uuid in
+                guard let runtime = monitoredRuntimes[uuid],
+                      runtime.lastRSSI != nil,
+                      let sampled = runtime.lastRSSISampledAt else { return false }
+                let age = now - sampled
+                return age >= 0 && age < interval
+            }
+            let reverse = reverseRuntimes[logical].map { runtime in
+                guard runtime.lastRSSI != nil, let sampled = runtime.lastRSSISampledAt else { return false }
+                let age = now - sampled
+                return age >= 0 && age < interval
+            } ?? false
+            return legacy || reverse
         }
         guard observed.contains(false) else { return }
         refreshMonitoringDiscovery(reason: "missingDeviceSignal")
@@ -1423,6 +1821,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 runtime.lastRSSI = nil
                 runtime.presence = false
             }
+            for runtime in reverseRuntimes.values {
+                runtime.invalidateTimers()
+                runtime.clearEvidence()
+            }
+            lastRSSISource = .none
             refreshPublishedMonitoringState()
             if !bluetoothPowerWarned {
                 bluetoothPowerWarned = true
@@ -1808,6 +2211,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             // about to expire cannot immediately undo a new manual lock.
             resetSignalTimer(for: runtime.uuid)
         }
+        for runtime in reverseRuntimes.values {
+            runtime.cancelProximityTimer()
+            let sampleAge = runtime.lastRSSISampledAt.map { userActivityMonitor.now - $0 }
+            let sampleIsFresh = sampleAge.map { $0 >= 0 && $0 < TimeInterval(settings.signalTimeout) } == true
+            runtime.signalObservationIsContinuous = runtime.signalObservationIsContinuous
+                && runtime.lastRSSI != nil && sampleIsFresh && !activeConnectionsPaused
+            resetReverseSignalTimer(for: runtime)
+        }
         cancelUnlockAttempt(reason: reason)
         wakeRetryTask?.cancel()
         wakeRetryTask = nil
@@ -2140,6 +2551,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         for runtime in monitoredRuntimes.values {
             runtime.invalidateTimers()
         }
+        for runtime in reverseRuntimes.values {
+            runtime.invalidateTimers()
+        }
         refreshPublishedMonitoringState()
     }
 
@@ -2159,6 +2573,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             runtime.peripheral = nil
             runtime.presence = false
             runtime.lastRSSI = nil
+        }
+        for runtime in reverseRuntimes.values {
+            runtime.invalidateTimers()
+            runtime.clearEvidence()
         }
         cancelUnlockAttempt()
 
@@ -2213,9 +2631,27 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private var monitoringHasFreshSignal: Bool {
         BLEDevicePresencePolicy.isSatisfied(
-            presences: logicalDeviceStates { $0.lastRSSI != nil },
+            presences: logicalDeviceFreshSignalStates(),
             relation: settings.deviceRelation
         )
+    }
+
+    /// Legacy-link discovery still needs to recover when only the reverse link
+    /// is fresh: the two directions run in parallel and one must never be used
+    /// as evidence that the other is healthy.
+    private var monitoringHasLegacyFreshSignal: Bool {
+        BLEDevicePresencePolicy.isSatisfied(
+            presences: logicalDeviceLegacyFreshSignalStates(),
+            relation: settings.deviceRelation
+        )
+    }
+
+    private func logicalDeviceLegacyFreshSignalStates() -> [Bool] {
+        logicalDeviceUUIDs.map { logical in
+            settings.identityRegistry.uuids(for: logical).contains {
+                monitoredRuntimes[$0]?.lastRSSI != nil
+            }
+        }
     }
 
     private func startDisplayWakeMonitoringRecovery(clearSignal: Bool) {
@@ -2232,6 +2668,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 // The pre-sleep deadline must not interrupt the cold reconnect.
                 // Presence stays false; this extends recovery, never RSSI validity.
                 resetSignalTimer(for: runtime.uuid, minimumDelay: BLEConnectionRetryGate.connectionTimeout)
+            }
+            for runtime in reverseRuntimes.values {
+                runtime.clearEvidence()
+                runtime.invalidateTimers()
+                resetReverseSignalTimer(
+                    for: runtime,
+                    minimumDelay: BLEConnectionRetryGate.connectionTimeout
+                )
             }
             presence = false
             refreshPublishedMonitoringState()
@@ -2300,7 +2744,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         let restartDelays: [TimeInterval]
         if restartImmediately {
             restartMonitoringAfterRecovery(reason: reason, resetCentral: true)
-            guard !monitoringHasFreshSignal else { return }
+            guard !monitoringHasLegacyFreshSignal else { return }
             restartDelays = plan.restartDelays.filter { $0 > 0 }
         } else {
             restartDelays = plan.restartDelays
@@ -2315,19 +2759,19 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                     await sleep(wait)
                 }
                 guard !Task.isCancelled, let self else { return }
-                guard !self.monitoringHasFreshSignal else { break }
+                guard !self.monitoringHasLegacyFreshSignal else { break }
                 // Only the first checkpoint can replace a broken session.
                 // Retrying discovery at 3/10s must not cancel a 60s connection.
                 self.restartMonitoringAfterRecovery(reason: reason, resetCentral: deadline == 0)
                 previousDeadline = deadline
             }
             self?.monitoringRecoveryTask = nil
-            self?.log("monitoring recovery finished freshSignal=\(self?.monitoringHasFreshSignal ?? false)")
+            self?.log("monitoring recovery finished legacyFreshSignal=\(self?.monitoringHasLegacyFreshSignal ?? false)")
         }
     }
 
     private func stopMonitoringRecovery(reason: String) {
-        guard monitoringRecoveryTask != nil, monitoringHasFreshSignal else { return }
+        guard monitoringRecoveryTask != nil, monitoringHasLegacyFreshSignal else { return }
         cancelMonitoringRecovery(reason: reason)
     }
 

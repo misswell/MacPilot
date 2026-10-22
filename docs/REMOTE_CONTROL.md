@@ -907,14 +907,103 @@ while the app is backgrounded. It cannot survive app termination or an iOS
 suspension that tears the peripheral down. Automated acceptance must use isolated
 pure/mocked logic, never lock, blank or sleep the user's real screen.
 
+## Authenticated reverse presence (production)
+
+This is the production path built on the reversed-role service; the manual
+connectivity test described in the next section remains a separate diagnostic
+role of the same Mac manager and the same fixed UUIDs. Starting or stopping the
+diagnostic test never starts or stops production, and production never accepts a
+diagnostic echo as presence evidence.
+
+The Mac advertises only the service UUID. A paired phone connects, reads Mac
+info and subscribes to the presence characteristic. For each subscriber the Mac
+issues a fresh 16-byte nonce by notification (small enough for the default ATT
+MTU), keeps exactly one pending challenge per central with a 15-second TTL, and
+repeats the same nonce when the notification buffer is full. A new nonce is
+issued about every 2.5 seconds while a subscriber exists.
+
+The phone answers a notification only after `readRSSI()` returns a real reading.
+It signs the sample with the Mac's long-term pairing key:
+
+| Field | Bytes | Notes |
+| --- | --- | --- |
+| version | 1 | currently `1`; unknown versions are rejected |
+| nonce | 16 | must equal the Mac's pending challenge |
+| mac ID | 16 | must equal the Mac's stable device ID |
+| RSSI | 1 | signed `Int8`, valid range `-127...0` |
+| sampled at | 8 | big-endian milliseconds since the epoch |
+| HMAC-SHA256 | 32 | domain label `MacPilotRemote-v1-reverse-presence` over every field above |
+
+The legacy `RemoteBLEPresenceChallenge.response(pairingKey:)` encoding is
+unchanged. The reverse sample uses a separate domain label, so an identity proof
+can never be replayed as a proximity sample. A sample older than 12 seconds, or
+more than 3 seconds in the future, is rejected. Only a verified sample consumes
+the pending nonce, so a duplicate write has nothing left to match.
+
+On the Mac, the model revalidates everything the GATT layer cannot own: the
+feature and reverse toggle are enabled, the session is on the console, the
+system is not asleep, the RSSI and timestamp are in range, the
+`clientID + keyFingerprint` still maps to a configured `primaryUUID`, and a
+pairing key is still available. The reported `clientID`, fingerprint, primary
+UUID, RSSI and sample time are the only data that cross into the unlock model.
+
+Reverse evidence lives in its own runtime per logical device
+(`BLEReversePresenceRuntime`), never in `identityRegistry.aliases`: the alias
+registry names phone peripherals the Mac's central saw, which is a different
+address space from the phone central the Mac's peripheral sees. Legacy and
+reverse presence are merged only at the logical-device layer
+(legacy alias presence OR authenticated reverse presence), and the configured
+`.any` / `.all` relation is still applied across logical devices. The two RSSI
+streams are never averaged. A connected GATT link without a fresh authenticated
+sample is not proximity; the existing signal timeout, departure threshold,
+`proximityTimeout`, `manualLock`, sleep, display and `wakeWithoutUnlocking`
+rules are unchanged. Every accepted sample enters the existing
+`updatePresence` / unlock-attempt gate; no GATT or unlock-model callback calls a
+screen-control primitive directly.
+
+The two links are independent for recovery as well as for presence: a fresh
+reverse sample never cancels legacy reconnection, scan retries or the
+`signalTimeout` recovery, and reverse timers are never extended by legacy
+advertisements. Each link must recover itself; either direction may still satisfy
+the unlock gate.
+
+Mac production starts only when BLE Unlock and the reverse toggle are both
+enabled, the session is on the console, a stable device ID exists, at least one
+configured identity binding exists, and `remotePairingKeyProvider` is
+available. Turning the feature off, unbinding, leaving the console session or
+quitting stops advertising, clears pending challenges and retries, and drops
+reverse runtime. If an iPhone stays connected while production is off, its
+subscription is remembered but granted nothing; re-enabling production
+challenges it again without waiting for a resubscribe iOS would not send.
+
+PilotNest keeps a separate `CBCentralManager` for production with restoration
+identifier `com.misswell.macpilot.reverse-presence.central`. Its intent keys are
+`reversePresence.wantsToRun`, `reversePresence.disabledByUser`,
+`reversePresence.autoEnableMigrated` and `reversePresence.knownMacIDs`; the last
+stores Mac UUIDs only, never keys. Pairing success (key already in the Keychain)
+enables it unless the user opted out; existing paired users migrate once; app
+launch restores the manager only when the intent and a Keychain key exist.
+Unknown Macs, Macs whose key was deleted, and invalid Mac info are disconnected
+without feeding any presence. Scanning never stops for a rejected Mac, and the
+phone keeps at most four Mac connections.
+
+Entering the background empties every pending challenge and marks each
+connection as waiting for a fresh one; only a challenge delivered afterwards can
+produce a new sample. A successful write only means the Mac accepted the sample.
+iOS does not guarantee relaunch after the user force quits the app; reopening it
+restores from the saved intent. The explicit iOS toggle in Settings stops the
+scan, connections and retries without touching the diagnostic test.
+
 ## Independent reversed-role GATT connectivity test
 
 The existing remote-control BLE transport remains Mac Central / iPhone
 Peripheral, including its GATT identity exchange and L2CAP channel. The optional
-connectivity test runs alongside it in the opposite direction. It has no command
-dispatcher, authentication, proximity verdict, RSSI policy or lock/unlock wiring.
-The existing names `ProximityBLEPeripheral`, `ProximityBLECentral` and
-`ProximityGATTService` are retained rather than introducing a duplicate protocol.
+connectivity test runs alongside it in the opposite direction. The test itself
+has no command dispatcher, authentication, proximity verdict, RSSI policy or
+lock/unlock wiring; those belong to the production reverse-presence path above,
+which the test neither controls nor verifies. The existing names
+`ProximityBLEPeripheral`, `ProximityBLECentral` and `ProximityGATTService` are
+retained rather than introducing a duplicate protocol.
 
 | Characteristic | UUID suffix | Properties | Payload |
 | --- | --- | --- | --- |
@@ -922,6 +1011,7 @@ The existing names `ProximityBLEPeripheral`, `ProximityBLECentral` and
 | Mac info | `…0002-000000000002` | read | 17 bytes: version `1` + device UUID (zeros = not configured) |
 | Echo | `…0002-000000000003` | notify | The originating phone's 16-byte payload |
 | Response | `…0002-000000000004` | write with response | A fresh random 16-byte nonce |
+| Presence | `…0002-000000000005` | read, write, notify | Legacy 33-byte identity challenge or production 16-byte nonce / 74-byte signed sample |
 
 The UUID after `central subscribed uuid=` in the Mac log identifies the subscribing
 central; it is **not** a characteristic UUID. Existing characteristic UUIDs and

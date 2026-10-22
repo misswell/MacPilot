@@ -31,6 +31,16 @@ struct ProximityGATTLocalizationTests {
         "proximityGATTLog",
         "proximityGATTLastEcho",
         "proximityGATTNoEvents",
+        "bleReverseGATT",
+        "bleReverseGATTInfo",
+        "bleReverseGATTStatus",
+        "bleReverseGATTSource",
+        "bleReverseGATTStatusOff",
+        "bleReverseGATTStatusWaiting",
+        "bleReverseGATTStatusActive",
+        "bleReverseGATTSourceNone",
+        "bleReverseGATTSourceLegacy",
+        "bleReverseGATTSourceReverse",
     ]
 
     @Test("both languages define every key")

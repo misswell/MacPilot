@@ -14,6 +14,8 @@
 		1970021C7F7E0FC5464C4433 /* DevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CEAD84B28A1735C296AEBF8 /* DevicesView.swift */; };
 		1CAEA4510A03902701764DC2 /* MacPilotRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82CA21A9B57090EDDD6FFE1B /* MacPilotRemoteApp.swift */; };
 		1FDC655EF74A5B0A9E892D40 /* PairingSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 444FF6D1A1FFC5A9B039FE51 /* PairingSheetView.swift */; };
+		214254DA8D44C2CE6D74492A /* ReversePresenceCentralTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EE8EAAFE7E9F4CB58477089 /* ReversePresenceCentralTests.swift */; };
+		2273915D9D97C652752EC870 /* ReversePresenceCentral.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3917549B01B5347A22F21BB3 /* ReversePresenceCentral.swift */; };
 		298C11B06564BF9AC1AE7F98 /* RemoteDesktopState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EF814DB36ABC4097BF2B12E /* RemoteDesktopState.swift */; };
 		2A31139F8AA46E71787728F6 /* RemoteDesktopView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7152877F9A213F21809D5A07 /* RemoteDesktopView.swift */; };
 		2A4D3DB2192AC62F75C6B89D /* RemoteAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2664C90B50B85054CF47D9B3 /* RemoteAppModel.swift */; };
@@ -107,6 +109,7 @@
 		2664C90B50B85054CF47D9B3 /* RemoteAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAppModel.swift; sourceTree = "<group>"; };
 		33405BDC25EC2DDD76357707 /* ReverseGATTHardwareUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReverseGATTHardwareUITests.swift; sourceTree = "<group>"; };
 		3774E27F2A76D7C23AFC2393 /* RemoteConnectionHandshakeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteConnectionHandshakeTests.swift; sourceTree = "<group>"; };
+		3917549B01B5347A22F21BB3 /* ReversePresenceCentral.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReversePresenceCentral.swift; sourceTree = "<group>"; };
 		3A556F1AAEC7A9B11C37B641 /* RemoteModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteModels.swift; sourceTree = "<group>"; };
 		3DDAE05B40754316829343D5 /* RemoteBLEPSMReadState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBLEPSMReadState.swift; sourceTree = "<group>"; };
 		4083ECB0625AD91715E766A6 /* PressureCurve.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressureCurve.swift; sourceTree = "<group>"; };
@@ -140,6 +143,7 @@
 		8BADBB71C31CBC31DE93557E /* RemoteKeyboardInputView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteKeyboardInputView.swift; sourceTree = "<group>"; };
 		8D425482A5A46A96A727A35D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		8ECA729F7E430578837002D2 /* RemoteConnectionRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteConnectionRetryTests.swift; sourceTree = "<group>"; };
+		8EE8EAAFE7E9F4CB58477089 /* ReversePresenceCentralTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReversePresenceCentralTests.swift; sourceTree = "<group>"; };
 		93EDD8D92E7229A2D55E777F /* MacPilotRemoteTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = MacPilotRemoteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		94F1B37F9E91D0638CF6DE1D /* TrackpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadView.swift; sourceTree = "<group>"; };
 		96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDiscoveryService.swift; sourceTree = "<group>"; };
@@ -255,6 +259,7 @@
 				3DDAE05B40754316829343D5 /* RemoteBLEPSMReadState.swift */,
 				4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */,
 				96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */,
+				3917549B01B5347A22F21BB3 /* ReversePresenceCentral.swift */,
 			);
 			path = Networking;
 			sourceTree = "<group>";
@@ -388,6 +393,7 @@
 				19106FC5E6A5C2F45AA18822 /* RemoteTextProximityGATTTests.swift */,
 				DE8A52135C3AB92A01DA4BAA /* RemoteTextSidecarStringsTests.swift */,
 				21D83AE67089B04DF8E33CDD /* RemoteVideoZoomTests.swift */,
+				8EE8EAAFE7E9F4CB58477089 /* ReversePresenceCentralTests.swift */,
 				5F080E6D6418DFB7A61BB39C /* SidecarPanelPolicyTests.swift */,
 			);
 			path = Tests;
@@ -590,6 +596,7 @@
 				5C29B9FB744D1FABA97A6123 /* RemoteTextProximityGATTTests.swift in Sources */,
 				DD5925FB4DD0DF114B4EF739 /* RemoteTextSidecarStringsTests.swift in Sources */,
 				33110033AB36379243431578 /* RemoteVideoZoomTests.swift in Sources */,
+				214254DA8D44C2CE6D74492A /* ReversePresenceCentralTests.swift in Sources */,
 				F6924314EE6A88C196606455 /* SidecarPanelPolicyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -636,6 +643,7 @@
 				7AD15026D75C2BBA62B0B152 /* RemoteTrackpadModel.swift in Sources */,
 				6E9F62D64507C5CC4E50142A /* RemoteVideoDecoder.swift in Sources */,
 				0C63A6B37405014D4C0B3A77 /* RemoteVideoView.swift in Sources */,
+				2273915D9D97C652752EC870 /* ReversePresenceCentral.swift in Sources */,
 				CC59413625ABC1AAEE0F80AA /* RootView.swift in Sources */,
 				AE3CA90F4FC1DCF98C3D983D /* SidecarDeviceSheet.swift in Sources */,
 				F6B84E79BE41DA884CB826BA /* SidecarPanelPolicy.swift in Sources */,

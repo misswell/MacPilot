@@ -82,6 +82,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         ProximityBLECentral.shared.resumeIfEnabled()
+        ReversePresenceCentral.shared.resumeAtLaunch()
         return true
     }
 
