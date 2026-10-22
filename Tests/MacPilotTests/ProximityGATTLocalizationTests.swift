@@ -8,6 +8,17 @@ import Testing
 @Suite("Proximity GATT localization")
 struct ProximityGATTLocalizationTests {
     private static let keys = [
+        "proximityGATTAdvertising",
+        "proximityGATTSubscribers",
+        "proximityGATTYes",
+        "proximityGATTNo",
+        "proximityGATTLastReceived",
+        "proximityGATTReceivedBytes",
+        "proximityGATTSentBytes",
+        "proximityGATTServiceUUID",
+        "proximityGATTEchoUUID",
+        "proximityGATTWriteUUID",
+        "proximityGATTClearLog",
         "proximityGATTTitle",
         "proximityGATTSubtitle",
         "proximityGATTStart",

@@ -42,11 +42,13 @@
 		76DE2646AF35A8E17A3CC3EA /* RemoteControlPreferencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00C1B29E6E95D05262D3D9A /* RemoteControlPreferencesTests.swift */; };
 		7AD15026D75C2BBA62B0B152 /* RemoteTrackpadModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D31EAE82FAE4CB3CCAD7C9 /* RemoteTrackpadModel.swift */; };
 		7F9A392EE7B644AB9A987F7A /* RemoteBLEPeripheral.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7890B51F3A461DD34A2BF5C8 /* RemoteBLEPeripheral.swift */; };
+		8125CD11F2CFF2110E8C14F7 /* ProximityGATTOptInTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F979F418DA0F632E06A6FBB6 /* ProximityGATTOptInTests.swift */; };
 		8ABE53FBAA8C5E88D864E561 /* RemoteConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */; };
 		8AD72A94074F0EECBBBB3670 /* RemoteBLEIdentityProbePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66DDA158E305F0563D52F0AE /* RemoteBLEIdentityProbePolicyTests.swift */; };
 		8BCC090B7F4D8B0260BF0650 /* InputEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5B2D649254FA8EE4ED7FA7E /* InputEvent.swift */; };
 		8D6D76E9226863A28B84D3D6 /* ProximityBLECentral.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E580CCBC171179A06C7B9F0 /* ProximityBLECentral.swift */; };
 		921C9954593FA4F21A8FA466 /* VelocityCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CCEAC5B50B59CC42724C3 /* VelocityCalculator.swift */; };
+		937118DF34847B59D7FE2C7E /* ReverseGATTHardwareUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33405BDC25EC2DDD76357707 /* ReverseGATTHardwareUITests.swift */; };
 		97D7FA550D676240482EF5B6 /* RemoteDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */; };
 		9A1F5568F3ECD63FDD274EED /* TouchProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D152E96DBE715090384BAA76 /* TouchProcessor.swift */; };
 		9C4A299E2EC608FE844CBF24 /* RemoteKeyboardInputView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BADBB71C31CBC31DE93557E /* RemoteKeyboardInputView.swift */; };
@@ -103,6 +105,7 @@
 		1CEAD84B28A1735C296AEBF8 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
 		21D83AE67089B04DF8E33CDD /* RemoteVideoZoomTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoZoomTests.swift; sourceTree = "<group>"; };
 		2664C90B50B85054CF47D9B3 /* RemoteAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAppModel.swift; sourceTree = "<group>"; };
+		33405BDC25EC2DDD76357707 /* ReverseGATTHardwareUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReverseGATTHardwareUITests.swift; sourceTree = "<group>"; };
 		3774E27F2A76D7C23AFC2393 /* RemoteConnectionHandshakeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteConnectionHandshakeTests.swift; sourceTree = "<group>"; };
 		3A556F1AAEC7A9B11C37B641 /* RemoteModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteModels.swift; sourceTree = "<group>"; };
 		3DDAE05B40754316829343D5 /* RemoteBLEPSMReadState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBLEPSMReadState.swift; sourceTree = "<group>"; };
@@ -167,6 +170,7 @@
 		F00C1B29E6E95D05262D3D9A /* RemoteControlPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlPreferencesTests.swift; sourceTree = "<group>"; };
 		F191E81E8CA9B2CCD4CF79A9 /* TouchHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchHistory.swift; sourceTree = "<group>"; };
 		F4E2DE683D33CF6736C45DE3 /* PressureSample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressureSample.swift; sourceTree = "<group>"; };
+		F979F418DA0F632E06A6FBB6 /* ProximityGATTOptInTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProximityGATTOptInTests.swift; sourceTree = "<group>"; };
 		FCFB309710B660CAEDF2CF72 /* TrackpadSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadSettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -224,6 +228,7 @@
 			isa = PBXGroup;
 			children = (
 				E81ADDA4A7D54CF015D28FD0 /* ControlSectionOrderUITests.swift */,
+				33405BDC25EC2DDD76357707 /* ReverseGATTHardwareUITests.swift */,
 				447CDE5B9C0AAC4C65F9D517 /* ScreenshotTests.swift */,
 			);
 			path = ScreenshotTests;
@@ -370,6 +375,7 @@
 		CAC85CAEC020E53A0EBEB9BC /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				F979F418DA0F632E06A6FBB6 /* ProximityGATTOptInTests.swift */,
 				9F5B0D09B033A0991D0A7F09 /* RemoteAutomaticMacSelectionTests.swift */,
 				BDCA3C418F7432B3AF67C8E6 /* RemoteBLEAdvertisingPolicyTests.swift */,
 				66DDA158E305F0563D52F0AE /* RemoteBLEIdentityProbePolicyTests.swift */,
@@ -562,6 +568,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5F09E65FDAE093628B7C3BF1 /* ControlSectionOrderUITests.swift in Sources */,
+				937118DF34847B59D7FE2C7E /* ReverseGATTHardwareUITests.swift in Sources */,
 				70EB80CE61981CAF16DD2B71 /* ScreenshotTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -570,6 +577,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8125CD11F2CFF2110E8C14F7 /* ProximityGATTOptInTests.swift in Sources */,
 				AD1A6265CB77ADBDF69A32F8 /* RemoteAutomaticMacSelectionTests.swift in Sources */,
 				53EBF9F3C73568C0B0607EDA /* RemoteBLEAdvertisingPolicyTests.swift in Sources */,
 				8AD72A94074F0EECBBBB3670 /* RemoteBLEIdentityProbePolicyTests.swift in Sources */,

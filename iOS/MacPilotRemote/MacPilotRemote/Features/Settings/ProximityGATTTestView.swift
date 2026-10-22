@@ -1,11 +1,12 @@
 import SwiftUI
+import MacPilotRemoteTransport
 
-/// Phase-one harness for the reversed BLE roles: Mac advertises, this phone
+/// Independent test for the reversed BLE roles: Mac advertises, this phone
 /// connects. It measures each GATT step and proves the sixteen byte echo comes
 /// back unchanged. It is not wired to unlock and stores no identity.
 struct ProximityGATTTestView: View {
     @EnvironmentObject private var appModel: RemoteAppModel
-    @StateObject private var central = ProximityBLECentral()
+    @ObservedObject private var central = ProximityBLECentral.shared
 
     var body: some View {
         List {
@@ -19,17 +20,46 @@ struct ProximityGATTTestView: View {
                         Button(appModel.text("proximityGATTStop"), role: .destructive) {
                             central.stop()
                         }
+                        .accessibilityIdentifier("proximityGATTStop")
                     } else {
                         Button(appModel.text("proximityGATTStart")) {
                             central.start()
                         }
                         .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("proximityGATTStart")
                     }
                 }
                 .accessibilityIdentifier("proximityGATTStartStop")
             } footer: {
                 Text(appModel.text("proximityGATTSubtitle"))
             }
+
+            Section(appModel.text("proximityGATTDiagnostics")) {
+                LabeledContent(appModel.text("proximityGATTLink"), value: appModel.text(central.isConnected ? "proximityGATTYes" : "proximityGATTNo"))
+                LabeledContent(appModel.text("proximityGATTSubscription"), value: appModel.text(central.isSubscribed ? "proximityGATTYes" : "proximityGATTNo"))
+                LabeledContent(appModel.text("proximityGATTSentBytes"), value: "\(central.probe.sentBytes)")
+                LabeledContent(appModel.text("proximityGATTReceivedBytes"), value: "\(central.probe.receivedBytes)")
+                LabeledContent(appModel.text("proximityGATTVerifiedCount"), value: "\(central.probe.verifiedCount)")
+                    .accessibilityIdentifier("proximityGATTVerifiedCount")
+                    .accessibilityValue("\(central.probe.verifiedCount)")
+                dateRow("proximityGATTLastSent", central.probe.lastSentAt)
+                dateRow("proximityGATTLastReceived", central.probe.lastReceivedAt)
+                dateRow("proximityGATTLastVerified", central.lastVerifiedAt)
+                if let error = central.lastError {
+                    LabeledContent(appModel.text("proximityGATTLastError"), value: error)
+                }
+                Button(appModel.text("proximityGATTSendAgain")) { central.sendEcho() }
+                    .accessibilityIdentifier("proximityGATTSendAgain")
+                    .disabled(!central.isSubscribed || central.probe.payload != nil)
+            }
+
+            Section(appModel.text("proximityGATTProtocol")) {
+                LabeledContent(appModel.text("proximityGATTServiceUUID"), value: ProximityGATTService.serviceUUID.uuidString)
+                LabeledContent(appModel.text("proximityGATTEchoUUID"), value: ProximityGATTService.echoCharacteristicUUID.uuidString)
+                LabeledContent(appModel.text("proximityGATTWriteUUID"), value: ProximityGATTService.responseCharacteristicUUID.uuidString)
+            }
+            .font(.caption.monospaced())
+            .textSelection(.enabled)
 
             if let info = central.macInfo {
                 Section(appModel.text("proximityGATTMacSection")) {
@@ -52,6 +82,8 @@ struct ProximityGATTTestView: View {
             }
 
             Section(appModel.text("proximityGATTLog")) {
+                Button(appModel.text("proximityGATTClearLog")) { central.clearLog() }
+                    .accessibilityIdentifier("proximityGATTClearLog")
                 if central.logLines.isEmpty {
                     Text(appModel.text("proximityGATTNoEvents"))
                         .foregroundStyle(.secondary)
@@ -60,6 +92,7 @@ struct ProximityGATTTestView: View {
                         Text(line)
                             .font(.caption.monospaced())
                             .textSelection(.enabled)
+                            .accessibilityIdentifier("proximityGATTLogLine")
                     }
                     ShareLink(item: central.logLines.joined(separator: "\n")) {
                         Label(appModel.text("proximityGATTShareLog"), systemImage: "square.and.arrow.up")
@@ -70,9 +103,11 @@ struct ProximityGATTTestView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(appModel.text("proximityGATTTitle"))
         .navigationBarTitleDisplayMode(.inline)
-        .onDisappear {
-            central.stop()
-        }
+    }
+
+    @ViewBuilder
+    private func dateRow(_ key: String, _ date: Date?) -> some View {
+        LabeledContent(appModel.text(key), value: date?.formatted(date: .omitted, time: .standard) ?? "—")
     }
 
     @ViewBuilder

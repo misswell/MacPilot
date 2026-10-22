@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Darwin
 import OSLog
+import MacPilotRemoteTransport
 import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
@@ -539,6 +540,17 @@ enum AppText {
         "bleAdvertisementStalledMessage": "MacPilot 已经很长时间没有收到任何蓝牙广播，接近解锁暂时无法工作。扫描无回调不代表已确认系统故障；设备广播减少或连接异常也可能导致无新信号。MacPilot 会尝试恢复已绑定设备的连接，仅在收到新信号后允许自动解锁。",
         "bleConflictingInstanceTitle": "检测到其他 MacPilot 实例",
         "bleConflictingInstanceCount": "另有 %d 个 MacPilot 实例正在运行。此检测无法确认对方是否启用蓝牙功能，也不能据此认定存在蓝牙冲突。",
+        "proximityGATTAdvertising": "Mac 广播",
+        "proximityGATTSubscribers": "通知订阅数",
+        "proximityGATTYes": "是",
+        "proximityGATTNo": "否",
+        "proximityGATTLastReceived": "最近接收",
+        "proximityGATTReceivedBytes": "接收字节数",
+        "proximityGATTSentBytes": "发送字节数",
+        "proximityGATTServiceUUID": "服务 UUID",
+        "proximityGATTEchoUUID": "通知 UUID",
+        "proximityGATTWriteUUID": "写入 UUID",
+        "proximityGATTClearLog": "清理测试日志",
         "proximityGATTTitle": "GATT 连通性测试（实验）",
         "proximityGATTSubtitle": "在 Mac 上广播测试服务，等 PilotNest 连接并回传 16 字节数据。只验证反向 BLE 链路，不参与锁定或解锁。先在 Mac 开始广播，再到 PilotNest 的「设置 › 连接方式」里开始扫描。",
         "proximityGATTStart": "开始广播",
@@ -546,10 +558,10 @@ enum AppText {
         "proximityGATTStatusIdle": "未启动",
         "proximityGATTStatusStarting": "正在启动…",
         "proximityGATTStatusAdvertising": "正在广播，等待 iPhone 连接",
-        "proximityGATTStatusConnected": "iPhone 已连接",
+        "proximityGATTStatusConnected": "iPhone 已订阅通知",
         "proximityGATTStatusFailed": "失败：%@",
         "proximityGATTLog": "事件日志",
-        "proximityGATTLastEcho": "最近回环：%@",
+        "proximityGATTLastEcho": "最近通知入队（回环由 iPhone 校验）：%@",
         "proximityGATTNoEvents": "还没有事件。",
         "remoteControl": "远程控制",
         "remoteControlSubtitle": "用同一局域网内的 iPhone 远程执行锁屏、黑屏、解锁和唤醒解锁。登录密码始终只保存在这台 Mac 上。",
@@ -1812,6 +1824,17 @@ enum AppText {
             "bleAdvertisementStalledMessage": "MacPilot has not received any Bluetooth advertisements for a long time, so proximity unlock cannot work right now. Missing scan callbacks do not establish a system failure; reduced advertising or connection problems may also cause missing signals. MacPilot will try to reconnect known devices and only allow automatic unlock after a fresh signal.",
             "bleConflictingInstanceTitle": "Other MacPilot instances detected",
             "bleConflictingInstanceCount": "%d other MacPilot instance(s) are running. This check cannot determine whether their Bluetooth features are enabled or establish a Bluetooth conflict.",
+            "proximityGATTAdvertising": "Mac advertising",
+            "proximityGATTSubscribers": "Notification subscribers",
+            "proximityGATTYes": "Yes",
+            "proximityGATTNo": "No",
+            "proximityGATTLastReceived": "Last received",
+            "proximityGATTReceivedBytes": "Received bytes",
+            "proximityGATTSentBytes": "Sent bytes",
+            "proximityGATTServiceUUID": "Service UUID",
+            "proximityGATTEchoUUID": "Notification UUID",
+            "proximityGATTWriteUUID": "Write UUID",
+            "proximityGATTClearLog": "Clear test log",
             "proximityGATTTitle": "GATT connectivity test (experimental)",
             "proximityGATTSubtitle": "Advertise a test service on the Mac, wait for PilotNest to connect and echo 16 bytes back. This only proves the reversed BLE link; it does not lock or unlock anything. Start advertising here first, then start scanning in PilotNest under Settings › Connection link.",
             "proximityGATTStart": "Start advertising",
@@ -1819,10 +1842,10 @@ enum AppText {
             "proximityGATTStatusIdle": "Not running",
             "proximityGATTStatusStarting": "Starting…",
             "proximityGATTStatusAdvertising": "Advertising; waiting for the iPhone",
-            "proximityGATTStatusConnected": "iPhone connected",
+            "proximityGATTStatusConnected": "iPhone subscribed to notifications",
             "proximityGATTStatusFailed": "Failed: %@",
             "proximityGATTLog": "Event log",
-            "proximityGATTLastEcho": "Last echo: %@",
+            "proximityGATTLastEcho": "Last notification queued (verified by iPhone): %@",
             "proximityGATTNoEvents": "No events yet.",
             "remoteControl": "Remote Control",
             "remoteControlSubtitle": "Lock, blank, unlock and wake-and-unlock this Mac from an iPhone on the same local network. The login password never leaves this Mac.",
@@ -5219,7 +5242,7 @@ struct BLEUnlockView: View {
     @State private var resetFailureMessage: String?
     @State private var sortMode: DeviceSortMode = .added
     @State private var showingHistoryClearConfirmation = false
-    @StateObject private var proximityProbe = ProximityBLEPeripheral()
+    @ObservedObject private var proximityProbe = ProximityBLEPeripheral.shared
     @State private var showsProximityLog = false
 
     var body: some View {
@@ -5258,7 +5281,6 @@ struct BLEUnlockView: View {
         .onDisappear {
             if showPicker { showPicker = false; ble.stopScanning() }
             pickingSecondary = false
-            proximityProbe.stop()
         }
     }
 
@@ -5689,9 +5711,23 @@ struct BLEUnlockView: View {
                         showsProximityLog = true
                         proximityProbe.start(macDeviceID: configuredMacDeviceID)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .macPilotProminentButtonStyle()
                 }
             }
+
+            LabeledContent(model.t("proximityGATTAdvertising"), value: model.t(proximityProbe.isAdvertising ? "proximityGATTYes" : "proximityGATTNo"))
+            LabeledContent(model.t("proximityGATTSubscribers"), value: "\(proximityProbe.subscriberCount)")
+            LabeledContent(model.t("proximityGATTReceivedBytes"), value: "\(proximityProbe.receivedBytes)")
+            LabeledContent(model.t("proximityGATTSentBytes"), value: "\(proximityProbe.sentBytes)")
+            LabeledContent(model.t("proximityGATTLastReceived"), value: proximityProbe.lastReceivedAt?.formatted(date: .omitted, time: .standard) ?? "—")
+            Group {
+                LabeledContent(model.t("proximityGATTServiceUUID"), value: ProximityGATTService.serviceUUID.uuidString)
+                LabeledContent(model.t("proximityGATTEchoUUID"), value: ProximityGATTService.echoCharacteristicUUID.uuidString)
+                LabeledContent(model.t("proximityGATTWriteUUID"), value: ProximityGATTService.responseCharacteristicUUID.uuidString)
+            }
+            .font(.caption.monospaced())
+            .textSelection(.enabled)
+            Button(model.t("proximityGATTClearLog")) { proximityProbe.clearLog() }
 
             if let lastEchoAt = proximityProbe.lastEchoAt {
                 Text(model.t("proximityGATTLastEcho", lastEchoAt.formatted(date: .omitted, time: .standard)))

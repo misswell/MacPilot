@@ -2,16 +2,14 @@ import CoreBluetooth
 import Foundation
 import MacPilotRemoteTransport
 
-/// Advertises a plain GATT service so the reversed BLE roles can be measured.
-///
-/// Every other BLE path in this repo has the Mac as the central. Before building
-/// background discovery, authentication or unlock on top of Mac-as-peripheral,
-/// this harness has to prove the radio path exists at all: advertise, accept a
-/// phone connection, answer a read, accept a notification subscription and echo
-/// sixteen bytes back. It deliberately has no identity, no proximity verdict and
-/// no unlock wiring, so a failure here cannot be mistaken for a security result.
+/// Independent Mac-as-peripheral connectivity test. Its advertisement, GATT
+/// service, bounded echo queue and retries never touch the old BLE managers,
+/// remote commands or the proximity/lock policy. Notification delivery is
+/// measured here; only the phone can verify the round trip.
 @MainActor
 final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeripheralManagerDelegate {
+    static let shared = ProximityBLEPeripheral()
+
     enum Status: Equatable {
         case idle
         case starting
@@ -23,32 +21,40 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
     @Published private(set) var status: Status = .idle
     @Published private(set) var logLines: [String] = []
     @Published private(set) var lastEchoAt: Date?
+    @Published private(set) var lastReceivedAt: Date?
+    @Published private(set) var receivedBytes = 0
+    @Published private(set) var sentBytes = 0
+    @Published private(set) var isAdvertising = false
+    @Published private(set) var subscriberCount = 0
+    @Published private(set) var isRunning = false
 
     private var manager: CBPeripheralManager?
     private var macInfo = Data()
     private var publishedService: CBMutableService?
     private var echoCharacteristic: CBMutableCharacteristic?
     private var responseCharacteristic: CBMutableCharacteristic?
-    private var subscribedCentrals: [UUID] = []
+    private var subscribedCentrals: [UUID: CBCentral] = [:]
     private var wantsToRun = false
     private var isPublishing = false
-    /// Echo that could not be queued because the notification buffer was full.
-    /// `peripheralManagerIsReady(toUpdateSubscribers:)` retries it.
-    private var pendingEcho: Data?
+    private var isStartingAdvertising = false
+    private var echoQueue = ProximityGATTEchoQueue()
+    private var retry = ProximityGATTRetry()
+    private var retryTask: Task<Void, Never>?
+    private var expiryTask: Task<Void, Never>?
+    private var sessionID = UUID()
     private let logLimit = 200
-
-    var isRunning: Bool {
-        switch status {
-        case .idle, .failed: return false
-        default: return true
-        }
-    }
 
     // MARK: - Lifecycle
 
     func start(macDeviceID: UUID?) {
         if manager != nil { stop() }
         wantsToRun = true
+        isRunning = true
+        sessionID = UUID()
+        retry.reset()
+        receivedBytes = 0
+        sentBytes = 0
+        lastReceivedAt = nil
         status = .starting
         lastEchoAt = nil
         macInfo = ProximityGATTMacInfo(deviceID: macDeviceID).encoded
@@ -62,12 +68,20 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
 
     func stop() {
         wantsToRun = false
-        pendingEcho = nil
+        isRunning = false
+        retryTask?.cancel()
+        retryTask = nil
+        expiryTask?.cancel()
+        expiryTask = nil
+        echoQueue.reset()
+        isAdvertising = false
+        subscriberCount = 0
         subscribedCentrals.removeAll()
         publishedService = nil
         echoCharacteristic = nil
         responseCharacteristic = nil
         isPublishing = false
+        isStartingAdvertising = false
         if let manager {
             manager.stopAdvertising()
             manager.removeAllServices()
@@ -77,6 +91,8 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
         status = .idle
         log("peripheral stopped")
     }
+
+    func clearLog() { logLines.removeAll() }
 
     // MARK: - GATT
 
@@ -112,7 +128,9 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
     }
 
     private func startAdvertising(_ manager: CBPeripheralManager) {
-        guard wantsToRun else { return }
+        guard wantsToRun, manager.state == .poweredOn,
+              !manager.isAdvertising, !isStartingAdvertising else { return }
+        isStartingAdvertising = true
         // Service UUID only; the local name is optional for discovery and would
         // shrink the room left for the UUID in the legacy advertising payload.
         manager.startAdvertising([
@@ -121,7 +139,7 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
     }
 
     private func log(_ message: @autoclosure () -> String) {
-        let line = "\(Date.now.formatted(date: .omitted, time: .standard)) \(message())"
+        let line = "\(Date.now.formatted(date: .omitted, time: .standard)) [\(sessionID.uuidString)] \(message())"
         logLines.append(line)
         if logLines.count > logLimit {
             logLines.removeFirst(logLines.count - logLimit)
@@ -133,10 +151,30 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
         log("peripheral failed: \(reason)")
     }
 
+    private func scheduleRetry(on peripheral: CBPeripheralManager) {
+        guard wantsToRun, peripheral.state == .poweredOn else { return }
+        retryTask?.cancel()
+        let delay = retry.nextDelay()
+        log("retry in \(delay)s")
+        retryTask = Task { @MainActor [weak self, weak peripheral] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self, let peripheral,
+                  peripheral === self.manager, self.wantsToRun,
+                  peripheral.state == .poweredOn else { return }
+            self.status = .starting
+            if self.publishedService == nil { self.publishService(on: peripheral) }
+            else { self.startAdvertising(peripheral) }
+        }
+    }
+
     // MARK: - CBPeripheralManagerDelegate
 
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         guard peripheral === manager else { return }
+        if peripheral.state != .poweredOn {
+            retryTask?.cancel()
+            resetPublishedService()
+        }
         switch peripheral.state {
         case .poweredOn:
             log("radio on")
@@ -147,10 +185,9 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
         case .unsupported:
             fail("Bluetooth unsupported")
         case .poweredOff:
-            resetPublishedService()
-            fail("Bluetooth is off")
+            fail("Bluetooth is off; waiting for radio recovery")
         default:
-            resetPublishedService()
+            status = .starting
             log("waiting for Bluetooth state=\(peripheral.state.rawValue)")
         }
     }
@@ -163,7 +200,11 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
         echoCharacteristic = nil
         responseCharacteristic = nil
         isPublishing = false
-        pendingEcho = nil
+        isStartingAdvertising = false
+        echoQueue.reset()
+        expiryTask?.cancel()
+        isAdvertising = false
+        subscriberCount = 0
         subscribedCentrals.removeAll()
     }
 
@@ -172,7 +213,11 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
         isPublishing = false
         if let error {
             publishedService = nil
+            echoCharacteristic = nil
+            responseCharacteristic = nil
+            peripheral.removeAllServices()
             fail("service add failed: \(error.localizedDescription)")
+            scheduleRetry(on: peripheral)
             return
         }
         log("GATT service added; starting advertisement")
@@ -180,21 +225,29 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
     }
 
     func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
-        guard peripheral === manager else { return }
+        guard peripheral === manager, wantsToRun, peripheral.state == .poweredOn,
+              publishedService != nil else { return }
+        isStartingAdvertising = false
         if let error {
+            isAdvertising = false
             fail("advertising failed: \(error.localizedDescription)")
+            scheduleRetry(on: peripheral)
             return
         }
         guard wantsToRun else {
             peripheral.stopAdvertising()
             return
         }
-        status = .advertising
+        isAdvertising = peripheral.isAdvertising
+        retry.reset()
+        status = subscriberCount == 0 ? .advertising : .connected
         log("advertising started")
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
-        guard peripheral === manager, request.characteristic.uuid == ProximityGATTService.macInfoCharacteristicUUID else {
+        guard peripheral === manager, wantsToRun,
+              request.characteristic.service === publishedService,
+              request.characteristic.uuid == ProximityGATTService.macInfoCharacteristicUUID else {
             peripheral.respond(to: request, withResult: .requestNotSupported)
             return
         }
@@ -208,43 +261,82 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
+        guard let first = requests.first else { return }
+        // CoreBluetooth requires one ATT response for the entire batch. Validate
+        // into a copy first so a rejected batch cannot partially echo data.
+        var staged = echoQueue
         for request in requests {
-            guard peripheral === manager,
-                  request.characteristic.uuid == ProximityGATTService.responseCharacteristicUUID else {
-                peripheral.respond(to: request, withResult: .requestNotSupported)
-                continue
+            guard peripheral === manager, wantsToRun,
+                  request.characteristic === responseCharacteristic else {
+                peripheral.respond(to: first, withResult: .requestNotSupported)
+                return
             }
-            guard request.offset == 0,
-                  let value = request.value,
-                  value.count == ProximityGATTEcho.length else {
-                log("rejected response write: offset=\(request.offset) bytes=\(request.value?.count ?? 0)")
-                peripheral.respond(to: request, withResult: .invalidAttributeValueLength)
-                continue
+            guard request.offset == 0 else {
+                peripheral.respond(to: first, withResult: .invalidOffset)
+                return
             }
-            lastEchoAt = .now
-            deliverEcho(value, on: peripheral)
-            peripheral.respond(to: request, withResult: .success)
+            guard let value = request.value, value.count == ProximityGATTEcho.length else {
+                log("rejected write: invalid length \(request.value?.count ?? 0)")
+                peripheral.respond(to: first, withResult: .invalidAttributeValueLength)
+                return
+            }
+            guard subscribedCentrals[request.central.identifier] != nil else {
+                log("rejected write: no subscriber for central=\(request.central.identifier)")
+                peripheral.respond(to: first, withResult: .unlikelyError)
+                return
+            }
+            guard staged.enqueue(value, for: request.central.identifier) else {
+                log("rejected write: notification queue busy")
+                peripheral.respond(to: first, withResult: .insufficientResources)
+                return
+            }
         }
+        echoQueue = staged
+        lastReceivedAt = .now
+        receivedBytes += requests.count * ProximityGATTEcho.length
+        log("received 16 bytes; writes=\(requests.count)")
+        peripheral.respond(to: first, withResult: .success)
+        deliverEchoes(on: peripheral)
     }
 
-    private func deliverEcho(_ value: Data, on peripheral: CBPeripheralManager) {
+    private func deliverEchoes(on peripheral: CBPeripheralManager) {
         guard let echoCharacteristic else { return }
-        guard peripheral.updateValue(value, for: echoCharacteristic, onSubscribedCentrals: nil) else {
-            // No subscriber, or the notification queue is full. Keeping the
-            // payload lets the ready callback retry instead of silently
-            // dropping the phone's only liveness signal.
-            pendingEcho = value
-            log("echo not queued; waiting for the notification buffer")
-            return
+        echoQueue.discardExpired()
+        while let entry = echoQueue.entries.first {
+            guard let central = subscribedCentrals[entry.centralID] else {
+                echoQueue.removeFirst()
+                continue
+            }
+            guard peripheral.updateValue(entry.payload, for: echoCharacteristic, onSubscribedCentrals: [central]) else {
+                log("echo not queued; waiting for notification buffer central=\(entry.centralID)")
+                scheduleQueueExpiry()
+                return
+            }
+            echoQueue.removeFirst()
+            lastEchoAt = .now
+            sentBytes += entry.payload.count
+            log("echoed 16 bytes central=\(entry.centralID); queued, verification belongs to iPhone")
         }
-        pendingEcho = nil
-        log("echoed \(value.count) bytes to \(subscribedCentrals.count) subscriber(s)")
+        expiryTask?.cancel()
+        expiryTask = nil
+    }
+
+    private func scheduleQueueExpiry() {
+        expiryTask?.cancel()
+        guard let expiry = echoQueue.entries.first?.expiresAt else { return }
+        expiryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, expiry.timeIntervalSinceNow)))
+            guard !Task.isCancelled, let self else { return }
+            self.log("notification queue deadline reached")
+            self.echoQueue.discardExpired()
+            if let manager = self.manager { self.deliverEchoes(on: manager) }
+        }
     }
 
     func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {
-        guard peripheral === manager, let pendingEcho else { return }
-        log("notification buffer ready; retrying echo")
-        deliverEcho(pendingEcho, on: peripheral)
+        guard peripheral === manager else { return }
+        log("notification buffer ready")
+        deliverEchoes(on: peripheral)
     }
 
     func peripheralManager(
@@ -252,15 +344,14 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
         central: CBCentral,
         didSubscribeTo characteristic: CBCharacteristic
     ) {
-        guard peripheral === manager,
-              characteristic.uuid == ProximityGATTService.echoCharacteristicUUID else { return }
-        if !subscribedCentrals.contains(central.identifier) {
-            subscribedCentrals.append(central.identifier)
-        }
+        guard peripheral === manager, wantsToRun,
+              characteristic === echoCharacteristic else { return }
+        subscribedCentrals[central.identifier] = central
+        subscriberCount = subscribedCentrals.count
+        isAdvertising = peripheral.isAdvertising
         status = .connected
         log("central subscribed uuid=\(central.identifier.uuidString)")
-        // A peripheral stops advertising while a central is connected; keep the
-        // intent so the link returns after this phone leaves.
+        // Subscription proves notification availability, not round-trip success.
         if peripheral.isAdvertising == false {
             log("advertisement paused while connected")
         }
@@ -271,9 +362,12 @@ final class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency 
         central: CBCentral,
         didUnsubscribeFrom characteristic: CBCharacteristic
     ) {
-        guard peripheral === manager,
-              characteristic.uuid == ProximityGATTService.echoCharacteristicUUID else { return }
-        subscribedCentrals.removeAll { $0 == central.identifier }
+        guard peripheral === manager, wantsToRun,
+              characteristic === echoCharacteristic else { return }
+        subscribedCentrals.removeValue(forKey: central.identifier)
+        subscriberCount = subscribedCentrals.count
+        echoQueue.remove(centralID: central.identifier)
+        isAdvertising = peripheral.isAdvertising
         log("central unsubscribed uuid=\(central.identifier.uuidString)")
         if subscribedCentrals.isEmpty {
             if !wantsToRun {

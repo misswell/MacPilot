@@ -907,91 +907,105 @@ while the app is backgrounded. It cannot survive app termination or an iOS
 suspension that tears the peripheral down. Automated acceptance must use isolated
 pure/mocked logic, never lock, blank or sleep the user's real screen.
 
-## Reversed-role BLE GATT feasibility (phase 1)
+## Independent reversed-role GATT connectivity test
 
-Every other BLE path in this project has the Mac as the central and the iPhone
-as the peripheral. Background discovery and unlock would reverse that: the Mac
-advertises, the phone scans and connects. A previous reversed-role attempt never
-established a link, so this phase exists only to measure whether the radio path
-works on the target hardware. It is a gate, not a feature:
-
-- If the pure GATT link cannot be established on a real Mac + real iPhone, stop.
-  Do not start background modes, identity reuse, RSSI presence or unlock wiring.
-- Nothing in this harness authenticates the Mac, persists a key, produces a
-  proximity verdict or can lock/unlock anything.
-- It runs only while its screen is open and the user has pressed start. No
-  background mode, state restoration, L2CAP channel or unlock integration is
-  involved.
-
-The service uses a direction marker distinct from the existing phone-advertised
-service (`…0001-…`), so the two BLE roles can never be confused:
+The existing remote-control BLE transport remains Mac Central / iPhone
+Peripheral, including its GATT identity exchange and L2CAP channel. The optional
+connectivity test runs alongside it in the opposite direction. It has no command
+dispatcher, authentication, proximity verdict, RSSI policy or lock/unlock wiring.
+The existing names `ProximityBLEPeripheral`, `ProximityBLECentral` and
+`ProximityGATTService` are retained rather than introducing a duplicate protocol.
 
 | Characteristic | UUID suffix | Properties | Payload |
 | --- | --- | --- | --- |
 | Service | `6D616350-696C-6F74-0002-000000000001` | — | — |
-| Mac info | `…0002-000000000002` | read | 17 bytes: version `1` + 16-byte device UUID (zeros = not configured) |
-| Echo | `…0002-000000000003` | notify | 16 bytes, echoed by the Mac |
-| Response | `…0002-000000000004` | write | 16-byte nonce written by the phone |
+| Mac info | `…0002-000000000002` | read | 17 bytes: version `1` + device UUID (zeros = not configured) |
+| Echo | `…0002-000000000003` | notify | The originating phone's 16-byte payload |
+| Response | `…0002-000000000004` | write with response | A fresh random 16-byte nonce |
 
-The phone reads Mac info, subscribes to Echo, writes a random 16-byte nonce to
-Response, and accepts the attempt only when the notification matches those bytes
-exactly. Payload rules live in `ProximityGATTService` in
-`MacPilotRemoteTransport`; the Mac and the phone must not grow separate copies.
+The UUID after `central subscribed uuid=` in the Mac log identifies the subscribing
+central; it is **not** a characteristic UUID. Existing characteristic UUIDs and
+payload lengths are unchanged, so the original foreground harness remains usable.
+
+The phone reads Mac info, subscribes to Echo and writes its nonce to Response.
+Only an exact, unexpired match consumes the single pending request and increments
+the verified count. Duplicates, mismatches and late responses are logged and
+ignored. Each connection attempt and each probe has a 15-second deadline. A repeat
+button and foreground resume can send another probe without reconnecting.
+
+The Mac validates the entire ATT write batch before changing state and responds
+once for that batch. A write requires the writer's notification subscription.
+Responses are targeted to that central. A full notification buffer preserves the
+queued response for `peripheralManagerIsReady`; the bounded queue accepts at most
+one response per central, expires it after 15 seconds and discards it on
+unsubscribe, radio reset or stop. Queuing a notification is not proof of a verified
+round trip: only the phone can report that. Mac subscription counts likewise do
+not claim visibility into physical connections that CoreBluetooth does not expose.
+
+### Lifecycle and background limits
+
+Both managers are app-owned, start only by explicit opt-in and remain independent
+of the old BLE managers. Leaving the test page no longer stops a running test;
+use its stop button. Mac stop removes only this manager's service/advertisement.
+The phone reacts to service invalidation as well as disconnection. The Mac retries
+publication/advertisement errors; the phone retries connection, discovery,
+subscription and write failures. Delays progress through 1, 2, 4, 8, 16, then a
+maximum of 30 seconds. Power-off/reset cancels pending work and waits for
+`poweredOn`; stop cancels all retries and queued work.
+
+PilotNest preserves `bluetooth-peripheral` and adds `bluetooth-central` to
+`UIBackgroundModes`. Its independent manager uses the fixed restoration ID
+`com.misswell.macpilot.reverse-gatt.central`. The explicit run intent is stored in
+the separate UserDefaults key `reverseGATTTest.wantsToRun`; existing configuration
+and pairing records are unchanged. App launch recreates this manager only when
+that intent exists; stop clears it. Restoration reattaches delegates, revalidates
+the service/characteristics and notification subscription and performs a fresh
+probe. A restored peer/cache alone never marks the test verified.
+
+Scanning always specifies the test service UUID. iOS schedules background scans,
+connections and callbacks; scan latency can increase, and local retry/deadline
+tasks can be suspended. Returning to the foreground checks any expired request.
+There is no background timer/keepalive guarantee and no promise of relaunch after
+a user force quit. See Apple's [background processing guide](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)
+and [TN3115 restoration rules](https://developer.apple.com/documentation/technotes/tn3115-bluetooth-state-restoration-app-relaunch-rules).
 
 ### On-device acceptance
 
-Use a real Mac and a real iPhone. Simulators cannot run this test. Bluetooth must
-be on for both, but no pairing, router or shared network is required. A configured
-remote-control identity is optional; without one the Mac info payload carries
-zeros and the test still passes.
+Use a real Mac and real iPhone. Simulators cannot prove BLE advertising, background
+scheduling or radio coexistence. A configured remote-control identity is optional;
+without one Mac info carries zeros. Export both logs, record device/OS versions and
+measure actual event-to-event latency (including background delays).
 
-1. On the Mac, open MacPilot › BLE Unlock and find **GATT connectivity test
-   (experimental)**. Press **Start advertising** and expand **Event log**.
-   Expected status: *Advertising; waiting for the iPhone*. Expected log:
-   `radio on`, `publishing GATT service 6D616350-696C-6F74-0002-000000000001`,
-   `GATT service added; starting advertisement`, `advertising started`.
-2. On the iPhone, open PilotNest › Settings › Connection link › **GATT
-   connectivity test (experimental)** and press **Start scanning**. Keep PilotNest
-   in the foreground. Expected log order: `radio on`, `scanning for …`, a
-   `discovered … rssi=` line, `connected in N ms`, `service found`, `characteristics
-   found in N ms`, `Mac info version=1 …`, `subscribed in N ms`, `echo write
-   acknowledged; waiting for the notification`, and finally `echo verified in N ms`.
-   The status becomes *Echo verified (N ms)* and every stage in **Stage timings**
-   is filled.
-3. Check the Mac log: `central subscribed uuid=…`, `echoed 16 bytes to 1
-   subscriber(s)` and the **Last echo** timestamp. A phone that leaves without
-   pressing stop logs `central unsubscribed` and the Mac re-advertises.
-4. Press stop on both sides. Re-running the test must work without relaunching
-   either app; toggling Bluetooth off and on must also recover once the radio
-   returns to `poweredOn`.
+1. Start MacPilot › BLE Unlock › GATT connectivity test › Start advertising.
+   Expect `advertising started`, advertising status and zero subscribers.
+2. Start PilotNest › Settings › Connection link › GATT connectivity test.
+   Expect `central connected`, `service discovered`, `central subscribed`,
+   `sending 16 bytes`, `received 16 bytes`, `round-trip verified`.
+   The Mac logs `received 16 bytes` and `echoed 16 bytes`; only PilotNest's verified
+   count proves matching. Send another probe and confirm it adds exactly one.
+3. Lock the iPhone, then stop/restart only the test advertisement on the Mac.
+   Repeat while PilotNest is in the background. Check automatic discovery,
+   reconnection and a fresh verified echo, recording actual delays. Verify an
+   existing subscription separately; no reconnect during this interval alone
+   establishes that it stayed active. Do not infer a pass just from a cached
+   “verified” label. Return to the foreground and send a new probe too.
+4. Toggle Bluetooth on either device and verify failure diagnostics followed by
+   automatic recovery after power-on. Stop/restart the test repeatedly and verify
+   that cancelled requests and prior sessions cannot add successes.
+5. Run the original RSSI monitoring and remote-control/L2CAP link concurrently.
+   Stop only the test and confirm the old link remains operational. Any actual
+   Mac lock/unlock acceptance must use an explicitly authorized isolated session;
+   automated tests must never lock or type into the user's login screen.
+6. Test a notification buffer stall, unsubscribe with a queued response, duplicate
+   and late notifications and connect/service/subscribe/write timeouts with the
+   automated state tests; confirm hardware buffer behavior separately when possible.
+7. Stop both test managers. Confirm no test scan, advertisement or retry remains.
+   Force quit is a separate negative/OS-policy observation, never a guaranteed
+   recovery acceptance criterion.
 
-Pass criterion: the iPhone reaches *Echo verified* with an exact 16-byte match,
-and the Mac log shows the corresponding subscriber and echo. Record the iPhone
-and Mac models, OS versions, RSSI and both logs (PilotNest's test screen has
-**Export log**) with the acceptance result.
-
-### Failure map
-
-The test names the stage that failed, so report that stage instead of "BLE does
-not work":
-
-- **No discovery while the Mac says advertising** — the phone never saw the
-  advertisement. Check Bluetooth permission, that both apps are in the
-  foreground, and that the Mac did not report `advertising failed`.
-- **Connect fails or times out** — the advertisement was seen but a link was not
-  established. The phone log carries the CoreBluetooth error.
-- **Service or characteristics missing** — the GATT database did not publish as
-  built; the Mac log shows whether `didAdd service` returned an error.
-- **Mac info decode failed** — version or length disagreed with
-  `ProximityGATTMacInfo`; the phone log includes the received byte count.
-- **Subscribe failed** — the Echo characteristic did not accept notifications.
-- **Write fails** — the Response characteristic is missing its write permission.
-- **Write acknowledged but no echo** — the notification path failed; the Mac log
-  shows `echo not queued` when its buffer was unavailable.
-- **Timed out** — the phone gives each attempt 15 seconds and names the stage it
-  was in when the timeout fired.
-
-Automated tests cover only the wire contract and both localization tables
-(`ProximityGATTServiceTests`, `ProximityGATTLocalizationTests`,
-`RemoteTextProximityGATTTests`). They cannot prove that a Mac advertises or that
-an iPhone connects; only the on-device run above can.
+Automated tests exercise nonce correlation, exactly-once counting, expiry, queue
+ownership/capacity/cleanup, capped retry, opt-in defaults and both localization
+tables. They cannot prove CoreBluetooth callback ordering, background relaunch,
+physical disconnection or simultaneous operation of the two radios' roles.
+Record actual validation and outstanding hardware checks in
+`docs/REVERSE_GATT_ACCEPTANCE.md`.

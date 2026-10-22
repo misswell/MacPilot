@@ -63,10 +63,11 @@
 		<string>_macpilot._tcp</string>
 	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>PilotNest uses Bluetooth as a fallback link to your Mac when both devices are not on the same network. It advertises a private channel that only your own Mac connects to; nothing is sent to the internet.</string>
+	<string>PilotNest uses Bluetooth as a fallback link to your Mac when both devices are not on the same network. It advertises a private remote-control channel and can connect to a Mac advertising the optional GATT connectivity test. Nothing is sent to the internet.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-peripheral</string>
+		<string>bluetooth-central</string>
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
