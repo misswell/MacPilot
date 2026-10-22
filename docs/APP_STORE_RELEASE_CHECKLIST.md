@@ -281,3 +281,17 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - ASC Build ID：`f9b687b6-881c-4bc0-b2f8-a232b1cc21e4`，`processingState=VALID`，上传于 2026-10-22T04:49:14-07:00，过期日 2027-01-20；pre-release version `be68d2f7-7ecd-454d-ba94-1703ef9ec493` 为 1.2.5。内部组「内部」（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`，`isInternalGroup=true`、`hasAccessToAllBuilds=true`）的 builds relationship 已包含本次构建（`asc testflight config export --include-builds` 读回）。
 - 中英文 What to Test 已写入并读回：zh-Hans 483 字符、en-US 1265 字符，内容覆盖退避重连、后台与可选锁屏验证步骤、导出日志，并说明该功能不参与自动解锁或远程控制。
 - 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 44 附加到 1.2.5 版本，也未执行 `asc metadata push`。`VALID` 不代表 Apple 已审核批准。
+
+## 2026-10-22 晚：1.2.5 / 构建 45 TestFlight 内部分发（反向 GATT 兜底识别）
+
+- 目的是把 iOS 端的反向 GATT 应答发到手机，配合 Mac `1.2.2-beta.43`。构建 44 只含测试页链路；本轮 iOS 增加了 `presenceChallengeResponder`（用既有 Keychain 配对密钥应答 Mac 的 nonce），因此需要新构建号。
+- 上传前 `asc versions list` 确认 1.2.5 train（`3ff9dbeb-fcb1-418b-baf6-e2b4c62dd007`）仍为 `PREPARE_FOR_SUBMISSION`，1.2.4 及更早 `READY_FOR_SALE`；`asc builds next-build-number` 返回 `45`（processed/upload/observed 均为 44）。`project.yml` 的 `MARKETING_VERSION` 保持 1.2.5、`CURRENT_PROJECT_VERSION` 44 → 45；`xcodegen generate` 后仍为 `CODE_SIGN_STYLE=Automatic`、`DEVELOPMENT_TEAM=U8U443D7ZL`，未固定 profile UUID。
+- 最终 IPA：`/tmp/PilotNest-export-45/PilotNest.ipa`（2,642,427 字节）；bundle `com.misswell.macpilot.remote`，版本/构建号 `1.2.5 (45)`，Team `U8U443D7ZL`；`unzip -t` → `No errors detected`。
+- IPA SHA-256：`714b9f4d3a90cda11ca8ed43c1ab601665fafe360465f4679c534b5ff26f42b6`。
+- `codesign --verify --deep --strict`：`valid on disk` + `satisfies its Designated Requirement`；`Authority=Apple Distribution: Guofeng Liu (U8U443D7ZL)`，`TeamIdentifier=U8U443D7ZL`。
+- Signer leaf DER SHA-256：`62e7580e4e86da3c0c5a015e89f2074bb8439ecc34148575ed3d88499a233704`，与 profile 的 `DeveloperCertificates[0]` 完全相同。
+- Profile：UUID `df12e579-3dec-4e63-b2df-86c5e2d37281`，有效至 2027-07-20；`get-task-allow=false`，顶层无 `ProvisionedDevices`、无 `ProvisionsAllDevices`，app-id `U8U443D7ZL.com.misswell.macpilot.remote` 一致。
+- 两层 `openssl cms -verify` 均 `CMS Verification successful`；已认证内层 DER 中 `ProfileDistributionType=STORE`、UUID 与 profile 一致。反向对照：翻转 `embedded.mobileprovision` 中间一字节后同一命令报 `CMS_SignerInfo_verify_ex: verification failure`。自动导出因本机 `No profiles` 失败，使用 `/tmp` 一次性手动参数，仓库自动签名设置未改。
+- ASC Build ID：`c88ebaed-1868-48ea-8702-2b5cb0b6c6e8`，`processingState=VALID`。内部组「内部」（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`）自动接收。
+- 中英文 What to Test 已写入并读回：zh-Hans 445 字符、en-US 1095 字符，说明背景、开关位置、验证步骤与「不绕过配对/RSSI/手动锁定」的边界。
+- 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 45 附加到 1.2.5 版本、未执行 `asc metadata push`。`VALID` 不代表 Apple 已审核批准。
