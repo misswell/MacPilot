@@ -77,6 +77,11 @@ iOS 新增默认关闭、重复停止、清理日志与独立 UserDefaults 意�
 - CI `39760590832`（提交 `59c3967`）通过，包括主测试、共享 GATT 回归、签名与 designated requirement。最终提交和 Beta 发布仍须各自通过精确 SHA 的门禁。
 - 真机 UI 使用本机已安装的 Xcode 27 beta（27A5209h），仅对本次命令设置 `DEVELOPER_DIR`，不修改全局 Xcode 选择。Xcode 26.6 的 UI 调试器不能匹配该 iOS 27 设备，因此切换工具链；纯逻辑测试曾通过不代表其 UI 调试器可用。
 - 实测修复了测试设施的 AppKit 主循环、父级 accessibilityIdentifier 覆盖子控件、NSPredicateExpectation 未传入目标元素三处问题；没有为通过驱动修改 GATT 协议或旧 BLE 行为。
+- 收尾复验（提交 `32375e4`）：共享协议包 115 tests / 20 suites 通过；`ProximityGATTLocalizationTests` 3/3 通过；
+  fresh release `-Xswiftc -warnings-as-errors` 编译通过，产物 `/tmp/octopilot-release-verify-20261022/release/MacPilot`
+  （sha256 `07d0d5c0…c85146`）。真机测试设施再次通过签名 `build-for-testing`，仅 2 条无 AppIntents 依赖的
+  metadata 警告。锁屏轮次暴露的 `activate()` 失败已修复为“先等前台再读日志”，并新增
+  `MACPILOT_GATT_LOCK_SCREEN=1`（不按 Home，改由侧键锁屏）以免再把锁屏当作回归。
 
 已保留的 PilotNest 开发测试 App：`/Users/guofeng/Code/solo/OctoPilot/build/reverse-gatt-validation/PilotNest.app`。
 它不是 App Store/TestFlight 分发包；此次没有上传 TestFlight。
