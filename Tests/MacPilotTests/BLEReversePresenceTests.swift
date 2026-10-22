@@ -228,6 +228,21 @@ struct BLEReversePresenceTests {
         #expect(firstDelay == 3, "A fresh reverse link must not cancel legacy discovery recovery")
     }
 
+    @Test func aDeviceRowFallsBackToTheAuthenticatedReverseSample() {
+        let h = Harness()
+        defer { h.model.shutdown() }
+
+        #expect(freshSample(h, rssi: -57))
+        #expect(h.model.deviceRSSI[h.phone] == -57)
+        #expect(h.model.deviceRSSI[h.watch] == nil)
+
+        // A live legacy observation keeps precedence, exactly like the header.
+        h.model.receiveMonitoredAdvertisement(-51, for: h.phone)
+        #expect(h.model.deviceRSSI[h.phone] == -51)
+        #expect(freshSample(h, rssi: -40))
+        #expect(h.model.deviceRSSI[h.phone] == -51)
+    }
+
     @Test func reversePresenceSatisfiesAnyButStillNeedsTheOtherDeviceForAll() {
         let h = Harness()
         defer { h.model.shutdown() }

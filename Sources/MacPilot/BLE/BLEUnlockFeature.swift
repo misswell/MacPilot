@@ -334,10 +334,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         let source: BLEPresenceSignalSource = latestLegacyRSSI != nil
             ? .legacy : (latestReverseRSSI != nil ? .reverse : .none)
         let perDeviceRSSI = logicalDeviceUUIDs.reduce(into: [UUID: Int]()) { result, logical in
-            let rssi = settings.identityRegistry.uuids(for: logical)
+            let legacy = settings.identityRegistry.uuids(for: logical)
                 .compactMap { monitoredRuntimes[$0]?.lastRSSI }
                 .max()
-            if let rssi { result[logical] = rssi }
+            // Match the header's precedence: a live legacy observation wins;
+            // the authenticated reverse link fills in when it is the only one.
+            if let rssi = legacy ?? reverseRuntimes[logical]?.lastRSSI {
+                result[logical] = rssi
+            }
         }
         if deviceRSSI != perDeviceRSSI { deviceRSSI = perDeviceRSSI }
         let isConnected = runtimes.contains { $0.peripheral?.state == .connected }
