@@ -990,6 +990,17 @@ Unknown Macs, Macs whose key was deleted, and invalid Mac info are disconnected
 without feeding any presence. Scanning never stops for a rejected Mac, and the
 phone keeps at most four Mac connections.
 
+A disconnect submits a new pending CoreBluetooth connection synchronously in
+its delegate callback. The retry delay is passed using
+`CBConnectPeripheralOptionStartDelayKey`; no application `Task.sleep` has to run
+before the system sees the request. Recoverable GATT rejections first finish
+our own cancellation, then submit exactly one delayed request. Backoff is per
+peripheral and resets only after a sample write was accepted by the Mac. Pending
+radio connections have no app timer: the 12-second setup timeout starts after
+`didConnect`, so it cannot cancel a system request while the phone is away.
+See [the background recovery incident](BLE_REVERSE_BACKGROUND_RECOVERY.md) for
+runtime evidence and verification limits.
+
 Entering the background empties every pending challenge and marks each
 connection as waiting for a fresh one; only a challenge delivered afterwards can
 produce a new sample. A successful write only means the Mac accepted the sample.

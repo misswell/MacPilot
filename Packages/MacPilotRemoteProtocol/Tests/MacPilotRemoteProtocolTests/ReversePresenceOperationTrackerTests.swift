@@ -152,3 +152,66 @@ struct ReversePresenceRecoveryPlanTests {
         #expect(rebuilding < wrongMac, "A Mac that keeps answering wrongly must not be hammered")
     }
 }
+
+
+struct ReversePresenceReconnectRequestsTests {
+    @Test func aDroppedLinkImmediatelyProducesASystemRequestWithoutATimer() {
+        var requests = ReversePresenceReconnectRequests()
+        let peer = UUID()
+        let action = requests.request(peer, waitingForCancellation: false)
+        #expect(action == .submit(delay: 1))
+        let staleCancellation = requests.cancelled(peer)
+        #expect(staleCancellation == nil)
+    }
+
+    @Test func aRejectionWaitsOnlyForItsOwnCancellationAndSubmitsOnce() {
+        var requests = ReversePresenceReconnectRequests()
+        let peer = UUID()
+        let action = requests.request(peer, minimumDelay: 60, waitingForCancellation: true)
+        #expect(action == .awaitCancellation)
+        let unrelated = requests.cancelled(UUID())
+        #expect(unrelated == nil)
+        let resumed = requests.cancelled(peer)
+        #expect(resumed == .submit(delay: 60))
+        let duplicate = requests.cancelled(peer)
+        #expect(duplicate == nil)
+    }
+
+    @Test func stoppingOrForgettingCancelsADeferredRecovery() {
+        var requests = ReversePresenceReconnectRequests()
+        let peer = UUID()
+        _ = requests.request(peer, minimumDelay: 30, waitingForCancellation: true)
+        requests.cancel(peer)
+        let forgotten = requests.cancelled(peer)
+        #expect(forgotten == nil)
+        _ = requests.request(peer, waitingForCancellation: true)
+        requests.reset()
+        let stopped = requests.cancelled(peer)
+        #expect(stopped == nil)
+    }
+
+    @Test func authenticatedSuccessResetsOnlyThatPeersBackoff() {
+        var requests = ReversePresenceReconnectRequests()
+        let first = UUID()
+        let other = UUID()
+        for expected in [1.0, 2, 4, 8, 16, 30, 30] {
+            let action = requests.request(first, waitingForCancellation: false)
+            #expect(action == .submit(delay: expected))
+        }
+        _ = requests.request(other, waitingForCancellation: false)
+        requests.authenticatedSampleReceived(from: first)
+        let recovered = requests.request(first, waitingForCancellation: false)
+        let unaffected = requests.request(other, waitingForCancellation: false)
+        #expect(recovered == .submit(delay: 1))
+        #expect(unaffected == .submit(delay: 2))
+    }
+
+    @Test func aRevisedRejectionKeepsTheLatestCooldown() {
+        var requests = ReversePresenceReconnectRequests()
+        let peer = UUID()
+        _ = requests.request(peer, minimumDelay: 5, waitingForCancellation: true)
+        _ = requests.request(peer, minimumDelay: 30, waitingForCancellation: true)
+        let action = requests.cancelled(peer)
+        #expect(action == .submit(delay: 30))
+    }
+}

@@ -182,3 +182,57 @@ public struct ReversePresenceRecoveryPlan: Sendable, Equatable {
         }
     }
 }
+
+/// Synchronous handoff of reconnects to the Bluetooth system. Application timers
+/// cannot be responsible for submitting a request after iOS suspends the app.
+/// A deliberate cancellation must finish first; forgetting/stopping discards it.
+public struct ReversePresenceReconnectRequests: Sendable {
+    public enum Action: Sendable, Equatable {
+        case submit(delay: TimeInterval)
+        case awaitCancellation
+    }
+
+    private var retries: [UUID: ProximityGATTRetry] = [:]
+    private var afterCancellation: [UUID: TimeInterval] = [:]
+
+    public init() {}
+
+    public mutating func request(
+        _ identifier: UUID,
+        minimumDelay: TimeInterval? = nil,
+        waitingForCancellation: Bool
+    ) -> Action {
+        let delay: TimeInterval
+        if let minimumDelay {
+            delay = max(1, minimumDelay)
+        } else {
+            var retry = retries[identifier] ?? ProximityGATTRetry()
+            delay = TimeInterval(retry.nextDelay())
+            retries[identifier] = retry
+        }
+        if waitingForCancellation {
+            afterCancellation[identifier] = delay
+            return .awaitCancellation
+        }
+        afterCancellation.removeValue(forKey: identifier)
+        return .submit(delay: delay)
+    }
+
+    public mutating func cancelled(_ identifier: UUID) -> Action? {
+        guard let delay = afterCancellation.removeValue(forKey: identifier) else { return nil }
+        return .submit(delay: delay)
+    }
+
+    public mutating func cancel(_ identifier: UUID) {
+        afterCancellation.removeValue(forKey: identifier)
+    }
+
+    public mutating func authenticatedSampleReceived(from identifier: UUID) {
+        retries.removeValue(forKey: identifier)
+    }
+
+    public mutating func reset() {
+        retries.removeAll()
+        afterCancellation.removeAll()
+    }
+}

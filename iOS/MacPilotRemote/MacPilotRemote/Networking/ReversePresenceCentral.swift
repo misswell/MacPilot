@@ -113,7 +113,7 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
     private var connectionTimeoutTasks: [UUID: Task<Void, Never>] = [:]
     private var readTimeoutTasks: [UUID: Task<Void, Never>] = [:]
     private var writeTimeoutTasks: [UUID: Task<Void, Never>] = [:]
-    private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
+    private var reconnectRequests = ReversePresenceReconnectRequests()
     /// Peripherals that failed for a recoverable reason. Keeping the reference
     /// lets recovery reconnect without a discovery callback that duplicate
     /// filtering will not deliver again.
@@ -124,7 +124,6 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
     private var deliberateRejections: Set<UUID> = []
     private var retryAfter: [UUID: Date] = [:]
     private var ignoredUntil: [UUID: Date] = [:]
-    private var retry = ProximityGATTRetry()
     private var knownMacIDs: Set<String>
     private var userDisabled: Bool
     private var sessionID = UUID()
@@ -207,8 +206,7 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
             // A Mac rejected before this pairing kept no retry target; a fresh
             // scan is what offers it again.
             retryTargets.removeAll()
-            for task in reconnectTasks.values { task.cancel() }
-            reconnectTasks.removeAll()
+            reconnectRequests.reset()
             restartScanning()
         }
     }
@@ -308,7 +306,7 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
         }
         isRunning = true
         sessionID = UUID()
-        retry.reset()
+        reconnectRequests.reset()
         status = .starting
         log("production central starting")
         if manager == nil {
@@ -343,12 +341,11 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
                 manager?.cancelPeripheralConnection(peripheral)
             }
         }
-        for task in reconnectTasks.values { task.cancel() }
         for task in connectionTimeoutTasks.values { task.cancel() }
         for task in readTimeoutTasks.values { task.cancel() }
         for task in writeTimeoutTasks.values { task.cancel() }
         connections.removeAll()
-        reconnectTasks.removeAll()
+        reconnectRequests.reset()
         connectionTimeoutTasks.removeAll()
         readTimeoutTasks.removeAll()
         writeTimeoutTasks.removeAll()
@@ -407,7 +404,7 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
 
     // MARK: - Connection setup
 
-    private func adopt(_ peripheral: CBPeripheral) {
+    private func adopt(_ peripheral: CBPeripheral, connectionDelay: TimeInterval = 0) {
         let identifier = peripheral.identifier
         guard connections[identifier] == nil, connections.count < maximumConnections else {
             manager?.cancelPeripheralConnection(peripheral)
@@ -417,20 +414,23 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
               ignoredUntil[identifier].map({ Date.now >= $0 }) ?? true else { return }
         peripheral.delegate = self
         connections[identifier] = Connection(peripheral: peripheral)
-        scheduleConnectionTimeout(for: identifier)
-        connect(peripheral)
+        retryTargets[identifier] = peripheral
+        connect(peripheral, delay: connectionDelay)
     }
 
-    private func connect(_ peripheral: CBPeripheral) {
+    private func connect(_ peripheral: CBPeripheral, delay: TimeInterval = 0) {
         guard isRunning, let manager else { return }
         switch peripheral.state {
         case .connected:
+            scheduleConnectionTimeout(for: peripheral.identifier)
             discover(on: peripheral)
         case .connecting, .disconnecting:
             break
         case .disconnected:
-            log("connecting to \(peripheral.identifier.uuidString.prefix(8))")
-            manager.connect(peripheral)
+            // Submit while this Bluetooth callback is executing. CoreBluetooth
+            // owns the delay and pending request even when iOS suspends us.
+            log("connecting to \(peripheral.identifier.uuidString.prefix(8)); system delay=\(delay)s")
+            manager.connect(peripheral, options: [CBConnectPeripheralOptionStartDelayKey: delay])
         @unknown default:
             rejectConnection(peripheral.identifier, reason: .unknownPeripheralState)
         }
@@ -459,16 +459,22 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
         guard isRunning else { return }
         if let ignoreUntil = ignoredUntil[identifier], Date.now < ignoreUntil { return }
         retryTargets[identifier] = peripheral
-        reconnectTasks[identifier]?.cancel()
-        let delay = retry.nextDelay()
-        log("reconnect in \(delay)s")
-        reconnectTasks[identifier] = Task { @MainActor [weak self, weak peripheral] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard let self, let peripheral, !Task.isCancelled, self.isRunning,
-                  self.connections[identifier] == nil else { return }
-            self.reconnectTasks[identifier] = nil
-            self.retryAfter[identifier] = nil
-            self.adopt(peripheral)
+        let action = reconnectRequests.request(
+            identifier, waitingForCancellation: deliberateRejections.contains(identifier)
+        )
+        performReconnect(action, for: identifier)
+    }
+
+    private func performReconnect(_ action: ReversePresenceReconnectRequests.Action, for identifier: UUID) {
+        switch action {
+        case .awaitCancellation:
+            log("reconnect waiting for cancellation callback \(identifier.uuidString.prefix(8))")
+        case .submit(let delay):
+            guard isRunning, let peripheral = retryTargets[identifier] else { return }
+            ignoredUntil.removeValue(forKey: identifier)
+            retryAfter.removeValue(forKey: identifier)
+            log("reconnect submitted to CoreBluetooth delay=\(delay)s")
+            adopt(peripheral, connectionDelay: delay)
         }
     }
 
@@ -478,8 +484,10 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
         if let connection = connections.removeValue(forKey: identifier) {
             // Recorded before the cancel so the resulting
             // `didDisconnectPeripheral` knows the teardown was deliberate.
-            deliberateRejections.insert(identifier)
-            manager?.cancelPeripheralConnection(connection.peripheral)
+            if connection.peripheral.state != .disconnected {
+                deliberateRejections.insert(identifier)
+                manager?.cancelPeripheralConnection(connection.peripheral)
+            }
             // Keep the peripheral so recovery does not depend on a scan that
             // duplicate filtering will not repeat.
             if plan.retriesAutomatically {
@@ -511,31 +519,24 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
     /// gone, a fresh scan is the only remaining way to be offered it.
     private func scheduleRecovery(for identifier: UUID, plan: ReversePresenceRecoveryPlan) {
         guard isRunning else { return }
-        reconnectTasks[identifier]?.cancel()
-        let delay = max(plan.cooldown, 1)
-        log("recovery in \(Int(delay))s reason=refreshScan=\(plan.refreshesScan)")
-        reconnectTasks[identifier] = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard let self, !Task.isCancelled, self.isRunning,
-                  self.connections[identifier] == nil else { return }
-            self.reconnectTasks[identifier] = nil
-            self.ignoredUntil.removeValue(forKey: identifier)
-            self.retryAfter.removeValue(forKey: identifier)
-            if let peripheral = self.retryTargets.removeValue(forKey: identifier) {
-                self.adopt(peripheral)
-                return
-            }
-            if plan.refreshesScan {
-                self.restartScanning()
-            }
+        guard retryTargets[identifier] != nil else {
+            if plan.refreshesScan { restartScanning() }
+            return
         }
+        // The only wait is for our own cancellation callback, never a Task
+        // timer. Its callback submits a delayed system connection immediately.
+        let action = reconnectRequests.request(
+            identifier, minimumDelay: plan.cooldown,
+            waitingForCancellation: deliberateRejections.contains(identifier)
+        )
+        performReconnect(action, for: identifier)
     }
 
     private func cancelTimers(for identifier: UUID) {
         connectionTimeoutTasks.removeValue(forKey: identifier)?.cancel()
         readTimeoutTasks.removeValue(forKey: identifier)?.cancel()
         writeTimeoutTasks.removeValue(forKey: identifier)?.cancel()
-        reconnectTasks.removeValue(forKey: identifier)?.cancel()
+        reconnectRequests.cancel(identifier)
     }
 
     private func scheduleReadTimeout(for identifier: UUID) {
@@ -655,7 +656,7 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
             }
         }
         connections.removeAll()
-        reconnectTasks.removeAll()
+        reconnectRequests.reset()
         retryAfter.removeAll()
         ignoredUntil.removeAll()
         retryTargets.removeAll()
@@ -695,9 +696,6 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
               peripheral.state == .disconnected else { return }
         if let retryAt = retryAfter[peripheral.identifier], Date.now < retryAt { return }
         if let ignoreUntil = ignoredUntil[peripheral.identifier], Date.now < ignoreUntil { return }
-        if reconnectTasks[peripheral.identifier] != nil {
-            reconnectTasks.removeValue(forKey: peripheral.identifier)?.cancel()
-        }
         log("discovered \(peripheral.identifier.uuidString.prefix(8)) rssi=\(RSSI.intValue)")
         adopt(peripheral)
     }
@@ -708,6 +706,9 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
             return
         }
         log("connected \(peripheral.identifier.uuidString.prefix(8)); discovering")
+        // A pending CoreBluetooth connection has no app timeout. Only the GATT
+        // setup after connection needs a bounded wait.
+        scheduleConnectionTimeout(for: peripheral.identifier)
         discover(on: peripheral)
     }
 
@@ -731,10 +732,13 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
         guard central === manager else { return }
         // `cancelPeripheralConnection` always delivers this callback, even when
         // the disconnection was this class's own decision. The rejection already
-        // planned its recovery; re-planning here would cancel that task and then
+        // planned its recovery; re-planning here would replace that request and then
         // bail out on the cooldown, leaving the Mac unreachable.
         if deliberateRejections.remove(peripheral.identifier) != nil {
             log("disconnected \(peripheral.identifier.uuidString.prefix(8)) after deliberate rejection")
+            if let action = reconnectRequests.cancelled(peripheral.identifier) {
+                performReconnect(action, for: peripheral.identifier)
+            }
             return
         }
         let known = connections[peripheral.identifier]?.macID != nil
@@ -919,6 +923,7 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
             lastError = "The Mac rejected a proximity sample"
             log("sample rejected reason=\(error.localizedDescription)")
         } else if operation != nil {
+            reconnectRequests.authenticatedSampleReceived(from: peripheral.identifier)
             acceptedSampleCount += 1
             lastSampleAt = .now
             lastRSSI = connection.lastSampledRSSI

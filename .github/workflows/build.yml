@@ -54,7 +54,7 @@ jobs:
         run: swift test --filter 'MonitorMenu|UpdateChannelTests|SoftwareUpdateTests|UpdateArchiveDownloaderTests|ReleaseCatalogServiceTests|CarbonHotKeyRoutingTests|SigningRequirementTests|ScreenRecordingTests|Awake|ClosedLid|SleepDisabledPlannerTests|BLEIdentity|ConfigurationSchemaContractTests|BLEUnlockPerformanceTests|BLEManualLockSuppressionTests|BLEAdvertisementLivenessTests|BLERediscoveryTests|BLEMonitoringRestorationTests|RemoteBLEBackoffTests|LocalNetworkSessionDiagnosisTests|RemoteBonjourPublisherTests|ScreenControlSafetyTests|RemoteNavigationControlTests|Clipboard|SecondarySelectionRegressionTests|RemoteControlAppStoreInfoTests|ProximityGATTLocalizationTests'
 
       - name: Run reversed-role GATT protocol regression tests
-        run: swift test --package-path Packages/MacPilotRemoteProtocol --filter 'ProximityGATT'
+        run: swift test --package-path Packages/MacPilotRemoteProtocol --filter 'ProximityGATT|ReversePresence'
 
       # Keep synchronous MainActor performance loops out of the heartbeat tests' deadlines.
       - name: Run Quick Search regression tests
