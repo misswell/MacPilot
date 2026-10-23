@@ -534,21 +534,26 @@ private extension SpotlightScopeResolution {
 
 // MARK: - 图标重试
 
+private final class LoadAttempts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    var count: Int {
+        lock.withLock { value }
+    }
+
+    @discardableResult
+    func next() -> Int {
+        lock.withLock {
+            value += 1
+            return value
+        }
+    }
+}
+
 /// 图标服务会短暂失败：一次失败不该让那一行在整个进程生命周期里停在占位符。
 @MainActor
 struct QuickSearchIconLoaderTests {
-    private final class LoadAttempts: @unchecked Sendable {
-        private let lock = NSLock()
-        private var value = 0
-
-        func next() -> Int {
-            lock.withLock {
-                value += 1
-                return value
-            }
-        }
-    }
-
     @Test func aFailedIconIsRetriedOnceThePanelReopens() async throws {
         let attempts = LoadAttempts()
         let png = try #require(Self.solidPNG())
@@ -590,5 +595,222 @@ struct QuickSearchIconLoaderTests {
         guard let tiff = image.tiffRepresentation,
               let rep = NSBitmapImageRep(data: tiff) else { return nil }
         return rep.representation(using: .png, properties: [:])
+    }
+}
+
+// MARK: - 图标落盘缓存
+
+/// 图标只向系统要一次，之后读缓存目录里的小 PNG；应用升级或超过刷新周期后重建。
+/// 全部用临时目录，绝不读写用户的真实缓存。
+@MainActor
+struct QuickSearchIconDiskCacheTests {
+    private struct Sandbox {
+        let root: URL
+        let cacheDirectory: URL
+        let appURL: URL
+    }
+
+    private static func makeSandbox() throws -> Sandbox {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("QuickSearchIconCache-\(UUID().uuidString)", isDirectory: true)
+        let apps = root.appendingPathComponent("Apps", isDirectory: true)
+        try FileManager.default.createDirectory(at: apps, withIntermediateDirectories: true)
+        let appURL = apps.appendingPathComponent("Sample.app")
+        try Data("app bundle".utf8).write(to: appURL)
+        return Sandbox(
+            root: root,
+            cacheDirectory: root.appendingPathComponent("Icons", isDirectory: true),
+            appURL: appURL
+        )
+    }
+
+    private static func png(_ color: NSColor) -> Data? {
+        let side: CGFloat = 24
+        let image = NSImage(size: NSSize(width: side, height: side))
+        image.lockFocus()
+        color.setFill()
+        NSRect(x: 0, y: 0, width: side, height: side).fill()
+        image.unlockFocus()
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
+    }
+
+    private static func setModificationDate(_ date: Date, of url: URL) throws {
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+    }
+
+    private static func waitUntil(_ condition: @MainActor () -> Bool) async {
+        for _ in 0..<1_000 {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    @Test func aStoredIconIsReadBackWithoutAskingTheIconService() throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory)
+        let png = try #require(Self.png(.systemBlue))
+
+        cache.store(png, for: sandbox.appURL, pointSize: 24)
+
+        let entry = try #require(cache.entry(for: sandbox.appURL, pointSize: 24))
+        #expect(entry.png == png)
+        #expect(!entry.isStale)
+    }
+
+    /// 应用包被替换后修改时间变化，旧图标不能再命中。
+    @Test func replacingTheAppInvalidatesItsCachedIcon() throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory)
+        let png = try #require(Self.png(.systemBlue))
+        cache.store(png, for: sandbox.appURL, pointSize: 24)
+
+        try Self.setModificationDate(Date().addingTimeInterval(60), of: sandbox.appURL)
+
+        #expect(cache.entry(for: sandbox.appURL, pointSize: 24) == nil)
+    }
+
+    @Test func aFreshEntryBecomesStaleAfterTheRefreshInterval() throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory)
+        let png = try #require(Self.png(.systemBlue))
+        cache.store(png, for: sandbox.appURL, pointSize: 24)
+        try Self.setModificationDate(
+            Date().addingTimeInterval(-QuickSearchIconDiskCache.refreshInterval - 60),
+            of: cache.cacheFileURL(for: sandbox.appURL, pointSize: 24)
+        )
+
+        let entry = try #require(cache.entry(for: sandbox.appURL, pointSize: 24))
+        #expect(entry.png == png)
+        #expect(entry.isStale)
+    }
+
+    @Test func anOversizedCacheFileIsDiscarded() throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory)
+        let file = cache.cacheFileURL(for: sandbox.appURL, pointSize: 24)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(count: QuickSearchIconDiskCache.maximumEntryBytes + 1).write(to: file)
+
+        #expect(cache.entry(for: sandbox.appURL, pointSize: 24) == nil)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test func pruneRemovesOnlyEntriesPastRetention() throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory)
+        let png = try #require(Self.png(.systemBlue))
+        cache.store(png, for: sandbox.appURL, pointSize: 24)
+        let oldURL = sandbox.root.appendingPathComponent("Old.app")
+        try Data("old app".utf8).write(to: oldURL)
+        cache.store(png, for: oldURL, pointSize: 24)
+        try Self.setModificationDate(
+            Date().addingTimeInterval(-QuickSearchIconDiskCache.retentionInterval - 60),
+            of: cache.cacheFileURL(for: oldURL, pointSize: 24)
+        )
+
+        #expect(cache.prune() == 1)
+        #expect(cache.entry(for: sandbox.appURL, pointSize: 24) != nil)
+        #expect(cache.entry(for: oldURL, pointSize: 24) == nil)
+    }
+
+    @Test func aCachedIconAppearsSynchronouslyWithoutCallingTheLoader() throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory)
+        let png = try #require(Self.png(.systemBlue))
+        cache.store(png, for: sandbox.appURL, pointSize: 24)
+        let attempts = LoadAttempts()
+        let loader = QuickSearchIconLoader(
+            imageLoader: { _, _ in
+                _ = attempts.next()
+                return nil
+            },
+            diskCache: cache
+        )
+        defer { loader.stop() }
+
+        let image = try #require(loader.icon(for: sandbox.appURL, pointSize: 24))
+        #expect(image.size == NSSize(width: 24, height: 24))
+        #expect(attempts.count == 0)
+    }
+
+    @Test func aStaleCachedIconShowsImmediatelyAndRefreshesInTheBackground() async throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory)
+        let oldPNG = try #require(Self.png(.systemBlue))
+        let newPNG = try #require(Self.png(.systemRed))
+        cache.store(oldPNG, for: sandbox.appURL, pointSize: 24)
+        try Self.setModificationDate(
+            Date().addingTimeInterval(-QuickSearchIconDiskCache.refreshInterval - 60),
+            of: cache.cacheFileURL(for: sandbox.appURL, pointSize: 24)
+        )
+        let attempts = LoadAttempts()
+        let loader = QuickSearchIconLoader(
+            imageLoader: { _, _ in attempts.next() == 1 ? newPNG : nil },
+            diskCache: cache
+        )
+        defer { loader.stop() }
+
+        #expect(loader.icon(for: sandbox.appURL, pointSize: 24) != nil)
+        await Self.waitUntil { attempts.count == 1 && loader.pendingRequestCount == 0 }
+
+        let entry = try #require(cache.entry(for: sandbox.appURL, pointSize: 24))
+        #expect(entry.png == newPNG)
+        #expect(!entry.isStale)
+    }
+
+    @Test func aLoadedIconIsWrittenThroughToDiskAndReusedByTheNextLoader() async throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory)
+        let png = try #require(Self.png(.systemBlue))
+        let firstAttempts = LoadAttempts()
+        let first = QuickSearchIconLoader(
+            imageLoader: { _, _ in firstAttempts.next(); return png },
+            diskCache: cache
+        )
+        defer { first.stop() }
+
+        #expect(first.icon(for: sandbox.appURL, pointSize: 24) == nil)
+        await Self.waitUntil { first.icon(for: sandbox.appURL, pointSize: 24) != nil }
+        #expect(firstAttempts.count == 1)
+        let entry = try #require(cache.entry(for: sandbox.appURL, pointSize: 24))
+        #expect(entry.png == png)
+
+        let secondAttempts = LoadAttempts()
+        let second = QuickSearchIconLoader(
+            imageLoader: { _, _ in secondAttempts.next(); return nil },
+            diskCache: cache
+        )
+        defer { second.stop() }
+        #expect(second.icon(for: sandbox.appURL, pointSize: 24) != nil)
+        #expect(secondAttempts.count == 0)
+    }
+
+    @Test func aCorruptCacheFileIsDiscardedAndReloaded() async throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory)
+        let corrupt = Data("not a png".utf8)
+        cache.store(corrupt, for: sandbox.appURL, pointSize: 24)
+        let png = try #require(Self.png(.systemBlue))
+        let loader = QuickSearchIconLoader(
+            imageLoader: { _, _ in png },
+            diskCache: cache
+        )
+        defer { loader.stop() }
+
+        #expect(loader.icon(for: sandbox.appURL, pointSize: 24) == nil)
+        await Self.waitUntil { loader.icon(for: sandbox.appURL, pointSize: 24) != nil }
+        let entry = try #require(cache.entry(for: sandbox.appURL, pointSize: 24))
+        #expect(entry.png == png)
     }
 }

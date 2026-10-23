@@ -41,6 +41,11 @@ final class QuickSearchIconLoader: ObservableObject {
     private var flushScheduled = false
     private var memoryPressureToken: UUID?
     private var imageLoader: @Sendable (URL, CGFloat) -> Data?
+    /// 落盘缓存只服务真实图标服务这条路径；注入取图器的测试不读也不写用户的缓存目录。
+    private let diskCache: QuickSearchIconDiskCache?
+    /// 后台重绘拿不到图时，回主线程再向 NSWorkspace 要一次。注入了取图器时不重试，
+    /// 否则测试里「取图器返回 nil」会被真实图标服务悄悄兜底。
+    private let retriesOnMainThread: Bool
 
     private(set) var pendingRequestCount = 0
 
@@ -49,7 +54,15 @@ final class QuickSearchIconLoader: ObservableObject {
     var activeLoadCount: Int { activeLoads }
     var diagnosticTaskCount: Int { loadTasks.count + (flushTask == nil ? 0 : 1) }
 
-    init(imageLoader: (@Sendable (URL, CGFloat) -> Data?)? = nil) {
+    init(
+        imageLoader: (@Sendable (URL, CGFloat) -> Data?)? = nil,
+        diskCache: QuickSearchIconDiskCache? = nil
+    ) {
+        let usesSystemLoader = imageLoader == nil
+        self.retriesOnMainThread = usesSystemLoader
+        // 测试宿主里的默认模型也会取图标；不能让它把假路径的占位图写进用户缓存目录。
+        let usesSharedDiskCache = usesSystemLoader && !SmartCaptureToast.isTestHost
+        self.diskCache = diskCache ?? (usesSharedDiskCache ? .shared : nil)
         self.imageLoader = imageLoader ?? { url, pointSize in
             DockGroupIconThumbnail.pngData(forFileAt: url, pointSize: pointSize)
         }
@@ -74,9 +87,23 @@ final class QuickSearchIconLoader: ObservableObject {
     }
 
     /// 已缓存则返回图片；未缓存则发起加载并返回 nil（视图先占位，图标到达后合并刷新）。
+    ///
+    /// 落盘缓存直接同步命中：再次呼出面板时图标和文字同一帧出现，不用等一轮异步加载。
+    /// 过期的图先照常显示，同时在后台重建，重建完成后合并刷新。
     func icon(for url: URL, pointSize: CGFloat = 32, key: String? = nil) -> NSImage? {
         let iconKey = key ?? url.standardizedFileURL.path
         if let cached = cache.object(forKey: iconKey as NSString) { return cached.image }
+        if let entry = diskCache?.entry(for: url, pointSize: pointSize) {
+            if let image = Self.image(from: entry.png, pointSize: pointSize) {
+                store(image, for: iconKey, pixelSide: Self.pixelSide(for: pointSize))
+                // 刷新失败过的条目继续用旧图，等下次呼出面板时再重建。
+                if entry.isStale, !failedKeys.contains(iconKey) {
+                    request(key: iconKey, url: url, pointSize: pointSize)
+                }
+                return image
+            }
+            diskCache?.remove(for: url, pointSize: pointSize)
+        }
         guard !failedKeys.contains(iconKey) else { return nil }
         request(key: iconKey, url: url, pointSize: pointSize)
         return nil
@@ -125,10 +152,9 @@ final class QuickSearchIconLoader: ObservableObject {
                 self.loadTasks[request.key] = nil
                 self.inFlight.remove(request.key)
                 self.pendingRequestCount = self.inFlight.count
-                if let data, let image = Self.image(from: data, pointSize: request.pointSize) {
-                    self.store(image, for: request.key, pixelSide: DockGroupIconThumbnail.pixelSize(
-                        forPoints: request.pointSize
-                    ))
+                if let (image, data) = self.resolvedIcon(for: request, backgroundResult: data) {
+                    self.store(image, for: request.key, pixelSide: Self.pixelSide(for: request.pointSize))
+                    self.diskCache?.store(data, for: request.url, pointSize: request.pointSize)
                 } else {
                     // 取不到就记下来，避免每次重绘都重新问一遍图标服务。
                     self.failedKeys.insert(request.key)
@@ -144,6 +170,24 @@ final class QuickSearchIconLoader: ObservableObject {
         let box = QuickSearchCachedIcon(key: key, image: image, cost: cost)
         tracker.insert(box)
         cache.setObject(box, forKey: key as NSString, cost: cost)
+    }
+
+    /// 后台结果优先。系统取图器在后台线程偶发返回空时，回主线程再向图标服务
+    /// 要一次——这条主线程路径已被剪贴板历史长期验证。注入取图器时不兜底。
+    private func resolvedIcon(for request: Request, backgroundResult: Data?) -> (NSImage, Data)? {
+        if let data = backgroundResult,
+           let image = Self.image(from: data, pointSize: request.pointSize) {
+            return (image, data)
+        }
+        guard retriesOnMainThread,
+              let data = DockGroupIconThumbnail.pngData(forFileAt: request.url, pointSize: request.pointSize),
+              let image = Self.image(from: data, pointSize: request.pointSize)
+        else { return nil }
+        return (image, data)
+    }
+
+    private static func pixelSide(for pointSize: CGFloat) -> Int {
+        DockGroupIconThumbnail.pixelSize(forPoints: pointSize)
     }
 
     /// NSImage 不是 Sendable：位图只在这里、也就是主 Actor 上组装。
