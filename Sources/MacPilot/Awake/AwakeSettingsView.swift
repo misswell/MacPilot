@@ -1254,10 +1254,6 @@ struct AwakeMenuView: View {
                 Button(model.t("awakeUnlimited")) { _ = awake.startScreenOnSession(duration: nil) }
             }
 
-            if awake.hasInteractiveSession {
-                Button(model.t("awakeStop"), action: awake.endAllInteractiveSessions)
-            }
-
             Button(model.t("awakeOpenSettings"), action: openSettings)
         } label: {
             Label(model.t("awake"), systemImage: menuIcon)
