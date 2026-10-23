@@ -112,6 +112,12 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
 
     private var wantsToRun: Bool { diagnosticWantsRun || productionWantsRun }
 
+    /// Whether the periodic challenge cadence is armed. A production restart
+    /// must leave this true even when a diagnostic session kept the radio and
+    /// the subscriptions alive, otherwise the phone receives one challenge and
+    /// then no further samples.
+    var isChallengeCadenceRunning: Bool { presenceChallengeTask != nil }
+
     // MARK: - Lifecycle
 
     /// Starts or keeps the diagnostic session. Never tears down a production
@@ -162,6 +168,13 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
         if publishedService == nil { publishService(on: manager) }
         else { startAdvertising(manager) }
         issuePresenceChallengesIfNeeded()
+        // `stopProduction` cancels the cadence task but keeps the manager and
+        // the existing subscriptions when a diagnostic session still owns the
+        // radio. A central that subscribed while production was off was
+        // therefore never seen by `didSubscribeTo`'s production branch, so
+        // restarting here has to re-arm the cadence explicitly — otherwise the
+        // phone gets one challenge and no further samples.
+        ensurePresenceChallengeTask()
     }
 
     /// Stops only the production session: advertising ends unless the

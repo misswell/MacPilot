@@ -212,6 +212,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     var isRecoveringFromSystemSleep: Bool { recoveringFromSystemSleep }
     var isUnlockAttemptScheduled: Bool { unlockAttemptSlot.isOccupied }
+    /// Test seam: counts presence actions without performing screen control.
+    /// Production never sets this.
+    var presenceActionObserver: ((Bool) -> Void)?
+    /// Test seam: ends the in-flight unlock attempt so a test can prove the
+    /// next close sample still retries. Production never calls this.
+    func cancelUnlockAttemptForTesting(reason: String) { cancelUnlockAttempt(reason: reason) }
     var activeConnectionsPaused: Bool {
         BLEActiveConnectionPolicy.shouldPause(
             displayAsleep: displayUnavailable,
@@ -679,13 +685,28 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         runtime.lastAcceptedAt = now
         runtime.sampleCount += 1
         runtime.signalObservationIsContinuous = !activeConnectionsPaused && !systemSleep
+        // A fresh authenticated sample ends any loss verification in progress,
+        // exactly as a legacy advertisement does in `updateMonitoredPeripheral`.
+        // Without this the flag stayed set after a recovery, so the next
+        // signal loss skipped the verification window and locked immediately.
+        if runtime.verifyingSignalLoss {
+            log("reverse signal recovered during loss verification device=\(primaryUUID.uuidString)")
+            runtime.verifyingSignalLoss = false
+        }
 
         let unlockThreshold = settings.unlockRSSI == Self.unlockDisabled
             ? settings.lockRSSI : settings.unlockRSSI
+        // Whether this sample already drove the presence action. `recomputePresence`
+        // dispatches `updatePresence(true)` on a false→true edge, and the unlock
+        // gate below dispatches the same thing for a steady-state retry. Running
+        // both for one sample repeats the display wake and the unlock preflight.
+        var dispatchedPresenceAction = false
         if rssi >= unlockThreshold && !runtime.presence {
             log("reverse RSSI crossed threshold rssi=\(rssi) threshold=\(unlockThreshold) device=\(primaryUUID.uuidString)")
             runtime.presence = true
+            let presenceBefore = presence
             recomputePresence(reason: "reverseClose")
+            dispatchedPresenceAction = !presenceBefore && presence
         }
 
         let lockThreshold = settings.lockRSSI == Self.lockDisabled
@@ -712,7 +733,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             && automaticUnlockAllowed
         if unlockConditionsAreEligible || unlockSignalTrigger.hasScheduledForLock {
             let triggerAllowsAttempt = unlockSignalTrigger.allowsAttempt(screenState: screenLockState())
-            if unlockConditionsAreEligible && triggerAllowsAttempt {
+            if unlockConditionsAreEligible && triggerAllowsAttempt && !dispatchedPresenceAction {
+                // Continuous proximity still retries an unlock that has not
+                // completed yet; only the sample that already dispatched the
+                // presence edge is skipped.
                 updatePresence(presence: true, reason: "reverseNearbySignal")
                 if unlockAttemptSlot.isOccupied { unlockSignalTrigger.noteScheduled() }
             }
@@ -2414,6 +2438,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
 
     func updatePresence(presence: Bool, reason: String) {
+        presenceActionObserver?(presence)
         log("presence handler value=\(presence) reason=\(reason) currentState=\(self.presence) lastRSSI=\(lastRSSI.map(String.init) ?? "none") displaySleep=\(displaySleep) systemSleep=\(systemSleep)")
         guard settings.isEnabled else {
             log("presence action skipped reason=featureDisabled")

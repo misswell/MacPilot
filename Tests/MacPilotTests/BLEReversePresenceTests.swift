@@ -397,3 +397,163 @@ struct BLEReversePresenceTests {
         func release() {}
     }
 }
+
+/// Regression tests for the state-machine defects found in review: a recovered
+/// signal must not shortcut the next departure, one sample must dispatch one
+/// presence action, and restarting production must keep the challenge cadence
+/// alive even when a diagnostic session still owns the radio.
+@MainActor
+struct BLEReversePresenceStateMachineTests {
+    @Test func aRecoveredSignalVerifiesTheNextDepartureAgain() throws {
+        let h = Harness()
+        defer { h.model.shutdown() }
+        #expect(h.model.acceptReversePresenceSample(
+            clientID: "phone", keyFingerprint: "fp",
+            primaryUUID: h.phone, rssi: -50, sampledAt: Date()
+        ))
+        let runtime = try #require(h.model.reverseRuntime(for: h.phone))
+
+        // First loss: one bounded verification window.
+        h.now += 60
+        h.model.handleReverseSignalTimeout(for: h.phone)
+        #expect(runtime.verifyingSignalLoss)
+        let firstVerification = try #require(h.signalActions.last)
+        #expect(firstVerification.delay == 240)
+
+        // The phone comes back before the window closes.
+        #expect(h.model.acceptReversePresenceSample(
+            clientID: "phone", keyFingerprint: "fp",
+            primaryUUID: h.phone, rssi: -50, sampledAt: Date()
+        ))
+        #expect(!runtime.verifyingSignalLoss, "A fresh authenticated sample ends loss verification")
+        #expect(h.model.presence)
+
+        // Second loss must run the whole verification again instead of
+        // treating the stale flag as an already-verified departure.
+        h.now += 60
+        h.model.handleReverseSignalTimeout(for: h.phone)
+        #expect(runtime.verifyingSignalLoss, "The next departure is verified again")
+        let secondVerification = try #require(h.signalActions.last)
+        #expect(secondVerification.delay == 240)
+        #expect(h.model.presence, "Presence is still held during verification")
+        #expect(h.locks.isEmpty, "A nearby loss never locks before the window closes")
+    }
+
+    @Test func oneSampleDispatchesOnePresenceAction() throws {
+        // Two logical devices so the combined presence starts out false, and a
+        // locked screen so the unlock gate is genuinely eligible. The presence
+        // edge and the unlock gate both used to dispatch for one sample.
+        let h = Harness(secondaryDevice: true, screenLocked: true)
+        defer { h.model.shutdown() }
+        h.model.settings.unlockRSSI = -55
+        var presenceActions = 0
+        h.model.presenceActionObserver = { _ in presenceActions += 1 }
+
+        #expect(h.model.acceptReversePresenceSample(
+            clientID: "phone", keyFingerprint: "fp",
+            primaryUUID: h.phone, rssi: -50, sampledAt: Date()
+        ))
+        #expect(h.model.presence)
+        #expect(presenceActions == 1, "One sample must not dispatch the same action twice")
+    }
+
+    @Test func continuousProximityStillRetriesAnIncompleteUnlock() throws {
+        let h = Harness(secondaryDevice: true, screenLocked: true)
+        defer { h.model.shutdown() }
+        h.model.settings.unlockRSSI = -55
+        var presenceActions = 0
+        h.model.presenceActionObserver = { _ in presenceActions += 1 }
+
+        #expect(h.model.acceptReversePresenceSample(
+            clientID: "phone", keyFingerprint: "fp",
+            primaryUUID: h.phone, rssi: -50, sampledAt: Date()
+        ))
+        let afterEdge = presenceActions
+        #expect(afterEdge == 1)
+
+        // The unlock cycle ends without confirming; sustained proximity must be
+        // able to start the next attempt rather than being suppressed forever.
+        h.model.cancelUnlockAttemptForTesting(reason: "test")
+        h.now += 30
+        #expect(h.model.acceptReversePresenceSample(
+            clientID: "phone", keyFingerprint: "fp",
+            primaryUUID: h.phone, rssi: -48, sampledAt: Date()
+        ))
+        #expect(presenceActions > afterEdge, "A steady close signal keeps retrying the unlock")
+    }
+
+    // MARK: - Harness
+
+    @MainActor
+    private final class Harness {
+        var now: TimeInterval = 100
+        let phone = UUID()
+        let macID = UUID()
+        let key = Data(repeating: 7, count: 32)
+        let peripheral = RecordingPeripheral()
+        var model: BLEUnlockModel!
+        var locks: [ScreenControlSource] = []
+        var signalActions: [(delay: TimeInterval, action: @MainActor () -> Void)] = []
+        var proximityActions: [(delay: TimeInterval, action: @MainActor () -> Void)] = []
+
+        init(secondaryDevice: Bool = false, screenLocked: Bool = false) {
+            model = BLEUnlockModel(
+                userActivityMonitor: BLEUserActivityMonitor(uptime: { [weak self] in self?.now ?? 0 }, observesEvents: false),
+                bluetoothScanner: SilentScanner(),
+                eventScriptRunner: { _ in }
+            )
+            model.displayUnavailableProbe = { false }
+            model.screenLockStateProbe = { screenLocked ? .locked : .unlocked }
+            model.lockScreenOperation = { [weak self] in self?.locks.append($0) }
+            model.settings.isEnabled = true
+            model.settings.deviceRelation = .any
+            model.settings.signalTimeout = 60
+            model.settings.proximityTimeout = 5
+            model.settings.lockRSSI = -80
+            model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
+            model.settings.reverseGATTPresenceEnabled = true
+            model.settings.pauseNowPlaying = false
+            model.reversePresencePeripheralOverride = peripheral
+            model.sessionOnConsoleProbe = { true }
+            model.remoteOwnDeviceIDProvider = { [macID] in macID }
+            model.remotePairingKeyProvider = { [key] clientID in clientID == "phone" ? key : nil }
+            model.signalTimeoutScheduler = { [weak self] delay, action in
+                self?.signalActions.append((delay, action))
+                return BackgroundTask.once(after: 3_600) {}
+            }
+            model.proximityTimeoutScheduler = { [weak self] delay, action in
+                self?.proximityActions.append((delay, action))
+                return BackgroundTask.once(after: 3_600) {}
+            }
+            if secondaryDevice { model.secondaryMonitoredUUID = UUID() }
+            model.startMonitor(phone)
+            model.bindRemoteIdentity(primaryUUID: phone, clientID: "phone", keyFingerprint: "fp")
+        }
+    }
+
+    @MainActor
+    private final class RecordingPeripheral: ProximityBLEPeripheral {
+        private(set) var productionRunning = false
+
+        override func startProduction(macDeviceID: UUID) {
+            productionRunning = true
+        }
+
+        override func stopProduction() {
+            productionRunning = false
+        }
+    }
+
+    @MainActor
+    private final class SilentScanner: BluetoothScanning {
+        var central: CBCentralManager? {
+            get { nil }
+            set {}
+        }
+        func createIfNeeded(delegate: CBCentralManagerDelegate) {}
+        func startIfPoweredOn() -> Bool { true }
+        func restartIfPoweredOn() -> Bool { true }
+        func stop() {}
+        func release() {}
+    }
+}

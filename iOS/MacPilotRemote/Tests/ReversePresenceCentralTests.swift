@@ -170,6 +170,27 @@ struct ReversePresenceCentralTests {
         #expect(gate.takeNonce() == next)
     }
 
+    @Test func aMeasurementOnlyConsumesTheChallengeItWasTakenFor() {
+        var gate = ReversePresenceChallengeGate()
+        let measured = Data(repeating: 0x44, count: 16)
+        let newer = Data(repeating: 0x55, count: 16)
+
+        let firstAccepted = gate.receive(measured)
+        #expect(firstAccepted)
+        // A newer challenge replaces the pending one before the measurement
+        // for the older one comes back.
+        let secondAccepted = gate.receive(newer)
+        #expect(secondAccepted)
+        let staleConsumed = gate.consume(measured)
+        #expect(!staleConsumed, "A stale measurement must not consume the new challenge")
+        #expect(gate.pendingChallengeNonce == newer)
+        let currentConsumed = gate.consume(newer)
+        #expect(currentConsumed)
+        #expect(!gate.hasPendingNonce)
+        let replayConsumed = gate.consume(newer)
+        #expect(!replayConsumed, "A challenge is single use")
+    }
+
     @Test func aSuspensionDropsThePendingChallenge() {
         var gate = ReversePresenceChallengeGate()
         let nonce = Data(repeating: 0x33, count: 16)
