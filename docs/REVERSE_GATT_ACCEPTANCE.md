@@ -289,3 +289,11 @@ iOS 后台调度下才能确认：
 - 手机锁屏后台静置 10 分钟以上，观察 `Diagnostics.log` 中反向样本是否持续
 - Mac 端关闭再开启「反向 GATT 兜底识别」，确认挑战循环恢复而不只是一次
 - 强行关闭 Mac 蓝牙再打开，确认两端都自动恢复而非需要重开 App
+
+### 本轮发布
+
+- Mac Beta：`v1.2.2-beta.51`（prerelease，4 个资产齐全）。下载 arm64 zip 通过
+  `codesign --verify --deep --strict`（含 Designated Requirement）与
+  `xcrun stapler validate`（"The validate action worked!"）；DMG `hdiutil verify` 校验和 VALID。
+- PilotNest：1.2.5 (48)，Build ID `3618c6fb-f2f6-41e0-96aa-dc9734ba632a`，`VALID`，
+  已在内部组；签名门禁证据见 `docs/APP_STORE_RELEASE_CHECKLIST.md`。

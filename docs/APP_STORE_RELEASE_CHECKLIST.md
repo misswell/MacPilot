@@ -324,3 +324,49 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - ASC Build ID：`3c5c6918-d3f0-4287-a526-b98d1c5826bb`，`processingState=VALID`，`internalBuildState=IN_BETA_TESTING`，`autoNotifyEnabled=true`。上传后 `asc testflight groups list --app` 与 `asc apps list` 一度返回空/500（ASC 服务端抖动），改用 `asc builds upload` 上传、`asc publish testflight --build <id>` 分发，并以全局组列表与 `asc testflight config export --include-builds` 读回确认内部组「内部」已包含构建 47；显式 `add-groups` 对内部组返回 `Cannot add internal group to a build`，因为内部组本就自动接收全部构建。
 - 中英文 What to Test 已写入并读回：zh-Hans 466 字符、en-US 1348 字符，内容与构建 46 相同。
 - 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 47 附加到 1.2.5 版本、未执行 `asc metadata push`。`VALID` 不代表 Apple 已审核批准。
+
+## 2026-10-23 / 1.2.5 / build 48
+
+反向 GATT 重连与采样时序修复后的 TestFlight 构建。
+
+- `MARKETING_VERSION=1.2.5`，`CURRENT_PROJECT_VERSION=48`（build 47 之后递增）
+- 1.2.5 版本列车仍为 `PREPARE_FOR_SUBMISSION`，可继续上传；1.2.4 及更早为
+  `READY_FOR_SALE`
+- 归档：`xcodebuild -scheme MacPilotRemote -configuration Release -destination 'generic/platform=iOS' archive`
+  → `** ARCHIVE SUCCEEDED **`
+- 导出：一次性 `ExportOptions.plist`（`method=app-store-connect`、手动签名、
+  profile `df12e579-3dec-4e63-b2df-86c5e2d37281`）→ `** EXPORT SUCCEEDED **`。
+  仓库内的自动签名配置未改动。
+
+### 签名门禁证据（针对最终导出的 IPA）
+
+| 检查 | 结果 |
+| --- | --- |
+| Bundle 版本 | `1.2.5 (48)`，`com.misswell.macpilot.remote` |
+| `codesign --verify --deep --strict` | 通过 |
+| 签名身份 | `Apple Distribution: Guofeng Liu (U8U443D7ZL)` |
+| 签名叶证书 DER SHA-256 | `62e7580e4e86da3c0c5a015e89f2074bb8439ecc34148575ed3d88499a233704` |
+| profile `DeveloperCertificates[0]` | 同一 SHA-256，逐字节一致 |
+| profile UUID / Team | `df12e579-…` / `U8U443D7ZL` |
+| profile 名称 | `PilotNest App Store 1.0.2 (8)` |
+| `get-task-allow` | `false` |
+| `beta-reports-active` | `true` |
+| CMS 验证 | `CMS Verification successful` |
+| 篡改对照 | 翻转中部 1 字节后 `CMS Verification failure`（证明验证真实有效） |
+
+注：该手动 profile 的签名属性里没有 `ProfileDistributionType` 键；改用
+`get-task-allow=false` + `beta-reports-active=true` + 名称中的 “App Store”
+作为分发类型证据。`security cms -D` 仅用于解码，未作为完整性依据。
+
+### 上传与 TestFlight
+
+- Build ID `3618c6fb-f2f6-41e0-96aa-dc9734ba632a`，`processingState=VALID`
+- IPA SHA-256 `ca6ba9da4c10042e2b5b7271d47f5e419aa15aaf8091a35e0c1195c9e9e27e48`（2,783,803 字节）
+- 内部组 `内部`（`dbf86047-…`）自动接收所有构建
+- What to Test：zh-Hans 402 字符、en-US 1110 字符，已写入并回读确认
+
+### 未做（按仓库策略）
+
+- 未提交 App Store 审核、未推外部 Beta 审核、未新增测试员
+- build 48 未挂到 1.2.5 版本对象上、未执行 `asc metadata push`
+- `VALID` 不等于 Apple 已批准

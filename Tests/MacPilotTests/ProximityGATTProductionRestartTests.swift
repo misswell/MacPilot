@@ -20,6 +20,19 @@ struct ProximityGATTProductionRestartTests {
         #expect(!peripheral.isChallengeCadenceRunning)
     }
 
+    /// A cold start arms the cadence, and a tick that cannot challenge anyone
+    /// stays armed. Cancelling on "no subscriber yet" made the task's lifetime
+    /// depend on callback ordering; the only disarm is a production stop.
+    @Test func aTransientPrerequisiteGapDoesNotDisarmTheCadence() {
+        let peripheral = ProximityBLEPeripheral()
+        peripheral.startProduction(macDeviceID: UUID())
+        #expect(peripheral.isChallengeCadenceRunning, "A cold start arms the cadence before any subscribe callback")
+        peripheral.issuePresenceChallengesIfNeeded()
+        #expect(peripheral.isChallengeCadenceRunning, "A skipped tick must not end the cadence")
+        peripheral.stopProduction()
+        #expect(!peripheral.isChallengeCadenceRunning)
+    }
+
     @Test func productionAndDiagnosticSessionsAreIndependent() {
         let peripheral = ProximityBLEPeripheral()
         peripheral.start(macDeviceID: UUID())

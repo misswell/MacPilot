@@ -109,6 +109,9 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
     private let logLimit = 200
     private let challengeInterval: TimeInterval = 2.5
     private let challengeTTL: TimeInterval = 15
+    private var cadenceSkipReason: String?
+    private var lastVerifiedSampleAt: Date?
+    private var lastSampleRejectionLoggedAt: Date?
 
     private var wantsToRun: Bool { diagnosticWantsRun || productionWantsRun }
 
@@ -155,11 +158,19 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
 
     /// Called by the unlock feature when its production conditions hold.
     func startProduction(macDeviceID: UUID) {
+        let wasRunning = productionWantsRun
         productionMacID = macDeviceID
         productionWantsRun = true
         isProductionRunning = true
+        if !wasRunning {
+            logPersisted("production start mac=\(macDeviceID.uuidString) subscribers=\(presenceSubscribedCentrals.count)")
+        }
         guard let manager else {
             beginSession(macDeviceID: macDeviceID)
+            // A cold start has no subscriptions yet, but arming here keeps the
+            // cadence lifetime owned by production instead of by whichever
+            // subscribe callback happens to arrive first.
+            ensurePresenceChallengeTask()
             return
         }
         if macInfo != ProximityGATTMacInfo(deviceID: macDeviceID).encoded {
@@ -184,9 +195,13 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
     /// the feature comes back, without waiting for a resubscribe that iOS will
     /// never perform on its own.
     func stopProduction() {
+        if productionWantsRun {
+            logPersisted("production stop subscribers=\(presenceSubscribedCentrals.count)")
+        }
         productionWantsRun = false
         isProductionRunning = false
         productionMacID = nil
+        cadenceSkipReason = nil
         clearPresenceChallenges()
         guard diagnosticWantsRun else {
             teardown()
@@ -332,6 +347,27 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
         if logLines.count > logLimit {
             logLines.removeFirst(logLines.count - logLimit)
         }
+    }
+
+    /// Persists a state transition. The in-memory ring buffer stays the detailed
+    /// trace; this goes to the 24-hour diagnostic history so a phone that stops
+    /// answering can be explained after the fact instead of showing up only as
+    /// "BLE stopped working". Only transitions belong here — the 2.5-second
+    /// challenge cadence would otherwise flood the file.
+    private func logPersisted(_ message: @autoclosure () -> String) {
+        let text = message()
+        log(text)
+        DiagnosticLog.write("BLEReverse", text)
+    }
+
+    /// A buggy client can retry a rejected sample on every cadence tick, so the
+    /// persisted copy is throttled while the in-memory trace keeps each one.
+    private func logRejectedSample(_ reason: String, centralID: UUID) {
+        log("rejected reverse sample: \(reason) central=\(centralID)")
+        let now = Date.now
+        guard lastSampleRejectionLoggedAt.map({ now.timeIntervalSince($0) >= 10 }) ?? true else { return }
+        lastSampleRejectionLoggedAt = now
+        DiagnosticLog.write("BLEReverse", "rejected reverse sample: \(reason) central=\(centralID)")
     }
 
     private func fail(_ reason: String) {
@@ -541,39 +577,39 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
     ) {
         let centralID = request.central.identifier
         guard productionWantsRun else {
-            log("rejected reverse sample: production disabled")
+            logRejectedSample("production disabled", centralID: centralID)
             peripheral.respond(to: request, withResult: .requestNotSupported)
             return
         }
         guard presenceSubscribedCentrals[centralID] != nil else {
-            log("rejected reverse sample: no presence subscription central=\(centralID)")
+            logRejectedSample("no presence subscription", centralID: centralID)
             peripheral.respond(to: request, withResult: .unlikelyError)
             return
         }
         guard let pending = pendingPresence[centralID] else {
-            log("rejected reverse sample: no pending challenge central=\(centralID)")
+            logRejectedSample("no pending challenge", centralID: centralID)
             peripheral.respond(to: request, withResult: .unlikelyError)
             return
         }
         guard let sample = RemoteBLEReversePresenceSample(encoded: response) else {
-            log("rejected reverse sample: malformed payload")
+            logRejectedSample("malformed payload", centralID: centralID)
             peripheral.respond(to: request, withResult: .invalidAttributeValueLength)
             return
         }
         let now = Date.now
         guard sample.macID == pending.macID,
               RemoteCrypto.constantTimeEquals(sample.nonce, pending.nonce) else {
-            log("rejected reverse sample: challenge mismatch")
+            logRejectedSample("challenge mismatch", centralID: centralID)
             peripheral.respond(to: request, withResult: .insufficientAuthentication)
             return
         }
         guard sample.isFresh(now: now) else {
-            log("rejected reverse sample: stale timestamp")
+            logRejectedSample("stale timestamp", centralID: centralID)
             peripheral.respond(to: request, withResult: .insufficientAuthentication)
             return
         }
         guard let matched = matchIdentity(for: sample, expectedMacID: pending.macID, expectedNonce: pending.nonce, now: now) else {
-            log("rejected reverse sample: no matching pairing key")
+            logRejectedSample("no matching pairing key", centralID: centralID)
             peripheral.respond(to: request, withResult: .insufficientAuthentication)
             return
         }
@@ -583,7 +619,13 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
         lastPresenceSampleAt = now
         lastReceivedAt = now
         let age = max(0, now.timeIntervalSince(sample.sampledAt))
-        log("reverse presence verified client=\(matched.clientID) rssi=\(sample.rssi) age=\(Int(age * 1000))ms")
+        let resumed = lastVerifiedSampleAt.map { now.timeIntervalSince($0) > 30 } ?? true
+        lastVerifiedSampleAt = now
+        if resumed {
+            logPersisted("reverse link delivering samples client=\(matched.clientID) rssi=\(sample.rssi) age=\(Int(age * 1000))ms")
+        } else {
+            log("reverse presence verified client=\(matched.clientID) rssi=\(sample.rssi) age=\(Int(age * 1000))ms")
+        }
         peripheral.respond(to: request, withResult: .success)
         onReversePresenceSample?(ProximityReversePresenceReport(
             centralID: centralID,
@@ -649,15 +691,43 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
 
     // MARK: - Production challenges
 
-    private func issuePresenceChallengesIfNeeded() {
-        guard productionWantsRun, let peripheral = manager,
-              peripheral.state == .poweredOn,
-              productionMacID != nil,
-              !presenceSubscribedCentrals.isEmpty,
-              publishedService != nil else {
+    /// One cadence tick. Only a stopped production session ends the task:
+    /// radio transitions, a service rebuild or a momentarily empty subscriber
+    /// list are all transient, and cancelling on any of them used to leave a
+    /// still-subscribed phone unchallenged until it resubscribed or the app
+    /// restarted. The task is re-armed solely by `didSubscribeTo` and
+    /// `startProduction`, so a premature cancel was permanent.
+    func issuePresenceChallengesIfNeeded() {
+        guard productionWantsRun else {
             presenceChallengeTask?.cancel()
             presenceChallengeTask = nil
+            cadenceSkipReason = nil
             return
+        }
+        let skipReason: String?
+        if manager == nil {
+            skipReason = "no manager"
+        } else if manager?.state != .poweredOn {
+            skipReason = "radio not powered on"
+        } else if productionMacID == nil {
+            skipReason = "no Mac identity"
+        } else if presenceSubscribedCentrals.isEmpty {
+            skipReason = "no presence subscriber"
+        } else if publishedService == nil {
+            skipReason = "service not published"
+        } else {
+            skipReason = nil
+        }
+        guard skipReason == nil, let peripheral = manager else {
+            if cadenceSkipReason != skipReason {
+                cadenceSkipReason = skipReason
+                logPersisted("challenge cadence waiting reason=\(skipReason ?? "unknown")")
+            }
+            return
+        }
+        if let previous = cadenceSkipReason {
+            cadenceSkipReason = nil
+            logPersisted("challenge cadence resumed after \(previous) subscribers=\(presenceSubscribedCentrals.count)")
         }
         let now = Date.now
         for (centralID, central) in presenceSubscribedCentrals {
@@ -785,11 +855,11 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
             presenceSubscribedCentrals[central.identifier] = central
             presenceSubscriberCount = presenceSubscribedCentrals.count
             guard productionWantsRun else {
-                log("presence subscription recorded; production disabled central=\(central.identifier)")
+                logPersisted("presence subscription recorded while production is off central=\(central.identifier)")
                 return
             }
             status = .connected
-            log("central subscribed to reverse presence uuid=\(central.identifier)")
+            logPersisted("presence subscribed central=\(central.identifier) subscribers=\(presenceSubscriberCount)")
             issuePresenceChallenge(to: central, on: peripheral)
             ensurePresenceChallengeTask()
             return
@@ -816,11 +886,11 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
             presenceSubscribedCentrals.removeValue(forKey: central.identifier)
             pendingPresence.removeValue(forKey: central.identifier)
             presenceSubscriberCount = presenceSubscribedCentrals.count
-            log("central unsubscribed from reverse presence uuid=\(central.identifier)")
-            if presenceSubscribedCentrals.isEmpty {
-                presenceChallengeTask?.cancel()
-                presenceChallengeTask = nil
-            }
+            logPersisted("presence unsubscribed central=\(central.identifier) subscribers=\(presenceSubscriberCount)")
+            // The cadence stays armed: production owns its lifetime, and the
+            // next tick records the missing-subscriber reason once. A phone
+            // that comes back without a fresh subscribe callback (iOS does not
+            // resubscribe on its own) is then still challenged.
             refreshPublishedState()
             if wantsToRun, peripheral.state == .poweredOn, peripheral.isAdvertising == false {
                 startAdvertising(peripheral)
