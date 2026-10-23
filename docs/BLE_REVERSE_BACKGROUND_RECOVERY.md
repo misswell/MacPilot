@@ -52,3 +52,9 @@ Apple 的[后台处理文档](https://developer.apple.com/library/archive/docume
 本修复使系统在应用仍获得蓝牙回调执行时间时就持有待连接请求；不承诺系统固定恢复延迟，
 也不承诺用户强制结束 App 后可以自动重新启动。验证需要在已安装新版的手机上，
 保持 App 后台经历真实断连，再回到蓝牙范围，核对未进入前台之前的新订阅和认证样本。
+
+## 发布
+
+- Mac Beta：`v1.2.2-beta.53`
+- PilotNest：1.2.5 (49)，Build ID `eecd5dcb-f072-4422-b66e-71306ce5d80e`，`VALID`，内部组
+- 签名门禁证据见 `docs/APP_STORE_RELEASE_CHECKLIST.md`

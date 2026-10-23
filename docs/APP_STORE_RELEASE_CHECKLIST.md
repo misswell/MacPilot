@@ -370,3 +370,38 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - 未提交 App Store 审核、未推外部 Beta 审核、未新增测试员
 - build 48 未挂到 1.2.5 版本对象上、未执行 `asc metadata push`
 - `VALID` 不等于 Apple 已批准
+
+## 2026-10-23 / 1.2.5 / build 49
+
+反向识别后台重连修复（见 `docs/BLE_REVERSE_BACKGROUND_RECOVERY.md`）。
+
+- `MARKETING_VERSION=1.2.5`，`CURRENT_PROJECT_VERSION=49`（build 48 之后递增）
+- 归档 `** ARCHIVE SUCCEEDED **`，导出 `** EXPORT SUCCEEDED **`；一次性手动
+  `ExportOptions.plist`（profile `df12e579-3dec-4e63-b2df-86c5e2d37281`），
+  仓库内自动签名配置未改动
+
+### 签名门禁证据（最终导出的 IPA）
+
+| 检查 | 结果 |
+| --- | --- |
+| Bundle 版本 | `1.2.5 (49)`，`com.misswell.macpilot.remote` |
+| `codesign --verify --deep --strict` | 通过 |
+| 签名叶证书 DER SHA-256 | `62e7580e4e86da3c0c5a015e89f2074bb8439ecc34148575ed3d88499a233704` |
+| profile `DeveloperCertificates[0]` | 同一 SHA-256，逐字节一致 |
+| profile UUID / Team | `df12e579-…` / `U8U443D7ZL` |
+| `get-task-allow` / `beta-reports-active` | `false` / `true` |
+| CMS 验证 | `CMS Verification successful` |
+| 篡改对照 | 翻转中部 1 字节后 `CMS Verification failure` |
+
+### 上传与 TestFlight
+
+- Build ID `eecd5dcb-f072-4422-b66e-71306ce5d80e`，`processingState=VALID`
+- IPA SHA-256 `ba5215e9c73e23caa6ee5027627c822c8c3c7ff1032562ab429431e67e92c912`（2,786,512 字节）
+- 内部组 `内部`（`dbf86047-…`）自动接收
+- What to Test：zh-Hans 629 字符、en-US 1722 字符，已写入并回读确认
+
+### 未做（按仓库策略）
+
+- 未提交 App Store 审核、未推外部 Beta 审核、未新增测试员
+- build 49 未挂到 1.2.5 版本对象上、未执行 `asc metadata push`
+- `VALID` 不等于 Apple 已批准
