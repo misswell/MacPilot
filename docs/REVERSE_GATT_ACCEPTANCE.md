@@ -248,3 +248,44 @@ iOS 新增默认关闭、重复停止、清理日志与独立 UserDefaults 意�
   Keychain 可访问性和多台 iPhone 同时连接同一 Mac 的硬件行为；这些只能由
   真机验收确认。任何异常路径的设计目标都是“不解锁”。
 
+
+## 2026-10-23 代码审查修复
+
+外部审查在 `e5a1dacf`（绑定手机后默认启用反向 GATT）上提出 5 项问题。逐条
+核对源码后确认 5 项全部成立，已全部修复；本轮修复**只增不减**，旧链路
+`RemoteBLECentral` / `RemoteBLEPeripheral` / `RemoteBLEService` 无任何改动。
+
+| # | 问题 | 结论 | 修复 |
+| --- | --- | --- | --- |
+| P1 | 临时 GATT 错误后不再自动重连 | 成立 | `rejectConnection` 现在带恢复计划；已配对设备按退避重试并重启扫描，失败的外设保留为重试目标；断开回调不再取消刚排好的恢复 |
+| P1 | RSSI 读取超时/后台切换与新挑战竞态 | 成立 | 读写改为 FIFO 操作队列，回调与发起它的操作配对；迟到/超时/后台前的回调被识别为陈旧，样本用**它自己的** nonce 签名 |
+| P2 | 反向信号恢复后未清 `verifyingSignalLoss` | 成立 | 新样本重置该标志，与旧广告路径一致 |
+| P2 | 诊断会话保留连接时生产模式只发一次挑战 | 成立 | `startProduction` 显式重新武装周期挑战任务 |
+| P3 | 首次靠近重复分发一次 Presence 动作 | 成立 | 同一样本只分发一次；持续靠近仍可重试未完成的解锁 |
+
+### 关于 CI 状态
+
+审查报告称 GitHub 未返回 `e5a1dacf` 的状态检查。实际查询该提交有 5 条检查，
+`build` / `release-gate` / `release / dist` 均为 `completed / success`，
+其余两条为按设计 `skipped`。CI 并非未知状态。
+
+### 本轮门禁
+
+- 共享协议包 **146 tests / 24 suites**（新增 24 项）
+- iOS PilotNest **88 tests / 17 suites**（新增 1 项）
+- Mac BLE + 配置契约 **186 tests / 21 suites**
+- Release 构建 `-Xswiftc -warnings-as-errors` 通过，0 warning
+- 全量 Mac 套件 1634 项：失败项均在 `AGENTS.md` 记录的已知 flake 清单内
+  （`CPUMonitorTests`、`BLEWakeRecoveryTests`、`ScreenCaptureTests`、
+  `PictureInPictureTests`、`ClosedLidSleepTests`、`FileCompressionMonitoringTests`）。
+  已用 `git stash` 在**未改动的干净基线**上复跑，同样失败且失败集合更大
+  （基线多出 3 个 `ClosedLidSleepTests`），确认与本次改动无关。
+
+### 仍然待真机
+
+前表的 1–11 项状态不变。特别地，本轮新增的重连与竞态修复只有在真实
+iOS 后台调度下才能确认：
+
+- 手机锁屏后台静置 10 分钟以上，观察 `Diagnostics.log` 中反向样本是否持续
+- Mac 端关闭再开启「反向 GATT 兜底识别」，确认挑战循环恢复而不只是一次
+- 强行关闭 Mac 蓝牙再打开，确认两端都自动恢复而非需要重开 App
