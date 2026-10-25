@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Combine
 import Darwin
 import OSLog
 import MacPilotRemoteTransport
@@ -14,10 +15,54 @@ extension Notification.Name {
 
 @main
 struct MacPilotApp: App {
-    @StateObject private var model = MacPilotModel()
+    @StateObject private var model: MacPilotModel
+    @StateObject private var menuBar: MenuBarDisplayController
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    init() {
+        let model = MacPilotModel()
+        // Register tracking before the first lazily constructed native menu,
+        // so resource sections see that first session and refresh normally.
+        _ = MonitorMenuActivity.shared
+        let controller: MenuBarDisplayController
+        if #available(macOS 14.4, *) {
+            controller = MenuBarDisplayController(menuFactory: { [weak model] context in
+                guard let model else { return NSMenu() }
+                return NSHostingMenu(rootView: MenuBarView.mainMenu(model: model, context: context,
+                    showMainWindow: {
+                        NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
+                    }).environmentObject(model))
+            }, iconName: { [weak model] in
+                guard let model else { return "timer" }
+                return MenuBarIcon.systemImage(
+                    awakeActive: model.awake.isKeepingAwake,
+                    enforcing: model.isFeatureEnabled(.exit) && model.isEnforcing,
+                    awakeFailed: model.awake.lastAssertionFailure != nil || model.awake.lastClosedLidFailure != nil
+                )
+            })
+        } else {
+            controller = MenuBarDisplayController()
+        }
+        controller.observeIconChanges(model.objectWillChange.eraseToAnyPublisher())
+        controller.observeIconChanges(model.awake.objectWillChange.eraseToAnyPublisher())
+        _model = StateObject(wrappedValue: model)
+        _menuBar = StateObject(wrappedValue: controller)
+    }
+
     var body: some Scene {
+        mainWindowScene
+        MenuBarExtra(isInserted: Binding(
+            get: { !menuBar.usesNativeMenu && menuBar.isInserted },
+            set: { if !menuBar.usesNativeMenu { menuBar.isInserted = $0 } }
+        )) {
+            MenuBarView.mainMenu(model: model, context: menuBar).environmentObject(model)
+        } label: {
+            MenuBarIconView(awake: model.awake, model: model)
+        }
+        .menuBarExtraStyle(.menu)
+    }
+
+    private var mainWindowScene: some Scene {
         Window("MacPilot", id: "main") {
             MainWindowRoot().environmentObject(model)
         }
@@ -35,21 +80,6 @@ struct MacPilotApp: App {
             }
         }
 
-        MenuBarExtra {
-            MenuBarView(
-                awake: model.awake,
-                pictureInPicture: model.pictureInPicture,
-                screenRecording: model.screenRecording,
-                inputSources: model.inputSources,
-                windowSwitcher: model.windowSwitcher,
-                smoothScrolling: model.smoothScrolling,
-                clipboard: model.clipboard,
-                localPorts: model.localPorts
-            ).environmentObject(model)
-        } label: {
-            MenuBarIconView(awake: model.awake, model: model)
-        }
-        .menuBarExtraStyle(.menu)
     }
 }
 
@@ -151,9 +181,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.runModal()
     }
 
-    /// 隐藏所有非面板窗口（菜单栏弹窗等面板不受影响），仅保留菜单栏图标。
+    /// Hide document/settings windows, never a status item's menu-bar window.
     private func hideRegularWindows() {
-        for window in NSApp.windows where !window.isKind(of: NSPanel.self) {
+        for window in NSApp.windows where window.canBecomeMain && !window.isKind(of: NSPanel.self) {
             window.orderOut(nil)
         }
     }
@@ -6183,6 +6213,8 @@ struct MenuBarView: View {
     @ObservedObject var smoothScrolling: SmoothScrollModel
     @ObservedObject var clipboard: ClipboardModel
     @ObservedObject var localPorts: LocalPortsModel
+    private let menuContext: MenuBarDisplayController?
+    private let showMainWindowAction: (@MainActor () -> Void)?
 
     init(
         awake: AwakeSessionManager = AwakeSessionManager(),
@@ -6192,7 +6224,9 @@ struct MenuBarView: View {
         windowSwitcher: WindowSwitcherModel = WindowSwitcherModel(),
         smoothScrolling: SmoothScrollModel = SmoothScrollModel(),
         clipboard: ClipboardModel = ClipboardModel(),
-        localPorts: LocalPortsModel
+        localPorts: LocalPortsModel,
+        menuContext: MenuBarDisplayController? = nil,
+        showMainWindow: (@MainActor () -> Void)? = nil
     ) {
         self._awake = ObservedObject(wrappedValue: awake)
         self._pictureInPicture = ObservedObject(wrappedValue: pictureInPicture)
@@ -6202,6 +6236,17 @@ struct MenuBarView: View {
         self._smoothScrolling = ObservedObject(wrappedValue: smoothScrolling)
         self._clipboard = ObservedObject(wrappedValue: clipboard)
         self._localPorts = ObservedObject(wrappedValue: localPorts)
+        self.menuContext = menuContext
+        self.showMainWindowAction = showMainWindow
+    }
+
+    static func mainMenu(model: MacPilotModel, context: MenuBarDisplayController,
+                         showMainWindow: (@MainActor () -> Void)? = nil) -> MenuBarView {
+        MenuBarView(awake: model.awake, pictureInPicture: model.pictureInPicture,
+                    screenRecording: model.screenRecording, inputSources: model.inputSources,
+                    windowSwitcher: model.windowSwitcher, smoothScrolling: model.smoothScrolling,
+                    clipboard: model.clipboard, localPorts: model.localPorts,
+                    menuContext: context, showMainWindow: showMainWindow)
     }
 
     var body: some View {
@@ -6233,6 +6278,9 @@ struct MenuBarView: View {
         }
         // Recovery remains reachable even when the Home switch is off.
         Divider()
+        if model.isFeatureEnabled(.displayControl), let menuContext {
+            DisplayControlMenuSection(control: model.displayControl, context: menuContext)
+        }
         Button(model.t("displayRestoreAll")) { model.displayControl.restore() }
         if model.isFeatureEnabled(.quickSearch) && model.quickSearch.settings.isEnabled {
             Divider()
@@ -6321,6 +6369,7 @@ struct MenuBarView: View {
     }
 
     private func showMainWindow() {
+        if let showMainWindowAction { showMainWindowAction(); return }
         // Load before raising: the window may exist holding nothing, and
         // presenting it empty for a frame looks like a broken settings page.
         model.loadMainWindowContent()
