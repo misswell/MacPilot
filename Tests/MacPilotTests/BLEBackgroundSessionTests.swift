@@ -88,6 +88,85 @@ struct BLEBackgroundSessionTests {
         #expect(h.scanner.duplicateModes == [true, false, true])
     }
 
+    @Test func consoleOwnershipPollSuspendsMonitoringWhenTheResignNotificationNeverArrived() {
+        let h = Harness(onConsole: true)
+        defer { h.model.shutdown() }
+        h.model.settings.isEnabled = true
+        h.model.activateFromConfiguration()
+        h.model.startMonitor(h.phone)
+        #expect(h.model.runtime(for: h.phone) != nil)
+
+        // A console switch whose NSWorkspace notification never arrives must
+        // still suspend monitoring once the ownership poll catches it.
+        h.onConsoleFlag = false
+        h.model.evaluateConsoleOwnership()
+
+        #expect(h.model.runtime(for: h.phone) == nil)
+        #expect(h.scanner.releases == 1)
+    }
+
+    @Test func consoleOwnershipPollResumesMonitoringWhenTheBecomeActiveNotificationNeverArrived() {
+        let h = Harness(onConsole: false)
+        defer { h.model.shutdown() }
+        h.model.settings.isEnabled = true
+        h.model.activateFromConfiguration()
+        h.model.startMonitor(h.phone)
+        #expect(h.model.runtime(for: h.phone) == nil)
+
+        h.onConsoleFlag = true
+        h.model.evaluateConsoleOwnership()
+        h.model.handleCentralStateChange(.poweredOn)
+
+        #expect(h.model.runtime(for: h.phone) != nil)
+    }
+
+    @Test func aRecentScanAttemptStillExpectsAdvertisementCallbacks() {
+        let h = Harness(onConsole: true)
+        defer { h.model.shutdown() }
+        h.model.settings.isEnabled = true
+        h.model.activateFromConfiguration()
+        h.model.startMonitor(h.phone)
+        h.model.handleCentralStateChange(.poweredOn)
+
+        // The fake scanner has no central, so `isScanning` can never be true;
+        // only a fresh scan attempt can make the watchdog expect callbacks.
+        h.model.lastScanAttemptAt = Date()
+        #expect(h.model.advertisementCallbacksExpected)
+
+        h.model.lastScanAttemptAt = Date(timeIntervalSinceNow: -3_600)
+        #expect(!h.model.advertisementCallbacksExpected)
+    }
+
+    @Test func prolongedSilenceRebuildsTheBLEClientOncePerEscalationWindow() {
+        let h = Harness(onConsole: true)
+        defer { h.model.shutdown() }
+        h.model.settings.isEnabled = true
+        h.model.activateFromConfiguration()
+        h.model.startMonitor(h.phone)
+        h.model.handleCentralStateChange(.poweredOn)
+
+        // Silence far beyond three thresholds with monitoring active: the
+        // watchdog must escalate from scan restarts to a full client rebuild.
+        h.model.advertisementLiveness = BLEAdvertisementLiveness(
+            silenceThreshold: 600,
+            now: Date(timeIntervalSinceNow: -2_400)
+        )
+        h.model.lastScanAttemptAt = Date()
+
+        h.model.evaluateAdvertisementLiveness()
+        // The trip escalates straight through the rebuild, whose stopMonitoring
+        // resets the published stall flag — the release is the observable proof.
+        #expect(h.scanner.releases == 1)
+
+        // The same silence window must not pay for a second rebuild.
+        h.model.advertisementLiveness = BLEAdvertisementLiveness(
+            silenceThreshold: 600,
+            now: Date(timeIntervalSinceNow: -2_400)
+        )
+        h.model.evaluateAdvertisementLiveness()
+        #expect(h.scanner.releases == 1)
+    }
+
     @MainActor
     private final class Harness {
         let phone = UUID()

@@ -8,6 +8,7 @@ import IOKit.pwr_mgt
 import MacPilotRemoteProtocol
 import MacPilotRemoteTransport
 import Security
+import SystemConfiguration
 
 nonisolated(unsafe) private let deviceInformationUUID = CBUUID(string: "180A")
 nonisolated(unsafe) private let manufacturerNameUUID = CBUUID(string: "2A29")
@@ -119,8 +120,21 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     private var scanCleanupTimer: BackgroundTask?
     private var livenessTimer: BackgroundTask?
     private var monitoringDiscoveryTimer: BackgroundTask?
+    /// Session-resign notifications have been observed to never arrive for
+    /// some console switches, which left a background session scanning until
+    /// the system stopped delivering Bluetooth callbacks to the process.
+    /// Survives monitoring suspension so it can also detect the return.
+    private var consoleOwnershipTimer: BackgroundTask?
     private var lastMonitoringDiscoveryAt: TimeInterval?
-    private var advertisementLiveness = BLEAdvertisementLiveness()
+    var advertisementLiveness = BLEAdvertisementLiveness()
+    /// The watchdog's evidence that callbacks were expected: a daemon-wedged
+    /// client can report `isScanning == false` forever while every rediscovery
+    /// tick keeps starting scans. Internal test seam; production only sets it
+    /// when a scan actually starts.
+    var lastScanAttemptAt: Date?
+    /// Marks the silence window that already paid for a full BLE client
+    /// rebuild, so continuous silence escalates at most once per window.
+    private var lastBLEClientRebuildAt: Date?
     var monitoredUUID: UUID?
     var secondaryMonitoredUUID: UUID?
     private var monitoredRuntimes: [UUID: BLEMonitoredDeviceRuntime] = [:]
@@ -1197,7 +1211,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }
         guard !central.isScanning else { return }
         log("scan started monitored=\(monitoredUUIDs.map(\.uuidString).joined(separator: ","))")
-        _ = bluetoothScanner.startIfPoweredOn()
+        if bluetoothScanner.startIfPoweredOn() { lastScanAttemptAt = Date() }
     }
 
     private var displayUnavailable: Bool {
@@ -1802,6 +1816,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         if let last = lastMonitoringDiscoveryAt, now >= last, now - last < interval { return }
         lastMonitoringDiscoveryAt = now
         let scanning = bluetoothScanner.restartIfPoweredOn()
+        if scanning { lastScanAttemptAt = Date() }
         log("monitoring discovery \(scanning ? "restarted" : "deferred") reason=\(reason) preservingConnections=true devices=[\(monitoringSignalSnapshot(at: now))]")
         if let central = centralMgr, central.state == .poweredOn {
             restoreKnownMonitoredPeripherals(using: central)
@@ -2150,7 +2165,18 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     /// A missing session dictionary keeps the pre-existing behavior; only an
     /// explicit `kCGSSessionOnConsoleKey = false` marks a fast-switched
     /// background session.
+    ///
+    /// `CGSessionCopyCurrentDictionary` describes the console session even
+    /// when read from a fast-switched background session, so its on-console
+    /// key says "true" about whoever owns the console — not about this
+    /// process. That lie kept a background instance scanning for hours.
+    /// The dynamic store names the real console user; this process is on
+    /// console only when that user is this process's own UID.
     nonisolated static func currentSessionIsOnConsole() -> Bool {
+        var consoleUID: uid_t = 0
+        if let consoleUser = SCDynamicStoreCopyConsoleUser(nil, &consoleUID, nil) as String? {
+            return !consoleUser.isEmpty && consoleUID == getuid()
+        }
         guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return true }
         return (session["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue ?? true
     }
@@ -2853,16 +2879,19 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         livenessTimer = nil
     }
 
-    private func evaluateAdvertisementLiveness() {
+    /// Internal so tests can drive the silence watchdog without waiting out
+    /// real thresholds.
+    func evaluateAdvertisementLiveness() {
         let monitoringActive = BLEAdvertisementLiveness.monitoringActive(
             featureEnabled: settings.isEnabled,
             hasMonitoredDevice: hasMonitoredDevice,
             bluetoothPoweredOn: bluetoothPoweredOn,
             displayAsleep: displayUnavailable,
             systemAsleep: systemSleep,
-            centralScanning: centralMgr?.isScanning == true
+            centralScanning: advertisementCallbacksExpected
         )
-        let silent = advertisementLiveness.evaluate(now: Date(), monitoringActive: monitoringActive)
+        let now = Date()
+        let silent = advertisementLiveness.evaluate(now: now, monitoringActive: monitoringActive)
         if silent, !advertisementStreamStalled {
             advertisementStreamStalled = true
             log("advertisement stream stalled reason=noCallbacksWhileMonitoringActive threshold=\(Int(advertisementLiveness.silenceThreshold))s; attempting monitoring recovery")
@@ -2870,7 +2899,38 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             // and report the symptom without blaming other running copies.
             startMonitoringRecovery(reason: "advertisementSilence", restartImmediately: true)
         }
+        if silent {
+            let escalationInterval = advertisementLiveness.silenceThreshold * 3
+            let silentFor = now.timeIntervalSince(advertisementLiveness.lastActivityAt)
+            let lastRebuildIsStale = lastBLEClientRebuildAt.map {
+                now.timeIntervalSince($0) >= escalationInterval
+            } ?? true
+            if silentFor >= escalationInterval, lastRebuildIsStale {
+                rebuildBLEClientStack(reason: "advertisementSilence")
+            }
+        }
         checkOtherInstances()
+    }
+
+    /// The scan leg of the watchdog's `monitoringActive` input.
+    var advertisementCallbacksExpected: Bool {
+        let rediscovery = BLEScanPolicy.rediscoveryInterval(signalTimeout: settings.signalTimeout)
+        return centralMgr?.isScanning == true
+            || lastScanAttemptAt.map { Date().timeIntervalSince($0) < max(15, rediscovery * 2) } == true
+    }
+
+    /// Scan restarts reuse the same daemon-wedged CoreBluetooth client
+    /// forever. A full teardown releases the XPC session behind it and
+    /// rebuilds every radio the feature owns — the one recovery a scan
+    /// restart cannot express. Bounded to once per three silence windows so
+    /// a merely quiet room only ever pays the scan restart.
+    private func rebuildBLEClientStack(reason: String) {
+        guard sessionIsOnConsole, settings.isEnabled, hasMonitoredDevice else { return }
+        lastBLEClientRebuildAt = Date()
+        log("rebuilding BLE client reason=\(reason)")
+        stopMonitoring()
+        ensureCentralManager()
+        if centralMgr?.state == .poweredOn { startConfiguredMonitoring() }
     }
 
     private func checkOtherInstances() {
@@ -2945,6 +3005,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }
         log("installing system observers")
         if sessionIsOnConsole { startUserActivityObservation() }
+        startConsoleOwnershipPolling()
         let nc = workspaceNotificationCenter
         observers.add(nc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -3065,6 +3126,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     /// call repeatedly; used when BLE is switched off and on app termination.
     func stopObservingSystemState() {
         stopUserActivityObservation()
+        stopConsoleOwnershipPolling()
         mediaResumeTask?.stop()
         mediaResumeTask = nil
         screenUnlockConfirmationTask?.stop()
@@ -3072,6 +3134,31 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         guard !observers.isEmpty else { return }
         observers.removeAll()
         log("removed system observers")
+    }
+
+    /// Backstop for `NSWorkspace` session notifications, which have been
+    /// observed to never arrive for some console switches. Polls the true
+    /// console owner and drives the same suspend/resume paths.
+    private func startConsoleOwnershipPolling() {
+        guard consoleOwnershipTimer == nil else { return }
+        consoleOwnershipTimer = BackgroundTask.repeating(every: 30) { [weak self] in
+            self?.evaluateConsoleOwnership()
+        }
+    }
+
+    private func stopConsoleOwnershipPolling() {
+        consoleOwnershipTimer?.stop()
+        consoleOwnershipTimer = nil
+    }
+
+    func evaluateConsoleOwnership() {
+        let onConsole = sessionOnConsoleProbe()
+        guard onConsole != sessionIsOnConsole else { return }
+        if onConsole {
+            handleSessionDidBecomeActive()
+        } else {
+            handleSessionDidResignActive()
+        }
     }
 
     private func startUserActivityObservation() {
