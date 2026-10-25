@@ -88,6 +88,22 @@ struct BLEBackgroundSessionTests {
         #expect(h.scanner.duplicateModes == [true, false, true])
     }
 
+    @Test func backgroundSessionSuspensionIsVisibleToTheUI() {
+        let h = Harness(onConsole: false)
+        defer { h.model.shutdown() }
+        h.model.settings.isEnabled = true
+        h.model.activateFromConfiguration()
+
+        // A background session never creates a central, so bluetoothPoweredOn
+        // stays false; the UI must read the suspension flag, not the radio.
+        #expect(h.model.suspendedForBackgroundSession)
+        #expect(!h.model.bluetoothPoweredOn)
+
+        h.onConsoleFlag = true
+        h.model.evaluateConsoleOwnership()
+        #expect(!h.model.suspendedForBackgroundSession)
+    }
+
     @Test func consoleOwnershipPollSuspendsMonitoringWhenTheResignNotificationNeverArrived() {
         let h = Harness(onConsole: true)
         defer { h.model.shutdown() }

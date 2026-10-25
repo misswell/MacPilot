@@ -707,7 +707,7 @@ enum AppText {
         "bleReverseGATTSourceReverse": "反向链路",
         "bleReverseGATTSourceNone": "暂无",
         "bleSetPassword": "设置密码…",
-        "bleBluetoothOff": "蓝牙未打开", "bleEnterPassword": "请输入登录密码", "blePasswordInfo": "密码将安全保存在钥匙串中，仅在屏幕锁定时用于解锁。",
+        "bleBluetoothOff": "蓝牙未打开", "bleBackgroundSession": "已挂起：其他账户正在使用本机屏幕", "bleEnterPassword": "请输入登录密码", "blePasswordInfo": "密码将安全保存在钥匙串中，仅在屏幕锁定时用于解锁。",
         "blePasswordStored": "密码已保存到钥匙串。", "blePasswordFailed": "无法保存密码：%@", "blePasswordNotSet": "尚未设置登录密码。请使用“设置密码…”。",
         "bleMinRSSI": "设置最小 RSSI…", "bleManage": "管理 BLE 解锁", "bleManageDevices": "在主窗口管理设备…",
         "bleNear": "接近", "bleAway": "离开", "bleLost": "信号丢失", "bleActive": "活动", "bleCurrentDevice": "当前设备", "bleChangeDevice": "更换设备",
@@ -2003,7 +2003,7 @@ enum AppText {
             "bleReverseGATTSourceReverse": "Reverse link",
             "bleReverseGATTSourceNone": "None yet",
             "bleSetPassword": "Set Password…",
-            "bleBluetoothOff": "Bluetooth is off", "bleEnterPassword": "Enter your login password", "blePasswordInfo": "It will be securely stored in Keychain and used only to unlock the locked screen.",
+            "bleBluetoothOff": "Bluetooth is off", "bleBackgroundSession": "Suspended: another account is using this Mac's display", "bleEnterPassword": "Enter your login password", "blePasswordInfo": "It will be securely stored in Keychain and used only to unlock the locked screen.",
             "blePasswordStored": "Password saved to Keychain.", "blePasswordFailed": "Couldn’t save password: %@", "blePasswordNotSet": "Login password is not set. Use Set Password….",
             "bleMinRSSI": "Set Minimum RSSI…", "bleManage": "Manage BLE Unlock", "bleManageDevices": "Manage devices in main window…",
             "bleNear": "Near", "bleAway": "Away", "bleLost": "Signal lost", "bleActive": "Active", "bleCurrentDevice": "Current device", "bleChangeDevice": "Change device",
@@ -5444,6 +5444,7 @@ struct BLEUnlockView: View {
     }
 
     private var proximityLabel: String {
+        if ble.suspendedForBackgroundSession { return model.t("bleBackgroundSession") }
         if !ble.bluetoothPoweredOn { return model.t("bleBluetoothOff") }
         if ble.lastRSSI == nil { return model.t("bleLost") }
         return ble.presence ? model.t("bleNear") : model.t("bleAway")
@@ -5524,12 +5525,14 @@ struct BLEUnlockView: View {
     }
 
     private var statusColor: Color {
+        if ble.suspendedForBackgroundSession { return .orange }
         if !ble.bluetoothPoweredOn { return .orange }
         if ble.lastRSSI == nil { return .secondary }
         return ble.presence ? .green : .red
     }
 
     private var statusText: String {
+        if ble.suspendedForBackgroundSession { return model.t("bleBackgroundSession") }
         if !ble.bluetoothPoweredOn { return model.t("bleBluetoothOff") }
         if ble.lastRSSI == nil { return ble.settings.monitoredDeviceUUID == nil ? model.t("bleNoDevice") : model.t("bleDeviceNotDetected") }
         return ble.presence ? model.t("bleNear") : model.t("bleAway")

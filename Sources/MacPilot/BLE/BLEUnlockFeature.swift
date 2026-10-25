@@ -226,6 +226,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     var isRecoveringFromSystemSleep: Bool { recoveringFromSystemSleep }
     var isUnlockAttemptScheduled: Bool { unlockAttemptSlot.isOccupied }
+    /// True when the feature wants to run but this fast-switched session does
+    /// not own the console. A background session never creates a central, so
+    /// `bluetoothPoweredOn` stays false there — the UI must not present that
+    /// as the radio being off.
+    var suspendedForBackgroundSession: Bool {
+        settings.isEnabled && !sessionIsOnConsole
+    }
     /// Test seam: counts presence actions without performing screen control.
     /// Production never sets this.
     var presenceActionObserver: ((Bool) -> Void)?
