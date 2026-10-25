@@ -28,5 +28,6 @@ final class FeatureRegistry {
         manager.register(model.localPorts)
         manager.register(model.rightClickFeature)
         manager.register(model.quickSearch)
+        manager.register(model.displayControl)
     }
 }

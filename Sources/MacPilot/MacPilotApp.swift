@@ -78,6 +78,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 登录启动期间为 true，用于隐藏主窗口，避免开机时窗口闪现。
     private var hideWindowDuringLaunch = false
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let control = DisplayControlTermination.owner, control.hasControl || control.isBusy else {
+            return .terminateNow
+        }
+        guard !DisplayControlTermination.isWaiting else { return .terminateLater }
+        DisplayControlTermination.isWaiting = true
+        Task { @MainActor in
+            let restored = await control.restoreBeforeTermination()
+            DisplayControlTermination.isWaiting = false
+            sender.reply(toApplicationShouldTerminate: restored)
+            if !restored {
+                let alert = NSAlert()
+                alert.messageText = control.t("displayQuitRecoveryFailed")
+                alert.informativeText = control.t("displayError_recoveryIncomplete")
+                alert.runModal()
+            }
+        }
+        return .terminateLater
+    }
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         // 尽早判断登录启动：此时 SwiftUI 尚未完成窗口显示，先隐藏已存在的窗口以减少闪现。
         // 手动双击启动时父进程不是 loginwindow，主窗口正常显示。
@@ -1674,7 +1694,8 @@ enum AppText {
             dockGroupsChinese,
             localPortsChinese,
             versionManagerChinese,
-            quickSearchChinese
+            quickSearchChinese,
+            displayControlChinese
         ]
     }
 
@@ -1688,7 +1709,8 @@ enum AppText {
             dockGroupsEnglish,
             localPortsEnglish,
             versionManagerEnglish,
-            quickSearchEnglish
+            quickSearchEnglish,
+            displayControlEnglish
         ]
     }
 
@@ -2244,6 +2266,7 @@ final class MacPilotModel: ObservableObject {
         var remoteControl: RemoteControlSettings
         var dockGroups: DockGroupsSettings
         var quickSearch: QuickSearchSettings
+        var displayControl: DisplayControlSettings
 
         /// Spelled out because the custom `init(from:)` suppresses the
         /// synthesized conformance, and `launchesAtLoginWasStored` must stay a
@@ -2256,10 +2279,10 @@ final class MacPilotModel: ObservableObject {
             case bleUnlock, fileCompression
             case screenCapture, screenRecording, pictureInPicture
             case inputSources, windowSwitcher, smoothScrolling, clipboard
-            case awake, awakeTriggers, awakeProfiles, remoteControl, dockGroups, quickSearch
+            case awake, awakeTriggers, awakeProfiles, remoteControl, dockGroups, quickSearch, displayControl
         }
 
-        init(enabledFeatures: Set<MainSection>, rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, launchesAtLogin: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, updateChannel: AppChannel = .stable, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], awakeProfiles: [AwakeSessionProfile], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings, quickSearch: QuickSearchSettings) {
+        init(enabledFeatures: Set<MainSection>, rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, launchesAtLogin: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, updateChannel: AppChannel = .stable, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], awakeProfiles: [AwakeSessionProfile], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings, quickSearch: QuickSearchSettings, displayControl: DisplayControlSettings = DisplayControlSettings()) {
             version = ConfigurationSchema.currentVersion
             self.enabledFeatures = enabledFeatures.map(\.rawValue).sorted()
             self.rules = rules
@@ -2286,6 +2309,7 @@ final class MacPilotModel: ObservableObject {
             self.remoteControl = remoteControl
             self.dockGroups = dockGroups
             self.quickSearch = quickSearch
+            self.displayControl = displayControl
         }
 
         /// Not encoded: sections that existed on disk but could not be decoded
@@ -2301,7 +2325,7 @@ final class MacPilotModel: ObservableObject {
             // Configurations written before the Home page represent an
             // explicit opt-in through their existing settings, so preserve
             // their visible/running feature set on the first launch.
-            enabledFeatures = Self.section([String].self, forKey: .enabledFeatures, in: container, default: MainSection.featureSections.map(\.rawValue), degraded: &degraded)
+            enabledFeatures = Self.section([String].self, forKey: .enabledFeatures, in: container, default: MainSection.featureSections.filter { $0 != .displayControl }.map(\.rawValue), degraded: &degraded)
             rules = Self.section([QuitRule].self, forKey: .rules, in: container, default: [], degraded: &degraded)
             isEnforcing = Self.section(Bool.self, forKey: .isEnforcing, in: container, default: true, degraded: &degraded)
             language = Self.section(AppLanguage.self, forKey: .language, in: container, default: .system, degraded: &degraded)
@@ -2328,6 +2352,7 @@ final class MacPilotModel: ObservableObject {
             remoteControl = Self.section(RemoteControlSettings.self, forKey: .remoteControl, in: container, default: RemoteControlSettings(), degraded: &degraded)
             dockGroups = Self.section(DockGroupsSettings.self, forKey: .dockGroups, in: container, default: DockGroupsSettings(), degraded: &degraded)
             quickSearch = Self.section(QuickSearchSettings.self, forKey: .quickSearch, in: container, default: QuickSearchSettings(), degraded: &degraded)
+            displayControl = Self.section(DisplayControlSettings.self, forKey: .displayControl, in: container, default: DisplayControlSettings(), degraded: &degraded)
             unreadableSections = degraded
         }
 
@@ -2382,6 +2407,7 @@ final class MacPilotModel: ObservableObject {
             try container.encode(remoteControl, forKey: .remoteControl)
             try container.encode(dockGroups, forKey: .dockGroups)
             try container.encode(quickSearch, forKey: .quickSearch)
+            try container.encode(displayControl, forKey: .displayControl)
         }
 
         /// 首页开关是功能唯一的开关，详情页不再保留自己的总开关（`docs/UI_DESIGN.md`）。
@@ -2407,6 +2433,7 @@ final class MacPilotModel: ObservableObject {
             if home.contains(.clipboard) { aligned.clipboard.isEnabled = true }
             if home.contains(.dockGroups) { aligned.dockGroups.isEnabled = true }
             if home.contains(.quickSearch) { aligned.quickSearch.isEnabled = true }
+            aligned.displayControl.isEnabled = home.contains(.displayControl)
 
             return aligned
         }
@@ -2444,7 +2471,7 @@ final class MacPilotModel: ObservableObject {
     /// True when macOS holds the registration but is waiting for the user to
     /// allow it in System Settings → General → Login Items & Extensions.
     @Published private(set) var loginItemNeedsApproval = false
-    @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; screenRecording.language = language; windowSwitcher.language = language; clipboard.language = language; quickSearch.language = language; saveIfReady() } }
+    @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; screenRecording.language = language; windowSwitcher.language = language; clipboard.language = language; quickSearch.language = language; displayControl.language = language; saveIfReady() } }
     let ble = BLEUnlockModel()
     let updater = SoftwareUpdater()
     /// True while a version switch transaction owns the app: the settings UI
@@ -2521,6 +2548,7 @@ final class MacPilotModel: ObservableObject {
     /// 快速搜索：应用启动 + 文件名搜索。构造只做对象分配——扫盘、建面板、
     /// 起 Spotlight 全部推迟到 `start()`。
     let quickSearch = QuickSearchModel()
+    let displayControl = DisplayControlModel()
     @Published var requestedSection: MainSection?
     /// Whether the main window holds its settings UI, and which page it opens
     /// on. False content is the normal state of a menu-bar app: the window
@@ -2792,6 +2820,13 @@ final class MacPilotModel: ObservableObject {
         clipboard.persist = { [weak self] in self?.saveIfReady() }
         quickSearch.persist = { [weak self] in self?.saveIfReady() }
         quickSearch.language = language
+        displayControl.language = language
+        displayControl.persist = { [weak self] in self?.saveIfReady() }
+        displayControl.recoveryShortcutConflict = { [weak self] in
+            guard let self else { return true }
+            return self.conflictingShortcutOwner(for: .displayRecovery) != nil
+                || (self.isFeatureEnabled(.quickSearch) && self.quickSearch.settings.hotkey == .displayRecovery)
+        }
         // 注册全局快捷键前先问一遍：这个组合是不是已经被 MacPilot 自己的另一个
         // 功能占用了。Carbon 不会报告跨进程占用，所以应用内的冲突只能在这里查。
         quickSearch.shortcutConflictChecker = { [weak self] binding in
@@ -3629,6 +3664,7 @@ final class MacPilotModel: ObservableObject {
         remoteDeviceStore.applyLoadedSettings(configuration.remoteControl)
         dockGroups.applyLoadedSettings(configuration.dockGroups)
         quickSearch.applyLoadedSettings(configuration.quickSearch, activate: false)
+        displayControl.applyLoadedSettings(configuration.displayControl)
     }
 
     private func scheduleInputSourceSave() {
@@ -3672,7 +3708,8 @@ final class MacPilotModel: ObservableObject {
             awakeProfiles: awakeProfiles.profiles,
             remoteControl: remoteDeviceStore.settings,
             dockGroups: dockGroups.settings,
-            quickSearch: quickSearch.settings
+            quickSearch: quickSearch.settings,
+            displayControl: displayControl.settings
         )
         let data: Data
         do {
@@ -4061,6 +4098,8 @@ extension MacPilotModel {
             dockGroups.setEnabled(true)
         case .quickSearch:
             quickSearch.setEnabled(true)
+        case .displayControl:
+            displayControl.setEnabled(true)
         case .home, .exit, .launch, .compression, .rightClick, .memoryMonitor, .cpuMonitor, .localPorts, .settings:
             break
         }
@@ -4103,6 +4142,8 @@ extension MacPilotModel {
             featureLifecycle.start(dockGroups.identifier)
         case .quickSearch:
             if quickSearch.settings.isEnabled { featureLifecycle.start(quickSearch.identifier) }
+        case .displayControl:
+            if displayControl.settings.isEnabled { featureLifecycle.start(displayControl.identifier) }
         case .memoryMonitor, .cpuMonitor, .localPorts:
             break
         }
@@ -4145,6 +4186,8 @@ extension MacPilotModel {
             featureLifecycle.stop(dockGroups.identifier)
         case .quickSearch:
             featureLifecycle.stop(quickSearch.identifier)
+        case .displayControl:
+            featureLifecycle.stop(displayControl.identifier)
         case .memoryMonitor:
             featureLifecycle.stop("memoryMonitor")
             MemoryMonitorModel.clearMenuCache()
@@ -4162,7 +4205,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
     case home
     case exit, launch, awake, ble, remoteControl, inputSources, compression, capture, screenRecording
     case pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick
-    case dockGroups, memoryMonitor, cpuMonitor, localPorts, quickSearch, settings
+    case dockGroups, memoryMonitor, cpuMonitor, localPorts, quickSearch, displayControl, settings
 
     var id: Self { self }
 
@@ -4188,6 +4231,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .cpuMonitor: "cpuMonitor"
         case .localPorts: "localPorts"
         case .quickSearch: "quickSearch"
+        case .displayControl: "displayControl"
         case .settings: "settings"
         }
     }
@@ -4214,6 +4258,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .cpuMonitor: "cpu"
         case .localPorts: "network"
         case .quickSearch: "magnifyingglass.circle"
+        case .displayControl: "display.2"
         case .settings: "gearshape"
         }
     }
@@ -4229,7 +4274,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
     static let utilitySections: [MainSection] = [
         .compression, .capture, .screenRecording, .pictureInPicture,
         .windowSwitcher, .smoothScrolling, .clipboard, .rightClick,
-        .memoryMonitor, .cpuMonitor, .localPorts, .dockGroups, .quickSearch
+        .memoryMonitor, .cpuMonitor, .localPorts, .dockGroups, .quickSearch, .displayControl
     ]
 
     static var featureSections: [MainSection] {
@@ -4258,6 +4303,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .cpuMonitor: "cpuMonitorSubtitle"
         case .localPorts: "localPortsSubtitle"
         case .quickSearch: "quickSearchSubtitle"
+        case .displayControl: "displayControlSubtitle"
         }
     }
 }
@@ -4407,6 +4453,8 @@ struct ContentView: View {
             LocalPortsView(model: model.localPorts)
         case .quickSearch:
             QuickSearchSettingsView(quickSearch: model.quickSearch)
+        case .displayControl:
+            DisplayControlSettingsView(control: model.displayControl)
         case .settings:
             SettingsView()
         }
@@ -6183,6 +6231,9 @@ struct MenuBarView: View {
             Divider()
             Button(model.t("clipboardOpenNow")) { deferCaptureAction { clipboard.openPanel() } }
         }
+        // Recovery remains reachable even when the Home switch is off.
+        Divider()
+        Button(model.t("displayRestoreAll")) { model.displayControl.restore() }
         if model.isFeatureEnabled(.quickSearch) && model.quickSearch.settings.isEnabled {
             Divider()
             Button(model.t("quickSearchOpenNow")) { model.quickSearch.openPanel() }

@@ -602,6 +602,14 @@ private func macPilotInputSourceEventTapCallback(
           event.getIntegerValueField(.eventSourceUserData) != macPilotInputSourceEventMarker
     else { return Unmanaged.passUnretained(event) }
 
+    // Never swallow the independent display helper's recovery combination,
+    // including bindings restored from configurations predating this feature.
+    if SmartCaptureShortcutBinding.displayRecovery.matches(
+        keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
+        flags: event.flags,
+        isRepeat: false
+    ) { return Unmanaged.passUnretained(event) }
+
     let owner = Unmanaged<InputSourceModel>.fromOpaque(context.owner).takeUnretainedValue()
     if let identifier = context.matchingShortcutIdentifier(for: event) {
         Task { @MainActor in _ = owner.selectInputSource(identifier: identifier) }

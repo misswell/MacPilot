@@ -97,6 +97,9 @@ enum ScreenBlankPlanner {
 }
 
 enum DisplayPower {
+    /// Topology control has its own recovery path. A blanket black overlay or
+    /// zero backlight must not hide its sole surviving output.
+    @MainActor static var topologyControlIsActive = false
     /// Posted whenever MacPilot's held-blank state changes so features that
     /// must stop hardware activity during a blank can react immediately.
     static let blankStateDidChangeNotification = Notification.Name("MacPilotDisplayBlankStateDidChange")
@@ -186,6 +189,7 @@ enum DisplayPower {
     @MainActor
     @discardableResult
     static func blankDisplay() -> Bool {
+        guard !topologyControlIsActive else { return false }
         if isBlanked { return true }
 
         let steps = ScreenBlankPlanner.steps(for: onlineCandidates())
@@ -529,6 +533,7 @@ enum DisplayPower {
     @MainActor
     @discardableResult
     static func setBrightness(_ value: Double) -> Bool {
+        guard !topologyControlIsActive || value > 0 else { return false }
         guard let displayID = brightnessTarget(in: onlineCandidates()) else { return false }
         if isBlanked { unblankDisplay() }
         let level = min(max(value, 0), 1)

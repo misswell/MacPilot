@@ -460,6 +460,9 @@ final class SoftwareUpdater: ObservableObject {
     func requestTerminateAfterInstall() {
         NSApp.terminate(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            // A display recovery transaction owns its virtual output. Forced
+            // exit must not bypass the asynchronous restoration barrier.
+            guard DisplayControlTermination.mayForceExit else { return }
             exit(0)
         }
     }

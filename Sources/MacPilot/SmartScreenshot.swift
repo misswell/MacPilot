@@ -47,6 +47,7 @@ struct SmartCaptureShortcutBinding: Codable, Equatable, Hashable, Sendable {
     var modifiers: InputSourceShortcutModifiers
 
     static let `default` = Self(keyCode: UInt16(kVK_F1), modifiers: [])
+    static let displayRecovery = Self(keyCode: UInt16(kVK_ANSI_9), modifiers: [.control, .option, .command])
 
     init(keyCode: UInt16 = UInt16(kVK_F1), modifiers: InputSourceShortcutModifiers = []) {
         self.keyCode = keyCode
@@ -58,6 +59,11 @@ struct SmartCaptureShortcutBinding: Codable, Equatable, Hashable, Sendable {
     }
 
     var validationError: SmartCaptureShortcutError? {
+        // The independent display recovery agent owns this fixed escape hatch.
+        // Keep application shortcuts from consuming it before Carbon receives it.
+        if self == Self.displayRecovery {
+            return .reservedKey
+        }
         // Escape is reserved by every selection overlay for cancellation;
         // keeping it unavailable with modifiers avoids an ambiguous cancel
         // versus capture gesture while a selection is active.

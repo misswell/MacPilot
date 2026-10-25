@@ -9,6 +9,8 @@ let package = Package(
         .executable(name: "MacPilotUpdater", targets: ["MacPilotUpdater"]),
         .executable(name: "MacPilotPowerHelper", targets: ["MacPilotPowerHelper"]),
         .library(name: "MacPilotPowerIPC", targets: ["MacPilotPowerIPC"]),
+        .library(name: "MacPilotDisplayControlCore", targets: ["MacPilotDisplayControlCore"]),
+        .executable(name: "MacPilotDisplayRecovery", targets: ["MacPilotDisplayRecovery"]),
         // Dock Groups：每个分组对应一个由 MacPilot 生成的 Helper App，
         // 复用同一个 binary，只靠 Bundle ID / 图标 / 名称区分。
         .executable(name: "MacPilotDockHelper", targets: ["MacPilotDockHelper"]),
@@ -36,6 +38,7 @@ let package = Package(
         .executableTarget(
             name: "MacPilot",
             dependencies: [
+                "MacPilotDisplayControlCore",
                 "MacPilotRightClickKit",
                 "MacPilotPowerIPC",
                 "MacPilotDockGroupsCore",
@@ -55,6 +58,33 @@ let package = Package(
             name: "MacPilotRecovery",
             dependencies: ["MacPilotUpdaterSupport"],
             linkerSettings: [.linkedFramework("AppKit")]
+        ),
+        .target(
+            name: "MacPilotDisplayControlCore",
+            dependencies: ["MacPilotDisplayBridge"],
+            linkerSettings: [.linkedFramework("CoreGraphics")]
+        ),
+        .target(
+            name: "MacPilotDisplayBridge",
+            path: "Sources/MacPilotDisplayBridge",
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])],
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("CoreGraphics")
+            ]
+        ),
+        .executableTarget(
+            name: "MacPilotDisplayRecovery",
+            dependencies: ["MacPilotDisplayControlCore"],
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("ApplicationServices"),
+                .linkedFramework("Carbon"),
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("Security"),
+                .linkedFramework("ServiceManagement")
+            ]
         ),
         // Dock Groups 的 Helper：每个分组一个 App，复用同一个 binary。
         .executableTarget(
@@ -105,11 +135,16 @@ let package = Package(
             name: "MacPilotTests",
             dependencies: [
                 "MacPilot",
+                "MacPilotDisplayControlCore",
                 "MacPilotPowerIPC",
                 "MacPilotDockGroupsCore",
                 "MacPilotUpdaterSupport",
                 .product(name: "MacPilotRemoteProtocol", package: "MacPilotRemoteProtocol")
             ]
+        ),
+        .testTarget(
+            name: "MacPilotDisplayControlCoreTests",
+            dependencies: ["MacPilotDisplayControlCore"]
         ),
         .testTarget(
             name: "MacPilotLocalPortsCoreTests",

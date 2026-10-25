@@ -37,7 +37,7 @@ struct ConfigurationSchemaContractTests {
                 "bleUnlock", "fileCompression", "screenCapture", "screenRecording",
                 "pictureInPicture", "inputSources", "windowSwitcher", "smoothScrolling",
                 "clipboard", "awake", "awakeTriggers", "awakeProfiles", "remoteControl",
-                "dockGroups", "quickSearch"
+                "dockGroups", "quickSearch", "displayControl"
             ]
         )
     }
@@ -109,6 +109,12 @@ struct ConfigurationSchemaContractTests {
             of: settings.favorites.first,
             supersetOf: ["identity", "path", "kind", "title", "subtitle", "bundleIdentifier", "addedAt"]
         )
+    }
+
+    @Test func displayControlSettingsEncodesEveryHistoricalKey() throws {
+        try assertEncodedKeys(of: DisplayControlSettings(), supersetOf: [
+            "isEnabled", "uuPolicy", "targetUUID", "virtualWidth", "virtualHeight", "hiDPI"
+        ])
     }
 
     @Test func sessionPolicyEncodesEveryHistoricalKey() throws {

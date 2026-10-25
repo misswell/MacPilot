@@ -55,6 +55,7 @@ HELPER_BIN="$BIN_DIR/MacPilotPowerHelper"
 # Dock Groups 的 Helper 可执行文件。MacPilot 会把它拷贝进
 # ~/Library/Application Support/MacPilot/DockGroups/<Group>.app 后复用。
 DOCK_HELPER_BIN="$BIN_DIR/MacPilotDockHelper"
+DISPLAY_RECOVERY_BIN="$BIN_DIR/MacPilotDisplayRecovery"
 OCCLUSION_PATCH_BIN="$BIN_DIR/libMacPilotOcclusionPatch.dylib"
 # Bind the plain `clang` invocation to the SDK SwiftPM already uses. Without
 # this, clang resolves `MacOSX.sdk` to the Command Line Tools copy, which can
@@ -91,6 +92,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_EXECUTABLE_NAME"
 cp "$UPDATER_BIN" "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
 cp "$HELPER_BIN" "$APP/Contents/MacOS/MacPilotPowerHelper"
+cp "$DISPLAY_RECOVERY_BIN" "$APP/Contents/MacOS/MacPilotDisplayRecovery"
+chmod 755 "$APP/Contents/MacOS/MacPilotDisplayRecovery"
 # 独立恢复 Helper：版本切换前会被复制到 VersionManager/Recovery/，
 # 用于从"没有版本管理器的旧版本"恢复降级前的 App 与配置。
 RECOVERY_BIN="$BIN_DIR/MacPilotRecovery"
@@ -102,12 +105,16 @@ chmod 755 "$APP/Contents/MacOS/MacPilotDockHelper"
 cp "$OCCLUSION_PATCH_BIN" "$APP/Contents/Resources/libMacPilotOcclusionPatch.dylib"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cp Resources/DisplayControlThirdPartyNotices.txt "$APP/Contents/Resources/DisplayControlThirdPartyNotices.txt"
 # SMAppService.daemon(plistName:) requires the LaunchDaemon plist inside the
 # bundle at Contents/Library/LaunchDaemons. The helper keeps the same name and
 # Mach service in bridge mode so one registration serves both identities.
 mkdir -p "$APP/Contents/Library/LaunchDaemons"
 cp Resources/com.misswell.macpilot.powerhelper.plist \
     "$APP/Contents/Library/LaunchDaemons/com.misswell.macpilot.powerhelper.plist"
+mkdir -p "$APP/Contents/Library/LaunchAgents"
+cp Resources/com.misswell.macpilot.display-recovery.plist \
+    "$APP/Contents/Library/LaunchAgents/com.misswell.macpilot.display-recovery.plist"
 if [[ -d "$ROOT/Resources/zh-Hans.lproj" ]]; then
     cp -R "$ROOT/Resources/zh-Hans.lproj" "$APP/Contents/Resources/"
 fi
@@ -220,6 +227,7 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
     # binary into every generated ~/Library/.../DockGroups/<Group>.app, and those
     # copies must not look like the MacPilot app itself.
     DOCK_HELPER_IDENTIFIER="${BUNDLE_IDENTIFIER}.dock-helper"
+    DISPLAY_RECOVERY_IDENTIFIER="com.misswell.macpilot.display-recovery"
     if [[ "$SIGNING_IDENTITY" == "-" ]]; then
         codesign --force --entitlements "$HELPER_ENTITLEMENTS" \
             --sign - "$APP/Contents/MacOS/MacPilotPowerHelper"
@@ -227,6 +235,8 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
             --sign - "$REXT_APPEX"
         codesign --force --sign - "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
         codesign --force --sign - "$APP/Contents/MacOS/MacPilotRecovery"
+        codesign --force --identifier "$DISPLAY_RECOVERY_IDENTIFIER" --sign - \
+            "$APP/Contents/MacOS/MacPilotDisplayRecovery"
         codesign --force --identifier "$DOCK_HELPER_IDENTIFIER" --sign - \
             "$APP/Contents/MacOS/MacPilotDockHelper"
         codesign --force --sign - \
@@ -242,6 +252,8 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
             "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
         codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
             "$APP/Contents/MacOS/MacPilotRecovery"
+        codesign --force --options runtime --identifier "$DISPLAY_RECOVERY_IDENTIFIER" \
+            --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/MacPilotDisplayRecovery"
         codesign --force --options runtime --identifier "$DOCK_HELPER_IDENTIFIER" \
             --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/MacPilotDockHelper"
         codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
