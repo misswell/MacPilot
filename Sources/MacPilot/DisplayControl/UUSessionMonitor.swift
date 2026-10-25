@@ -169,7 +169,6 @@ enum UUAccessibilityReader {
               let bundle = app.bundleURL else { return .init(status: .disconnected) }
         guard AXIsProcessTrusted() else { return .init(status: .unknown, uncertainty: .accessibilityPermission) }
         let root = AXUIElementCreateApplication(app.processIdentifier)
-        AXUIElementSetMessagingTimeout(root, 0.15)
         var readFailed = false
         guard let windows = attribute(root, kAXWindowsAttribute, failed: &readFailed) as? [AXUIElement], !windows.isEmpty else {
             return .init(status: .unknown, uncertainty: readFailed ? .interfaceUnreadable : .windowUnavailable)
@@ -233,6 +232,13 @@ enum UUAccessibilityReader {
     }
 
     private static func attribute(_ element: AXUIElement, _ key: String, failed: inout Bool) -> CFTypeRef? {
+        // AX timeouts belong to each individual AXUIElement, not its process
+        // or parent. A timeout on the application root leaves child reads at
+        // the default timeout and can stall the entire serial reader.
+        guard AXUIElementSetMessagingTimeout(element, 0.15) == .success else {
+            failed = true
+            return nil
+        }
         var result: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(element, key as CFString, &result)
         guard error == .success else {
