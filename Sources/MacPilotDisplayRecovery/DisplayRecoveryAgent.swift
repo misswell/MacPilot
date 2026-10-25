@@ -71,32 +71,28 @@ final class DisplayRecoveryAgent: NSObject, NSXPCListenerDelegate, @unchecked Se
         statusCache.update(controller.response())
 
         heartbeatTimer.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(100))
-        heartbeatTimer.setEventHandler { [weak self] in
+        heartbeatTimer.setEventHandler(handler: DisplayRecoveryEventHandler.enqueue(on: operations) { @Sendable [weak self] in
             guard let self else { return }
-            self.operations.async {
-                if self.terminationRequested {
-                    self.controller.restoreAll()
-                    if self.controller.response().state == .idle { exit(EXIT_SUCCESS) }
-                } else {
-                    self.controller.expireLeases()
-                }
-                self.statusCache.update(self.controller.response())
+            if self.terminationRequested {
+                self.controller.restoreAll()
+                if self.controller.response().state == .idle { exit(EXIT_SUCCESS) }
+            } else {
+                self.controller.expireLeases()
             }
-        }
+            self.statusCache.update(self.controller.response())
+        })
         heartbeatTimer.resume()
 
         for signalNumber in [SIGTERM, SIGINT] {
             _ = signal(signalNumber, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: timerQueue)
-            source.setEventHandler { [weak self] in
+            source.setEventHandler(handler: DisplayRecoveryEventHandler.enqueue(on: operations) { @Sendable [weak self] in
                 guard let self else { return }
-                self.operations.async {
-                    self.terminationRequested = true
-                    self.controller.setEmergencyHotKeyReady(false)
-                    self.controller.restoreAll()
-                    if self.controller.response().state == .idle { exit(EXIT_SUCCESS) }
-                }
-            }
+                self.terminationRequested = true
+                self.controller.setEmergencyHotKeyReady(false)
+                self.controller.restoreAll()
+                if self.controller.response().state == .idle { exit(EXIT_SUCCESS) }
+            })
             terminationSignals.append(source)
             source.resume()
         }
