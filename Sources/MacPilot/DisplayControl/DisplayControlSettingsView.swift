@@ -53,7 +53,7 @@ struct DisplayControlSettingsView: View {
                             }
                         }
                     }
-                    Text(model.t("displayUUState_" + control.uuObservation.status.rawValue))
+                    Text(model.t(control.uuObservation.statusTextKey))
                         .font(.subheadline).foregroundStyle(.secondary)
                     if !control.uuObservation.controllers.isEmpty {
                         Text(control.uuObservation.controllers.joined(separator: ", "))
