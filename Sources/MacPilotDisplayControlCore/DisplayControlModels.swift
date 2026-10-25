@@ -189,7 +189,7 @@ public enum DisplayRecoveryService {
 /// The XPC boundary transports bounded Codable payloads; the helper validates
 /// their schema and sender before dispatching any operation.
 @objc public protocol DisplayRecoveryXPC {
-    func execute(_ data: Data, reply: @escaping (Data) -> Void)
+    func execute(_ data: Data, reply: @escaping @Sendable (Data) -> Void)
 }
 
 public enum DisplayControlSafety {

@@ -221,7 +221,7 @@ private final class DisplayRecoveryProxy: NSObject, DisplayRecoveryXPC, @uncheck
         self.cache = cache
     }
 
-    func execute(_ data: Data, reply: @escaping (Data) -> Void) {
+    func execute(_ data: Data, reply: @escaping @Sendable (Data) -> Void) {
         guard data.count <= 64 * 1024,
               let request = try? decoder.decode(DisplayControlRequest.self, from: data) else {
             reply((try? encoder.encode(DisplayControlResponse(
@@ -250,9 +250,9 @@ private final class DisplayRecoveryProxy: NSObject, DisplayRecoveryXPC, @uncheck
     }
 }
 
-private final class DisplayRecoveryReply: @unchecked Sendable {
-    private let callback: (Data) -> Void
-    init(_ callback: @escaping (Data) -> Void) { self.callback = callback }
+private final class DisplayRecoveryReply: Sendable {
+    private let callback: @Sendable (Data) -> Void
+    init(_ callback: @escaping @Sendable (Data) -> Void) { self.callback = callback }
     func send(_ data: Data) { callback(data) }
 }
 
