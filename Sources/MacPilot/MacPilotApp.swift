@@ -117,6 +117,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 登录启动期间为 true，用于隐藏主窗口，避免开机时窗口闪现。
     private var hideWindowDuringLaunch = false
 
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // The settings Window is not the lifetime of this resident app.
+        // A native NSStatusItem does not count as a SwiftUI MenuBarExtra scene;
+        // without this override closing the window can stop BLE and all other
+        // background services. Explicit Quit still uses applicationShouldTerminate.
+        false
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let control = DisplayControlTermination.owner, control.hasControl || control.isBusy else {
             return .terminateNow
