@@ -108,6 +108,46 @@ struct DisplayControlIntegrationTests {
         #expect(client.requests.contains { $0.command == .restore })
     }
 
+    @Test func pendingRecoveryRetriesRestoreWithoutRenewingControl() async {
+        let client = MockDisplayClient(ready: true)
+        client.state = .recoveryRequired
+        let model = makeModel(client)
+        await model.refresh()
+        #expect(model.hasRecoveryObligation)
+        #expect(!model.holdsControl)
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        model.applyLoadedSettings(settings)
+        model.start()
+        defer { model.stop() }
+        for _ in 0..<100 where !client.requests.contains(where: { $0.command == .restore }) {
+            await Task.yield()
+        }
+        #expect(client.requests.contains { $0.command == .restore })
+        #expect(!client.requests.contains { $0.command == .heartbeat })
+    }
+
+    @Test func activeControlAndRecoveryHaveSeparateOwnershipStates() async {
+        let client = MockDisplayClient(ready: true)
+        let model = makeModel(client)
+        for state in [DisplayControlState.active, .awaitingVirtualConfirmation, .awaitingKeepConfirmation] {
+            client.state = state
+            await model.refresh()
+            #expect(model.holdsControl)
+            #expect(!model.hasRecoveryObligation)
+        }
+        for state in [DisplayControlState.recovering, .recoveryRequired, .failed] {
+            client.state = state
+            await model.refresh()
+            #expect(!model.holdsControl)
+            #expect(model.hasRecoveryObligation)
+        }
+        client.state = .idle
+        await model.refresh()
+        #expect(!model.holdsControl)
+        #expect(!model.hasRecoveryObligation)
+    }
+
     private func makeModel(_ client: MockDisplayClient) -> DisplayControlModel {
         DisplayControlModel(client: client,
             monitor: UUSessionMonitor(read: { .init(status: .disconnected) }),
@@ -116,6 +156,7 @@ struct DisplayControlIntegrationTests {
 
     private final class MockDisplayClient: DisplayRecoverySending {
         var requests: [DisplayControlRequest] = []
+        var state: DisplayControlState = .idle
         let ready: Bool
         let display = DisplayControlDisplay(uuid: "test-physical", displayID: 1, name: "Test display",
             isBuiltIn: true, isVirtual: false, isOnline: true, isActive: true,
@@ -125,7 +166,7 @@ struct DisplayControlIntegrationTests {
 
         func send(_ request: DisplayControlRequest) async throws -> DisplayControlResponse {
             requests.append(request)
-            return .init(displays: [display], state: .idle, helperReady: ready)
+            return .init(displays: [display], state: state, helperReady: ready)
         }
     }
 }

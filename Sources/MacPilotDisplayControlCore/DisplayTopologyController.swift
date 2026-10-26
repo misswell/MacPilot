@@ -27,6 +27,7 @@ public final class DisplayTopologyController: @unchecked Sendable {
     private(set) var messageCode: DisplayControlMessageCode?
     private(set) var generation = UUID()
     private var controlHeartbeatAt: Date?
+    private var controlRevocationPersistenceFailed = false
     private var emergencyHotKeyReady = false
     private var authenticationReady = false
 
@@ -80,8 +81,10 @@ public final class DisplayTopologyController: @unchecked Sendable {
                 messageCode = .recoveryIncomplete
                 return
             }
-            guard !journal.isComplete else {
-                try store.removeIfComplete()
+            _ = revokeControl(for: journal.remoteSessionID)
+            if journal.isComplete {
+                state = .recovering
+                _ = finalizeRestorationIfStable(journal, now: Date())
                 return
             }
             state = .recovering
@@ -90,18 +93,31 @@ public final class DisplayTopologyController: @unchecked Sendable {
                 messageCode = .recoveryIncomplete
                 return
             }
-            if let sessionID = journal.remoteSessionID {
-                try persistOverride(for: sessionID)
+            guard let completed = try store.load(), completed.isComplete else {
+                state = .recoveryRequired
+                messageCode = .recoveryIncomplete
+                return
             }
-            state = .idle
-            generation = UUID()
+            _ = finalizeRestorationIfStable(completed, now: Date())
         } catch {
+            lease.clearLease()
+            controlHeartbeatAt = nil
             state = .recoveryRequired
             messageCode = .recoveryIncomplete
         }
     }
 
     public func handle(_ request: DisplayControlRequest, now: Date = Date()) {
+        if request.command != .status, request.command != .restore,
+           loadJournal() != nil {
+            expireLeases(now: now)
+        }
+        if request.command != .status, request.command != .restore,
+           let journal = loadJournal(),
+           (journal.phase == .restoringDisplays || journal.isComplete || state == .recoveryRequired || state == .recovering) {
+            messageCode = .recoveryIncomplete
+            return
+        }
         switch request.command {
         case .status:
             return
@@ -132,7 +148,13 @@ public final class DisplayTopologyController: @unchecked Sendable {
 
     public func expireLeases(now: Date = Date()) {
         guard let journal = loadJournal() else { return }
+        if journal.isComplete {
+            _ = revokeControl(for: journal.remoteSessionID)
+            _ = finalizeRestorationIfStable(journal, now: now)
+            return
+        }
         if state == .recoveryRequired || journal.phase == .restoringDisplays {
+            _ = revokeControl(for: journal.remoteSessionID ?? lease.sessionID)
             restoreAll()
             return
         }
@@ -165,33 +187,35 @@ public final class DisplayTopologyController: @unchecked Sendable {
     public func restoreAll() {
         do {
             guard let journal = try store.load() else {
-                let sessionToOverride = lease.sessionID
-                lease.overrideCurrentSession()
-                if let sessionToOverride { try overrideStore.save(sessionToOverride) }
+                _ = revokeControl(for: lease.sessionID)
                 state = .idle
                 generation = UUID()
                 if messageCode != .recoveryIncomplete { messageCode = .userOverride }
                 return
             }
+            _ = revokeControl(for: journal.remoteSessionID ?? lease.sessionID)
             state = .recovering
+            if journal.isComplete {
+                _ = finalizeRestorationIfStable(journal, now: Date())
+                return
+            }
             guard restore(journal: journal) else {
                 state = .recoveryRequired
                 messageCode = .recoveryIncomplete
                 return
             }
-            if let sessionID = journal.remoteSessionID {
-                try persistOverride(for: sessionID)
-            } else {
-                let sessionID = lease.sessionID
-                lease.overrideCurrentSession()
-                if let sessionID { try overrideStore.save(sessionID) }
+            guard let completed = try store.load(), completed.isComplete else {
+                state = .recoveryRequired
+                messageCode = .recoveryIncomplete
+                return
             }
-            generation = UUID()
-            state = .idle
-            if messageCode != .confirmationExpired && messageCode != .uuSessionRequired {
+            _ = finalizeRestorationIfStable(completed, now: Date())
+            if state == .idle, messageCode != .confirmationExpired && messageCode != .uuSessionRequired {
                 messageCode = .userOverride
             }
         } catch {
+            lease.clearLease()
+            controlHeartbeatAt = nil
             state = .recoveryRequired
             messageCode = .recoveryIncomplete
         }
@@ -200,55 +224,65 @@ public final class DisplayTopologyController: @unchecked Sendable {
     private func handleHeartbeat(_ request: DisplayControlRequest, now: Date) {
         let journal = loadJournal()
         guard request.generation == (journal?.generation ?? generation) else { messageCode = .staleGeneration; return }
-        guard let session = request.remoteSessionID else {
-            guard journal?.remoteSessionID == nil else {
-                lease.clearLease()
-                controlHeartbeatAt = now
-                state = .recovering
+        guard let journal, !journal.isComplete,
+              journal.phase != .restoringDisplays,
+              (state == .active || state == .awaitingKeepConfirmation || state == .awaitingVirtualConfirmation) else {
+            _ = revokeControl(for: journal?.remoteSessionID)
+            state = .recovering
+            messageCode = .uuSessionRequired
+            restoreAll()
+            return
+        }
+        if let deadline = journal.confirmationDeadline, now >= deadline {
+            messageCode = .confirmationExpired
+            _ = revokeControl(for: journal.remoteSessionID)
+            state = .recovering
+            restoreAll()
+            return
+        }
+        let remotePolicy = journal.policy == .remotePhysical || journal.policy == .remoteVirtualOnly || journal.policy == .remoteVirtualWithPhysical
+        if remotePolicy {
+            guard let session = request.remoteSessionID else {
                 messageCode = .uuSessionRequired
+                _ = revokeControl(for: journal.remoteSessionID)
+                state = .recovering
                 restoreAll()
                 return
             }
-            lease.clearLease()
-            controlHeartbeatAt = now
-            if var updated = journal {
-                updated.remoteLeaseExpiresAt = now.addingTimeInterval(DisplayRemoteLease.lifetime)
-                updated.updatedAt = now
-                do { try store.save(updated) }
-                catch { messageCode = .recoveryIncomplete }
-            }
-            return
-        }
-        guard let journal else {
-            do {
-                if let oldOverride = try overrideStore.load(), oldOverride != session {
-                    try overrideStore.clear()
-                }
-            } catch {
-                messageCode = .recoveryIncomplete
-                return
-            }
-            if lease.sessionID == nil, !lease.beginNewSession(session) {
-                messageCode = .userOverride
-                return
-            }
-            guard lease.renew(sessionID: session, generation: request.generation, now: now) else {
+            guard journal.remoteSessionID == session else {
                 messageCode = .staleGeneration
                 return
             }
-            controlHeartbeatAt = now
+            guard
+                  lease.sessionID == session,
+                  lease.isFresh(now: now),
+                  journal.remoteLeaseExpiresAt.map({ now <= $0 }) == true,
+                  lease.renew(sessionID: session, generation: journal.generation, now: now) else {
+                messageCode = .uuSessionRequired
+                _ = revokeControl(for: journal.remoteSessionID ?? request.remoteSessionID)
+                state = .recovering
+                restoreAll()
+                return
+            }
+            var updated = journal
+            updated.updatedAt = now
+            updated.remoteLeaseExpiresAt = now.addingTimeInterval(DisplayRemoteLease.lifetime)
+            do { try store.save(updated) }
+            catch { messageCode = .recoveryIncomplete; _ = revokeControl(for: session); state = .recovering; restoreAll() }
             return
         }
-        guard journal.remoteSessionID == session,
-              lease.renew(sessionID: session, generation: journal.generation, now: now) else {
+        guard journal.remoteSessionID == nil, request.remoteSessionID == nil else {
             messageCode = .staleGeneration
             return
         }
-        var updated = journal
-        updated.updatedAt = now
-        updated.remoteLeaseExpiresAt = now.addingTimeInterval(DisplayRemoteLease.lifetime)
-        do { try store.save(updated); controlHeartbeatAt = now }
-        catch { messageCode = .recoveryIncomplete }
+        guard controlHeartbeatAt.map({ now >= $0 && now.timeIntervalSince($0) <= DisplayRemoteLease.lifetime }) == true else {
+            messageCode = .uuSessionRequired
+            _ = revokeControl(for: nil)
+            state = .recovering
+            restoreAll()
+            return
+        }
+        controlHeartbeatAt = now
     }
 
     private func disableOne(_ request: DisplayControlRequest, now: Date) {
@@ -646,6 +680,27 @@ public final class DisplayTopologyController: @unchecked Sendable {
         try overrideStore.save(sessionID)
     }
 
+    @discardableResult
+    private func revokeControl(for sessionID: String?) -> Bool {
+        controlHeartbeatAt = nil
+        let sessionToOverride = sessionID ?? lease.sessionID
+        guard let sessionToOverride else {
+            lease.clearLease()
+            return !controlRevocationPersistenceFailed
+        }
+        do {
+            try persistOverride(for: sessionToOverride)
+            controlRevocationPersistenceFailed = false
+            return true
+        }
+        catch {
+            lease.clearLease()
+            controlRevocationPersistenceFailed = true
+            messageCode = .recoveryIncomplete
+            return false
+        }
+    }
+
     private func restoreOne(targetUUID: String) {
         do {
             guard var journal = try store.load(),
@@ -668,11 +723,11 @@ public final class DisplayTopologyController: @unchecked Sendable {
             journal.disabledDisplayUUIDs.removeAll { $0 == targetUUID }
             journal.updatedAt = Date()
             if journal.disabledDisplayUUIDs.isEmpty && journal.virtualDisplayUUID == nil {
-                journal.phase = .complete
+                journal.phase = .restoringDisplays
                 try store.save(journal)
-                try store.removeIfComplete()
-                state = .idle
-                generation = UUID()
+                _ = revokeControl(for: journal.remoteSessionID)
+                state = .recovering
+                restoreAll()
             } else {
                 journal.phase = .active
                 try store.save(journal)
@@ -694,7 +749,24 @@ public final class DisplayTopologyController: @unchecked Sendable {
         do { try store.save(journal) }
         catch { messageCode = .recoveryIncomplete; return false }
 
-        let toRestore = Set(journal.disabledDisplayUUIDs + journal.pendingRestoreUUIDs)
+        // A prior attempt may have successfully re-enabled a display, removed
+        // it from the journal, and then failed while restoring the main screen
+        // or layout. If that display disappeared again, the next retry must
+        // still rediscover it from the original topology.
+        let online = driver.displays()
+        let replacedIDs = Set(journal.originalDisplays.compactMap { original in
+            online.contains(where: { $0.displayID == original.displayID && $0.uuid != original.uuid })
+                ? original.displayID : nil
+        })
+        let mayRetryMissingOriginals = originalJournal.phase == .restoringDisplays
+        let missingOriginals = journal.originalDisplays.filter { original in
+            mayRetryMissingOriginals
+                && original.isActive
+                && !original.isVirtual
+                && !replacedIDs.contains(original.displayID)
+                && !online.contains(where: { $0.uuid == original.uuid && $0.isUsable })
+        }
+        let toRestore = Set(journal.disabledDisplayUUIDs + journal.pendingRestoreUUIDs + missingOriginals.map(\.uuid))
         for uuid in toRestore {
             guard let original = journal.originalDisplays.first(where: { $0.uuid == uuid }) else {
                 messageCode = .recoveryIncomplete
@@ -702,6 +774,7 @@ public final class DisplayTopologyController: @unchecked Sendable {
             }
             if !journal.pendingRestoreUUIDs.contains(uuid) {
                 journal.pendingRestoreUUIDs.append(uuid)
+                if !journal.disabledDisplayUUIDs.contains(uuid) { journal.disabledDisplayUUIDs.append(uuid) }
                 journal.updatedAt = Date()
                 do { try store.save(journal) }
                 catch { messageCode = .recoveryIncomplete; return false }
@@ -735,12 +808,68 @@ public final class DisplayTopologyController: @unchecked Sendable {
         journal.updatedAt = Date()
         do {
             try store.save(journal)
-            try store.removeIfComplete()
         } catch {
             messageCode = .recoveryIncomplete
             return false
         }
         return true
+    }
+
+    /// A completed journal is retained until a later helper tick verifies that
+    /// the restored display identities, main screen, and layout stayed valid.
+    private func finalizeRestorationIfStable(_ journal: DisplayRecoveryJournal, now: Date) -> Bool {
+        guard journal.isComplete,
+              journal.systemSessionID == DisplayRecoverySession.identifier else {
+            state = .recoveryRequired
+            messageCode = .recoveryIncomplete
+            return false
+        }
+        guard now >= journal.updatedAt,
+              now.timeIntervalSince(journal.updatedAt) >= 1 else {
+            state = .recovering
+            return false
+        }
+        guard !controlRevocationPersistenceFailed else {
+            state = .recoveryRequired
+            messageCode = .recoveryIncomplete
+            return false
+        }
+        let current = driver.displays()
+        let expected = journal.originalDisplays.filter(\.isActive)
+        let identitiesMatch = expected.allSatisfy { original in
+            current.contains(where: { $0.uuid == original.uuid && $0.isUsable })
+                && !current.contains(where: { $0.displayID == original.displayID && $0.uuid != original.uuid })
+        }
+        let mainMatches = journal.originalMainDisplayUUID.map { mainUUID in
+            current.contains(where: { $0.uuid == mainUUID && $0.isMain && $0.isUsable })
+        } ?? true
+        let layoutMatches = expected.allSatisfy { original in
+            guard let actual = current.first(where: { $0.uuid == original.uuid && $0.isUsable }) else { return false }
+            return abs(actual.originX - original.originX) <= 1 && abs(actual.originY - original.originY) <= 1
+        }
+        guard identitiesMatch, mainMatches, layoutMatches else {
+            var retry = journal
+            retry.phase = .restoringDisplays
+            retry.updatedAt = now
+            do { try store.save(retry) }
+            catch { messageCode = .recoveryIncomplete }
+            state = .recoveryRequired
+            messageCode = .recoveryIncomplete
+            return false
+        }
+        do {
+            try store.removeIfComplete()
+            generation = UUID()
+            state = .idle
+            if messageCode != .confirmationExpired && messageCode != .uuSessionRequired {
+                messageCode = .userOverride
+            }
+            return true
+        } catch {
+            state = .recoveryRequired
+            messageCode = .recoveryIncomplete
+            return false
+        }
     }
 
     private func restoreDisplay(_ original: DisplayControlDisplay, journal: DisplayRecoveryJournal) -> Bool {

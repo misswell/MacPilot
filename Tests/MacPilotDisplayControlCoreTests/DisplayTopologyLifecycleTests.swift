@@ -11,6 +11,7 @@ struct DisplayTopologyLifecycleTests {
         #expect(f.controller.response().state == .awaitingKeepConfirmation)
         #expect(!f.driver.current.contains { $0.uuid == "two" })
         f.controller.expireLeases(now: now.addingTimeInterval(16))
+        f.controller.expireLeases(now: Date().addingTimeInterval(1.1))
         #expect(f.controller.response().state == .idle)
         #expect(f.driver.current.contains { $0.uuid == "two" && $0.isUsable })
         #expect(try f.store.load() == nil)
@@ -24,6 +25,7 @@ struct DisplayTopologyLifecycleTests {
         f.controller.handle(.init(command: .confirmChange, generation: f.generation, confirmed: true), now: now)
         #expect(f.controller.response().state == .active)
         f.controller.expireLeases(now: now.addingTimeInterval(DisplayRemoteLease.lifetime + 1))
+        f.controller.expireLeases(now: Date().addingTimeInterval(1.1))
         #expect(f.controller.response().state == .idle)
         #expect(f.driver.current.count == 2)
     }
@@ -44,6 +46,7 @@ struct DisplayTopologyLifecycleTests {
         #expect(f.driver.current.filter(\.isUsable).count == 1)
         #expect(f.driver.current.first?.isVirtual == true)
         f.controller.handle(.init(command: .restore), now: now)
+        f.controller.expireLeases(now: Date().addingTimeInterval(1.1))
         #expect(f.controller.response().state == .idle)
         #expect(f.driver.current.filter { !$0.isVirtual && $0.isUsable }.count == 2)
         #expect(f.driver.physicalWasUsableAtVirtualDestruction)
@@ -63,7 +66,120 @@ struct DisplayTopologyLifecycleTests {
         f.controller.expireLeases(now: now.addingTimeInterval(2))
         #expect(f.controller.response().state == .awaitingKeepConfirmation)
         f.controller.handle(.init(command: .heartbeat, generation: f.generation), now: now.addingTimeInterval(3))
+        f.controller.expireLeases(now: Date().addingTimeInterval(1.1))
         #expect(f.controller.response().state == .idle)
+    }
+
+    @Test func lateHeartbeatAfterLeaseExpiryCannotReviveControlBeforeTimerTick() throws {
+        let f = LifecycleFixture()
+        defer { f.removeFiles() }
+        let now = Date()
+        f.controller.handle(.init(command: .keepOnly, targetUUID: "one", generation: f.generation,
+            remoteSessionID: "tablet", policy: .remotePhysical), now: now)
+        f.controller.handle(.init(command: .confirmChange, generation: f.generation, confirmed: true),
+            now: now.addingTimeInterval(1))
+        f.controller.handle(.init(command: .heartbeat, generation: f.generation, remoteSessionID: "tablet"),
+            now: now.addingTimeInterval(DisplayRemoteLease.lifetime + 1))
+
+        #expect(f.controller.response().state == .recovering)
+        #expect(try f.store.load()?.phase == .complete)
+        #expect(try DisplaySessionOverrideStore(fileURL: f.root.appendingPathComponent("override.json")).load() == "tablet")
+    }
+
+    @Test func expiredLeaseRejectsOldKeepOnlyBeforeItCanChangeTopology() throws {
+        let f = LifecycleFixture()
+        defer { f.removeFiles() }
+        let now = Date()
+        f.driver.current.append(.init(uuid: "three", displayID: 3, name: "three", isBuiltIn: false,
+            isVirtual: false, isOnline: true, isActive: true, isMain: false,
+            width: 1920, height: 1080, isOwned: false))
+        f.controller.handle(.init(command: .keepOnly, targetUUID: "one", generation: f.generation,
+            remoteSessionID: "tablet", policy: .remotePhysical), now: now)
+        f.controller.handle(.init(command: .confirmChange, generation: f.generation, confirmed: true), now: now)
+        f.controller.handle(.init(command: .heartbeat, generation: f.generation, remoteSessionID: "tablet"),
+            now: now.addingTimeInterval(1))
+
+        f.controller.handle(.init(command: .keepOnly, targetUUID: "two", generation: f.generation,
+            remoteSessionID: "tablet", policy: .remotePhysical), now: now.addingTimeInterval(DisplayRemoteLease.lifetime + 2))
+
+        #expect(f.controller.response().state == .recovering)
+        #expect(try f.store.load()?.isComplete == true)
+        #expect(f.driver.current.filter { !$0.isVirtual && $0.isUsable }.count == 3)
+    }
+
+    @Test func noJournalHeartbeatCannotAcquireControl() {
+        let f = LifecycleFixture()
+        defer { f.removeFiles() }
+        f.controller.handle(.init(command: .heartbeat, generation: f.generation, remoteSessionID: "tablet"))
+        #expect(f.controller.response().state == .idle)
+        #expect(f.controller.response().message == DisplayControlMessageCode.userOverride.rawValue)
+        #expect((try? f.store.load()) == nil)
+    }
+
+    @Test func recoveryRequiredHeartbeatCannotExtendTheLeaseOrReuseOldGeneration() throws {
+        let f = LifecycleFixture()
+        defer { f.removeFiles() }
+        let now = Date()
+        let originals = f.driver.current
+        f.driver.current.removeAll { $0.uuid == "two" }
+        var journal = DisplayRecoveryJournal(generation: UUID(), policy: .remotePhysical, originalDisplays: originals)
+        journal.remoteSessionID = "tablet"
+        journal.remoteLeaseExpiresAt = now.addingTimeInterval(30)
+        journal.disabledDisplayUUIDs = ["two"]
+        journal.pendingRestoreUUIDs = ["two"]
+        journal.phase = .restoringDisplays
+        try f.store.save(journal)
+        f.driver.failEnables = true
+        f.controller.recoverAtStartup()
+        #expect(f.controller.response().state == .recoveryRequired)
+
+        f.controller.handle(.init(command: .heartbeat, generation: journal.generation,
+            remoteSessionID: "tablet"), now: now.addingTimeInterval(3))
+
+        f.controller.handle(.init(command: .disable, targetUUID: "one", generation: journal.generation),
+            now: now.addingTimeInterval(4))
+
+        #expect(f.controller.response().state == .recoveryRequired)
+        #expect(try f.store.load()?.remoteLeaseExpiresAt == journal.remoteLeaseExpiresAt)
+        #expect(try f.store.load()?.phase == .restoringDisplays)
+        #expect(!f.driver.current.contains { $0.uuid == "one" && !$0.isUsable })
+        #expect(try DisplaySessionOverrideStore(fileURL: f.root.appendingPathComponent("override.json")).load() == "tablet")
+    }
+
+    @Test func completedJournalWaitsForRestoredTopologyToStayValid() throws {
+        let f = LifecycleFixture()
+        defer { f.removeFiles() }
+        let now = Date()
+        f.controller.handle(.init(command: .disable, targetUUID: "two", generation: f.generation), now: now)
+        f.controller.handle(.init(command: .confirmChange, generation: f.generation, confirmed: true), now: now)
+        f.controller.handle(.init(command: .restore), now: now.addingTimeInterval(1))
+        #expect(try f.store.load()?.isComplete == true)
+
+        f.driver.current.removeAll { $0.uuid == "two" }
+        f.controller.expireLeases(now: Date().addingTimeInterval(1.1))
+
+        #expect(f.controller.response().state == .recoveryRequired)
+        #expect(try f.store.load()?.phase == .restoringDisplays)
+    }
+
+    @Test func stableRestoreAcceptsTheSameDisplayUUIDAfterItsNumericIDChanges() throws {
+        let f = LifecycleFixture()
+        defer { f.removeFiles() }
+        let now = Date()
+        f.controller.handle(.init(command: .disable, targetUUID: "two", generation: f.generation), now: now)
+        f.controller.handle(.init(command: .confirmChange, generation: f.generation, confirmed: true), now: now)
+        f.controller.handle(.init(command: .restore), now: now.addingTimeInterval(1))
+        let originalMain = try #require(f.driver.current.first(where: { $0.uuid == "one" }))
+        f.driver.current[0] = .init(uuid: originalMain.uuid, displayID: 9, name: originalMain.name,
+            isBuiltIn: originalMain.isBuiltIn, isVirtual: originalMain.isVirtual,
+            isOnline: originalMain.isOnline, isActive: originalMain.isActive, isMain: originalMain.isMain,
+            width: originalMain.width, height: originalMain.height, isOwned: originalMain.isOwned,
+            originX: originalMain.originX, originY: originalMain.originY)
+
+        f.controller.expireLeases(now: Date().addingTimeInterval(1.1))
+
+        #expect(f.controller.response().state == .idle)
+        #expect(try f.store.load() == nil)
     }
 
     @Test func failedPhysicalRestoreNeverDestroysTheSoleVirtualOutput() {
@@ -79,6 +195,67 @@ struct DisplayTopologyLifecycleTests {
         #expect(f.controller.response().state == .recoveryRequired)
         #expect(f.driver.current.contains { $0.isVirtual && $0.isUsable })
         #expect(f.driver.destroyCount == 0)
+    }
+
+    @Test func restoreRetriesAnOriginalActiveDisplayEvenAfterItsPendingEntryWasCleared() throws {
+        let f = LifecycleFixture()
+        defer { f.removeFiles() }
+        let originalMain = f.driver.current[0]
+        let external = f.driver.current[1]
+        f.driver.current = [external]
+
+        var journal = DisplayRecoveryJournal(generation: UUID(), policy: .localPhysical,
+            originalDisplays: [originalMain, external])
+        journal.phase = .restoringDisplays
+        try f.store.save(journal)
+
+        f.controller.handle(.init(command: .restore))
+        f.controller.expireLeases(now: Date().addingTimeInterval(1.1))
+
+        #expect(f.controller.response().state == .idle)
+        #expect(f.driver.current.contains { $0.uuid == originalMain.uuid && $0.isUsable && $0.isMain })
+        #expect(try f.store.load() == nil)
+    }
+
+    @Test func failedRetryKeepsMissingOriginalDisplayJournaledForAnotherAttempt() throws {
+        let f = LifecycleFixture()
+        defer { f.removeFiles() }
+        let originalMain = f.driver.current[0]
+        let external = f.driver.current[1]
+        f.driver.current = [external]
+        f.driver.failEnables = true
+
+        var journal = DisplayRecoveryJournal(generation: UUID(), policy: .remoteVirtualOnly,
+            originalDisplays: [originalMain, external])
+        journal.phase = .restoringDisplays
+        journal.remoteSessionID = "tablet"
+        journal.virtualDisplayUUID = "virtual"
+        f.driver.current.append(.init(uuid: "virtual", displayID: 3, name: "virtual", isBuiltIn: false,
+            isVirtual: true, isOnline: true, isActive: true, isMain: false,
+            width: 1920, height: 1080, isOwned: true))
+        try f.store.save(journal)
+
+        f.controller.handle(.init(command: .restore))
+
+        #expect(f.controller.response().state == .recoveryRequired)
+        #expect(f.driver.current.contains { $0.uuid == "virtual" && $0.isUsable })
+        #expect(f.driver.destroyCount == 0)
+        let saved = try #require(try f.store.load())
+        #expect(saved.disabledDisplayUUIDs.contains(originalMain.uuid))
+        #expect(saved.pendingRestoreUUIDs.contains(originalMain.uuid))
+        #expect(saved.pendingRestoreUUIDs.allSatisfy(saved.disabledDisplayUUIDs.contains))
+
+        f.driver.failEnables = false
+        f.controller.handle(.init(command: .restore))
+        f.controller.expireLeases(now: Date().addingTimeInterval(1.1))
+        #expect(f.controller.response().state == .idle)
+        #expect(f.controller.response().message == DisplayControlMessageCode.userOverride.rawValue)
+        #expect(try f.store.load() == nil)
+
+        let idleGeneration = f.controller.response().generation
+        f.controller.handle(.init(command: .disable, targetUUID: "two", generation: idleGeneration))
+        #expect(f.controller.response().state == .awaitingKeepConfirmation)
+        #expect(!f.driver.current.contains { $0.uuid == "two" && $0.isUsable })
     }
 }
 

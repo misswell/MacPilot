@@ -68,6 +68,16 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         guard let state = snapshot?.state else { return false }
         return ![.idle, .unavailable].contains(state)
     }
+    // Owning an active configuration and owing recovery are different: a
+    // recovery reply must never cause the GUI to renew a control lease.
+    var holdsControl: Bool {
+        guard let state = snapshot?.state else { return false }
+        return [.active, .awaitingVirtualConfirmation, .awaitingKeepConfirmation].contains(state)
+    }
+    var hasRecoveryObligation: Bool {
+        guard let state = snapshot?.state else { return false }
+        return [.recovering, .recoveryRequired, .failed].contains(state)
+    }
     var remainingSeconds: Int {
         max(0, Int(ceil((snapshot?.confirmationDeadline ?? now).timeIntervalSince(now))))
     }
@@ -258,7 +268,18 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         guard !isBusy, !isPreparingHelper else { return }
         let epoch = operationEpoch
         do {
-            let command: DisplayControlCommand = hasControl ? .heartbeat : .status
+            let command: DisplayControlCommand
+            if holdsControl {
+                command = .heartbeat
+            } else if hasRecoveryObligation {
+                // Keep releasing the old transaction, including after an XPC
+                // interruption. Do not automatically reapply this UU session.
+                inhibitedSessionID = sessionID
+                appliedSessionID = nil
+                command = .restore
+            } else {
+                command = .status
+            }
             let response = try await client.send(.init(command: command, generation: snapshot?.generation,
                 remoteSessionID: uuObservation.status == .connected ? sessionID : nil))
             guard isRunning, !Task.isCancelled, epoch == operationEpoch else { return }

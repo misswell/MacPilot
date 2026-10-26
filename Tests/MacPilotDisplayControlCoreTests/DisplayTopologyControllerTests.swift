@@ -64,6 +64,7 @@ struct DisplayTopologyControllerTests {
             remoteSessionID: "uu-session"
         ), now: now.addingTimeInterval(2))
         fixture.controller.expireLeases(now: now.addingTimeInterval(20))
+        fixture.controller.expireLeases(now: Date().addingTimeInterval(1.1))
 
         #expect(fixture.controller.response().state == .idle)
         #expect(fixture.driver.displays().filter { !$0.isVirtual && $0.isUsable }.count == 2)
@@ -113,6 +114,7 @@ struct DisplayTopologyControllerTests {
             remoteSessionID: "uu-session"), now: now.addingTimeInterval(3))
 
         fixture.controller.expireLeases(now: now.addingTimeInterval(4))
+        fixture.controller.expireLeases(now: Date().addingTimeInterval(1.1))
 
         #expect(fixture.controller.response().state == .idle)
         #expect(fixture.driver.displays().filter { !$0.isVirtual && $0.isUsable }.count == 2)
@@ -209,6 +211,7 @@ struct DisplayTopologyControllerTests {
 
         fixture.controller.expireLeases(now: Date().addingTimeInterval(1))
         #expect(fixture.driver.displays().contains(where: { $0.uuid == other.uuid && $0.isUsable }))
+        fixture.controller.expireLeases(now: Date().addingTimeInterval(1.1))
         #expect(try store.load() == nil)
     }
 
