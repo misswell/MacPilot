@@ -204,7 +204,17 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     /// control injects HID events globally, so a background session acting on
     /// "its" BLE device would type into the other user's screen.
     var sessionOnConsoleProbe: () -> Bool = BLEUnlockModel.currentSessionIsOnConsole
+    /// Bluetooth authorization as the identity learner sees it. A seam
+    /// because the test host's real TCC verdict is environment state.
+    var bluetoothAuthorizationProbe: () -> CBManagerAuthorization = { CBManager.authorization }
+    /// Console owner's name for suspension-cause reporting; nil when
+    /// unavailable. "loginwindow" means no user owns the screen.
+    var consoleUserNameProbe: () -> String? = { BLEUnlockModel.currentConsoleUserName() }
     private var sessionIsOnConsole = true
+    /// Set while suspended for a background session whose cause the ownership
+    /// poll identified: the login window owns the console rather than
+    /// another user's desktop.
+    private(set) var suspendedAtLoginWindow = false
     private var pickerWasActiveBeforeSessionSuspend = false
     var workspaceNotificationCenterOverride: NotificationCenter?
     var heldBlankNotificationCenterOverride: NotificationCenter?
@@ -233,6 +243,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     var suspendedForBackgroundSession: Bool {
         settings.isEnabled && !sessionIsOnConsole
     }
+    /// Whether the passive rotated-address learner (its own central, no
+    /// screen control) is currently armed.
+    var identityLearnerActive: Bool { presenceAuthenticator.isActive }
     /// Test seam: counts presence actions without performing screen control.
     /// Production never sets this.
     var presenceActionObserver: ((Bool) -> Void)?
@@ -505,13 +518,19 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     /// what makes a challenge meaningful.
     private func updatePresenceAuthentication() {
         enableReversePresenceForBoundDeviceIfNeeded()
-        let shouldRun = settings.isEnabled
-            && sessionIsOnConsole
-            && centralMgr != nil
+        // The rotated-address learner is passive GATT: discovery, a challenge,
+        // an alias record. It never locks, unlocks or types, so it also runs
+        // in a fast-switched background session — otherwise the phone's
+        // address can only be learned while this user is looking at the
+        // screen and every return finds a stale alias. Its radio is created
+        // only when Bluetooth access is already decided; a fresh install must
+        // not be prompted at launch by the learner alone.
+        let learnerShouldRun = settings.isEnabled
             && !settings.identityRegistry.bindings.isEmpty
             && remoteOwnDeviceIDProvider != nil
             && remotePairingKeyProvider != nil
-        presenceAuthenticator.setActive(shouldRun)
+            && (centralMgr != nil || bluetoothAuthorizationProbe() == .allowedAlways)
+        presenceAuthenticator.setActive(learnerShouldRun)
         // The reverse link does not depend on the phone-as-peripheral
         // authenticator, so it has its own start conditions. It also does not
         // need the Mac's central manager: its radio is a CBPeripheralManager.
@@ -922,7 +941,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         // nothing consumes.
         startObservingSystemState()
         guard sessionIsOnConsole else {
+            noteSuspensionCause()
             logSettings("configuration activation deferred reason=backgroundSession")
+            // The passive identity learner may still run here; monitoring
+            // itself stays suspended until this session owns the console.
+            updatePresenceAuthentication()
             return
         }
         // Do not create CBCentralManager during launch while Bluetooth access
@@ -2188,6 +2211,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         return (session["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue ?? true
     }
 
+    /// The raw console owner name, or nil when the dynamic store has no
+    /// verdict. "loginwindow" (no user) distinguishes a logged-out console
+    /// from another user's desktop.
+    nonisolated static func currentConsoleUserName() -> String? {
+        var consoleUID: uid_t = 0
+        return SCDynamicStoreCopyConsoleUser(nil, &consoleUID, nil) as String?
+    }
+
     func isScreenLocked() -> Bool {
         screenLockState() == .locked
     }
@@ -3168,6 +3199,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }
     }
 
+    /// Records why monitoring is suspended so the UI can tell "another user's
+    /// desktop" apart from "the login window" (the console session logged out).
+    private func noteSuspensionCause() {
+        suspendedAtLoginWindow = consoleUserNameProbe() == "loginwindow"
+    }
+
     private func startUserActivityObservation() {
         guard userActivityPolicyTimer == nil else { return }
         userActivityMonitor.onInput = { [weak self] in self?.handleObservedUserInput() }
@@ -3190,10 +3227,15 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     func handleSessionDidResignActive() {
         guard sessionIsOnConsole else { return }
         sessionIsOnConsole = false
+        noteSuspensionCause()
         log("session left the console; suspending BLE monitoring")
         pickerWasActiveBeforeSessionSuspend = isScanning
         stopUserActivityObservation()
         stopMonitoring()
+        // Monitoring is suspended, but the passive rotated-address learner
+        // keeps running so the phone's current UUID is still learned while
+        // another user owns the screen.
+        updatePresenceAuthentication()
     }
 
     func handleSessionDidBecomeActive() {

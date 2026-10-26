@@ -88,6 +88,71 @@ struct BLEBackgroundSessionTests {
         #expect(h.scanner.duplicateModes == [true, false, true])
     }
 
+    @Test func theIdentityLearnerKeepsLearningWhileTheSessionIsSuspended() {
+        let h = Harness(onConsole: true)
+        defer { h.model.shutdown() }
+        h.model.settings.isEnabled = true
+        h.model.bluetoothAuthorizationProbe = { .allowedAlways }
+        h.model.remoteOwnDeviceIDProvider = { UUID() }
+        h.model.remotePairingKeyProvider = { _ in Data([1, 2, 3]) }
+        h.model.activateFromConfiguration()
+        h.model.startMonitor(h.phone)
+        h.model.bindRemoteIdentity(primaryUUID: h.phone, clientID: "phone", keyFingerprint: "fp")
+        #expect(h.model.identityLearnerActive)
+
+        h.onConsoleFlag = false
+        h.model.handleSessionDidResignActive()
+
+        // Monitoring and its central are gone, but the passive learner keeps
+        // its own radio so rotated addresses are still learned in background.
+        #expect(h.model.runtime(for: h.phone) == nil)
+        #expect(h.scanner.releases == 1)
+        #expect(h.model.identityLearnerActive)
+
+        h.onConsoleFlag = true
+        h.model.handleSessionDidBecomeActive()
+        h.model.handleCentralStateChange(.poweredOn)
+        #expect(h.model.identityLearnerActive)
+    }
+
+    @Test func theIdentityLearnerNeverPromptsOnAFreshInstall() {
+        let h = Harness(onConsole: true)
+        defer { h.model.shutdown() }
+        h.model.settings.isEnabled = true
+        h.model.bluetoothAuthorizationProbe = { .notDetermined }
+        h.model.remoteOwnDeviceIDProvider = { UUID() }
+        h.model.remotePairingKeyProvider = { _ in Data([1, 2, 3]) }
+        h.model.activateFromConfiguration()
+        h.model.startMonitor(h.phone)
+        h.model.bindRemoteIdentity(primaryUUID: h.phone, clientID: "phone", keyFingerprint: "fp")
+
+        // A binding alone must not create the learner's radio while Bluetooth
+        // access is undecided; enabling BLE (creating the central) is the
+        // consent moment.
+        #expect(!h.model.identityLearnerActive)
+    }
+
+    @Test func suspensionCauseDistinguishesTheLoginWindowFromAnotherUser() {
+        let h = Harness(onConsole: true)
+        defer { h.model.shutdown() }
+        h.model.settings.isEnabled = true
+        h.model.activateFromConfiguration()
+        h.model.startMonitor(h.phone)
+
+        h.model.consoleUserNameProbe = { "agentuse" }
+        h.onConsoleFlag = false
+        h.model.handleSessionDidResignActive()
+        #expect(!h.model.suspendedAtLoginWindow)
+
+        // The console session logs out; the screen shows the login window.
+        h.model.consoleUserNameProbe = { "loginwindow" }
+        h.onConsoleFlag = true
+        h.model.handleSessionDidBecomeActive()
+        h.onConsoleFlag = false
+        h.model.handleSessionDidResignActive()
+        #expect(h.model.suspendedAtLoginWindow)
+    }
+
     @Test func backgroundSessionSuspensionIsVisibleToTheUI() {
         let h = Harness(onConsole: false)
         defer { h.model.shutdown() }
