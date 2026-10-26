@@ -29,6 +29,10 @@ struct MacPilotApp: App {
         if #available(macOS 14.4, *) {
             controller = MenuBarDisplayController(menuFactory: { [weak model] context in
                 guard let model else { return NSMenu() }
+                // Sample once per popup. The displayed AppKit tree stays fixed
+                // while tracking; the next popup gets fresh monitor rows.
+                if model.isFeatureEnabled(.memoryMonitor) { _ = MemoryMonitorModel.menuSnapshot() }
+                if model.isFeatureEnabled(.cpuMonitor) { _ = CPUMonitorModel.menuSnapshot() }
                 return NSHostingMenu(rootView: MenuBarView.mainMenu(model: model, context: context,
                     showMainWindow: {
                         NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)

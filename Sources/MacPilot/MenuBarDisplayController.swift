@@ -282,14 +282,20 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         lastIconName = name
     }
 
-    @objc private func openMenu(_ sender: NSStatusBarButton) {
-        guard let menuFactory else { return }
+    func prepareMenuSession() -> MenuBarMenuSession? {
+        guard let menuFactory else { return nil }
         captureTarget()
-        let menu = menuFactory(self)
+        return MenuBarMenuSession(source: menuFactory(self))
+    }
+
+    @objc private func openMenu(_ sender: NSStatusBarButton) {
+        guard let session = prepareMenuSession() else { return }
         openingOwnedMenu = true
         sender.highlight(true)
         defer { sender.highlight(false); openingOwnedMenu = false }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY), in: sender)
+        _ = withExtendedLifetime(session) {
+            session.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY), in: sender)
+        }
     }
 
     static func liveScreens() -> [MenuBarDisplay] {
