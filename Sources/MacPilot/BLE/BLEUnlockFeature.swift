@@ -2193,28 +2193,95 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
 
     /// A missing session dictionary keeps the pre-existing behavior; only an
-    /// explicit `kCGSSessionOnConsoleKey = false` marks a fast-switched
-    /// background session.
+    /// Whether this process's session owns the console (the screen).
     ///
-    /// `CGSessionCopyCurrentDictionary` describes the console session even
-    /// when read from a fast-switched background session, so its on-console
-    /// key says "true" about whoever owns the console — not about this
-    /// process. That lie kept a background instance scanning for hours.
-    /// The dynamic store names the real console user; this process is on
-    /// console only when that user is this process's own UID.
+    /// Every simple probe lies in one direction or another:
+    ///
+    /// - `CGSessionCopyCurrentDictionary` returns the *console* session's
+    ///   dictionary even when called from a fast-switched background session,
+    ///   so `kCGSSessionOnConsoleKey` describes whoever owns the screen rather
+    ///   than this process. Trusting it let a background instance keep
+    ///   scanning for 16 hours.
+    /// - `SCDynamicStoreCopyConsoleUser` and the `/dev/console` tty owner can
+    ///   keep returning a *logged-out* user for a long time after fast user
+    ///   switching (observed: stale `agentuse` while the kernel's session
+    ///   table already listed only `guofeng` on console). Trusting it
+    ///   suspended monitoring on a machine with a single active account.
+    ///
+    /// The kernel's `IOConsoleUsers` array is the authoritative session table,
+    /// so it decides first. The CG dictionary cross-checks it, and the dynamic
+    /// store is only a fallback for hosts where IOKit reports nothing.
     nonisolated static func currentSessionIsOnConsole() -> Bool {
+        if let consoleSession = consoleSessionRecord() {
+            if let onConsole = consoleSession.onConsole { return onConsole }
+        }
+        if let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+           let onConsole = (session["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue,
+           let user = session["kCGSSessionUserNameKey"] as? String {
+            // The dictionary describes the console session; it is this
+            // process's session only when the names agree.
+            let isOwnSession = user == NSUserName()
+            return isOwnSession && onConsole
+        }
         var consoleUID: uid_t = 0
         if let consoleUser = SCDynamicStoreCopyConsoleUser(nil, &consoleUID, nil) as String? {
             return !consoleUser.isEmpty && consoleUID == getuid()
         }
-        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return true }
-        return (session["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue ?? true
+        return true
     }
 
-    /// The raw console owner name, or nil when the dynamic store has no
-    /// verdict. "loginwindow" (no user) distinguishes a logged-out console
-    /// from another user's desktop.
+    /// One console session from the kernel's session table.
+    struct ConsoleSessionRecord: Equatable {
+        let userName: String
+        /// nil when the record carries no on-console verdict.
+        let onConsole: Bool?
+    }
+
+    /// Reads `IOConsoleUsers` and returns the session whose user matches this
+    /// process. Two sessions can report `OnConsole`, so the matching user — not
+    /// the flag alone — decides which record describes this process.
+    nonisolated static func consoleSessionRecord() -> ConsoleSessionRecord? {
+        guard let matching = consoleSessionRecords().first(where: { $0.userName == NSUserName() }) else {
+            return nil
+        }
+        return matching
+    }
+
+    /// Every session in the kernel's console table, in table order.
+    ///
+    /// `IOConsoleUsers` hangs off the `IOResources` service, not off a path
+    /// like `IOService:/IOResources/Root` (which does not resolve), so this
+    /// iterates the matching services.
+    nonisolated static func consoleSessionRecords() -> [ConsoleSessionRecord] {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(
+            kIOMainPortDefault, IOServiceMatching("IOResources"), &iterator
+        ) == KERN_SUCCESS else { return [] }
+        defer { IOObjectRelease(iterator) }
+        var records: [ConsoleSessionRecord] = []
+        var service = IOIteratorNext(iterator)
+        while service != 0 {
+            if let entries = IORegistryEntryCreateCFProperty(
+                service, "IOConsoleUsers" as CFString, kCFAllocatorDefault, 0
+            )?.takeRetainedValue() as? [[String: Any]] {
+                for entry in entries {
+                    guard let user = entry["kCGSSessionUserNameKey"] as? String else { continue }
+                    let onConsole = (entry["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue
+                    records.append(ConsoleSessionRecord(userName: user, onConsole: onConsole))
+                }
+            }
+            IOObjectRelease(service)
+            service = IOIteratorNext(iterator)
+        }
+        return records
+    }
+
+    /// The console owner's name for suspension-cause reporting; nil when
+    /// unavailable. "loginwindow" means no user owns the screen.
     nonisolated static func currentConsoleUserName() -> String? {
+        if let owner = consoleSessionRecords().first(where: { $0.onConsole == true }) {
+            return owner.userName
+        }
         var consoleUID: uid_t = 0
         return SCDynamicStoreCopyConsoleUser(nil, &consoleUID, nil) as String?
     }

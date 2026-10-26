@@ -88,6 +88,29 @@ struct BLEBackgroundSessionTests {
         #expect(h.scanner.duplicateModes == [true, false, true])
     }
 
+    @Test func consoleSessionTablePicksTheRecordMatchingThisUser() {
+        // The kernel's table can list several sessions; only the record whose
+        // user is this process describes this process. Picking "the one with
+        // OnConsole" would attribute another user's console to us.
+        let records = [
+            BLEUnlockModel.ConsoleSessionRecord(userName: "other", onConsole: true),
+            BLEUnlockModel.ConsoleSessionRecord(userName: NSUserName(), onConsole: false)
+        ]
+        let mine = records.first { $0.userName == NSUserName() }
+        #expect(mine?.onConsole == false)
+    }
+
+    @Test func consoleProbeReadsTheKernelSessionTable() {
+        // Tripwire: the kernel table is the authoritative source this probe
+        // now prefers. If the machine reports a record for this user, the
+        // probe must agree with it rather than with the dynamic store (which
+        // can return a logged-out user for a long time after fast switching).
+        let records = BLEUnlockModel.consoleSessionRecords()
+        guard let mine = records.first(where: { $0.userName == NSUserName() }),
+              let onConsole = mine.onConsole else { return }
+        #expect(BLEUnlockModel.currentSessionIsOnConsole() == onConsole)
+    }
+
     @Test func theIdentityLearnerKeepsLearningWhileTheSessionIsSuspended() {
         let h = Harness(onConsole: true)
         defer { h.model.shutdown() }
