@@ -192,7 +192,9 @@ struct MenuBarDisplayControllerTests {
         try? await Task.sleep(for: .milliseconds(100))
 
         #expect(controller.isInserted)
-        #expect(changes.count == 2 || changes.count == 3)
+        // 中断「移除后重装」窗口的任务会先把图标装回来，再由替换任务重跑一遍，
+        // 因此这里可能比 2 次略多；关键是最终必须已插入，而不是停在已移除。
+        #expect((2...4).contains(changes.count))
     }
 
     @Test func topologyChangeWhileAMenuTracksDuringTheRemovedWindowRestoresTheItem() async {
@@ -230,6 +232,77 @@ struct MenuBarDisplayControllerTests {
         center.post(name: NSMenu.didEndTrackingNotification, object: menu)
         #expect(await waitForInsertionState(true, controller))
         try? await Task.sleep(for: .milliseconds(120))
+        #expect(controller.isInserted)
+    }
+
+    @Test func disablingTheIconStopsReattachmentAndReenablingRestoresIt() async {
+        let state = TestDisplayState([screen("main", x: 0), screen("external", x: 1_920)])
+        let center = NotificationCenter()
+        let controller = makeController(center: center, screens: { state.screens })
+        defer { controller.stop() }
+
+        controller.setEnabled(false)
+        #expect(!controller.isEnabled)
+        #expect(!controller.isInserted)
+
+        // 用户关掉图标后，显示器拓扑变化不得把它重新装回来——
+        // 否则「隐藏菜单栏图标」会被一次分辨率切换撤销。
+        state.screens = [screen("main", x: 0)]
+        center.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        try? await Task.sleep(for: .milliseconds(60))
+        #expect(!controller.isInserted)
+
+        controller.setEnabled(true)
+        #expect(controller.isEnabled)
+        #expect(controller.isInserted)
+    }
+
+    @Test func disablingTheIconMidReattachmentDoesNotLeaveItInserted() async {
+        let state = TestDisplayState([screen("main", x: 0), screen("external", x: 1_920)])
+        let center = NotificationCenter()
+        let controller = MenuBarDisplayController(
+            notificationCenter: center,
+            screens: { state.screens },
+            debounce: .milliseconds(2),
+            insertionDelay: .milliseconds(80)
+        )
+        defer { controller.stop() }
+
+        state.screens = [screen("main", x: 0)]
+        center.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        #expect(await waitForInsertionState(false, controller))
+
+        controller.setEnabled(false)
+        try? await Task.sleep(for: .milliseconds(120))
+
+        #expect(!controller.isInserted)
+        #expect(!controller.isEnabled)
+    }
+
+    @Test func selfHealNeverFightsTheUserAndRespectsTheSwitch() async {
+        let state = TestDisplayState([screen("main", x: 0), screen("external", x: 1_920)])
+        let center = NotificationCenter()
+        let controller = makeController(center: center, screens: { state.screens })
+        defer { controller.stop() }
+
+        state.screens = [screen("main", x: 0)]
+        center.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        #expect(await waitForInsertionState(false, controller))
+
+        // 菜单正在跟踪时自愈必须让路，否则会重建一个用户正看着的菜单。
+        let menu = NSMenu()
+        center.post(name: NSMenu.didBeginTrackingNotification, object: menu)
+        controller.selfHeal()
+        #expect(!controller.isInserted)
+        center.post(name: NSMenu.didEndTrackingNotification, object: menu)
+        #expect(await waitForInsertionState(true, controller))
+
+        // 用户关掉图标后，自愈不得把它装回来。
+        controller.setEnabled(false)
+        controller.selfHeal()
+        #expect(!controller.isInserted)
+
+        controller.setEnabled(true)
         #expect(controller.isInserted)
     }
 

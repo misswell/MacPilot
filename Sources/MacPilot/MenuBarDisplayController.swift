@@ -14,6 +14,10 @@ struct MenuBarDisplay: Equatable, Sendable {
 final class MenuBarDisplayController: NSObject, ObservableObject {
     @Published var isInserted = true
     @Published private(set) var targetUUID: String?
+    /// Whether the user wants the menu-bar icon at all. Reattachment and
+    /// self-healing respect it: a hidden icon must stay hidden across display
+    /// topology changes and missed launch notifications.
+    @Published private(set) var isEnabled = true
     private let center: NotificationCenter
     private let screens: @MainActor () -> [MenuBarDisplay]
     private let pointer: @MainActor () -> CGPoint
@@ -27,6 +31,7 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     private var reinserting = false
     private var revision = 0
     private var reinsertTask: Task<Void, Never>?
+    private var watchdogTask: Task<Void, Never>?
     private var subscriptions: MenuBarDisplaySubscriptions?
     private var iconSubscriptions = Set<AnyCancellable>()
     private var statusItem: NSStatusItem?
@@ -73,6 +78,27 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         }.store(in: &iconSubscriptions)
     }
 
+    /// Hides or shows the status item on the user's request.
+    ///
+    /// Disabling cancels any queued reattachment first: otherwise the
+    /// reinstall that a topology change had already scheduled would bring the
+    /// icon straight back.
+    func setEnabled(_ enabled: Bool) {
+        guard enabled != isEnabled else { return }
+        isEnabled = enabled
+        revision += 1
+        reinsertTask?.cancel()
+        reinsertTask = nil
+        needsReinsert = false
+        reinserting = false
+        isInserted = enabled
+        if enabled {
+            installStatusItem()
+        } else {
+            removeStatusItem()
+        }
+    }
+
     func stop() {
         revision += 1
         reinsertTask?.cancel()
@@ -82,6 +108,41 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         if reinserting { finishInsertion() }
         needsReinsert = false
         targetUUID = nil
+    }
+
+    /// Re-asserts the item on a slow tick, for the one failure that leaves no
+    /// notification behind: our own reattachment removes the item, waits, then
+    /// reinstalls, and a cancelled task can leave `reinserting` set with
+    /// nothing scheduled. Nothing else produces that pair, so recovering it
+    /// cannot fight a user who hid the icon on purpose.
+    func startWatchdog(interval: Duration = .seconds(60)) {
+        watchdogTask?.cancel()
+        watchdogTask = Task { @MainActor [weak self, interval] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: interval) } catch { return }
+                self?.selfHeal()
+            }
+        }
+    }
+
+    func stopWatchdog() {
+        watchdogTask?.cancel()
+        watchdogTask = nil
+    }
+
+    /// Recovers a reattachment this controller started and never finished.
+    ///
+    /// Skipped while a menu is open so a reinstall never fights the menu the
+    /// user is looking at, and skipped unless both halves of the interrupted
+    /// state are present — an item the user hid elsewhere is left alone.
+    func selfHeal() {
+        guard isEnabled, trackingMenus.isEmpty else { return }
+        guard reinserting, statusItem == nil else { return }
+        reinserting = false
+        isInserted = true
+        needsReinsert = false
+        installStatusItem()
+        DiagnosticLog.write("MenuBar", "Recovered an interrupted status item reattachment", level: .warning)
     }
 
     private func receive(name: Notification.Name, menuID: ObjectIdentifier?) {
@@ -112,7 +173,7 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     /// notification missed, or a cancelled reattachment that never got to
     /// reinstall. Reattachment itself is guarded by `reinserting`.
     private func ensureInstalled() {
-        guard menuFactory != nil, !reinserting, statusItem == nil else { return }
+        guard isEnabled, menuFactory != nil, !reinserting, statusItem == nil else { return }
         installStatusItem()
     }
 
@@ -125,13 +186,14 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         revision += 1
         let token = revision
         reinsertTask?.cancel()
+        // A cancelled task may have already taken the item out of the menu
+        // bar and stopped before reinstalling it. Restoring synchronously —
+        // before the new pass sleeps — keeps the icon on screen for the whole
+        // window, and clears the guard the abandoned task left behind.
+        if reinserting { finishInsertion() }
+        guard isEnabled else { return }
         guard trackingMenus.isEmpty else {
-            // The cancelled task may already sit between removal and
-            // reinstall. Tracking ending would re-run the dance, but leaving
-            // the item removed until then hides the menu-bar icon for as
-            // long as any menu stays open — restore it immediately.
             needsReinsert = true
-            if reinserting { finishInsertion() }
             return
         }
         reinsertTask = Task { @MainActor [weak self, debounce] in
@@ -153,13 +215,13 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     }
 
     private func finishInsertion() {
-        isInserted = true
+        isInserted = isEnabled
         reinserting = false
         installStatusItem()
     }
 
     private func installStatusItem() {
-        guard menuFactory != nil, statusItem == nil else { return }
+        guard isEnabled, menuFactory != nil, statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.autosaveName = "MacPilotStatusItem"
         statusItem = item
@@ -169,6 +231,13 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         item.button?.setAccessibilityLabel("MacPilot")
         lastIconName = nil
         updateIcon()
+    }
+
+    private func removeStatusItem() {
+        guard let item = statusItem else { return }
+        NSStatusBar.system.removeStatusItem(item)
+        statusItem = nil
+        lastIconName = nil
     }
 
     private func updateIcon() {

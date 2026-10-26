@@ -37,9 +37,25 @@ struct ConfigurationSchemaContractTests {
                 "bleUnlock", "fileCompression", "screenCapture", "screenRecording",
                 "pictureInPicture", "inputSources", "windowSwitcher", "smoothScrolling",
                 "clipboard", "awake", "awakeTriggers", "awakeProfiles", "remoteControl",
-                "dockGroups", "quickSearch", "displayControl"
+                "dockGroups", "quickSearch", "displayControl", "appPresence"
             ]
         )
+    }
+
+    @Test func appPresenceEncodesBothSwitchesAndRejectsHidingBoth() throws {
+        try assertEncodedKeys(
+            of: AppPresenceSettings(showsDockIcon: false, showsMenuBarIcon: true),
+            supersetOf: ["showsDockIcon", "showsMenuBarIcon"]
+        )
+        // A configuration that asks for neither icon must not strand the app.
+        let decoded = try JSONDecoder().decode(
+            AppPresenceSettings.self,
+            from: Data(#"{"showsDockIcon":false,"showsMenuBarIcon":false}"#.utf8)
+        )
+        #expect(decoded.showsMenuBarIcon)
+        // Missing keys keep the installation default: both icons shown.
+        let legacy = try JSONDecoder().decode(AppPresenceSettings.self, from: Data("{}".utf8))
+        #expect(legacy == .standard)
     }
 
     @Test func awakeSessionProfileConfigurationEncodesEveryHistoricalKey() throws {

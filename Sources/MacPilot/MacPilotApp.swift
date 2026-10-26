@@ -17,6 +17,7 @@ extension Notification.Name {
 struct MacPilotApp: App {
     @StateObject private var model: MacPilotModel
     @StateObject private var menuBar: MenuBarDisplayController
+    @StateObject private var presence: AppPresenceController
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
@@ -45,8 +46,16 @@ struct MacPilotApp: App {
         }
         controller.observeIconChanges(model.objectWillChange.eraseToAnyPublisher())
         controller.observeIconChanges(model.awake.objectWillChange.eraseToAnyPublisher())
+        controller.startWatchdog()
+        // Apply both switches from the moment the app finishes launching. The
+        // Dock icon also has to follow the main window, so a fresh launch with
+        // no window open shows the menu-bar icon only.
+        let presence = AppPresenceController(settings: model.appPresence)
+        presence.attachMenuBarIcon { [weak controller] shows in controller?.setEnabled(shows) }
+        model.connectPresence(presence)
         _model = StateObject(wrappedValue: model)
         _menuBar = StateObject(wrappedValue: controller)
+        _presence = StateObject(wrappedValue: presence)
     }
 
     var body: some Scene {
@@ -485,6 +494,9 @@ enum AppText {
         "languageDescription": "选择 MacPilot 的显示语言。更改会立即生效。", "systemLanguage": "跟随系统",
         "english": "English", "simplifiedChinese": "简体中文", "checkNow": "立即检查", "startAtLogin": "登录时启动",
         "startAtLoginHint": "登录 Mac 后自动在后台启动 MacPilot。",
+        "appPresence": "窗口与图标", "appPresenceHint": "选择 MacPilot 在系统中的入口。安装后 Dock 图标与菜单栏图标都显示，可在这里手动隐藏其中一个。",
+        "showDockIcon": "显示 Dock 图标", "showMenuBarIcon": "显示菜单栏图标",
+        "appPresenceOneRequiredHint": "Dock 图标与菜单栏图标至少保留一个，否则将无法再打开 MacPilot。关闭主窗口后 Dock 图标会一并隐藏；只保留 Dock 图标时它会一直显示。",
         "quitApp": "退出 MacPilot", "enabledStatus": "MacPilot：已启用",
         "disabledStatus": "MacPilot：已停用", "disableApp": "停用 MacPilot", "enableApp": "启用 MacPilot",
         "loginError": "无法更新登录启动项：%@", "loginItemNeedsApproval": "macOS 正在等待你允许 MacPilot 登录时启动，请在“系统设置 → 通用 → 登录项与扩展”里打开它。", "aboutAutomation": "自动化", "manageRules": "管理应用规则和界面偏好。", "githubProject": "GitHub 项目", "githubProjectDescription": "在 GitHub 查看 MacPilot 的源代码、版本发布和问题反馈。", "githubProjectLink": "github.com/%@",
@@ -1782,6 +1794,9 @@ enum AppText {
             "minute": "minute", "minutes": "minutes", "language": "Language", "languageDescription": "Choose MacPilot’s display language. Changes apply immediately.",
             "systemLanguage": "System Language", "english": "English", "simplifiedChinese": "Simplified Chinese", "checkNow": "Check now",
             "startAtLogin": "Start at Login", "startAtLoginHint": "Launch MacPilot automatically in the background when you log in.", "quitApp": "Quit MacPilot", "enabledStatus": "MacPilot: Enabled",
+            "appPresence": "Windows & Icons", "appPresenceHint": "Choose how MacPilot appears in the system. The Dock icon and the menu-bar icon are both shown after installation; hide either one here.",
+            "showDockIcon": "Show Dock icon", "showMenuBarIcon": "Show menu-bar icon",
+            "appPresenceOneRequiredHint": "Keep at least one of the two icons, or MacPilot can no longer be opened. Closing the main window also hides the Dock icon; if the Dock icon is the only one kept, it stays visible.",
             "disabledStatus": "MacPilot: Disabled", "disableApp": "Disable MacPilot", "enableApp": "Enable MacPilot",
             "loginError": "Couldn’t update the login item: %@", "loginItemNeedsApproval": "macOS is waiting for you to allow MacPilot to start at login. Turn it on in System Settings → General → Login Items & Extensions.", "aboutAutomation": "AUTOMATION", "manageRules": "Manage app rules and interface preferences.", "githubProject": "GitHub Project", "githubProjectDescription": "View MacPilot’s source code, releases, and issue tracker on GitHub.", "githubProjectLink": "github.com/%@",
             "quitsIn": "Quits in %d min",
@@ -2297,6 +2312,9 @@ final class MacPilotModel: ObservableObject {
         var dockGroups: DockGroupsSettings
         var quickSearch: QuickSearchSettings
         var displayControl: DisplayControlSettings
+        /// The two system entry points. Both are on by default and may never
+        /// both be off (see `AppPresenceSettings`).
+        var appPresence: AppPresenceSettings
 
         /// Spelled out because the custom `init(from:)` suppresses the
         /// synthesized conformance, and `launchesAtLoginWasStored` must stay a
@@ -2310,9 +2328,10 @@ final class MacPilotModel: ObservableObject {
             case screenCapture, screenRecording, pictureInPicture
             case inputSources, windowSwitcher, smoothScrolling, clipboard
             case awake, awakeTriggers, awakeProfiles, remoteControl, dockGroups, quickSearch, displayControl
+            case appPresence
         }
 
-        init(enabledFeatures: Set<MainSection>, rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, launchesAtLogin: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, updateChannel: AppChannel = .stable, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], awakeProfiles: [AwakeSessionProfile], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings, quickSearch: QuickSearchSettings, displayControl: DisplayControlSettings = DisplayControlSettings()) {
+        init(enabledFeatures: Set<MainSection>, rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, launchesAtLogin: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, updateChannel: AppChannel = .stable, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], awakeProfiles: [AwakeSessionProfile], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings, quickSearch: QuickSearchSettings, displayControl: DisplayControlSettings = DisplayControlSettings(), appPresence: AppPresenceSettings = .standard) {
             version = ConfigurationSchema.currentVersion
             self.enabledFeatures = enabledFeatures.map(\.rawValue).sorted()
             self.rules = rules
@@ -2340,6 +2359,7 @@ final class MacPilotModel: ObservableObject {
             self.dockGroups = dockGroups
             self.quickSearch = quickSearch
             self.displayControl = displayControl
+            self.appPresence = appPresence
         }
 
         /// Not encoded: sections that existed on disk but could not be decoded
@@ -2383,6 +2403,7 @@ final class MacPilotModel: ObservableObject {
             dockGroups = Self.section(DockGroupsSettings.self, forKey: .dockGroups, in: container, default: DockGroupsSettings(), degraded: &degraded)
             quickSearch = Self.section(QuickSearchSettings.self, forKey: .quickSearch, in: container, default: QuickSearchSettings(), degraded: &degraded)
             displayControl = Self.section(DisplayControlSettings.self, forKey: .displayControl, in: container, default: DisplayControlSettings(), degraded: &degraded)
+            appPresence = Self.section(AppPresenceSettings.self, forKey: .appPresence, in: container, default: .standard, degraded: &degraded)
             unreadableSections = degraded
         }
 
@@ -2438,6 +2459,7 @@ final class MacPilotModel: ObservableObject {
             try container.encode(dockGroups, forKey: .dockGroups)
             try container.encode(quickSearch, forKey: .quickSearch)
             try container.encode(displayControl, forKey: .displayControl)
+            try container.encode(appPresence, forKey: .appPresence)
         }
 
         /// 首页开关是功能唯一的开关，详情页不再保留自己的总开关（`docs/UI_DESIGN.md`）。
@@ -2579,6 +2601,18 @@ final class MacPilotModel: ObservableObject {
     /// 起 Spotlight 全部推迟到 `start()`。
     let quickSearch = QuickSearchModel()
     let displayControl = DisplayControlModel()
+    /// The Dock and menu-bar icon switches. Persisted intent only; the
+    /// controller that applies it lives in `MacPilotApp`, because it needs the
+    /// status item that the app owns.
+    @Published private(set) var appPresence = AppPresenceSettings.standard
+    /// True while the main window is on screen; the Dock icon follows it when
+    /// both entry points are enabled. Seeded from the launch context so the
+    /// first applied policy already matches the window that is about to
+    /// appear — a login launch stays in the menu bar.
+    @Published private(set) var isMainWindowOpen = !AppLaunchContext.wasLaunchedAtLogin
+    /// The live controller, once the App has created it. Weak so a released
+    /// controller is never resurrected by a settings change.
+    weak var presenceController: AppPresenceController?
     @Published var requestedSection: MainSection?
     /// Whether the main window holds its settings UI, and which page it opens
     /// on. False content is the normal state of a menu-bar app: the window
@@ -2748,6 +2782,7 @@ final class MacPilotModel: ObservableObject {
                 // while it is still animating closed. The token makes that turn
                 // safe to lose: a reopen in the meantime owns the content now.
                 let closing = self.mainContent.beginClose()
+                self.mainWindowVisibilityChanged(false)
                 Task { @MainActor [weak self] in
                     self?.mainContent.completeClose(requestedGeneration: closing)
                 }
@@ -2772,6 +2807,9 @@ final class MacPilotModel: ObservableObject {
                           window.title == Self.mainWindowTitle,
                           window.canBecomeMain else { return }
                     self.loadMainWindowContent()
+                    // A window that came back is a visible window again: the
+                    // Dock icon returns with it.
+                    self.mainWindowVisibilityChanged(true)
                 }
             })
         }
@@ -3695,6 +3733,7 @@ final class MacPilotModel: ObservableObject {
         dockGroups.applyLoadedSettings(configuration.dockGroups)
         quickSearch.applyLoadedSettings(configuration.quickSearch, activate: false)
         displayControl.applyLoadedSettings(configuration.displayControl)
+        appPresence = configuration.appPresence.normalized()
     }
 
     private func scheduleInputSourceSave() {
@@ -3739,7 +3778,8 @@ final class MacPilotModel: ObservableObject {
             remoteControl: remoteDeviceStore.settings,
             dockGroups: dockGroups.settings,
             quickSearch: quickSearch.settings,
-            displayControl: displayControl.settings
+            displayControl: displayControl.settings,
+            appPresence: appPresence
         )
         let data: Data
         do {
@@ -4056,6 +4096,48 @@ extension MacPilotModel {
 
     func loadMainWindowContent() {
         mainContent.load()
+    }
+
+    /// Switches the Dock icon, refusing a change that would leave neither
+    /// entry point on. Returns whether the change was accepted.
+    @discardableResult
+    func setShowsDockIcon(_ shows: Bool) -> Bool {
+        guard let updated = appPresence.allowingDockIconChange(to: shows) else { return false }
+        setAppPresence(updated)
+        return true
+    }
+
+    /// Switches the menu-bar icon with the same rule as the Dock icon.
+    @discardableResult
+    func setShowsMenuBarIcon(_ shows: Bool) -> Bool {
+        guard let updated = appPresence.allowingMenuBarIconChange(to: shows) else { return false }
+        setAppPresence(updated)
+        return true
+    }
+
+    func setAppPresence(_ settings: AppPresenceSettings) {
+        let normalized = settings.normalized()
+        guard normalized != appPresence else { return }
+        appPresence = normalized
+        presenceController?.update(settings: normalized)
+        saveIfReady()
+    }
+
+    /// Called when the main window appears or closes. Only the Dock icon
+    /// depends on it; the menu-bar icon is independent.
+    func mainWindowVisibilityChanged(_ isOpen: Bool) {
+        guard isOpen != isMainWindowOpen else { return }
+        isMainWindowOpen = isOpen
+        presenceController?.mainWindowVisibilityChanged(isOpen)
+    }
+
+    /// Keeps the live presence controller in step with the saved settings.
+    /// The App owns the controller (it needs the status item), the model owns
+    /// the persisted intent, and this is the one seam between them.
+    func connectPresence(_ controller: AppPresenceController) {
+        presenceController = controller
+        controller.update(settings: appPresence)
+        controller.mainWindowVisibilityChanged(isMainWindowOpen)
     }
 
     /// 这个组合是否已被 MacPilot 内另一个**已启用**的功能占用；返回占用者的标题键。
@@ -6474,6 +6556,27 @@ struct SettingsView: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(width: 220, alignment: .leading)
+                }
+                SettingsCard {
+                    Text(model.t("appPresence")).font(.headline)
+                    Text(model.t("appPresenceHint")).font(.subheadline).foregroundStyle(.secondary)
+                    // The switch that would remove the last way back into the
+                    // app is disabled rather than silently rejected.
+                    Toggle(model.t("showDockIcon"), isOn: Binding(
+                        get: { model.appPresence.showsDockIcon },
+                        set: { model.setShowsDockIcon($0) }
+                    ))
+                    .toggleStyle(.switch)
+                    .disabled(!model.appPresence.showsMenuBarIcon)
+                    Toggle(model.t("showMenuBarIcon"), isOn: Binding(
+                        get: { model.appPresence.showsMenuBarIcon },
+                        set: { model.setShowsMenuBarIcon($0) }
+                    ))
+                    .toggleStyle(.switch)
+                    .disabled(!model.appPresence.showsDockIcon)
+                    Text(model.t("appPresenceOneRequiredHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 SettingsCard {
                     Text(model.t("configFile")).font(.headline)

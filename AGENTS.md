@@ -127,6 +127,16 @@ Everything persisted under `StoredConfiguration` (`config.json` + sidecar files)
 - **Section isolation:** `StoredConfiguration.init(from:)` decodes every section through its `section(...)` helper; one unreadable section falls back to that section's defaults and is recorded in `unreadableSections` so `load()` quarantines the raw file before any save. Do not bypass this helper for persisted sections.
 - **The tripwire test** `Tests/MacPilotTests/ConfigurationSchemaContractTests.swift` asserts every persisted type still encodes its historical key set (append-only). A failing contract means your change would strand downgrades — keep the key, don't delete the assertion.
 
+## Dock and menu-bar icons (invariant)
+
+Both entry points are shown after a fresh install, and the user may hide either one in Settings — but never both. The rules live in `Sources/MacPilot/AppPresence.swift`; the model only persists intent, `AppPresenceController` applies it.
+
+- **At least one entry point always survives.** `AppPresenceSettings.normalized()` restores the menu-bar icon when a stored pair asks for neither, and `allowingDockIconChange` / `allowingMenuBarIconChange` refuse the change that would remove the last one. The Settings switches are disabled in that state rather than silently rejecting the toggle. A configuration that hides both (hand-edited, or written by a future build) must never strand a running app with no way back in.
+- **The Dock icon follows the main window only while the menu bar still offers a way in.** `AppPresencePolicy.showsDockIcon` returns the window state when both are enabled, and always `true` in the Dock-only configuration — there the icon is the only way back, so it must outlive the window. Closing the window switches the app to `.accessory`; reopening (menu bar, Dock click, deep link) switches it back to `.regular`. `LSUIElement` stays `true` in `Info.plist`; the policy is applied at runtime.
+- **`willClose` is the only close signal.** `orderOut` (the login-launch path in `hideRegularWindows`) must not hide the Dock icon: a hidden window is not a closed one.
+- **The status item must always leave an item behind.** `MenuBarDisplayController.scheduleReinsert` removes the item, waits, and reinstalls; every exit from that removed window — including a cancelled sleep — has to restore it, or `reinserting` stays set with no item and no task and the icon is gone until relaunch (observed after the v1.2.2-beta.59 native-menu change). `scheduleReinsert` restores synchronously before its next pass, and `selfHeal()` (driven by `startWatchdog`) covers the rest.
+- Validate with `AppPresenceTests`, `MenuBarDisplayControllerTests` and `ConfigurationSchemaContractTests` after touching this path.
+
 ## Dock Groups helper editing (invariant)
 
 The helper panel can add, remove and reorder a group's apps, so the old "main app writes, helper reads" split no longer holds. Both processes edit the same `groups.json`; correctness depends on these rules:
