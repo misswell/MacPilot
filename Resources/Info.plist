@@ -59,6 +59,10 @@
 	<string>MacPilot shows the camera in a floating overlay window that is captured into screen recordings.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>MacPilot uses the microphone to record narration as a separate audio track in screen recordings. Audio stays on your Mac.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>MacPilot needs location access to read the connected Wi-Fi name and quit apps on the Wi-Fi networks you choose. Your location is not recorded or sent anywhere.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>MacPilot reads the connected Wi-Fi name for your Wi-Fi quit rules.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>MacPilot needs local network access so PilotNest can discover this nearby Mac and connect securely for remote control. Connections stay between your devices; nothing is sent to the internet.</string>
 	<key>NSBonjourServices</key>

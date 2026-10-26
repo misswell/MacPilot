@@ -220,8 +220,10 @@ struct QuitRule: Identifiable, Codable, Hashable {
     var inactiveQuitMinutes: Int?
     var hiddenQuitMinutes: Int?
     var isEnabled = true
+    // Optional for compatibility with rules saved before Wi-Fi triggers existed.
+    var quitWiFiNames: [String]? = nil
 
-    var hasAction: Bool { inactiveHideMinutes != nil || inactiveCloseMinutes != nil || inactiveQuitMinutes != nil || hiddenQuitMinutes != nil }
+    var hasAction: Bool { !(quitWiFiNames ?? []).isEmpty || inactiveHideMinutes != nil || inactiveCloseMinutes != nil || inactiveQuitMinutes != nil || hiddenQuitMinutes != nil }
 }
 
 struct AppVersionInfo: Equatable {
@@ -243,6 +245,8 @@ struct AppVersionInfo: Equatable {
 }
 
 private struct QuitRuntimeState {
+    var wiFiQuitPID: pid_t?
+    var wiFiQuitAt: Date?
     var lastActiveAt: Date?
     var hiddenAt: Date?
     var didHideSinceActive = false
@@ -471,9 +475,16 @@ enum AppText {
         "home": "首页", "homeSubtitle": "选择需要的工具；未开启的功能不会显示在左侧，也不会在后台运行。",
         "homeFeatureHint": "首页开关控制功能入口和后台运行。打开后，功能会出现在左侧菜单中。",
         "homeEnabledCount": "已启用 %d 个功能", "homeAutomation": "自动化", "homeUtilities": "效率工具",
+        "quitWiFi": "连接指定 Wi-Fi 时退出",
+        "quitWiFiHint": "每行一个 Wi-Fi 名称，区分大小写。连接任意一个后即退出应用（包括前台应用）；约每 10 秒检查一次。",
+        "quitWiFiPlaceholder": "Wi-Fi 名称（每行一个）",
+        "quitWiFiSummary": "连接 Wi-Fi 时退出：%@",
+        "quitWiFiPermission": "读取 Wi-Fi 名称需要定位权限；未授权或名称不可读时不会触发退出。",
+        "quitWiFiAuthorize": "允许读取 Wi-Fi 名称",
+        "quitWiFiSettings": "打开定位服务设置",
         "rules": "退出", "settings": "设置", "addApp": "添加应用", "apps": "应用",
         "versionLabel": "版本 %@（构建 %@）",
-        "rulesSubtitle": "在应用闲置一段时间后自动隐藏、关闭窗口或退出。",
+        "rulesSubtitle": "按闲置时间自动隐藏、关闭窗口或退出，也可在连接指定 Wi-Fi 时退出应用。",
         "dropApp": "拖入应用以添加规则", "invalidDrop": "请拖入 macOS 应用（.app）以创建规则。",
         "duplicateRule": "已存在 \"%@\" 的规则。", "selfRule": "MacPilot 不能管理自身。", "enforcing": "规则执行中", "paused": "规则已暂停",
         "enabledChecked": "%d 条已启用 · 检查于 %@", "noApps": "尚未添加应用",
@@ -1774,7 +1785,14 @@ enum AppText {
             "homeEnabledCount": "%d features enabled", "homeAutomation": "Automation", "homeUtilities": "Utilities",
             "rules": "Exit", "settings": "Settings", "addApp": "Add app", "apps": "APPS",
             "versionLabel": "Version %@ (Build %@)",
-            "rulesSubtitle": "Hide, close windows, or quit apps after they’ve been inactive.", "dropApp": "Drop an app to add its rule",
+            "quitWiFi": "Quit on selected Wi-Fi networks",
+            "quitWiFiHint": "One Wi-Fi name per line, case-sensitive. Quit the app, including when active, on any match. Checked about every 10 seconds.",
+            "quitWiFiPlaceholder": "Wi-Fi names (one per line)",
+            "quitWiFiSummary": "Quit on Wi-Fi: %@",
+            "quitWiFiPermission": "Location access is required to read Wi-Fi names. No quit is triggered when access or names are unavailable.",
+            "quitWiFiAuthorize": "Allow Wi-Fi name access",
+            "quitWiFiSettings": "Open Location Services settings",
+            "rulesSubtitle": "Hide, close windows, or quit inactive apps, or quit apps on selected Wi-Fi networks.", "dropApp": "Drop an app to add its rule",
             "invalidDrop": "Drop a macOS application (.app) to create a rule.", "duplicateRule": "A rule for \"%@\" already exists.",
             "selfRule": "MacPilot cannot manage itself.",
             "enforcing": "Enforcing rules", "paused": "Rules paused", "enabledChecked": "%d enabled • checked %@",
@@ -2564,6 +2582,7 @@ final class MacPilotModel: ObservableObject {
     let awakeTriggers: AwakeTriggerEngine
     /// 会话方案：Awake 的配置模板存储，持久化在 config.json 的 awakeProfiles。
     let awakeProfiles = AwakeProfileStore()
+    let quitWiFiMonitor = QuitWiFiMonitor()
     let featureLifecycle = FeatureLifecycleManager()
     lazy var exitFeature = ClosureManagedFeature(
         identifier: "exit",
@@ -2574,6 +2593,7 @@ final class MacPilotModel: ObservableObject {
             self?.rebuildQuitSchedule()
         },
         stop: { [weak self] in
+            self?.quitWiFiMonitor.stop()
             self?.stopSafetyChecks()
             self?.cancelAllQuitTasks(resetRuntime: true)
             self?.stopObservingWorkspace()
@@ -3250,6 +3270,7 @@ final class MacPilotModel: ObservableObject {
         quitRuntimeStates[rule.id] = nil
         quitDeadlines[rule.id] = nil
         save()
+        rebuildQuitSchedule()
     }
 
     func move(from offsets: IndexSet, to destination: Int) {
@@ -3463,6 +3484,10 @@ final class MacPilotModel: ObservableObject {
     }
 
     private func rebuildQuitSchedule(now: Date = Date()) {
+        quitWiFiMonitor.configure(
+            enabled: isFeatureEnabled(.exit) && isEnforcing && rules.contains { $0.isEnabled && !($0.quitWiFiNames ?? []).isEmpty },
+            onChange: { [weak self] in self?.rebuildQuitSchedule() }
+        )
         guard isFeatureEnabled(.exit), isEnforcing else {
             cancelAllQuitTasks()
             return
@@ -3491,6 +3516,19 @@ final class MacPilotModel: ObservableObject {
         }
 
         var state = quitRuntimeStates[rule.id] ?? QuitRuntimeState()
+        if QuitWiFiPolicy.matches(names: rule.quitWiFiNames, connectedNames: quitWiFiMonitor.connectedNames) {
+            if state.wiFiQuitPID != app.processIdentifier || state.wiFiQuitAt.map({ now.timeIntervalSince($0) >= 60 }) != false {
+                quitWithoutAutomationPrompt(app)
+                state.wiFiQuitPID = app.processIdentifier
+                state.wiFiQuitAt = now
+            }
+            quitRuntimeStates[rule.id] = state
+            quitDeadlines[rule.id] = nil
+            scheduleQuitWake(for: rule.id, at: now.addingTimeInterval(60), now: now)
+            return
+        }
+        state.wiFiQuitPID = nil
+        state.wiFiQuitAt = nil
         if app.isActive {
             cancelQuitTask(for: rule.id)
             state.lastActiveAt = now
@@ -3892,6 +3930,7 @@ final class MacPilotModel: ObservableObject {
             startSafetyChecks()
             rebuildQuitSchedule()
         } else {
+            quitWiFiMonitor.stop()
             stopSafetyChecks()
             cancelAllQuitTasks(resetRuntime: true)
         }
@@ -4810,6 +4849,7 @@ struct RuleRow: View {
         if let m = rule.inactiveCloseMinutes { items.append(model.t("closeAfter", m)) }
         if let m = rule.inactiveQuitMinutes { items.append(model.t("quitAfter", m)) }
         if let m = rule.hiddenQuitMinutes { items.append(model.t("quitHidden", m)) }
+        if let names = rule.quitWiFiNames, !names.isEmpty { items.append(model.t("quitWiFiSummary", names.joined(separator: ", "))) }
         return items.joined(separator: " • ")
     }
 }
@@ -4916,6 +4956,8 @@ struct RuleEditor: View {
     @State private var inactiveQuitMinutes = 10
     @State private var hiddenQuitEnabled = false
     @State private var hiddenQuitMinutes = 10
+    @State private var wiFiQuitEnabled = false
+    @State private var wiFiNames = ""
     @State private var runningApps: [NSRunningApplication] = []
     @State private var needsAccessibilityRecovery = false
 
@@ -4932,26 +4974,34 @@ struct RuleEditor: View {
         _inactiveQuitMinutes = State(initialValue: rule?.inactiveQuitMinutes ?? 10)
         _hiddenQuitEnabled = State(initialValue: rule?.hiddenQuitMinutes != nil)
         _hiddenQuitMinutes = State(initialValue: rule?.hiddenQuitMinutes ?? 10)
+        _wiFiQuitEnabled = State(initialValue: !(rule?.quitWiFiNames ?? []).isEmpty)
+        _wiFiNames = State(initialValue: (rule?.quitWiFiNames ?? []).joined(separator: "\n"))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text(original == nil ? model.t("addRule") : model.t("editAppRule")).font(.title2.bold())
             Text(model.t("ruleDetail")).foregroundStyle(.secondary)
-            appPicker
-            Divider()
-            ActionSetting(title: model.t("hideInactive"), enabled: $hideEnabled, minutes: $hideMinutes)
-            ActionSetting(title: model.t("closeInactive"), enabled: $closeEnabled, minutes: $closeMinutes)
-            Text(model.t("closeWindowHint")).font(.caption).foregroundStyle(.secondary)
-            if closeEnabled && needsAccessibilityRecovery {
-                AccessibilityRecoveryView()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    appPicker
+                    Divider()
+                    ActionSetting(title: model.t("hideInactive"), enabled: $hideEnabled, minutes: $hideMinutes)
+                    ActionSetting(title: model.t("closeInactive"), enabled: $closeEnabled, minutes: $closeMinutes)
+                    Text(model.t("closeWindowHint")).font(.caption).foregroundStyle(.secondary)
+                    if closeEnabled && needsAccessibilityRecovery {
+                        AccessibilityRecoveryView()
+                    }
+                    ActionSetting(title: model.t("quitInactive"), enabled: $inactiveQuitEnabled, minutes: $inactiveQuitMinutes)
+                    ActionSetting(title: model.t("quitAfterHidden"), enabled: $hiddenQuitEnabled, minutes: $hiddenQuitMinutes)
+                    QuitWiFiEditor(enabled: $wiFiQuitEnabled, names: $wiFiNames)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            ActionSetting(title: model.t("quitInactive"), enabled: $inactiveQuitEnabled, minutes: $inactiveQuitMinutes)
-            ActionSetting(title: model.t("quitAfterHidden"), enabled: $hiddenQuitEnabled, minutes: $hiddenQuitMinutes)
-            Spacer()
-            HStack { Spacer(); Button(model.t("cancel")) { dismiss() }; Button(original == nil ? model.t("addApp") : model.t("save")) { save() }.buttonStyle(.borderedProminent).disabled(bundleIdentifier.isEmpty || !(hideEnabled || closeEnabled || inactiveQuitEnabled || hiddenQuitEnabled)) }
+            Spacer(minLength: 0)
+            HStack { Spacer(); Button(model.t("cancel")) { dismiss() }; Button(original == nil ? model.t("addApp") : model.t("save")) { save() }.buttonStyle(.borderedProminent).disabled(bundleIdentifier.isEmpty || !(hideEnabled || closeEnabled || inactiveQuitEnabled || hiddenQuitEnabled || (wiFiQuitEnabled && !QuitWiFiPolicy.parse(wiFiNames).isEmpty))) }
         }
-        .padding(28).frame(width: 520, height: needsAccessibilityRecovery ? 700 : 625)
+        .padding(28).frame(width: 560, height: 700)
         .onAppear {
             runningApps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && $0.bundleIdentifier != Bundle.main.bundleIdentifier }.sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
             needsAccessibilityRecovery = closeEnabled && !model.hasWindowControlAccess()
@@ -5028,7 +5078,8 @@ struct RuleEditor: View {
             inactiveCloseMinutes: closeEnabled ? closeMinutes : nil,
             inactiveQuitMinutes: inactiveQuitEnabled ? inactiveQuitMinutes : nil,
             hiddenQuitMinutes: hiddenQuitEnabled ? hiddenQuitMinutes : nil,
-            isEnabled: original?.isEnabled ?? true
+            isEnabled: original?.isEnabled ?? true,
+            quitWiFiNames: wiFiQuitEnabled ? QuitWiFiPolicy.parse(wiFiNames) : nil
         )
         if original == nil {
             if model.addRule(rule) { dismiss() }
