@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Identity for the display-recovery agent.
+
+	  The agent lives inside MacPilot.app because SMAppService requires its
+	  LaunchAgent plist to name a program inside that bundle. As a bare
+	  executable under Contents/MacOS it inherits the host bundle's identity,
+	  and LaunchServices then treats a running agent as a running MacPilot:
+	  `open -a MacPilot.app`, Finder double-clicks and login launches resolve to
+	  the agent, so the real process is never spawned and nothing appears.
+
+	  A nested app bundle with its own identifier keeps the program inside the
+	  host bundle while giving it a separate LaunchServices identity. Both
+	  LSUIElement and LSBackgroundOnly mark it as a background-only program, so
+	  it never registers a Dock icon or a menu-bar item of its own.
+	-->
+	<key>CFBundleIdentifier</key>
+	<string>com.misswell.macpilot.display-recovery</string>
+	<key>CFBundleExecutable</key>
+	<string>MacPilotDisplayRecovery</string>
+	<key>CFBundleName</key>
+	<string>MacPilot Display Recovery</string>
+	<key>CFBundleDisplayName</key>
+	<string>MacPilot Display Recovery</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSBackgroundOnly</key>
+	<true/>
+</dict>
+</plist>

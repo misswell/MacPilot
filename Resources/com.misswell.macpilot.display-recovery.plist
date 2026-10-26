@@ -4,8 +4,18 @@
 <dict>
 	<key>Label</key>
 	<string>com.misswell.macpilot.display-recovery</string>
+	<!--
+	  The program lives in a nested app bundle (Contents/Helpers/
+	  MacPilotDisplayRecovery.app), not directly under Contents/MacOS. A bare
+	  executable there inherits the host bundle's identity, and LaunchServices
+	  then treats a running agent as a running MacPilot — `open -a MacPilot.app`,
+	  Finder double-clicks and login launches resolve to the agent, so the real
+	  process never starts and nothing appears. The nested bundle gives the
+	  agent its own identity while keeping the program inside the host bundle,
+	  which SMAppService requires.
+	-->
 	<key>BundleProgram</key>
-	<string>Contents/MacOS/MacPilotDisplayRecovery</string>
+	<string>Contents/Helpers/MacPilotDisplayRecovery.app/Contents/MacOS/MacPilotDisplayRecovery</string>
 	<key>MachServices</key>
 	<dict>
 		<key>com.misswell.macpilot.display-recovery</key>

@@ -92,8 +92,18 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_EXECUTABLE_NAME"
 cp "$UPDATER_BIN" "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
 cp "$HELPER_BIN" "$APP/Contents/MacOS/MacPilotPowerHelper"
-cp "$DISPLAY_RECOVERY_BIN" "$APP/Contents/MacOS/MacPilotDisplayRecovery"
-chmod 755 "$APP/Contents/MacOS/MacPilotDisplayRecovery"
+# 常驻的显示恢复助手要包成独立 .app：SMAppService 要求 LaunchAgent 的
+# BundleProgram 指向本 bundle 内的程序，而裸可执行文件会继承主 App 的
+# bundle identity —— 助手在跑时 LaunchServices 认为 MacPilot 已在运行，
+# `open -a`、Finder 双击、登录启动全都不再创建主进程（用户看到「点了没反应」）。
+# 嵌套 app 让它留在 bundle 内、同时拥有独立的 LS 身份。
+RECOVERY_AGENT_APP="$APP/Contents/Helpers/MacPilotDisplayRecovery.app"
+mkdir -p "$RECOVERY_AGENT_APP/Contents/MacOS"
+cp "$DISPLAY_RECOVERY_BIN" "$RECOVERY_AGENT_APP/Contents/MacOS/MacPilotDisplayRecovery"
+chmod 755 "$RECOVERY_AGENT_APP/Contents/MacOS/MacPilotDisplayRecovery"
+cp "$ROOT/Resources/MacPilotDisplayRecovery.app.Info.plist" "$RECOVERY_AGENT_APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${BUNDLE_VERSION:-1.0.0}" "$RECOVERY_AGENT_APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER:-1}" "$RECOVERY_AGENT_APP/Contents/Info.plist"
 # 独立恢复 Helper：版本切换前会被复制到 VersionManager/Recovery/，
 # 用于从"没有版本管理器的旧版本"恢复降级前的 App 与配置。
 RECOVERY_BIN="$BIN_DIR/MacPilotRecovery"
@@ -235,8 +245,11 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
             --sign - "$REXT_APPEX"
         codesign --force --sign - "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
         codesign --force --sign - "$APP/Contents/MacOS/MacPilotRecovery"
+        # The nested bundle is signed whole (its own identifier comes from its
+        # Info.plist) before the host bundle, so the seal covers a finished
+        # nested signature rather than one written afterwards.
         codesign --force --identifier "$DISPLAY_RECOVERY_IDENTIFIER" --sign - \
-            "$APP/Contents/MacOS/MacPilotDisplayRecovery"
+            "$RECOVERY_AGENT_APP"
         codesign --force --identifier "$DOCK_HELPER_IDENTIFIER" --sign - \
             "$APP/Contents/MacOS/MacPilotDockHelper"
         codesign --force --sign - \
@@ -252,8 +265,10 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
             "$APP/Contents/MacOS/$UPDATER_EXECUTABLE_NAME"
         codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
             "$APP/Contents/MacOS/MacPilotRecovery"
+        # Sign the whole nested bundle: signing only its executable leaves an
+        # unsigned Info.plist that LaunchServices will not trust as an identity.
         codesign --force --options runtime --identifier "$DISPLAY_RECOVERY_IDENTIFIER" \
-            --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/MacPilotDisplayRecovery"
+            --sign "$SIGNING_IDENTITY" "$RECOVERY_AGENT_APP"
         codesign --force --options runtime --identifier "$DOCK_HELPER_IDENTIFIER" \
             --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/MacPilotDockHelper"
         codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
