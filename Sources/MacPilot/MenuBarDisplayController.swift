@@ -206,6 +206,14 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
                 NSStatusBar.system.removeStatusItem(item)
                 self.statusItem = nil
             }
+            // The item is out of the menu bar from here on. This sleep is
+            // cancellable, so every exit — including a cancellation — has to
+            // reinstall it. Returning straight out of a cancelled sleep left
+            // `reinserting` true with no item and no task left to put one
+            // back, which hid the icon until relaunch.
+            defer {
+                if self.reinserting { self.finishInsertion() }
+            }
             do { try await Task.sleep(for: self.insertionDelay) } catch { return }
             guard self.revision == token else { return }
             self.finishInsertion()
