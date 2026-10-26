@@ -20,6 +20,8 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     var recoveryShortcutConflict: (() -> Bool)?
     private let client: any DisplayRecoverySending
     private let monitor: UUSessionMonitor
+    private let recoveryService: any DisplayRecoveryRegistering
+    @Published private(set) var isPreparingHelper = false
     private var pollTask: Task<Void, Never>?
     private var operationTask: Task<Void, Never>?
     private var sessionID: String?
@@ -34,8 +36,10 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
 
     init(client: (any DisplayRecoverySending)? = nil, monitor: UUSessionMonitor? = nil,
          showsConfirmation: Bool = true, prepareVisibleOutputs: (() -> Bool)? = nil,
-         controlStateChanged: ((Bool) -> Void)? = nil) {
+         controlStateChanged: ((Bool) -> Void)? = nil,
+         recoveryService: (any DisplayRecoveryRegistering)? = nil) {
         self.client = client ?? DisplayRecoveryClient()
+        self.recoveryService = recoveryService ?? DisplayRecoveryRegistration()
         self.monitor = monitor ?? UUSessionMonitor()
         self.showsConfirmation = showsConfirmation
         self.prepareVisibleOutputs = prepareVisibleOutputs ?? {
@@ -69,7 +73,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     }
     var canChange: Bool {
         guard let snapshot else { return false }
-        return isRunning && helperReady && !isBusy && snapshot.confirmationDeadline == nil
+        return isRunning && helperReady && !isBusy && !isPreparingHelper && snapshot.confirmationDeadline == nil
             && [.idle, .active].contains(snapshot.state)
     }
     var isConfirmingVirtual: Bool { snapshot?.state == .awaitingVirtualConfirmation }
@@ -139,12 +143,37 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     }
 
     func prepareHelper() {
+        Task { await prepareHelperAndRefresh() }
+    }
+
+    func prepareHelperAndRefresh() async {
+        guard !isPreparingHelper, !isBusy, !hasControl else { return }
         guard recoveryShortcutConflict?() != true else { errorKey = "displayRecoveryShortcutConflict"; return }
+        isPreparingHelper = true
+        defer { isPreparingHelper = false }
         do {
-            let service = SMAppService.agent(plistName: DisplayRecoveryService.serviceName + ".plist")
-            if service.status != .enabled { try service.register() }
-            errorKey = service.status == .enabled ? nil : "displayHelperApproval"
-            Task { await refresh() }
+            if recoveryService.status == .enabled {
+                do {
+                    // An enabled registration can still point at an executable
+                    // removed by an update. Only a live reply proves it works.
+                    let response = try await client.send(.init(command: .status))
+                    apply(response)
+                    return
+                } catch {
+                    // An in-flight poll can reveal that this helper owns pending
+                    // recovery. Do not cycle it once control has become active.
+                    guard !hasControl else { return }
+                    try await recoveryService.unregister()
+                }
+            }
+            if recoveryService.status != .requiresApproval {
+                try recoveryService.register()
+            }
+            guard recoveryService.status == .enabled else {
+                errorKey = "displayHelperApproval"
+                return
+            }
+            await refresh()
         } catch { errorKey = "displayHelperInstallFailed" }
     }
 
@@ -226,7 +255,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
 
     private func poll() async {
         now = Date()
-        guard !isBusy else { return }
+        guard !isBusy, !isPreparingHelper else { return }
         let epoch = operationEpoch
         do {
             let command: DisplayControlCommand = hasControl ? .heartbeat : .status
