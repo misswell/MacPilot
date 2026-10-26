@@ -188,13 +188,13 @@ struct MenuBarDisplayControllerTests {
 
         state.screens = [main, third]
         center.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
-        #expect(await waitForInsertionState(true, controller))
-        try? await Task.sleep(for: .milliseconds(100))
+        // Cancelling the first pass synchronously restores the icon, then
+        // starts a replacement pass. That interim `true` is not completion:
+        // wait for both remove/insert pairs, rather than a wall-clock delay.
+        #expect(await waitForInsertions(4, changes))
 
         #expect(controller.isInserted)
-        // 中断「移除后重装」窗口的任务会先把图标装回来，再由替换任务重跑一遍，
-        // 因此这里可能比 2 次略多；关键是最终必须已插入，而不是停在已移除。
-        #expect((2...4).contains(changes.count))
+        #expect(changes.count == 4)
     }
 
     @Test func topologyChangeWhileAMenuTracksDuringTheRemovedWindowRestoresTheItem() async {
