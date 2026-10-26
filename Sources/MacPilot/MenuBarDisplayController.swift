@@ -2,6 +2,15 @@ import AppKit
 import Combine
 import MacPilotDisplayControlCore
 
+@MainActor
+protocol MenuBarStatusItem: AnyObject {
+    var autosaveName: NSStatusItem.AutosaveName! { get set }
+    var isVisible: Bool { get set }
+    var button: NSStatusBarButton? { get }
+}
+
+extension NSStatusItem: MenuBarStatusItem {}
+
 struct MenuBarDisplay: Equatable, Sendable {
     let uuid: String
     let frame: CGRect
@@ -34,7 +43,9 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     private var watchdogTask: Task<Void, Never>?
     private var subscriptions: MenuBarDisplaySubscriptions?
     private var iconSubscriptions = Set<AnyCancellable>()
-    private var statusItem: NSStatusItem?
+    private var statusItem: (any MenuBarStatusItem)?
+    private let makeStatusItem: @MainActor () -> any MenuBarStatusItem
+    private let removeItem: @MainActor (any MenuBarStatusItem) -> Void
     private var lastIconName: String?
     private var openingOwnedMenu = false
     var usesNativeMenu: Bool { menuFactory != nil }
@@ -46,7 +57,13 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         debounce: Duration = .milliseconds(300),
         insertionDelay: Duration = .milliseconds(80),
         menuFactory: (@MainActor (MenuBarDisplayController) -> NSMenu)? = nil,
-        iconName: @escaping @MainActor () -> String = { "timer" }
+        iconName: @escaping @MainActor () -> String = { "timer" },
+        makeStatusItem: @escaping @MainActor () -> any MenuBarStatusItem = {
+            NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        },
+        removeItem: @escaping @MainActor (any MenuBarStatusItem) -> Void = { item in
+            if let item = item as? NSStatusItem { NSStatusBar.system.removeStatusItem(item) }
+        }
     ) {
         center = notificationCenter
         self.screens = screens
@@ -55,6 +72,8 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         self.insertionDelay = insertionDelay
         self.menuFactory = menuFactory
         self.iconName = iconName
+        self.makeStatusItem = makeStatusItem
+        self.removeItem = removeItem
         topology = screens().sorted { $0.uuid < $1.uuid }
         super.init()
         var tokens: [NSObjectProtocol] = []
@@ -203,7 +222,7 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
             self.reinserting = true
             self.isInserted = false
             if let item = self.statusItem {
-                NSStatusBar.system.removeStatusItem(item)
+                removeItem(item)
                 self.statusItem = nil
             }
             // The item is out of the menu bar from here on. This sleep is
@@ -230,7 +249,7 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
 
     private func installStatusItem() {
         guard isEnabled, menuFactory != nil, statusItem == nil else { return }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        let item = makeStatusItem()
         item.autosaveName = "MacPilotStatusItem"
         statusItem = item
         item.button?.target = self
@@ -239,11 +258,15 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         item.button?.setAccessibilityLabel("MacPilot")
         lastIconName = nil
         updateIcon()
+        // AppKit restores visibility when autosaveName is assigned, including
+        // a hidden value left by the previous removal. Our enabled setting
+        // owns visibility, so a newly installed item must explicitly be shown.
+        item.isVisible = true
     }
 
     private func removeStatusItem() {
         guard let item = statusItem else { return }
-        NSStatusBar.system.removeStatusItem(item)
+        removeItem(item)
         statusItem = nil
         lastIconName = nil
     }
