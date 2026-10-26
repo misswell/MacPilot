@@ -195,6 +195,44 @@ struct MenuBarDisplayControllerTests {
         #expect(changes.count == 2 || changes.count == 3)
     }
 
+    @Test func topologyChangeWhileAMenuTracksDuringTheRemovedWindowRestoresTheItem() async {
+        let main = screen("main", x: 0)
+        let external = screen("external", x: 1_920)
+        let third = screen("third", x: 3_840)
+        let state = TestDisplayState([main, external])
+        let center = NotificationCenter()
+        let controller = MenuBarDisplayController(
+            notificationCenter: center,
+            screens: { state.screens },
+            debounce: .milliseconds(2),
+            insertionDelay: .milliseconds(70)
+        )
+        let changes = observeInsertions(controller)
+        defer { controller.stop() }
+        let menu = NSMenu()
+
+        state.screens = [main]
+        center.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        #expect(await waitForInsertionState(false, controller))
+
+        // A menu starts tracking while the status item sits removed, then the
+        // topology changes again. Cancelling the in-flight reattachment must
+        // restore the item at once — waiting for tracking to end would hide
+        // the icon for as long as the menu stays open.
+        center.post(name: NSMenu.didBeginTrackingNotification, object: menu)
+        state.screens = [main, third]
+        center.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        #expect(await waitForInsertionState(true, controller))
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(controller.isInserted)
+
+        // Tracking ends: the pending topology change still re-runs the dance.
+        center.post(name: NSMenu.didEndTrackingNotification, object: menu)
+        #expect(await waitForInsertionState(true, controller))
+        try? await Task.sleep(for: .milliseconds(120))
+        #expect(controller.isInserted)
+    }
+
     private func makeController(
         center: NotificationCenter,
         screens: @escaping @MainActor () -> [MenuBarDisplay],

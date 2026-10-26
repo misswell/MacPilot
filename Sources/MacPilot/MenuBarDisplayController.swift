@@ -85,6 +85,7 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     }
 
     private func receive(name: Notification.Name, menuID: ObjectIdentifier?) {
+        ensureInstalled()
         switch name {
         case NSApplication.didChangeScreenParametersNotification:
             let next = screens().sorted { $0.uuid < $1.uuid }
@@ -107,6 +108,14 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         }
     }
 
+    /// Self-heals every path that could leave the icon uninstalled: a launch
+    /// notification missed, or a cancelled reattachment that never got to
+    /// reinstall. Reattachment itself is guarded by `reinserting`.
+    private func ensureInstalled() {
+        guard menuFactory != nil, !reinserting, statusItem == nil else { return }
+        installStatusItem()
+    }
+
     private func captureTarget() {
         let point = pointer()
         targetUUID = screens().first(where: { $0.frame.contains(point) })?.uuid
@@ -116,7 +125,15 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         revision += 1
         let token = revision
         reinsertTask?.cancel()
-        guard trackingMenus.isEmpty else { return }
+        guard trackingMenus.isEmpty else {
+            // The cancelled task may already sit between removal and
+            // reinstall. Tracking ending would re-run the dance, but leaving
+            // the item removed until then hides the menu-bar icon for as
+            // long as any menu stays open — restore it immediately.
+            needsReinsert = true
+            if reinserting { finishInsertion() }
+            return
+        }
         reinsertTask = Task { @MainActor [weak self, debounce] in
             do { try await Task.sleep(for: debounce) } catch { return }
             guard let self, self.revision == token, self.trackingMenus.isEmpty,
@@ -155,6 +172,7 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     }
 
     private func updateIcon() {
+        ensureInstalled()
         let name = iconName()
         guard let button = statusItem?.button, lastIconName != name else { return }
         let image = NSImage(systemSymbolName: name, accessibilityDescription: "MacPilot")
