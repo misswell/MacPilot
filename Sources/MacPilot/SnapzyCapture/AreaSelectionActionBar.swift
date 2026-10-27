@@ -521,8 +521,10 @@ final class AreaSelectionActionBar: NSView {
       row.addArrangedSubview(makeLineStylePopUp(model))
       row.addArrangedSubview(makeWidthControl(model, titleKey: "scAnnotationLineWidth"))
       row.addArrangedSubview(makeColorControls(model))
-    case .pencil, .highlighter:
+    case .pencil:
       row.addArrangedSubview(makeWidthControl(model, titleKey: "scAnnotationLineWidth"))
+      row.addArrangedSubview(makeColorControls(model))
+    case .highlighter:
       row.addArrangedSubview(makeColorControls(model))
     case .text, .counter:
       row.addArrangedSubview(makeWidthControl(model, titleKey: "scToolSize"))

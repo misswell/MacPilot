@@ -5594,7 +5594,7 @@ struct SmartAnnotationStyle: Equatable, Sendable {
     static func `default`(for tool: SmartAnnotationTool) -> Self {
         switch tool {
         case .highlighter:
-            return Self(lineWidth: 14, opacity: 0.45, color: .yellow)
+            return Self(lineWidth: 14, opacity: 0.45, color: .red)
         case .watermark:
             return Self(lineWidth: 3, opacity: 0.76, color: .white)
         case .filledRectangle:
@@ -5717,7 +5717,7 @@ extension SmartAnnotation {
 
     func hitTest(_ point: CGPoint, tolerance: CGFloat = 0.018) -> Bool {
         switch self {
-        case .arrow(let start, let end), .line(let start, let end), .highlighter(let start, let end):
+        case .arrow(let start, let end), .line(let start, let end):
             return Self.distance(from: point, to: start, end: end) <= tolerance
         case .pencil(let points):
             return zip(points, points.dropFirst()).contains {
@@ -6440,22 +6440,24 @@ struct SmartAnnotationEditor: View {
             Divider()
                 .frame(height: 22)
 
-            HStack(spacing: 4) {
-                Text(AppText.value("scAnnotationLineWidth", language: language))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Image(systemName: "line.3.horizontal")
-                    .foregroundStyle(.secondary)
-                Slider(value: lineWidthBinding, in: 1...48, step: 1)
-                    .frame(width: 78)
-                Text(Self.lineWidthDisplayText(for: model.currentStyle.lineWidth))
-                    .font(.caption.monospacedDigit())
-                    .frame(width: 24, alignment: .trailing)
+            if model.tool != .highlighter {
+                HStack(spacing: 4) {
+                    Text(AppText.value("scAnnotationLineWidth", language: language))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "line.3.horizontal")
+                        .foregroundStyle(.secondary)
+                    Slider(value: lineWidthBinding, in: 1...48, step: 1)
+                        .frame(width: 78)
+                    Text(Self.lineWidthDisplayText(for: model.currentStyle.lineWidth))
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 24, alignment: .trailing)
+                }
+                .help(AppText.value("scAnnotationLineWidth", language: language))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(AppText.value("scAnnotationLineWidth", language: language))
+                .accessibilityValue(Text(Self.lineWidthDisplayText(for: model.currentStyle.lineWidth)))
             }
-            .help(AppText.value("scAnnotationLineWidth", language: language))
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(AppText.value("scAnnotationLineWidth", language: language))
-            .accessibilityValue(Text(Self.lineWidthDisplayText(for: model.currentStyle.lineWidth)))
 
             HStack(spacing: 4) {
                 Text(AppText.value("scAnnotationOpacity", language: language))
@@ -6474,37 +6476,39 @@ struct SmartAnnotationEditor: View {
             .accessibilityLabel(AppText.value("scAnnotationOpacity", language: language))
             .accessibilityValue(Text(Self.opacityDisplayText(for: model.currentStyle.opacity)))
 
-            Toggle(
-                AppText.value("scAnnotationFill", language: language),
-                isOn: fillBinding
-            )
-            .toggleStyle(.checkbox)
-            .font(.caption)
+            if model.tool != .highlighter {
+                Toggle(
+                    AppText.value("scAnnotationFill", language: language),
+                    isOn: fillBinding
+                )
+                .toggleStyle(.checkbox)
+                .font(.caption)
 
-            Menu {
-                ForEach(SmartAnnotationLineStyle.allCases) { lineStyle in
-                    Button {
-                        model.setLineStyle(lineStyle)
-                    } label: {
-                        HStack {
-                            Text(lineStyle.title(language: language))
-                            if model.currentStyle.lineStyle == lineStyle {
-                                Image(systemName: "checkmark")
+                Menu {
+                    ForEach(SmartAnnotationLineStyle.allCases) { lineStyle in
+                        Button {
+                            model.setLineStyle(lineStyle)
+                        } label: {
+                            HStack {
+                                Text(lineStyle.title(language: language))
+                                if model.currentStyle.lineStyle == lineStyle {
+                                    Image(systemName: "checkmark")
+                                }
                             }
                         }
                     }
+                } label: {
+                    Label(
+                        model.currentStyle.lineStyle.title(language: language),
+                        systemImage: "line.3.horizontal"
+                    )
                 }
-            } label: {
-                Label(
-                    model.currentStyle.lineStyle.title(language: language),
-                    systemImage: "line.3.horizontal"
-                )
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help(AppText.value("scAnnotationLineStyle", language: language))
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help(AppText.value("scAnnotationLineStyle", language: language))
         }
-        .help(AppText.value("scAnnotationWheelHint", language: language))
+        .help(AppText.value(model.tool == .highlighter ? "scAnnotationOpacity" : "scAnnotationWheelHint", language: language))
     }
 
     private var annotationColorControls: some View {
@@ -6601,9 +6605,8 @@ struct SmartAnnotationEditor: View {
         )
         return ZStack(alignment: .topLeading) {
             Color.black.opacity(0.08)
-            Image(decorative: image, scale: 1).resizable().frame(width: fitted.width, height: fitted.height)
-                .position(x: fitted.midX, y: fitted.midY)
             Canvas { context, _ in
+                context.draw(Image(decorative: image, scale: 1), in: fitted)
                 drawAnnotations(context: &context, in: fitted)
                 drawDraft(context: &context, in: fitted)
             }
@@ -6611,7 +6614,7 @@ struct SmartAnnotationEditor: View {
                 AnnotationScrollWheelMonitor { delta, modifiers in
                     if modifiers.contains(.option) {
                         model.adjustOpacity(by: delta > 0 ? 0.05 : -0.05)
-                    } else {
+                    } else if model.tool != .highlighter {
                         model.adjustLineWidth(by: delta > 0 ? 1 : -1)
                     }
                 }
@@ -6902,14 +6905,17 @@ struct SmartAnnotationEditor: View {
             if rect.width > 3, rect.height > 3 {
                 return commit { model.append(.crop(normalized(rect, in: fitted))) }
             }
-        case .arrow, .line, .highlighter:
+        case .highlighter:
+            if rect.width > 3, rect.height > 3 {
+                return commit { model.append(.highlighter(normalized(start, in: fitted), normalized(end, in: fitted))) }
+            }
+        case .arrow, .line:
             if hypot(end.x - start.x, end.y - start.y) > 4 {
                 let startPoint = normalized(start, in: fitted)
                 let endPoint = normalized(end, in: fitted)
                 switch model.tool {
                 case .arrow: return commit { model.append(.arrow(startPoint, endPoint)) }
                 case .line: return commit { model.append(.line(startPoint, endPoint)) }
-                case .highlighter: return commit { model.append(.highlighter(startPoint, endPoint)) }
                 default: break
                 }
             }
@@ -7150,7 +7156,12 @@ struct SmartAnnotationEditor: View {
                 lineWidth: lineWidth,
                 context: &context
             )
-        case .line, .highlighter:
+        case .highlighter:
+            let value = CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
+            var highlightContext = context
+            highlightContext.blendMode = .multiply
+            highlightContext.fill(Path(value), with: .color(style.color.swiftUIColor.opacity(style.opacity)))
+        case .line:
             drawLineLike(
                 model.tool,
                 from: start,
@@ -7254,14 +7265,12 @@ struct SmartAnnotationEditor: View {
             )
         case .counter(let value, let point):
             drawCounter(value, at: denormalized(point, in: rect), style: style, context: &context)
-        case .highlighter(let start, let end):
-            drawLineLike(
-                .highlighter,
-                from: denormalized(start, in: rect),
-                to: denormalized(end, in: rect),
-                style: style,
-                lineWidth: lineWidth,
-                context: &context
+        case .highlighter:
+            var highlightContext = context
+            highlightContext.blendMode = .multiply
+            highlightContext.fill(
+                Path(denormalized(annotation.normalizedBounds, in: rect)),
+                with: .color(style.color.swiftUIColor.opacity(style.opacity))
             )
         case .pencil(let points):
             drawPencil(
@@ -7714,13 +7723,11 @@ enum SmartAnnotationRenderer {
                 width: bounds.width,
                 style: style
             )
-        case .highlighter(let start, let end):
+        case .highlighter:
             context.saveGState()
-            context.setStrokeColor(color(style.color, opacity: style.opacity))
-            applyStrokeStyle(context, style: style, lineWidth: lineWidth)
-            context.move(to: point(start, in: bounds, canvas: canvas))
-            context.addLine(to: point(end, in: bounds, canvas: canvas))
-            context.strokePath()
+            context.setBlendMode(.multiply)
+            context.setFillColor(color(style.color, opacity: style.opacity))
+            context.fill(rect(annotation.normalizedBounds, in: bounds, canvas: canvas))
             context.restoreGState()
         case .pencil(let values):
             let values = points(values, in: bounds, canvas: canvas)

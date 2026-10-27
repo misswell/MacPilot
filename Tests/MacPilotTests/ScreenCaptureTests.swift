@@ -832,6 +832,35 @@ struct ScreenCaptureTests {
         #expect(cropped.height == 96)
     }
 
+    @Test func highlighterFillsTheDraggedRectangleAndRemainsEditable() throws {
+        let mark = SmartAnnotation.highlighter(CGPoint(x: 0.8, y: 0.7), CGPoint(x: 0.2, y: 0.3))
+        #expect(mark.hitTest(CGPoint(x: 0.3, y: 0.6)))
+        #expect(!mark.hitTest(CGPoint(x: 0.1, y: 0.1)))
+        let resized = mark.resized(from: mark.normalizedBounds, to: CGRect(x: 0.1, y: 0.1, width: 0.4, height: 0.2))
+        #expect(abs(resized.normalizedBounds.width - 0.4) < 0.0001)
+        #expect(abs(resized.normalizedBounds.height - 0.2) < 0.0001)
+
+        let source = try #require(makeTestImage(width: 100, height: 100, color: .white))
+        let output = try #require(SmartAnnotationRenderer.render(
+            image: source, annotations: [mark],
+            styles: [SmartAnnotationStyle(opacity: 0.45, color: .red)]
+        ))
+        let bitmap = NSBitmapImageRep(cgImage: output)
+        let inside = try #require(bitmap.colorAt(x: 30, y: 50)?.usingColorSpace(.deviceRGB))
+        let outside = try #require(bitmap.colorAt(x: 10, y: 10)?.usingColorSpace(.deviceRGB))
+        #expect(inside.redComponent > inside.greenComponent + 0.2)
+        #expect(inside.greenComponent > 0.3)
+        #expect(outside.greenComponent > 0.95)
+
+        let darkSource = try #require(makeTestImage(width: 100, height: 100, color: .black))
+        let darkOutput = try #require(SmartAnnotationRenderer.render(
+            image: darkSource, annotations: [mark],
+            styles: [SmartAnnotationStyle(opacity: 0.45, color: .red)]
+        ))
+        let darkPixel = try #require(NSBitmapImageRep(cgImage: darkOutput).colorAt(x: 30, y: 50)?.usingColorSpace(.deviceRGB))
+        #expect(darkPixel.redComponent < 0.05)
+    }
+
     @Test func smartAnnotationStylesClampToSafeBounds() {
         let minimum = SmartAnnotationStyle(lineWidth: -10, opacity: -1)
         #expect(minimum.lineWidth == 1)
