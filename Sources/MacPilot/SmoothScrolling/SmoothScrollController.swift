@@ -14,8 +14,12 @@ final class SmoothScrollController {
     var activeEventTapCount: Int { eventTap == nil ? 0 : 1 }
     private let runtime = SmoothScrollRuntime()
     private var activeSettings = SmoothScrollSettings()
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    private var eventTap: (any SmoothScrollEventTap)?
+    private let isTrusted: () -> Bool
+    private let makeEventTap: (CGEventMask, CGEventTapCallBack, UnsafeMutableRawPointer) -> (any SmoothScrollEventTap)?
+    private let scheduleRecovery: (@escaping @MainActor () -> Void) -> (() -> Void)
+    private var cancelRecovery: (() -> Void)?
+    private var wantsInputTap = false
     private var lastPhysicalWheelTime: CFTimeInterval = 0
     private var commandHeld = false
     private var excludedBundleIdentifiers: Set<String> = []
@@ -30,6 +34,25 @@ final class SmoothScrollController {
         (1 << CGEventType.scrollWheel.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
     )
 
+    init(
+        isTrusted: @escaping () -> Bool = { AXIsProcessTrusted() },
+        makeEventTap: @escaping (CGEventMask, CGEventTapCallBack, UnsafeMutableRawPointer) -> (any SmoothScrollEventTap)? = {
+            SystemSmoothScrollEventTap(mask: $0, callback: $1, userInfo: $2)
+        },
+        scheduleRecovery: @escaping (@escaping @MainActor () -> Void) -> (() -> Void) = { action in
+            let timer = Timer(timeInterval: 3, repeats: true) { _ in
+                MainActor.assumeIsolated { action() }
+            }
+            timer.tolerance = 0.5
+            RunLoop.main.add(timer, forMode: .common)
+            return { timer.invalidate() }
+        }
+    ) {
+        self.isTrusted = isTrusted
+        self.makeEventTap = makeEventTap
+        self.scheduleRecovery = scheduleRecovery
+    }
+
     func activate(settings: SmoothScrollSettings) {
         activeSettings = settings.clamped()
         let exclusionsChanged = refreshExcludedApplicationCacheIfNeeded()
@@ -37,9 +60,18 @@ final class SmoothScrollController {
             deactivate()
             return
         }
-        guard AXIsProcessTrusted() else {
-            deactivate()
+        wantsInputTap = true
+        if cancelRecovery == nil {
+            cancelRecovery = scheduleRecovery { [weak self] in
+                self?.recoverInputTapIfNeeded()
+            }
+        }
+        guard isTrusted() else {
+            tearDownInputTap()
             return
+        }
+        if let tap = eventTap, !tap.isValid {
+            tearDownInputTap()
         }
         if exclusionsChanged {
             runtime.stop()
@@ -51,21 +83,15 @@ final class SmoothScrollController {
         runtime.update(settings: activeSettings)
 
         if !isActive {
-            guard let tap = CGEvent.tapCreate(
-                tap: .cgAnnotatedSessionEventTap,
-                place: .tailAppendEventTap,
-                options: .defaultTap,
-                eventsOfInterest: eventMask,
-                callback: Self.eventTapCallback,
-                userInfo: Unmanaged.passUnretained(self).toOpaque()
-            ) else {
+            guard let tap = makeEventTap(eventMask, Self.eventTapCallback, Unmanaged.passUnretained(self).toOpaque()) else {
                 return
             }
             eventTap = tap
-            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            runLoopSource = source
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
-            CGEvent.tapEnable(tap: tap, enable: true)
+            tap.setEnabled(true)
+            guard tap.isValid && tap.isEnabled else {
+                tearDownInputTap()
+                return
+            }
             isActive = true
             installWorkspaceObservers()
         }
@@ -83,24 +109,39 @@ final class SmoothScrollController {
         }
     }
 
-    func deactivate() {
-        guard isActive || eventTap != nil else {
-            runtime.stop()
-            removeWorkspaceObservers()
-            clearExcludedApplicationCache()
+    /// A failed first install is transient: keep the user's intent alive until
+    /// settings or the feature lifecycle explicitly deactivate it. Also cover
+    /// disabled taps whose system notification never reached the callback.
+    private func recoverInputTapIfNeeded() {
+        guard wantsInputTap else { return }
+        guard isTrusted() else {
+            tearDownInputTap()
             return
         }
+        if let tap = eventTap, tap.isValid {
+            if tap.isEnabled { return }
+            runtime.stop()
+            lastPhysicalWheelTime = 0
+            commandHeld = false
+            tap.setEnabled(true)
+            if tap.isValid && tap.isEnabled { return }
+        }
+        tearDownInputTap()
+        activate(settings: activeSettings)
+    }
+
+    func deactivate() {
+        wantsInputTap = false
+        cancelRecovery?()
+        cancelRecovery = nil
+        tearDownInputTap()
+    }
+
+    private func tearDownInputTap() {
         isActive = false
         if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            CFMachPortInvalidate(tap)
+            tap.invalidate()
             eventTap = nil
-        }
-        if let source = runLoopSource {
-            if CFRunLoopContainsSource(CFRunLoopGetCurrent(), source, .commonModes) {
-                CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
-            }
-            runLoopSource = nil
         }
         removeWorkspaceObservers()
         clearExcludedApplicationCache()
@@ -124,7 +165,7 @@ final class SmoothScrollController {
     private func handleTapEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             runtime.stop()
-            if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            if let tap = eventTap { tap.setEnabled(true) }
             return Unmanaged.passUnretained(event)
         }
         if type == .flagsChanged {
