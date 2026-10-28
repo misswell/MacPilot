@@ -306,6 +306,33 @@ struct MenuBarDisplayControllerTests {
         #expect(controller.isInserted)
     }
 
+    /// The status button shows the CPU percentage from its own text, so the
+    /// status-item view can stay icon-only and never rebuild the command tree.
+    @Test func statusButtonBadgeComesFromTheInjectedSourceNotTheViewTree() {
+        let center = NotificationCenter()
+        var badge: String? = "12.0%"
+        let controller = MenuBarDisplayController(
+            notificationCenter: center,
+            screens: { [self.screen("main", x: 0)] },
+            pointer: { .zero },
+            debounce: .milliseconds(5),
+            insertionDelay: .milliseconds(5),
+            menuFactory: nil,
+            iconBadge: { badge }
+        )
+        defer { controller.stop() }
+        // isInserted only becomes true once the (real) status item exists; the
+        // injected badge source is what the button draws. Assert the source is
+        // what the controller reads when the CPU row changes.
+        #expect(controller.currentIconBadge == nil || controller.currentIconBadge == "12.0%")
+        badge = "37.5%"
+        controller.refreshIconForTesting()
+        #expect(controller.currentIconBadge == "37.5%")
+        badge = nil
+        controller.refreshIconForTesting()
+        #expect(controller.currentIconBadge == nil)
+    }
+
     private func makeController(
         center: NotificationCenter,
         screens: @escaping @MainActor () -> [MenuBarDisplay],

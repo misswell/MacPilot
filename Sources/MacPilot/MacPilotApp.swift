@@ -47,11 +47,17 @@ struct MacPilotApp: App {
                     enforcing: model.isFeatureEnabled(.exit) && model.isEnforcing,
                     awakeFailed: model.awake.lastAssertionFailure != nil || model.awake.lastClosedLidFailure != nil
                 )
+            }, iconBadge: { [weak model] in
+                guard let model else { return nil }
+                return MenuBarCPUPercent.menuTitle(model: model)
             })
         } else {
             controller = MenuBarDisplayController()
             MonitorMenuActivity.shared.setLegacyRootMatcher { [weak model] menu in
                 guard let model else { return false }
+                // Match on the per-item titles rather than the root menu title:
+                // the root now carries the CPU-percentage badge, which changes
+                // with every sample and must not stop this from matching.
                 let titles = Set(menu.items.map(\.title))
                 return ["settings", "quitApp", "turnOffScreenNow"].allSatisfy {
                     titles.contains(model.t($0))
@@ -80,7 +86,7 @@ struct MacPilotApp: App {
         )) {
             MenuBarView.mainMenu(model: model, context: menuBar).environmentObject(model)
         } label: {
-            MenuBarIconView(awake: model.awake, model: model)
+            MenuBarView.iconLabel(model: model, context: menuBar).environmentObject(model)
         }
         .menuBarExtraStyle(.menu)
     }
@@ -113,6 +119,22 @@ enum MenuBarIcon {
     }
 }
 
+/// The CPU percentage shown beside the status icon.
+///
+/// This reads the shared menu snapshot, so it is cheap on the status item's
+/// 3-second model tick. It is deliberately a percentage string — never an
+/// abbreviation of a label — so the status button can draw it without a
+/// SwiftUI text view that would re-render the menu command tree.
+@MainActor
+enum MenuBarCPUPercent {
+    static func menuTitle(model: MacPilotModel) -> String? {
+        guard model.isFeatureEnabled(.cpuMonitor) else { return nil }
+        let snapshot = CPUMonitorModel.menuSnapshot(allowsRefresh: false)
+        guard let system = snapshot.system else { return nil }
+        return CPUPercentFormatter.string(from: system.totalPercent)
+    }
+}
+
 private struct MenuBarIconView: View {
     @ObservedObject var awake: AwakeSessionManager
     @ObservedObject var model: MacPilotModel
@@ -123,6 +145,7 @@ private struct MenuBarIconView: View {
             enforcing: model.isFeatureEnabled(.exit) && model.isEnforcing,
             awakeFailed: awake.lastAssertionFailure != nil || awake.lastClosedLidFailure != nil
         ))
+        .contentShape(Rectangle())
     }
 }
 
@@ -6377,6 +6400,16 @@ struct MenuBarView: View {
     @ObservedObject var localPorts: LocalPortsModel
     private let menuContext: MenuBarDisplayController?
     private let showMainWindowAction: (@MainActor () -> Void)?
+    /// The full menu, or only the status-item icon label. The native status
+    /// item keeps this view merely for `MenuBarIconView`'s icon; the popup is
+    /// the fixed `MenuBarMenuSession` snapshot. Rendering the command list here
+    /// would leave the entire menu built and published in every framework
+    /// update tick, which is what made opening and hovering the menu lag.
+    private let isMenuContent: Bool
+
+    /// Whether this instance carries the full command tree (the popup) or only
+    /// the status icon. Exposed so a test can pin the split.
+    var showsMenuContent: Bool { isMenuContent }
 
     init(
         awake: AwakeSessionManager = AwakeSessionManager(),
@@ -6388,7 +6421,8 @@ struct MenuBarView: View {
         clipboard: ClipboardModel = ClipboardModel(),
         localPorts: LocalPortsModel,
         menuContext: MenuBarDisplayController? = nil,
-        showMainWindow: (@MainActor () -> Void)? = nil
+        showMainWindow: (@MainActor () -> Void)? = nil,
+        isMenuContent: Bool = true
     ) {
         self._awake = ObservedObject(wrappedValue: awake)
         self._pictureInPicture = ObservedObject(wrappedValue: pictureInPicture)
@@ -6400,6 +6434,7 @@ struct MenuBarView: View {
         self._localPorts = ObservedObject(wrappedValue: localPorts)
         self.menuContext = menuContext
         self.showMainWindowAction = showMainWindow
+        self.isMenuContent = isMenuContent
     }
 
     static func mainMenu(model: MacPilotModel, context: MenuBarDisplayController,
@@ -6411,7 +6446,26 @@ struct MenuBarView: View {
                     menuContext: context, showMainWindow: showMainWindow)
     }
 
+    /// The status-item label needs only the icon. Keep the heavyweight command
+    /// tree out of this view; the popup reads the `MenuBarMenuSession` snapshot.
+    static func iconLabel(model: MacPilotModel, context: MenuBarDisplayController) -> MenuBarView {
+        MenuBarView(awake: model.awake, pictureInPicture: model.pictureInPicture,
+                    screenRecording: model.screenRecording, inputSources: model.inputSources,
+                    windowSwitcher: model.windowSwitcher, smoothScrolling: model.smoothScrolling,
+                    clipboard: model.clipboard, localPorts: model.localPorts,
+                    menuContext: context, showMainWindow: nil, isMenuContent: false)
+    }
+
     var body: some View {
+        // The native (macOS 14.4+) status button lives in the controller and
+        // pops the fixed `MenuBarMenuSession` snapshot; its SwiftUI label only
+        // needs the icon, never the command tree. On the fallback path the
+        // `MenuBarExtra` menu owns the click and reads this same command tree.
+        if isMenuContent { menuContent } else { MenuBarIconView(awake: awake, model: model) }
+    }
+
+    @ViewBuilder
+    private var menuContent: some View {
         // 保留各功能的即时操作，但只展示首页已启用的功能。
         if model.isFeatureEnabled(.awake) && awake.settings.isEnabled {
             Divider()

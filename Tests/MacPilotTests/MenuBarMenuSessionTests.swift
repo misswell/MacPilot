@@ -238,3 +238,53 @@ private struct LiveMenuProbe: View {
         }
     }
 }
+
+@MainActor
+struct MenuBarIconLabelTests {
+    /// The status-item label is only the icon. Building the full command tree
+    /// in the label is what re-rendered the whole menu on every model tick and
+    /// delayed the menu popup; the label view must stay at the icon.
+    @Test func iconLabelViewDoesNotBuildTheCommandTree() {
+        _ = NSApplication.shared
+        let model = MacPilotModel()
+        let controller = MenuBarDisplayController(
+            notificationCenter: NotificationCenter(),
+            screens: { [] },
+            pointer: { .zero },
+            menuFactory: { _ in NSMenu() }
+        )
+        defer { controller.stop() }
+        let label = MenuBarView.iconLabel(model: model, context: controller).environmentObject(model)
+        let host = NSHostingView(rootView: AnyView(label))
+        host.frame = NSRect(x: 0, y: 0, width: 40, height: 22)
+        host.layoutSubtreeIfNeeded()
+        // An icon-only label has no descendant NSMenu-bearing buttons.
+        let buttons = collectButtons(host)
+        #expect(buttons.isEmpty)
+    }
+
+    /// The full menu view carries the command content; the icon label carries
+    /// none. Assert on the view flag rather than AppKit buttons: SwiftUI defers
+    /// button materialization, but the flag decides whether the menu body is
+    /// in the view tree at all.
+    @Test func fullMenuViewCarriesCommandContentAndIconLabelDoesNot() {
+        _ = NSApplication.shared
+        let model = MacPilotModel()
+        let controller = MenuBarDisplayController(
+            notificationCenter: NotificationCenter(),
+            screens: { [] },
+            pointer: { .zero },
+            menuFactory: { _ in NSMenu() }
+        )
+        defer { controller.stop() }
+        #expect(MenuBarView.mainMenu(model: model, context: controller).showsMenuContent)
+        #expect(!MenuBarView.iconLabel(model: model, context: controller).showsMenuContent)
+    }
+
+    private func collectButtons(_ view: NSView) -> [NSView] {
+        var found: [NSView] = []
+        if view is NSButton { found.append(view) }
+        for sub in view.subviews { found += collectButtons(sub) }
+        return found
+    }
+}

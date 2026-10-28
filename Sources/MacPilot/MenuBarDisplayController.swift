@@ -32,6 +32,7 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     private let pointer: @MainActor () -> CGPoint
     private let menuFactory: (@MainActor (MenuBarDisplayController) -> NSMenu)?
     private let iconName: @MainActor () -> String
+    private let iconBadge: @MainActor () -> String?
     private let debounce: Duration
     private let insertionDelay: Duration
     private var topology: [MenuBarDisplay]
@@ -47,6 +48,8 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     private let makeStatusItem: @MainActor () -> any MenuBarStatusItem
     private let removeItem: @MainActor (any MenuBarStatusItem) -> Void
     private var lastIconName: String?
+    private var lastBadge: String?
+    private var badgeText: String?
     private var openingOwnedMenu = false
     var usesNativeMenu: Bool { menuFactory != nil }
 
@@ -58,6 +61,7 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         insertionDelay: Duration = .milliseconds(80),
         menuFactory: (@MainActor (MenuBarDisplayController) -> NSMenu)? = nil,
         iconName: @escaping @MainActor () -> String = { "timer" },
+        iconBadge: @escaping @MainActor () -> String? = { nil },
         makeStatusItem: @escaping @MainActor () -> any MenuBarStatusItem = {
             NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         },
@@ -72,6 +76,7 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         self.insertionDelay = insertionDelay
         self.menuFactory = menuFactory
         self.iconName = iconName
+        self.iconBadge = iconBadge
         self.makeStatusItem = makeStatusItem
         self.removeItem = removeItem
         topology = screens().sorted { $0.uuid < $1.uuid }
@@ -257,6 +262,7 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         item.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         item.button?.setAccessibilityLabel("MacPilot")
         lastIconName = nil
+        lastBadge = nil
         updateIcon()
         // AppKit restores visibility when autosaveName is assigned, including
         // a hidden value left by the previous removal. Our enabled setting
@@ -269,18 +275,57 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         removeItem(item)
         statusItem = nil
         lastIconName = nil
+        lastBadge = nil
     }
 
     private func updateIcon() {
         ensureInstalled()
         let name = iconName()
-        guard let button = statusItem?.button, lastIconName != name else { return }
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: "MacPilot")
-        image?.isTemplate = true
-        image?.size = NSSize(width: 18, height: 18)
-        button.image = image
-        lastIconName = name
+        let badge = iconBadge()
+        applyIcon(name: name, badge: badge)
     }
+
+    /// Applies the icon and its text badge directly on the `NSStatusBarButton`.
+    ///
+    /// The status item's view is only the icon label. Drawing the number here,
+    /// instead of letting a SwiftUI label re-render the command tree on every
+    /// CPU sample, keeps the button's visual update free of menu rebuilds.
+    private func applyIcon(name: String, badge: String?) {
+        if let button = statusItem?.button, let image = NSImage(systemSymbolName: name, accessibilityDescription: "MacPilot") {
+            image.isTemplate = true
+            image.size = NSSize(width: 18, height: 18)
+            if name != lastIconName { button.image = image }
+        }
+        guard badge != lastBadge || name != lastIconName else { lastIconName = name; return }
+        lastIconName = name
+        lastBadge = badge
+        badgeText = badge
+        guard let button = statusItem?.button else { return }
+        if let badge, !badge.isEmpty {
+            let attributed = NSAttributedString(string: " \(badge) ", attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
+                .baselineOffset: 1,
+            ])
+            button.attributedTitle = attributed
+            button.imagePosition = .imageLeading
+            // A square item clips the number; let it grow to fit, and shrink
+            // back to square when the badge disappears.
+            (statusItem as? NSStatusItem)?.length = NSStatusItem.variableLength
+        } else {
+            button.attributedTitle = NSAttributedString(string: "")
+            button.imagePosition = .imageOnly
+            (statusItem as? NSStatusItem)?.length = NSStatusItem.squareLength
+        }
+    }
+
+    /// Exposes the badge the status button currently shows, for tests and the
+    /// native-menu snapshot (which needs the number as a menu row).
+    var currentIconBadge: String? { badgeText }
+
+    /// Re-reads the icon/badge sources and applies them. Normally driven by the
+    /// observed model publishers; exposed so tests can prove the source — not
+    /// the SwiftUI view tree — owns the status button's number.
+    func refreshIconForTesting() { updateIcon() }
 
     func prepareMenuSession() -> MenuBarMenuSession? {
         guard let menuFactory else { return nil }
@@ -291,6 +336,14 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     }
 
     @objc private func openMenu(_ sender: NSStatusBarButton) {
+        openMenuPopUp(from: sender)
+    }
+
+    /// Opens the fixed session snapshot on the status button.
+    ///
+    /// Used both by the button's own action and by a SwiftUI label button, so
+    /// the popup always reflects a single snapshot taken at open time.
+    func openMenuPopUp(from sender: NSStatusBarButton) {
         guard let session = prepareMenuSession() else { return }
         openingOwnedMenu = true
         sender.highlight(true)
