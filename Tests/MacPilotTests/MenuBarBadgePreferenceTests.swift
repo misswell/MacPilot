@@ -3,19 +3,19 @@ import Testing
 @testable import MacPilot
 
 /// The CPU percentage beside the status icon is an interface preference, not a
-/// feature of the CPU monitor: turning it off must leave the monitor running,
-/// and an install that predates the switch keeps the badge.
+/// feature of the CPU monitor: it is opt-in, and hiding it must leave the
+/// monitor running.
 struct MenuBarBadgePreferenceTests {
-    @Test func theCPUPercentBadgeIsOnUntilTheUserTurnsItOff() {
+    @Test func theCPUPercentBadgeStaysOffUntilTheUserTurnsItOn() {
         let name = "MenuBarBadgePreferenceTests-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
 
-        #expect(MenuBarBadgePreference.showsCPUPercent(in: defaults))
-        MenuBarBadgePreference.setShowsCPUPercent(false, in: defaults)
         #expect(!MenuBarBadgePreference.showsCPUPercent(in: defaults))
         MenuBarBadgePreference.setShowsCPUPercent(true, in: defaults)
         #expect(MenuBarBadgePreference.showsCPUPercent(in: defaults))
+        MenuBarBadgePreference.setShowsCPUPercent(false, in: defaults)
+        #expect(!MenuBarBadgePreference.showsCPUPercent(in: defaults))
     }
 
     @Test func thePreferenceIsPerUserDefaultsDomain() {
@@ -27,8 +27,8 @@ struct MenuBarBadgePreferenceTests {
             first.removePersistentDomain(forName: firstName)
             second.removePersistentDomain(forName: secondName)
         }
-        MenuBarBadgePreference.setShowsCPUPercent(false, in: first)
-        #expect(MenuBarBadgePreference.showsCPUPercent(in: second))
+        MenuBarBadgePreference.setShowsCPUPercent(true, in: first)
+        #expect(!MenuBarBadgePreference.showsCPUPercent(in: second))
     }
 
     @Test @MainActor func theBadgeOnlyAppearsWhenBothTheFeatureAndThePreferenceAllowIt() {

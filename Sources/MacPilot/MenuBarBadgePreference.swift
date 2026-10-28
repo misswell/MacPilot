@@ -10,11 +10,11 @@ import Foundation
 enum MenuBarBadgePreference {
     static let cpuPercentKey = "menuBar.showsCPUPercent"
 
-    /// The CPU percentage is shown whenever the CPU monitor is enabled, unless
-    /// the user turned the badge off. Defaults to on so an existing install
-    /// keeps the number it had before this switch existed.
+    /// The CPU percentage stays hidden until the user asks for it. The badge is
+    /// noise for most people, and a menu-bar item must not grow a number just
+    /// because the CPU monitor happens to be enabled.
     static func showsCPUPercent(in defaults: UserDefaults = .standard) -> Bool {
-        defaults.object(forKey: cpuPercentKey) as? Bool ?? true
+        defaults.object(forKey: cpuPercentKey) as? Bool ?? false
     }
 
     static func setShowsCPUPercent(_ shows: Bool, in defaults: UserDefaults = .standard) {
