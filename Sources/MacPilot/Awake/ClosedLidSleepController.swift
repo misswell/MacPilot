@@ -105,7 +105,10 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
             do { try await self.helper.cleanupUnusedLegacyRegistration() }
             catch {
                 guard !self.desiredEnabled, !self.isShutdown else { return }
-                self.lastFailure = error as? ClosedLidSleepFailure ?? .requestFailed(error.localizedDescription)
+                // Nothing was requested here, so this cannot mean protection is
+                // missing — only that the unused service was not released.
+                self.lastFailure = (error as? ClosedLidSleepFailure
+                    ?? .requestFailed(error.localizedDescription)).duringRetirement()
             }
             if !self.desiredEnabled, !self.isShutdown {
                 self.serviceState = self.helper.registrationState
@@ -231,7 +234,8 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
             do { try await helper.cleanupUnusedLegacyRegistration() }
             catch {
                 guard !desiredEnabled, !isShutdown else { return }
-                lastFailure = error as? ClosedLidSleepFailure ?? .requestFailed(error.localizedDescription)
+                lastFailure = (error as? ClosedLidSleepFailure
+                    ?? .requestFailed(error.localizedDescription)).duringRetirement()
                 serviceState = .error(lastFailure?.message ?? error.localizedDescription)
             }
         case .failure(let failure):

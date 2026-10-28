@@ -450,6 +450,49 @@ struct ClosedLidSleepControllerTests {
         #expect(controller.lastFailure != nil)
     }
 
+    @Test func aFailedUnusedServiceReleaseIsReportedAsRetirementNotLostProtection() async {
+        let helper = ClosedLidTestPowerHelper()
+        helper.cleanupError = ClosedLidSleepFailure.registrationFailed("The old power service did not unload.")
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .seconds(60), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        controller.cleanupUnusedPowerServiceIfDisabled()
+        await waitUntil { controller.lastFailure != nil }
+
+        // Nothing was requested here: the protection was never missing, only
+        // the unused background service was not released.
+        #expect(helper.cleanupCallCount == 1)
+        #expect(controller.lastFailure?.stage == .retirement)
+        #expect(controller.lastFailure?.kind == .registrationFailed)
+        #expect(controller.lastFailure?.message == "The old power service did not unload.")
+        #expect(!controller.isActive)
+    }
+
+    @Test func aRequestedProtectionFailureStaysInTheProtectionStage() async {
+        let helper = ClosedLidTestPowerHelper()
+        helper.setSleepDisabledResult = .failure(.requestFailed("pmset denied"))
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .seconds(60), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        controller.setEnabled(true)
+        await waitUntil { controller.lastFailure != nil }
+
+        #expect(controller.lastFailure?.stage == .protection)
+    }
+
+    @Test func anEnabledControllerNeverRetiresTheUnusedService() async {
+        let helper = ClosedLidTestPowerHelper()
+        let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .seconds(60), reconnectDelays: [])
+        defer { controller.shutdown() }
+
+        controller.setEnabled(true)
+        await waitUntil { controller.isActive }
+
+        controller.cleanupUnusedPowerServiceIfDisabled()
+        try? await Task.sleep(for: .milliseconds(20))
+        #expect(helper.cleanupCallCount == 0)
+    }
+
     @Test func heartbeatRepairsALostSettingEvenWhenTheConnectionIsHealthy() async {
         let helper = ClosedLidTestPowerHelper()
         let controller = ClosedLidSleepController(helper: helper, heartbeatInterval: .milliseconds(10), reconnectDelays: [])
@@ -948,6 +991,8 @@ private final class ClosedLidTestPowerHelper: PowerHelperServicing {
     private(set) var setSleepDisabledCalls: [Bool] = []
     private(set) var heartbeatCallCount = 0
     private(set) var releaseSynchronouslyCallCount = 0
+    private(set) var cleanupCallCount = 0
+    var cleanupError: (any Error)?
     var setSleepDisabledResult: Result<Bool, ClosedLidSleepFailure> = .success(true)
     var heartbeatResult: Result<Bool, ClosedLidSleepFailure> = .success(true)
     var systemSleepDisabled = true
@@ -992,5 +1037,10 @@ private final class ClosedLidTestPowerHelper: PowerHelperServicing {
 
     func releaseSynchronously() {
         releaseSynchronouslyCallCount += 1
+    }
+
+    func cleanupUnusedLegacyRegistration() async throws {
+        cleanupCallCount += 1
+        if let cleanupError { throw cleanupError }
     }
 }

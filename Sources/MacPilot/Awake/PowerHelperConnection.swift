@@ -15,10 +15,29 @@ struct ClosedLidSleepFailure: Error, Equatable, LocalizedError, Sendable {
         case requestFailed
     }
 
+    /// Where the failure happened.
+    ///
+    /// A `protection` failure means the MacBook may still sleep with the lid
+    /// closed. A `retirement` failure means a power service the feature no
+    /// longer needs was not released; sleep protection is not missing at all.
+    /// The menu-bar icon flags both (something needs attention either way), so
+    /// the Home page has to describe them differently instead of labelling an
+    /// unfinished release as "closed-lid sleep prevention failed".
+    enum Stage: String, Sendable {
+        case protection
+        case retirement
+    }
+
     let kind: Kind
     let message: String
+    var stage = Stage.protection
 
     var errorDescription: String? { message }
+
+    /// Re-labels a failure raised while retiring an unused power service.
+    func duringRetirement() -> ClosedLidSleepFailure {
+        ClosedLidSleepFailure(kind: kind, message: message, stage: .retirement)
+    }
 
     static func helperUnavailable() -> ClosedLidSleepFailure {
         ClosedLidSleepFailure(kind: .helperUnavailable, message: "The background power service is unavailable.")

@@ -150,6 +150,7 @@ VStack(alignment: .leading, spacing: 0) {
 - 每张卡片用 `SettingsCard(accented:)`：`accented == true`（功能已开启）时仅在描边上加一层 accent，不换材质、不加内边距，也不要在卡片外面再套一层玻璃（避免多层玻璃嵌套）。
 - 卡片内部结构固定：第一行是 34pt 圆角图标底座 + 右侧 `.toggleStyle(.switch)` 开关；第二行是 `.body.weight(.semibold)` 标题 + `.caption` 说明。说明文字用 `.lineLimit(3, reservesSpace: true)` 保证同一行卡片等高。
 - 分组标题（如「自动化」「效率工具」）以 `.font(.headline)` 直接放在网格上方，不放进卡片——网格本身已经是卡片，再套一层就是嵌套玻璃。
+- 菜单栏出现警告图标时，页头下方的**橙色内联提示**（`InlineWarningBox`，见令牌表）逐条列出原因，标题下是具体说明与一个修复入口；没有问题时整块不渲染。它和 `RemoteLocalNetworkNotice` 一样是页面级提示，不再套一层 `SettingsCard`。
 
 ### 功能总开关只在首页
 

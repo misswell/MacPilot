@@ -45,7 +45,9 @@ struct MacPilotApp: App {
                 return MenuBarIcon.systemImage(
                     awakeActive: model.awake.isKeepingAwake,
                     enforcing: model.isFeatureEnabled(.exit) && model.isEnforcing,
-                    awakeFailed: model.awake.lastAssertionFailure != nil || model.awake.lastClosedLidFailure != nil
+                    // The Home page explains exactly this list, never a
+                    // hand-picked subset.
+                    awakeFailed: model.awake.hasAttentionIssue
                 )
             }, iconBadge: { [weak model] in
                 guard let model else { return nil }
@@ -143,7 +145,7 @@ private struct MenuBarIconView: View {
         Image(systemName: MenuBarIcon.systemImage(
             awakeActive: awake.isKeepingAwake,
             enforcing: model.isFeatureEnabled(.exit) && model.isEnforcing,
-            awakeFailed: awake.lastAssertionFailure != nil || awake.lastClosedLidFailure != nil
+            awakeFailed: awake.hasAttentionIssue
         ))
         .contentShape(Rectangle())
     }
@@ -508,6 +510,18 @@ enum AppText {
         "home": "首页", "homeSubtitle": "选择需要的工具；未开启的功能不会显示在左侧，也不会在后台运行。",
         "homeFeatureHint": "首页开关控制功能入口和后台运行。打开后，功能会出现在左侧菜单中。",
         "homeEnabledCount": "已启用 %d 个功能", "homeAutomation": "自动化", "homeUtilities": "效率工具",
+        "homeNeedsAttention": "需要处理",
+        "homeNeedsAttentionHint": "「保持唤醒」报告了下面的问题，菜单栏的警告图标表示的就是它们；修复前，相关保护可能不会生效。",
+        "homeNeedsAttentionOpenAwake": "查看「保持唤醒」",
+        "homeNeedsAttentionRetryCleanup": "重新尝试释放",
+        "awakeIssueSystemSleepTitle": "无法阻止系统休眠",
+        "awakeIssueSystemSleepDetail": "系统未接受阻止休眠的电源断言（%@），Mac 仍可能进入睡眠。",
+        "awakeIssueDisplaySleepTitle": "无法阻止显示器休眠",
+        "awakeIssueDisplaySleepDetail": "系统未接受保持显示器的电源断言（%@），显示器仍可能按系统设置关闭。",
+        "awakeIssueClosedLidTitle": "合盖防休眠未生效",
+        "awakeIssueRetirementTitle": "后台电源服务未退出",
+        "awakeIssueRetirementDetail": "保持唤醒已关闭，但后台电源服务没有按预期卸载（%@），它可能仍在后台运行。",
+        "awakeIssueClosedLidRegistrationDetail": "后台电源服务注册失败（%@），合盖后 Mac 仍可能进入睡眠。请在“系统设置 → 通用 → 登录项与扩展”中允许 MacPilot 后台电源服务，再到「保持唤醒」重新检查。",
         "quitWiFi": "连接指定 Wi-Fi 时退出",
         "quitWiFiHint": "每行一个 Wi-Fi 名称，区分大小写。连接任意一个后即退出应用（包括前台应用）；约每 10 秒检查一次。",
         "quitWiFiPlaceholder": "Wi-Fi 名称（每行一个）",
@@ -1816,6 +1830,18 @@ enum AppText {
             "home": "Home", "homeSubtitle": "Choose the tools you need. Disabled features stay out of the sidebar and do not run in the background.",
             "homeFeatureHint": "These switches control each feature's sidebar entry and background runtime. Turn one on to add it to the sidebar.",
             "homeEnabledCount": "%d features enabled", "homeAutomation": "Automation", "homeUtilities": "Utilities",
+            "homeNeedsAttention": "Needs attention",
+            "homeNeedsAttentionHint": "Awake reported the problems below — they are what the warning icon in the menu bar refers to. Related protection may not work until they are fixed.",
+            "homeNeedsAttentionOpenAwake": "Open Awake",
+            "homeNeedsAttentionRetryCleanup": "Retry release",
+            "awakeIssueSystemSleepTitle": "System sleep is not blocked",
+            "awakeIssueSystemSleepDetail": "macOS rejected the power assertion that blocks system sleep (%@); the Mac may still sleep.",
+            "awakeIssueDisplaySleepTitle": "Display sleep is not blocked",
+            "awakeIssueDisplaySleepDetail": "macOS rejected the power assertion that keeps the display on (%@); the display may still turn off.",
+            "awakeIssueClosedLidTitle": "Closed-lid sleep prevention is not active",
+            "awakeIssueRetirementTitle": "Background power service did not stop",
+            "awakeIssueRetirementDetail": "Awake is off, but the background power service did not unload (%@) and may still be running.",
+            "awakeIssueClosedLidRegistrationDetail": "The background power service could not register (%@), so the MacBook may still sleep with the lid closed. Allow the MacPilot background power service in System Settings → General → Login Items & Extensions, then check again in Awake.",
             "rules": "Exit", "settings": "Settings", "addApp": "Add app", "apps": "APPS",
             "versionLabel": "Version %@ (Build %@)",
             "quitWiFi": "Quit on selected Wi-Fi networks",
@@ -4607,7 +4633,7 @@ struct ContentView: View {
     private var sectionContent: some View {
         switch section {
         case .home:
-            HomeView()
+            HomeView(awake: model.awake)
         case .exit:
             header
             enforcementStatus

@@ -169,6 +169,22 @@ struct AwakeSettingsView: View {
             if let failure = awake.lastAssertionFailure {
                 warningBanner(Label(model.t("awakeAssertionError", failure.code), systemImage: "exclamationmark.triangle.fill"))
             }
+            // A failed release never reaches the closed-lid status row below:
+            // the service is not requested at all in that state, so without
+            // this banner the menu-bar warning would have no cause on this page.
+            if let failure = awake.lastClosedLidFailure, failure.stage == .retirement {
+                warningBanner(
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(model.t("awakeIssueRetirementTitle"), systemImage: "exclamationmark.triangle.fill")
+                        Text(AppText.value("awakeIssueRetirementDetail", language: model.language,
+                                           arguments: [failure.message]))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                )
+                .help(model.t("awakeClosedLidError", failure.message))
+            }
         }
     }
 
@@ -400,14 +416,7 @@ struct AwakeSettingsView: View {
     }
 
     private func warningBanner<Content: View>(_ content: Content) -> some View {
-        content
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(.orange.opacity(0.35))
-            )
+        InlineWarningBox { content }
     }
 
 }
@@ -1261,7 +1270,7 @@ struct AwakeMenuView: View {
     }
 
     private var menuIcon: String {
-        if awake.lastAssertionFailure != nil || awake.lastClosedLidFailure != nil {
+        if awake.hasAttentionIssue {
             return "exclamationmark.triangle"
         }
         return awake.isKeepingAwake ? "sun.max.fill" : "moon.zzz"

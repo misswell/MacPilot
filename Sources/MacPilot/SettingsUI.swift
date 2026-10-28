@@ -61,6 +61,29 @@ extension View {
     }
 }
 
+/// 权限 / 警告内联提示框（`docs/UI_DESIGN.md` 令牌表）。
+///
+/// 统一使用橙色 10% 底、圆角 10、35% 橙色描边；需要内联提示的页面都套这一层，
+/// 不要在页面里各拼一套配色。
+struct InlineWarningBox<Content: View>: View {
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(.orange.opacity(0.35))
+            )
+    }
+}
+
 /// Multi-page feature navigation uses a single adaptive selection treatment.
 /// Liquid Glass remains interactive on macOS 26; older releases use the accent fill.
 struct SettingsSelectionPill: View {
