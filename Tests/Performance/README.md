@@ -39,6 +39,19 @@ This counts redundant work, not CPU percentage. Measure the actual release
 process separately with the same feature switches and window state to assess
 the CPU improvement.
 
+## Idle menu and display-control work
+
+`swift test --filter 'LocalPortsModelTests|DisplayControlIntegrationTests'` uses
+mock scanners and display clients; it never changes the real screen state.
+Hidden native-menu evaluations must launch zero port scans, including after a
+snapshot expires. One hundred identical display replies must emit zero model
+publications. The idle display loop checks status every 15 seconds instead of
+every second; active control, confirmation and recovery retain one-second
+checks, and acquiring a lease wakes an idle loop immediately.
+
+These are work-count budgets, not a claim about total process CPU. Compare
+release-process CPU with the same feature switches and menu/window state.
+
 ## Phase 2 acceptance
 
 Use the **new release process**. Record the SHA, macOS version, hardware, PID,

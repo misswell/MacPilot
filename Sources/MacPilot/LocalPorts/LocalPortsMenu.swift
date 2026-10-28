@@ -105,13 +105,14 @@ extension LocalPortOwnerCategory {
 /// 同步返回，所以首帧显示上一轮结果，扫描落地后再刷新这一份列表。
 struct LocalPortsMenuSection: View {
     @EnvironmentObject private var model: MacPilotModel
+    @ObservedObject private var menuActivity = MonitorMenuActivity.shared
     @ObservedObject var ports: LocalPortsModel
     let openPorts: () -> Void
 
     var body: some View {
-        // Menu content is built when the menu opens, which is the earliest hook
-        // there is; the call itself only queues work and re-checks its own TTL.
-        let _ = ports.refreshForMenu()
+        // Offscreen body evaluations reuse the last snapshot. Native tracking,
+        // rather than SwiftUI appearance, authorizes another lsof/ps scan.
+        let _ = ports.refreshForMenu(allowsRefresh: menuActivity.isTracking)
         let snapshot = ports.snapshot
         let rows = LocalPortsMenuPresentation.rows(from: snapshot)
         let shown = Array(rows.prefix(LocalPortsMenuPresentation.maximumRows))

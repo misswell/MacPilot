@@ -61,12 +61,35 @@ struct LocalPortsModelTests {
         model.shutdown()
     }
 
+    @Test func hiddenMenuEvaluationsNeverScanEvenAfterTheSnapshotExpires() async throws {
+        let recorder = ScanRecorder(snapshot: .empty)
+        let model = LocalPortsModel(environment: makeEnvironment(scan: { recorder.scan() }))
+        defer { model.shutdown() }
+
+        for _ in 0..<100 {
+            model.refreshForMenu(maxAge: 0, allowsRefresh: false)
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(recorder.calls == 0)
+
+        model.refreshForMenu(maxAge: 0, allowsRefresh: true)
+        for _ in 0..<200 where model.lastRefresh == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(recorder.calls == 1)
+        for _ in 0..<100 {
+            model.refreshForMenu(maxAge: 0, allowsRefresh: false)
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(recorder.calls == 1)
+    }
+
     @Test func menuRefreshFillsTheSnapshotWithoutOpeningThePage() async throws {
         let snapshot = LocalPortSnapshot(activities: [fixtureActivity()])
         let recorder = ScanRecorder(snapshot: snapshot)
         let model = LocalPortsModel(environment: makeEnvironment(scan: { recorder.scan() }))
 
-        model.refreshForMenu(maxAge: 0)
+        model.refreshForMenu(maxAge: 0, allowsRefresh: true)
         for _ in 0..<200 where model.snapshot.activities.isEmpty {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -81,17 +104,17 @@ struct LocalPortsModelTests {
         let recorder = ScanRecorder(snapshot: snapshot)
         let model = LocalPortsModel(environment: makeEnvironment(scan: { recorder.scan() }))
 
-        model.refreshForMenu(maxAge: 60)
+        model.refreshForMenu(maxAge: 60, allowsRefresh: true)
         for _ in 0..<200 where recorder.calls == 0 {
             try await Task.sleep(for: .milliseconds(5))
         }
-        model.refreshForMenu(maxAge: 60)
-        model.refreshForMenu(maxAge: 60)
+        model.refreshForMenu(maxAge: 60, allowsRefresh: true)
+        model.refreshForMenu(maxAge: 60, allowsRefresh: true)
         try await Task.sleep(for: .milliseconds(40))
         #expect(recorder.calls == 1)
         #expect(recorder.maximumActive == 1)
 
-        model.refreshForMenu(maxAge: 0)
+        model.refreshForMenu(maxAge: 0, allowsRefresh: true)
         for _ in 0..<200 where recorder.calls < 2 {
             try await Task.sleep(for: .milliseconds(5))
         }

@@ -49,7 +49,8 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         self.controlStateChanged = controlStateChanged ?? { DisplayPower.topologyControlIsActive = $0 }
         self.monitor.onChange = { [weak self] observation, id in
             guard let self else { return }
-            self.uuObservation = observation
+            let changed = self.uuObservation != observation || self.sessionID != id
+            if self.uuObservation != observation { self.uuObservation = observation }
             self.sessionID = id
             if id == nil, observation.status == .disconnected {
                 self.hasObservedDisconnection = true
@@ -59,6 +60,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
                 // must not undo startup recovery or a previous emergency release.
                 self.inhibitedSessionID = id
             }
+            if changed, self.isRunning { self.restartPolling() }
         }
     }
 
@@ -78,6 +80,16 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         guard let state = snapshot?.state else { return false }
         return [.recovering, .recoveryRequired, .failed].contains(state)
     }
+    /// Lease renewal and recovery stay responsive; an idle helper needs only
+    /// occasional status checks. Commands and remote-session changes wake it.
+    var pollInterval: Duration {
+        if snapshot == nil || holdsControl || hasRecoveryObligation || isBusy
+            || isPreparingHelper || errorKey != nil || uuObservation.status != .disconnected {
+            return .seconds(1)
+        }
+        return .seconds(15)
+    }
+
     var remainingSeconds: Int {
         max(0, Int(ceil((snapshot?.confirmationDeadline ?? now).timeIntervalSince(now))))
     }
@@ -108,11 +120,16 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         hasObservedDisconnection = false
         if showsConfirmation { DisplayControlTermination.owner = self }
         syncMonitor()
+        restartPolling()
+    }
+
+    private func restartPolling() {
+        pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.poll()
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                do { try await Task.sleep(for: self.pollInterval) } catch { return }
             }
         }
     }
@@ -264,7 +281,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     }
 
     private func poll() async {
-        now = Date()
+        if snapshot?.confirmationDeadline != nil { now = Date() }
         guard !isBusy, !isPreparingHelper else { return }
         let epoch = operationEpoch
         do {
@@ -312,14 +329,20 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
                 self.errorKey = "displayHelperUnavailable"
             }
             self.isBusy = false
+            // A command may acquire a lease while the idle loop is asleep.
+            if self.isRunning { self.restartPolling() }
         }
     }
 
     private func apply(_ response: DisplayControlResponse) {
-        snapshot = response
-        if let message = response.message { errorKey = "displayError_" + message }
-        else { errorKey = nil }
+        let nextError = response.message.map { "displayError_" + $0 }
+        if errorKey != nextError { errorKey = nextError }
+        // Also clear an optimistic control mark when a rejected command returns
+        // the same idle snapshot as before it was sent.
         controlStateChanged(![.idle, .unavailable].contains(response.state))
+        guard snapshot != response else { return }
+        snapshot = response
+        if response.confirmationDeadline != nil { now = Date() }
         updateConfirmationPanel()
     }
 

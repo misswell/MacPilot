@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import MacPilotDisplayControlCore
 import Testing
@@ -146,6 +147,96 @@ struct DisplayControlIntegrationTests {
         await model.refresh()
         #expect(!model.holdsControl)
         #expect(!model.hasRecoveryObligation)
+    }
+
+    @Test func idleStatusChecksBackOffButActiveAndRecoveryLeasesStayFast() async {
+        let client = MockDisplayClient(ready: true)
+        let model = makeModel(client)
+        #expect(model.pollInterval == .seconds(1))
+        await model.refresh()
+        #expect(model.pollInterval == .seconds(15))
+        for state in [DisplayControlState.active, .awaitingVirtualConfirmation,
+                      .awaitingKeepConfirmation, .recovering, .recoveryRequired, .failed] {
+            client.state = state
+            await model.refresh()
+            #expect(model.pollInterval == .seconds(1))
+        }
+        client.state = .idle
+        await model.refresh()
+        #expect(model.pollInterval == .seconds(15))
+    }
+
+    @Test func idleLoopSleepsThroughTheOldOneSecondPollingInterval() async throws {
+        let client = MockDisplayClient(ready: true)
+        let model = makeModel(client)
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        model.applyLoadedSettings(settings)
+        model.start()
+        defer { model.stop() }
+        for _ in 0..<200 where client.requests.isEmpty {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(client.requests.count == 1)
+        try await Task.sleep(for: .milliseconds(1_100))
+        #expect(client.requests.count == 1)
+    }
+
+    @Test func acquiringControlWakesTheIdleLoopToRenewItsLease() async throws {
+        let client = MockDisplayClient(ready: true)
+        let model = makeModel(client)
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        model.applyLoadedSettings(settings)
+        model.start()
+        defer { model.stop() }
+        for _ in 0..<200 where !model.canChange {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        client.state = .active
+        model.keepOnly(client.display)
+        for _ in 0..<200 where !client.requests.contains(where: { $0.command == .heartbeat }) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(client.requests.contains { $0.command == .keepOnly })
+        #expect(client.requests.contains { $0.command == .heartbeat })
+    }
+
+    @Test func rejectedCommandClearsOptimisticControlEvenWhenTheReplyIsUnchanged() async throws {
+        let client = MockDisplayClient(ready: true)
+        var controlMarks: [Bool] = []
+        let model = DisplayControlModel(client: client,
+            monitor: UUSessionMonitor(read: { .init(status: .disconnected) }),
+            showsConfirmation: false, prepareVisibleOutputs: { true },
+            controlStateChanged: { controlMarks.append($0) })
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        model.applyLoadedSettings(settings)
+        model.start()
+        defer { model.stop() }
+        for _ in 0..<200 where !model.canChange {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.keepOnly(client.display)
+        for _ in 0..<200 where model.isBusy {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(controlMarks.contains(true))
+        #expect(controlMarks.last == false)
+    }
+
+    @Test func unchangedStatusDoesNotInvalidateMenusAndSettings() async {
+        let client = MockDisplayClient(ready: true)
+        let model = makeModel(client)
+        await model.refresh()
+        var publications = 0
+        let subscription = model.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+        for _ in 0..<100 { await model.refresh() }
+        #expect(publications == 0)
+        client.state = .active
+        await model.refresh()
+        #expect(publications > 0)
     }
 
     private func makeModel(_ client: MockDisplayClient) -> DisplayControlModel {

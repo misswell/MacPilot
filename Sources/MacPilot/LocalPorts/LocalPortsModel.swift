@@ -96,7 +96,10 @@ final class LocalPortsModel: ObservableObject, ManagedFeature {
     /// and the submenu shows the previous snapshot until the scan lands. The hop
     /// to the next run-loop turn keeps the `@Published` writes out of the menu's
     /// own view update.
-    func refreshForMenu(maxAge: TimeInterval = LocalPortsModel.menuRefreshInterval) {
+    func refreshForMenu(maxAge: TimeInterval = LocalPortsModel.menuRefreshInterval, allowsRefresh: Bool) {
+        // Native menus also evaluate their SwiftUI content while hidden.
+        // Only a tracked menu session may launch subprocesses for this data.
+        guard allowsRefresh else { return }
         Task { [weak self] in
             guard let self, !self.isRefreshing else { return }
             if let lastRefresh = self.lastRefresh,

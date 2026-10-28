@@ -154,7 +154,7 @@ public struct DisplayControlDisplay: Codable, Equatable, Identifiable, Sendable 
     }
 }
 
-public struct DisplayControlResponse: Codable, Sendable {
+public struct DisplayControlResponse: Codable, Equatable, Sendable {
     public let displays: [DisplayControlDisplay]
     public let state: DisplayControlState
     public let message: String?
