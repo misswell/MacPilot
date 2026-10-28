@@ -52,6 +52,29 @@ checks, and acquiring a lease wakes an idle loop immediately.
 These are work-count budgets, not a claim about total process CPU. Compare
 release-process CPU with the same feature switches and menu/window state.
 
+## Failure, cancellation and transport budgets
+
+The CPU audit regressions use mock services and counters rather than changing
+real screen state. `MonitorMenuActivityTests` accepts only registered menu
+roots and their descendants; unrelated menus must never authorize scans.
+`LocalPortsModelTests` bounds failed automatic scans to a 10–60 second backoff,
+including reopening the page, while explicit refresh remains available.
+`DisplayControlIntegrationTests` checks idle service-failure backoff (2–60
+seconds), unchanged error publications, and single-request manual refreshes;
+active leases and recovery still use one-second checks.
+
+`DockGroupsPerformanceTests` checks unchanged running-set publication counts.
+Quick Search cancellation must stop before reading another app's metadata.
+Video transport reservations prevent capture from entering the encoder while
+the send slot is busy and must be released on failure, cancellation or stop.
+PiP stall monitoring starts only with an active capture and ends with it.
+
+These tests bound redundant work. To measure CPU, compare the same release
+configuration while switching apps, opening unrelated menus, rebuilding an
+index, and streaming across a constrained connection. Do not equate blocked
+LaunchServices/AX stack samples with CPU time, and verify the resident helper's
+image UUID before attributing it to a newly installed build.
+
 ## Phase 2 acceptance
 
 Use the **new release process**. Record the SHA, macOS version, hardware, PID,

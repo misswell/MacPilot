@@ -165,18 +165,14 @@ enum QuickSearchAppInfoReader {
     /// 直接读 `Contents/Info.plist`，不走 `Bundle` 的进程内缓存——和
     /// `InstalledAppResolver.freshVersion` 同一个理由：原地升级后要看到新值。
     static func read(fromAppAt url: URL) -> Info {
+        let empty = Info(metadata: QuickSearchAppMetadata(), alternateNames: [], descriptions: [], tags: [], inferredKeywords: [])
+        guard !Task.isCancelled else { return empty }
         let plistURL = url.appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("Info.plist")
         guard let data = try? Data(contentsOf: plistURL),
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         else {
-            return Info(
-                metadata: QuickSearchAppMetadata(),
-                alternateNames: [],
-                descriptions: [],
-                tags: [],
-                inferredKeywords: []
-            )
+            return empty
         }
 
         var names: [String] = []
@@ -189,6 +185,7 @@ enum QuickSearchAppInfoReader {
 
         let resources = url.appendingPathComponent("Contents/Resources", isDirectory: true)
         let localized = QuickSearchVendorMetadataReader.localizedInfo(fromAppAt: url)
+        guard !Task.isCancelled else { return empty }
         names.append(contentsOf: localized.names)
 
         var descriptions = localized.descriptions
@@ -199,6 +196,7 @@ enum QuickSearchAppInfoReader {
             descriptions.append(getInfo)
         }
         descriptions.append(contentsOf: QuickSearchVendorMetadataReader.serviceNames(from: plist))
+        guard !Task.isCancelled else { return empty }
         if let electron = QuickSearchElectronMetadataReader.read(fromResourcesAt: resources) {
             if let productName = electron.productName { names.append(productName) }
             descriptions.append(contentsOf: electron.descriptions)
@@ -211,6 +209,7 @@ enum QuickSearchAppInfoReader {
         )
         let tags = QuickSearchAppTagger.tags(for: metadata)
         let cappedDescriptions = capped(descriptions)
+        guard !Task.isCancelled else { return empty }
         let inferredKeywords = tags.isEmpty && cappedDescriptions.isEmpty
             ? QuickSearchVendorMetadataReader.fallbackKeywords(fromAppAt: url)
             : []

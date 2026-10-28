@@ -804,10 +804,12 @@ private final class PiPStreamOutput: NSObject, SCStreamOutput {
 @MainActor
 private final class PiPStreamDelegate: NSObject, SCStreamDelegate {
     weak var session: PiPSession?
+    var token = UUID()
 
     nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
         Task { @MainActor [weak self] in
-            self?.session?.streamStopped(with: error)
+            guard let self else { return }
+            self.session?.streamStopped(with: error, token: self.token)
         }
     }
 }
@@ -938,7 +940,6 @@ final class PiPSession: ObservableObject, Identifiable {
         isStalled = false
         hasObservedMotion = false
         lastContentChangeDate = Date()
-        startStallMonitor()
         let token = UUID()
         captureToken = token
         captureStartTask = Task { [weak self] in
@@ -955,8 +956,7 @@ final class PiPSession: ObservableObject, Identifiable {
         captureToken = UUID()
         captureStartTask?.cancel()
         captureStartTask = nil
-        stallMonitorTask?.cancel()
-        stallMonitorTask = nil
+        captureDidEnd()
         let currentStream = stream
         stream = nil
         streamOutput = nil
@@ -1026,15 +1026,20 @@ final class PiPSession: ObservableObject, Identifiable {
         if oldIdle != isIdle { owner?.sessionDidChange() }
     }
 
-    func streamStopped(with error: Error) {
-        guard !isHidden else { return }
+    func streamStopped(with error: Error, token: UUID) {
+        guard !isHidden, token == captureToken else { return }
+        captureDidEnd()
+        captureToken = UUID()
+        let stoppedToken = captureToken
+        captureStartTask?.cancel()
+        captureStartTask = nil
         stream = nil
         streamOutput = nil
         streamDelegate = nil
         Task { [weak self] in
             guard let self else { return }
             let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, stoppedToken == self.captureToken else { return }
             if content?.windows.contains(where: { $0.windowID == self.source.windowID }) == true {
                 self.isStalled = true
                 self.errorMessage = error.localizedDescription
@@ -1408,6 +1413,7 @@ final class PiPSession: ObservableObject, Identifiable {
             let output = PiPStreamOutput(processor: processor, session: self)
             let delegate = PiPStreamDelegate()
             delegate.session = self
+            delegate.token = token
             let stream = SCStream(filter: filter, configuration: configuration, delegate: delegate)
             try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: DispatchQueue(label: "com.misswell.macpilot.pip.frames"))
             try await stream.startCapture()
@@ -1418,6 +1424,7 @@ final class PiPSession: ObservableObject, Identifiable {
             self.stream = stream
             self.streamOutput = output
             self.streamDelegate = delegate
+            captureDidStart()
             errorMessage = nil
             // macOS may send only SCFrameStatusIdle samples when a window is
             // static. Those samples are valid but intentionally have no pixel
@@ -1426,6 +1433,7 @@ final class PiPSession: ObservableObject, Identifiable {
             captureInitialImage(filter: filter, configuration: configuration, processor: processor, token: token)
         } catch {
             if !Task.isCancelled, token == captureToken {
+                captureDidEnd()
                 errorMessage = error.localizedDescription
             }
         }
@@ -1501,7 +1509,14 @@ final class PiPSession: ObservableObject, Identifiable {
         start()
     }
 
-    private func startStallMonitor() {
+    var isStallMonitorRunning: Bool { stallMonitorTask != nil }
+
+    func captureDidEnd() {
+        stallMonitorTask?.cancel()
+        stallMonitorTask = nil
+    }
+
+    func captureDidStart() {
         guard stallMonitorTask == nil else { return }
         stallMonitorTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {

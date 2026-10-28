@@ -285,7 +285,9 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     func prepareMenuSession() -> MenuBarMenuSession? {
         guard let menuFactory else { return nil }
         captureTarget()
-        return MenuBarMenuSession(source: menuFactory(self))
+        let session = MenuBarMenuSession(source: menuFactory(self))
+        MonitorMenuActivity.shared.register(rootMenu: session.menu)
+        return session
     }
 
     @objc private func openMenu(_ sender: NSStatusBarButton) {

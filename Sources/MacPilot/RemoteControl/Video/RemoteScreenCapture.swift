@@ -16,6 +16,7 @@ final class RemoteScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
     private var quality: RemoteVideoQuality = .balanced
     private var forceKeyFrame = true
     private var encoding = false
+    private var encodingReservation: RemoteVideoTransport.SendReservation?
     private var stopped = false
     private var generation = 0
     private var width = 0
@@ -105,20 +106,24 @@ final class RemoteScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
         // During a capture configuration change ignore old-sized surfaces.
         guard CVPixelBufferGetWidth(pixel) == width, CVPixelBufferGetHeight(pixel) == height else { return }
         guard !encoding else { dropped += 1; return }
+        guard let reservation = transport.reserveSend() else { dropped += 1; return }
         encoding = true
+        encodingReservation = reservation
         let epoch = generation
         let force = forceKeyFrame
         forceKeyFrame = false
         encoder.encode(pixel, time: sample.presentationTimeStamp, forceKeyFrame: force) { [weak self] packet, milliseconds in
-            guard let self else { return }
+            guard let self else { reservation.cancel(); return }
             self.queue.async {
-                guard epoch == self.generation, !self.stopped else { return }
+                guard epoch == self.generation, !self.stopped,
+                      self.encodingReservation === reservation else { reservation.cancel(); return }
                 self.encoding = false
+                self.encodingReservation = nil
                 self.encodeTotal += milliseconds
                 self.encodedCount += 1
-                if let packet, self.transport.send(packet) {
+                if let packet, self.transport.send(packet, using: reservation) {
                     self.sent += 1; self.bytes += packet.payload.count
-                } else { self.dropped += 1; self.forceKeyFrame = true }
+                } else { reservation.cancel(); self.dropped += 1; self.forceKeyFrame = true }
                 self.reportAndAdapt()
             }
         }
@@ -142,6 +147,7 @@ final class RemoteScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
         guard let next, next != quality else { return }
         quality = next; lastQualityChange = now
         generation += 1; encoding = false; forceKeyFrame = true
+        encodingReservation?.cancel(); encodingReservation = nil
         resize()
         do { try encoder.configure(width: width, height: height, quality: quality) }
         catch { onFailure?(); return }
@@ -159,6 +165,7 @@ final class RemoteScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
     func stop() {
         queue.async {
             self.stopped = true; self.generation += 1
+            self.encodingReservation?.cancel(); self.encodingReservation = nil; self.encoding = false
             self.encoder.stop()
             if let stream = self.stream {
                 self.stream = nil

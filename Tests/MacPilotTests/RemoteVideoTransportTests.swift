@@ -5,6 +5,21 @@ import Network
 import Testing
 
 struct RemoteVideoTransportTests {
+    @Test func reservationBlocksCompetingPacketsAndCanBeReleased() throws {
+        let connection = NWConnection(host: "127.0.0.1", port: 12345, using: .tcp)
+        let transport = RemoteVideoTransport(connection: connection, secret: Data(repeating: 1, count: 32), isServer: true)
+        let reservation = try #require(transport.reserveSend())
+        #expect(transport.reserveSend() == nil)
+        #expect(!transport.send(RemoteVideoPacket(frameType: .diagnostics)))
+        reservation.cancel()
+        let next = try #require(transport.reserveSend())
+        reservation.cancel()
+        #expect(transport.reserveSend() == nil)
+        next.cancel()
+        #expect(transport.reserveSend() != nil)
+        transport.cancel()
+        #expect(transport.reserveSend() == nil)
+    }
     @Test(.timeLimit(.minutes(1))) @MainActor
     func independentVideoSocketAuthenticatesAndRejectsAQueuedFrameBacklog() async throws {
         let harness = VideoSocketHarness()

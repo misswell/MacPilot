@@ -10,6 +10,21 @@ import Testing
 
 @Suite(.serialized)
 struct PictureInPictureTests {
+    @Test @MainActor func stallMonitorRunsOnlyForAnActiveCapture() {
+        let source = PiPSource(windowID: 1, processID: 1, appName: "Test", bundleIdentifier: nil,
+                               title: "Test", frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        let session = PiPSession(source: source, region: .fullWindow, settings: .init(), owner: PictureInPictureModel())
+        #expect(!session.isStallMonitorRunning)
+        session.captureDidStart()
+        session.captureDidStart()
+        #expect(session.isStallMonitorRunning)
+        session.captureDidEnd()
+        #expect(!session.isStallMonitorRunning)
+        session.captureDidStart()
+        #expect(session.isStallMonitorRunning)
+        session.stop()
+        #expect(!session.isStallMonitorRunning)
+    }
     @Test func defaultsSupportThePipiriStyleHotkeyWorkflow() {
         let settings = PictureInPictureSettings()
 
@@ -252,7 +267,7 @@ struct PictureInPictureTests {
         let session = PiPSession(
             source: source, region: .fullWindow, settings: .init(), owner: owner, stallThreshold: 0.1
         )
-        session.start()
+        session.captureDidStart()
         defer { session.close() }
         let first = try #require(makeTestImage(gray: 0.2))
         let second = try #require(makeTestImage(gray: 0.8))

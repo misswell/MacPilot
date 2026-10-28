@@ -33,7 +33,7 @@ final class RemoteVideoEncoder {
 
     func encode(_ pixel: CVPixelBuffer, time: CMTime, forceKeyFrame: Bool,
                 output: @escaping @Sendable (RemoteVideoPacket?, Double) -> Void) {
-        guard let session else { return }
+        guard let session else { output(nil, 0); return }
         let started = ProcessInfo.processInfo.systemUptime
         let status = VTCompressionSessionEncodeFrame(session, imageBuffer: pixel,
             presentationTimeStamp: time, duration: .invalid,

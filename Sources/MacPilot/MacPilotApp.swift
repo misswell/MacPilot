@@ -33,6 +33,9 @@ struct MacPilotApp: App {
                 // while tracking; the next popup gets fresh monitor rows.
                 if model.isFeatureEnabled(.memoryMonitor) { _ = MemoryMonitorModel.menuSnapshot() }
                 if model.isFeatureEnabled(.cpuMonitor) { _ = CPUMonitorModel.menuSnapshot() }
+                if model.isFeatureEnabled(.localPorts) {
+                    model.localPorts.refreshForMenu(allowsRefresh: true)
+                }
                 return NSHostingMenu(rootView: MenuBarView.mainMenu(model: model, context: context,
                     showMainWindow: {
                         NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
@@ -47,6 +50,13 @@ struct MacPilotApp: App {
             })
         } else {
             controller = MenuBarDisplayController()
+            MonitorMenuActivity.shared.setLegacyRootMatcher { [weak model] menu in
+                guard let model else { return false }
+                let titles = Set(menu.items.map(\.title))
+                return ["settings", "quitApp", "turnOffScreenNow"].allSatisfy {
+                    titles.contains(model.t($0))
+                }
+            }
         }
         controller.observeIconChanges(model.objectWillChange.eraseToAnyPublisher())
         controller.observeIconChanges(model.awake.objectWillChange.eraseToAnyPublisher())

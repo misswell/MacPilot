@@ -36,16 +36,21 @@ final class LocalPortsModel: ObservableObject, ManagedFeature {
     private var generation: UInt64 = 0
     private var isVisible = false
     private let closeEnvironment: LocalPortCloseEnvironment
+    private let clock: () -> TimeInterval
+    private var menuFailureCount = 0
+    private var nextAutomaticRetryAt: TimeInterval = -.infinity
 
-    init(environment: LocalPortCloseEnvironment = .live) {
+    init(environment: LocalPortCloseEnvironment = .live,
+         clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         closeEnvironment = environment
+        self.clock = clock
     }
 
     func startVisibleSession() {
         guard !isVisible else { return }
         isVisible = true
         generation &+= 1
-        refresh()
+        refreshIfVisible()
 
         autoRefreshTask.start(interval: .seconds(10)) { [weak self] in
             self?.refreshIfVisible()
@@ -101,7 +106,8 @@ final class LocalPortsModel: ObservableObject, ManagedFeature {
         // Only a tracked menu session may launch subprocesses for this data.
         guard allowsRefresh else { return }
         Task { [weak self] in
-            guard let self, !self.isRefreshing else { return }
+            guard let self, !self.isRefreshing,
+                  self.clock() >= self.nextAutomaticRetryAt else { return }
             if let lastRefresh = self.lastRefresh,
                Date().timeIntervalSince(lastRefresh) < maxAge { return }
             self.startScan(appliesWhileHidden: true)
@@ -225,7 +231,7 @@ final class LocalPortsModel: ObservableObject, ManagedFeature {
     }
 
     private func refreshIfVisible() {
-        guard isVisible else { return }
+        guard isVisible, clock() >= nextAutomaticRetryAt else { return }
         refresh()
     }
 
@@ -255,14 +261,16 @@ final class LocalPortsModel: ObservableObject, ManagedFeature {
                       !Task.isCancelled,
                       self.generation == requestGeneration else { return }
                 if !appliesWhileHidden, !self.isVisible { return }
+                self.menuFailureCount = 0
+                self.nextAutomaticRetryAt = -.infinity
                 self.snapshot = value
                 self.lastRefresh = Date()
             } catch let error as LocalPortScanError {
                 guard let self, self.generation == requestGeneration else { return }
-                self.lastScanError = error
+                self.recordScanFailure(error)
             } catch {
                 guard let self, self.generation == requestGeneration else { return }
-                self.lastScanError = .commandFailed(command: "lsof", status: -1)
+                self.recordScanFailure(.commandFailed(command: "lsof", status: -1))
             }
 
             guard let self, self.generation == requestGeneration else { return }
@@ -272,4 +280,11 @@ final class LocalPortsModel: ObservableObject, ManagedFeature {
         }
         refreshTask = task
     }
+    private func recordScanFailure(_ error: LocalPortScanError) {
+        menuFailureCount = min(menuFailureCount + 1, 4)
+        let delay = min(60, Self.menuRefreshInterval * pow(2, Double(menuFailureCount - 1)))
+        nextAutomaticRetryAt = clock() + delay
+        lastScanError = error
+    }
+
 }

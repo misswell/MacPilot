@@ -9,6 +9,30 @@ final class MonitorMenuActivity: ObservableObject {
 
     @Published private(set) var isTracking = false
     private var trackingMenus = Set<ObjectIdentifier>()
+    private let roots = NSHashTable<NSMenu>.weakObjects()
+    private var legacyRootMatches: ((NSMenu) -> Bool)?
+
+    /// The popup controller registers the exact AppKit tree it will display.
+    func register(rootMenu: NSMenu) { roots.add(rootMenu) }
+
+    /// macOS 14.0–14.3 owns the MenuBarExtra tree. Identify its root from the
+    /// app's complete command signature, then track that exact tree as usual.
+    func setLegacyRootMatcher(_ matches: @escaping (NSMenu) -> Bool) {
+        legacyRootMatches = matches
+    }
+
+    private func owns(_ menu: NSMenu) -> Bool {
+        var ancestor: NSMenu? = menu
+        while let current = ancestor {
+            if roots.contains(current) { return true }
+            if legacyRootMatches?(current) == true {
+                roots.add(current)
+                return true
+            }
+            ancestor = current.supermenu
+        }
+        return false
+    }
     private var subscriptions: MonitorMenuSubscriptions?
 
     init(notificationCenter: NotificationCenter = .default) {
@@ -16,9 +40,10 @@ final class MonitorMenuActivity: ObservableObject {
             forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main
         ) { [weak self] notification in
             guard let menu = notification.object as? NSMenu else { return }
-            let identifier = ObjectIdentifier(menu)
+            let event = MonitorMenuEvent(menu: menu)
             MainActor.assumeIsolated {
-                self?.beginTracking(identifier)
+                guard let self, self.owns(event.menu) else { return }
+                self.beginTracking(ObjectIdentifier(event.menu))
             }
         }
         let end = notificationCenter.addObserver(
@@ -57,4 +82,11 @@ private final class MonitorMenuSubscriptions: @unchecked Sendable {
     deinit {
         for token in tokens { center.removeObserver(token) }
     }
+}
+
+/// NotificationCenter delivers these observers synchronously on OperationQueue.main.
+/// The envelope carries the non-Sendable AppKit value into that isolated body;
+/// it is never accessed from another queue.
+private struct MonitorMenuEvent: @unchecked Sendable {
+    let menu: NSMenu
 }

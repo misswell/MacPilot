@@ -122,6 +122,40 @@ struct LocalPortsModelTests {
         model.shutdown()
     }
 
+    @Test func failedMenuScansBackOffWithoutPretendingTheSnapshotIsFresh() async throws {
+        let recorder = ScanRecorder(snapshot: .empty)
+        var now: TimeInterval = 100
+        let model = LocalPortsModel(environment: makeEnvironment(scan: {
+            _ = recorder.scan()
+            throw LocalPortScanError.commandFailed(command: "lsof", status: 2)
+        }), clock: { now })
+        defer { model.shutdown() }
+        model.refreshForMenu(maxAge: 0, allowsRefresh: true)
+        for _ in 0..<200 where model.lastScanError == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(recorder.calls == 1)
+        #expect(model.lastRefresh == nil)
+        for _ in 0..<10 {
+            model.startVisibleSession()
+            model.stopVisibleSession()
+        }
+        #expect(recorder.calls == 1)
+        for _ in 0..<100 { model.refreshForMenu(maxAge: 0, allowsRefresh: true) }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(recorder.calls == 1)
+        now = 110
+        model.refreshForMenu(maxAge: 0, allowsRefresh: true)
+        for _ in 0..<200 where recorder.calls < 2 || model.isRefreshing {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(recorder.calls == 2)
+        now = 120
+        for _ in 0..<100 { model.refreshForMenu(maxAge: 0, allowsRefresh: true) }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(recorder.calls == 2)
+    }
+
     @Test func successfulCloseClearsPlanAndRefreshesSnapshot() async throws {
         let snapshot = LocalPortSnapshot(activities: [fixtureActivity()])
         let recorder = ScanRecorder(snapshot: snapshot)

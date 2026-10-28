@@ -166,6 +166,54 @@ struct DisplayControlIntegrationTests {
         #expect(model.pollInterval == .seconds(15))
     }
 
+    @Test func unavailableIdleServiceBacksOffAndDoesNotRepublishTheSameError() async {
+        let client = MockDisplayClient(ready: true)
+        client.fails = true
+        let model = makeModel(client)
+        await model.refresh()
+        #expect(model.pollInterval == .seconds(2))
+        var publications = 0
+        let subscription = model.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+        for _ in 0..<10 { await model.refresh() }
+        #expect(publications == 0)
+        #expect(model.pollInterval == .seconds(60))
+        client.fails = false
+        await model.refresh()
+        #expect(model.pollInterval == .seconds(15))
+    }
+
+    @Test func unavailableActiveServiceKeepsLeasePollingFast() async {
+        let client = MockDisplayClient(ready: true)
+        client.state = .active
+        let model = makeModel(client)
+        await model.refresh()
+        client.fails = true
+        await model.refresh()
+        #expect(model.pollInterval == .seconds(1))
+    }
+
+    @Test func manualFailedRefreshDoesNotImmediatelyPollAgain() async throws {
+        let client = MockDisplayClient(ready: true)
+        let model = makeModel(client)
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        model.applyLoadedSettings(settings)
+        model.start()
+        defer { model.stop() }
+        for _ in 0..<200 where client.requests.isEmpty {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(client.requests.count == 1)
+        client.fails = true
+        await model.refresh()
+        #expect(client.requests.count == 2)
+        #expect(model.pollInterval == .seconds(2))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(client.requests.count == 2)
+        #expect(model.pollInterval == .seconds(2))
+    }
+
     @Test func idleLoopSleepsThroughTheOldOneSecondPollingInterval() async throws {
         let client = MockDisplayClient(ready: true)
         let model = makeModel(client)
@@ -249,6 +297,7 @@ struct DisplayControlIntegrationTests {
         var requests: [DisplayControlRequest] = []
         var state: DisplayControlState = .idle
         let ready: Bool
+        var fails = false
         let display = DisplayControlDisplay(uuid: "test-physical", displayID: 1, name: "Test display",
             isBuiltIn: true, isVirtual: false, isOnline: true, isActive: true,
             isMain: true, width: 1920, height: 1080)
@@ -257,6 +306,7 @@ struct DisplayControlIntegrationTests {
 
         func send(_ request: DisplayControlRequest) async throws -> DisplayControlResponse {
             requests.append(request)
+            if fails { throw NSError(domain: "test", code: 1) }
             return .init(displays: [display], state: state, helperReady: ready)
         }
     }

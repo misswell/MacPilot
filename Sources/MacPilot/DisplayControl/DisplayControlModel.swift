@@ -29,6 +29,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     private var inhibitedSessionID: String?
     private var hasObservedDisconnection = false
     private var operationEpoch = UUID()
+    private var consecutiveIdleFailures = 0
     private let showsConfirmation: Bool
     private let prepareVisibleOutputs: () -> Bool
     private let controlStateChanged: (Bool) -> Void
@@ -83,11 +84,14 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     /// Lease renewal and recovery stay responsive; an idle helper needs only
     /// occasional status checks. Commands and remote-session changes wake it.
     var pollInterval: Duration {
-        if snapshot == nil || holdsControl || hasRecoveryObligation || isBusy
-            || isPreparingHelper || errorKey != nil || uuObservation.status != .disconnected {
+        if holdsControl || hasRecoveryObligation || isBusy
+            || isPreparingHelper || uuObservation.status != .disconnected {
             return .seconds(1)
         }
-        return .seconds(15)
+        if consecutiveIdleFailures > 0 {
+            return .seconds(min(60, 1 << min(consecutiveIdleFailures, 6)))
+        }
+        return snapshot == nil ? .seconds(1) : .seconds(15)
     }
 
     var remainingSeconds: Int {
@@ -123,9 +127,13 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         restartPolling()
     }
 
-    private func restartPolling() {
+    private func restartPolling(immediately: Bool = true) {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
+            if !immediately {
+                guard let self else { return }
+                do { try await Task.sleep(for: self.pollInterval) } catch { return }
+            }
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.poll()
@@ -177,7 +185,12 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         guard !isPreparingHelper, !isBusy, !hasControl else { return }
         guard recoveryShortcutConflict?() != true else { errorKey = "displayRecoveryShortcutConflict"; return }
         isPreparingHelper = true
-        defer { isPreparingHelper = false }
+        pollTask?.cancel()
+        pollTask = nil
+        defer {
+            isPreparingHelper = false
+            if isRunning, !isBusy { restartPolling(immediately: false) }
+        }
         do {
             if recoveryService.status == .enabled {
                 do {
@@ -207,12 +220,21 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }
 
     func refresh() async {
+        if isRunning {
+            pollTask?.cancel()
+            pollTask = nil
+        }
         let epoch = operationEpoch
         do {
             let response = try await client.send(.init(command: .status))
-            if epoch == operationEpoch { apply(response) }
+            if epoch == operationEpoch, !Task.isCancelled { apply(response) }
         }
-        catch { errorKey = "displayHelperUnavailable" }
+        catch {
+            guard epoch == operationEpoch, !Task.isCancelled else { return }
+            recordUnavailable()
+        }
+        guard epoch == operationEpoch, !Task.isCancelled else { return }
+        if isRunning, !isPreparingHelper, !isBusy { restartPolling(immediately: false) }
     }
 
     func disable(_ display: DisplayControlDisplay) {
@@ -307,7 +329,15 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
                sessionID != inhibitedSessionID, sessionID != appliedSessionID, settings.uuPolicy != .none {
                 applyRemotePolicy()
             }
-        } catch { errorKey = "displayHelperUnavailable" }
+        } catch {
+            guard isRunning, !Task.isCancelled, epoch == operationEpoch else { return }
+            recordUnavailable()
+        }
+    }
+
+    private func recordUnavailable() {
+        consecutiveIdleFailures = min(consecutiveIdleFailures + 1, 6)
+        if errorKey != "displayHelperUnavailable" { errorKey = "displayHelperUnavailable" }
     }
 
     private func perform(_ request: DisplayControlRequest, restoring: Bool = false) {
@@ -326,7 +356,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
                 self.apply(response)
             } catch {
                 guard token == self.operationEpoch, !Task.isCancelled else { return }
-                self.errorKey = "displayHelperUnavailable"
+                self.recordUnavailable()
             }
             self.isBusy = false
             // A command may acquire a lease while the idle loop is asleep.
@@ -335,12 +365,16 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     }
 
     private func apply(_ response: DisplayControlResponse) {
+        consecutiveIdleFailures = 0
         let nextError = response.message.map { "displayError_" + $0 }
         if errorKey != nextError { errorKey = nextError }
         // Also clear an optimistic control mark when a rejected command returns
         // the same idle snapshot as before it was sent.
         controlStateChanged(![.idle, .unavailable].contains(response.state))
-        guard snapshot != response else { return }
+        guard snapshot != response else {
+            if response.confirmationDeadline != nil, confirmationPanel == nil { updateConfirmationPanel() }
+            return
+        }
         snapshot = response
         if response.confirmationDeadline != nil { now = Date() }
         updateConfirmationPanel()

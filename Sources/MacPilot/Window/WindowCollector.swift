@@ -33,11 +33,10 @@ enum WindowSwitcherInventory {
     ) -> [WindowSwitcherItem] {
         let recordsByProcess = Dictionary(grouping: serverRecords, by: \.processID)
         let applications = NSWorkspace.shared.runningApplications.filter { application in
+            guard recordsByProcess[application.processIdentifier]?.contains(where: { $0.isOnScreen }) == true else { return false }
             guard !application.isTerminated else { return false }
             guard application.activationPolicy == .regular || application.activationPolicy == .accessory else { return false }
             if application.isHidden && !settings.includeHiddenApplications { return false }
-            let processRecords = recordsByProcess[application.processIdentifier] ?? []
-            guard processRecords.contains(where: { $0.isOnScreen }) else { return false }
             return true
         }
 

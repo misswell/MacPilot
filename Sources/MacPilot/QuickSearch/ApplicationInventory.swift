@@ -271,11 +271,21 @@ final class ApplicationInventory: ObservableObject {
     /// 直接用扫到的路径，**不**再按 Bundle ID 向 Launch Services 解析——
     /// 那样会把同一个 Bundle ID 的不同安装路径折叠成一条。
     nonisolated static func scanInstalledEntries(in directories: [URL]) -> [QuickSearchApplicationEntry] {
-        InstalledAppResolver.scanInstalledApps(in: directories).compactMap { reference in
-            guard !reference.path.isEmpty else { return nil }
+        entries(for: InstalledAppResolver.scanInstalledApps(in: directories), reader: QuickSearchAppInfoReader.read)
+    }
+
+    nonisolated static func entries(
+        for references: [DockGroupApp],
+        reader: (URL) -> QuickSearchAppInfoReader.Info
+    ) -> [QuickSearchApplicationEntry] {
+        var entries: [QuickSearchApplicationEntry] = []
+        for reference in references {
+            guard !Task.isCancelled else { return [] }
+            guard !reference.path.isEmpty else { continue }
             let url = URL(fileURLWithPath: reference.path, isDirectory: true)
-            let info = QuickSearchAppInfoReader.read(fromAppAt: url)
-            return QuickSearchApplicationEntry(
+            let info = reader(url)
+            guard !Task.isCancelled else { return [] }
+            entries.append(QuickSearchApplicationEntry(
                 url: url,
                 name: reference.name,
                 bundleIdentifier: reference.bundleIdentifier,
@@ -283,8 +293,9 @@ final class ApplicationInventory: ObservableObject {
                 tags: info.tags,
                 descriptions: info.descriptions,
                 inferredKeywords: info.inferredKeywords
-            )
+            ))
         }
+        return entries
     }
 
     static func workspaceRunningApplications() -> [QuickSearchRunningApplication] {

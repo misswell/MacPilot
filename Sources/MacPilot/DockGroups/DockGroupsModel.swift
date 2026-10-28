@@ -23,6 +23,7 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
     var isRunning: Bool { isActive }
     var diagnosticTaskCount: Int {
         (runningTask.isRunning ? 1 : 0) + (dockRefreshTask == nil ? 0 : 1)
+            + (helperHealthTask == nil ? 0 : 1)
             + iconLoadTasks.count + (iconFlushTask == nil ? 0 : 1)
     }
     var diagnosticObserverCount: Int {
@@ -46,6 +47,7 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
 
     let helperManager: DockHelperManager
     private let store: DockGroupStore
+    private let runningIdentifiers: () -> Set<String>
 
     private var isActive = false
     private let runningTask = BackgroundTask()
@@ -56,8 +58,11 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
     private let configChangeObservers = ObserverBag()
     /// 外观 / Dock 布局变化后的合并刷新，避免连续通知触发多次重建。
     private var dockRefreshTask: Task<Void, Never>?
+    private var helperHealthTask: Task<Void, Never>?
     /// 读取 Dock 图标位置的最小间隔：Dock 树的读取要跨进程，别被高频通知打满。
     private var lastDockTileRefresh: Date = .distantPast
+    private var lastHelperHealthCheck: Date = .distantPast
+    private var helperCheckRequested = false
     /// 只放已经按尺寸限制过的缩略图（见 DockGroupIconThumbnail）。
     private var iconCache: [String: NSImage] = [:]
     /// 需求第 12 节：图标缩略图缓存在 ~/Library/Caches/MacPilot/DockGroups/。
@@ -92,9 +97,11 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
     init(
         store: DockGroupStore = DockGroupStore(),
         helperManager: DockHelperManager = DockHelperManager(),
-        iconCacheDirectory: URL = DockGroupPaths.defaultCacheDirectory()
+        iconCacheDirectory: URL = DockGroupPaths.defaultCacheDirectory(),
+        runningIdentifiers: @escaping () -> Set<String> = { InstalledAppResolver.runningBundleIdentifiers() }
     ) {
         self.store = store
+        self.runningIdentifiers = runningIdentifiers
         self.helperManager = helperManager
         iconCacheStore = DockGroupIconCache(directory: iconCacheDirectory)
     }
@@ -119,6 +126,14 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
         startObservingWorkspace()
         startObservingConfigChanges()
         ensureHelpersExistIfNeeded()
+        helperHealthTask?.cancel()
+        helperHealthTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                guard let self, self.isActive else { return }
+                self.ensureHelpersExistIfNeeded()
+            }
+        }
         scheduleDockRefresh()
     }
 
@@ -133,6 +148,9 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
         stopObservingConfigChanges()
         dockRefreshTask?.cancel()
         dockRefreshTask = nil
+        helperHealthTask?.cancel()
+        helperHealthTask = nil
+        helperCheckRequested = false
         stopMonitoring()
     }
 
@@ -553,7 +571,9 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
 
     /// 启动时做一次「缺失 / 版本过期就重做」的轻量校验，避免每次启动都无脑重写磁盘。
     private func ensureHelpersExistIfNeeded(force: Bool = false) {
-        guard settings.isEnabled, helperManager.isHelperExecutableAvailable else { return }
+        guard settings.isEnabled else { return }
+        lastHelperHealthCheck = Date()
+        guard helperManager.isHelperExecutableAvailable else { return }
         var missing = false
         for group in groups {
             if force || helperManager.helperNeedsRegeneration(for: group) {
@@ -570,7 +590,8 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
 
     /// 需求第 9 节：只用公开的 NSWorkspace 运行列表，不接触目标进程内部。
     func refreshRunningState() {
-        runningBundleIdentifiers = InstalledAppResolver.runningBundleIdentifiers()
+        let next = runningIdentifiers()
+        if runningBundleIdentifiers != next { runningBundleIdentifiers = next }
     }
 
     private func startObservingWorkspace() {
@@ -587,7 +608,7 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
         for name in names {
             let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in
-                    self?.refreshRunningState()
+                    if name != NSWorkspace.didActivateApplicationNotification { self?.refreshRunningState() }
                     self?.scheduleDockRefresh()
                 }
             }
@@ -600,7 +621,7 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.scheduleDockRefresh() }
+            Task { @MainActor in self?.scheduleDockRefresh(checkHelpers: true) }
         }, center: appearanceCenter)
     }
 
@@ -645,14 +666,18 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
 
     /// 合并刷新：外观变化要重建 Helper，Dock 布局变化要重读图标位置。
     /// 系统会连着发好几条通知，这里合成一次（300ms）。
-    private func scheduleDockRefresh() {
+    private func scheduleDockRefresh(checkHelpers: Bool = false) {
         guard settings.isEnabled else { return }
+        helperCheckRequested = helperCheckRequested || checkHelpers
         dockRefreshTask?.cancel()
         dockRefreshTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
             guard let self, !Task.isCancelled else { return }
             // 外观变了：跟随系统的分组需要按新外观重建 Helper（Info.plist 里记录了外观）。
-            self.ensureHelpersExistIfNeeded()
+            if self.helperCheckRequested || Date().timeIntervalSince(self.lastHelperHealthCheck) >= 60 {
+                self.helperCheckRequested = false
+                self.ensureHelpersExistIfNeeded()
+            }
             self.refreshDockTileAnchors()
         }
     }

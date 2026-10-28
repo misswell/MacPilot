@@ -16,6 +16,8 @@ public final class RemoteVideoTransport: @unchecked Sendable {
     private let lock = NSLock()
     private var busy = false
     private var closed = false
+    private var reservationID: UInt64?
+    private var nextReservationID: UInt64 = 0
     public var onReady: (@Sendable () -> Void)?
     public var onPacket: (@Sendable (RemoteVideoPacket) -> Void)?
     public var onFailure: (@Sendable () -> Void)?
@@ -52,18 +54,51 @@ public final class RemoteVideoTransport: @unchecked Sendable {
         connection.start(queue: queue)
     }
 
+    public final class SendReservation: @unchecked Sendable {
+        fileprivate weak var transport: RemoteVideoTransport?
+        fileprivate let id: UInt64
+        fileprivate init(transport: RemoteVideoTransport, id: UInt64) { self.transport = transport; self.id = id }
+        public func cancel() { transport?.releaseReservation(id) }
+        deinit { cancel() }
+    }
+
+    public func reserveSend() -> SendReservation? {
+        lock.withLock {
+            guard !closed, !busy else { return nil }
+            busy = true
+            nextReservationID &+= 1
+            reservationID = nextReservationID
+            return SendReservation(transport: self, id: nextReservationID)
+        }
+    }
+
+    private func releaseReservation(_ id: UInt64) {
+        lock.withLock {
+            guard reservationID == id else { return }
+            reservationID = nil
+            busy = false
+        }
+    }
+
     /// False means congestion, never "queued for later". An encoder that
     /// drops a reference frame must force an IDR before resuming.
     @discardableResult
     public func send(_ packet: RemoteVideoPacket) -> Bool {
-        let reserved = lock.withLock {
-            guard !closed, !busy else { return false }
-            busy = true
+        guard let reservation = reserveSend() else { return false }
+        return send(packet, using: reservation)
+    }
+
+    @discardableResult
+    public func send(_ packet: RemoteVideoPacket, using reservation: SendReservation) -> Bool {
+        let accepted = lock.withLock {
+            guard !closed, reservation.transport === self, reservationID == reservation.id else { return false }
+            reservationID = nil
             return true
         }
-        guard reserved else { return false }
+        guard accepted else { return false }
         queue.async { [weak self] in
             guard let self else { return }
+            guard !self.lock.withLock({ self.closed }) else { return }
             do {
                 let data = try self.sender.encode(packet)
                 let start = ProcessInfo.processInfo.systemUptime
@@ -87,7 +122,7 @@ public final class RemoteVideoTransport: @unchecked Sendable {
     }
 
     public func cancel() {
-        lock.withLock { closed = true }
+        lock.withLock { closed = true; reservationID = nil; busy = false }
         connection.cancel()
     }
 
@@ -95,6 +130,8 @@ public final class RemoteVideoTransport: @unchecked Sendable {
         let notify = lock.withLock {
             guard !closed else { return false }
             closed = true
+            reservationID = nil
+            busy = false
             return true
         }
         connection.cancel()
