@@ -34,7 +34,7 @@ extension AppText {
         "displayUUPermissionHint": "需要已安装 UU 远程、辅助功能权限，并保持 UU 主窗口可读取。检测依赖 UU 的界面结构；读不到时会停止续期并恢复实体屏。",
         "displayAccessibility": "辅助功能设置",
         "displayApplyUUNow": "应用当前 UU 策略",
-        "displayRuleChangeHint": "启动时已有的连接需手动应用一次，后续新连接自动处理。手动解除后，本次连接不再自动关屏；修改策略会先恢复，需要重新应用或等待下一次连接。",
+        "displayRuleChangeHint": "UU 连接时按上面的策略自动调整，启动时已连接的会话也一样。本次连接被手动解除或确认超时回滚后，不再自动关屏；点「应用当前 UU 策略」可重新应用。修改策略会先恢复屏幕。",
         "displayVirtualSpecification": "虚拟屏规格",
         "displayPixelWidth": "像素宽度",
         "displayPixelHeight": "像素高度",
@@ -95,7 +95,7 @@ extension AppText {
         "displayError_permissionDenied": "恢复助手拒绝了无法验证的控制请求。",
         "displayError_displayAPIUnavailable": "当前系统缺少所需显示接口，已停止控制。",
         "displayError_transactionFailed": "系统未完成屏幕配置，已保留恢复记录。",
-        "displayError_userOverride": "已手动解除控制，本次连接不再自动关闭屏幕。"
+        "displayError_userOverride": "本次连接已解除过屏幕控制（手动解除或确认超时回滚），不会再自动关闭屏幕。点「应用当前 UU 策略」可重新应用。"
     ]
 
     static let displayControlEnglish: [String: String] = [
@@ -133,7 +133,7 @@ extension AppText {
         "displayUUPermissionHint": "Requires UU Remote, Accessibility permission, and a readable UU main window. Detection depends on UU's interface. Missing evidence stops lease renewal and restores physical displays.",
         "displayAccessibility": "Accessibility settings",
         "displayApplyUUNow": "Apply current UU policy",
-        "displayRuleChangeHint": "Apply once for a connection already active at startup; new connections run automatically. Releasing control pauses this session. Changing a rule restores displays; apply again or wait for a new connection.",
+        "displayRuleChangeHint": "The rule runs automatically when UU connects, including a session that is already active at startup. Releasing control or a confirmation timeout pauses it for this session; click “Apply UU rule” to apply it again. Changing a rule restores displays first.",
         "displayVirtualSpecification": "Virtual display specification",
         "displayPixelWidth": "Pixel width",
         "displayPixelHeight": "Pixel height",
@@ -194,6 +194,6 @@ extension AppText {
         "displayError_permissionDenied": "The recovery helper rejected an unverified request.",
         "displayError_displayAPIUnavailable": "The required display API is unavailable on this system.",
         "displayError_transactionFailed": "The system did not finish configuring displays. Recovery records are retained.",
-        "displayError_userOverride": "Control was released manually. Automatic disabling is paused for this session."
+        "displayError_userOverride": "Control was already released for this session (manually or by a confirmation timeout), so it will not disable screens automatically. Click “Apply UU rule” to apply it again."
     ]
 }

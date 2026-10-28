@@ -3,6 +3,36 @@ import Testing
 @testable import MacPilotDisplayControlCore
 
 struct DisplayTopologyControllerTests {
+    @Test func aStaleOverrideMessageDoesNotGreetANewSession() {
+        let fixture = ControllerFixture(displays: [
+            screen("one", id: 1, main: true),
+            screen("two", id: 2)
+        ])
+        fixture.driver.removesVirtualOnDestroy = true
+        let start = Date()
+        let spec = DisplayVirtualSpec(width: 1920, height: 1080)
+        func prepare(confirmed: Bool, at now: Date) {
+            fixture.controller.handle(.init(command: .prepareVirtual, virtualSpec: spec,
+                generation: fixture.controller.response().generation,
+                remoteSessionID: "uu-session", confirmed: confirmed, policy: .remoteVirtualOnly), now: now)
+        }
+
+        // Reach the "this session was released" state through the timeout path.
+        prepare(confirmed: false, at: start)
+        fixture.controller.expireLeases(now: start.addingTimeInterval(31))
+        fixture.controller.expireLeases(now: Date().addingTimeInterval(1.1))
+        prepare(confirmed: false, at: Date())
+        #expect(fixture.controller.response().message == DisplayControlMessageCode.userOverride.rawValue)
+
+        // The same session keeps the truthful explanation.
+        fixture.controller.handle(.init(command: .status, remoteSessionID: "uu-session"), now: Date())
+        #expect(fixture.controller.response().message == DisplayControlMessageCode.userOverride.rawValue)
+
+        // A different session must not inherit it: the user did nothing there.
+        fixture.controller.handle(.init(command: .status, remoteSessionID: "next-session"), now: Date())
+        #expect(fixture.controller.response().message == nil)
+    }
+
     @Test func anExplicitReapplyClearsTheSessionOverrideLeftByAConfirmationTimeout() {
         let fixture = ControllerFixture(displays: [
             screen("one", id: 1, main: true),
@@ -28,7 +58,7 @@ struct DisplayTopologyControllerTests {
 
         prepare(confirmed: false, at: Date())
         #expect(fixture.controller.response().state == .idle)
-        #expect(fixture.controller.response().message == DisplayControlMessageCode.uuSessionRequired.rawValue)
+        #expect(fixture.controller.response().message == DisplayControlMessageCode.userOverride.rawValue)
         #expect(!fixture.driver.displays().contains(where: { $0.uuid == "owned-virtual" }))
 
         // The button in the settings page is an explicit re-apply, and that is

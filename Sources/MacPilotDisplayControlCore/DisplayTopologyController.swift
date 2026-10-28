@@ -120,6 +120,7 @@ public final class DisplayTopologyController: @unchecked Sendable {
         }
         switch request.command {
         case .status:
+            clearStaleOverrideMessage(for: request.remoteSessionID)
             return
         case .heartbeat:
             handleHeartbeat(request, now: now)
@@ -676,6 +677,19 @@ public final class DisplayTopologyController: @unchecked Sendable {
         return active
     }
 
+    /// A message describes the last transaction, not the helper's permanent
+    /// state. `userOverride` left by a previous session (or by the app that
+    /// already quit) must not greet the next session as if the user had just
+    /// released control.
+    private func clearStaleOverrideMessage(for remoteSessionID: String?) {
+        guard messageCode == .userOverride, state == .idle else { return }
+        guard let overrideSession = lease.manualOverrideSessionID else {
+            messageCode = nil
+            return
+        }
+        if remoteSessionID != overrideSession { messageCode = nil }
+    }
+
     private func activeJournalGeneration() -> UUID? { loadJournal()?.generation }
     private func loadJournal() -> DisplayRecoveryJournal? { try? store.load() }
 
@@ -685,7 +699,9 @@ public final class DisplayTopologyController: @unchecked Sendable {
     /// the user just got back.
     private func clearOverrideForExplicitRetry(_ request: DisplayControlRequest, session: String) -> Bool {
         guard lease.manualOverrideSessionID == session else { return true }
-        guard request.confirmed else { messageCode = .uuSessionRequired; return false }
+        // "This session already released control" is the truthful answer here;
+        // `.uuSessionRequired` would claim the UU session itself is unusable.
+        guard request.confirmed else { messageCode = .userOverride; return false }
         do { try overrideStore.clear() }
         catch { messageCode = .recoveryIncomplete; return false }
         lease.clearOverride()

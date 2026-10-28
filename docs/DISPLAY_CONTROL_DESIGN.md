@@ -110,8 +110,10 @@ UUyc-companion 的 README 明确说明：仅创建虚拟屏时，需要用户在
 - **确认控件必须留在虚拟屏**，但用户切到虚拟屏之前看不到它。因此进入 `awaitingVirtualConfirmation` 时，同时在该屏之外的**当前实体屏**上显示一块不可交互的引导窗口：说明要在 UU 显示面板选择 `MacPilot Remote Display`、再在虚拟屏上确认，并显示倒计时。引导窗口不能代替确认，也不能放在任意物理屏上执行确认。
 - **一次确认超时 / 紧急解除 = 本次会话 override**，自动规则不得重试，否则会立刻把用户刚恢复的桌面再次关掉。设置页的「应用当前 UU 策略」是唯一的显式重新应用路径：`prepareVirtual` / `keepOnly` 带 `confirmed: true` 时才会清除 `DisplayControlOverride.json`；自动路径始终为 `false`，无权清除。禁止把「清除 override」做成自动重试的一部分。
 - **失败必须在页面顶部可见**：错误提示从「安全恢复」卡片移到页头下方，UU 已连接且规则非 `none` 时在同一处提供「应用当前 UU 策略」重试按钮。
+- **启动时已连接的 UU 会话同样自动应用**：旧实现为了让"重启 GUI 不撤销启动恢复/紧急解除"而禁止启动后自动应用，结果装完新版本重启时 UU 明明连着却什么都不做，页面还留着上一次会话的「已手动解除控制」。启动恢复由助手状态机负责（`recovering` 期间 `canChange == false`），上一次解除由 `DisplayControlOverride.json` 按会话拦住，因此 GUI 不再自行抑制；自动请求若被会话 override 挡住，助手返回 `userOverride` 而不是误导性的 `uuSessionRequired`。
+- **消息只描述最近一次事务**：`userOverride` 等消息不得跨会话/跨 GUI 重启存活。助手处理 `status` 时，若会话与 override 记录的会话不同（或 UU 已断开），清掉这条陈旧消息，避免新会话一打开页面就被说成"你刚手动解除了控制"。
 - **状态迁移与策略决定写入 `~/Library/Logs/MacPilot/Diagnostics.log`（`DisplayControl`）**：状态 / message 变化时才记录，附带 UU 状态、会话前缀与实体/虚拟屏数量。没有这条记录，「没有反应」无法回溯。
-- 回归：`DisplayTopologyControllerTests.anExplicitReapplyClearsTheSessionOverrideLeftByAConfirmationTimeout`、`DisplayControlIntegrationTests.theManualUUButtonIsMarkedAsAnExplicitReapplyButTheAutomaticRuleIsNot`；`DisplayControlTranslationsHaveMatchingKeys` 保证两份文案同步。
+- 回归：`DisplayTopologyControllerTests.anExplicitReapplyClearsTheSessionOverrideLeftByAConfirmationTimeout`、`DisplayTopologyControllerTests.aStaleOverrideMessageDoesNotGreetANewSession`、`DisplayControlIntegrationTests.onlyTheUserInitiatedUUApplyAsksTheHelperToClearTheSessionOverride`；`DisplayControlTranslationsHaveMatchingKeys` 保证两份文案同步。
 
 ## 4. 运行时、恢复记录和会话策略
 

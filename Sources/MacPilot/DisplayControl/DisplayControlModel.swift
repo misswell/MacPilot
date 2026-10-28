@@ -32,7 +32,6 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     private var sessionID: String?
     private var appliedSessionID: String?
     private var inhibitedSessionID: String?
-    private var hasObservedDisconnection = false
     private var operationEpoch = UUID()
     private var consecutiveIdleFailures = 0
     private let showsConfirmation: Bool
@@ -65,12 +64,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
             if self.uuObservation != observation { self.uuObservation = observation }
             self.sessionID = id
             if id == nil, observation.status == .disconnected {
-                self.hasObservedDisconnection = true
                 self.inhibitedSessionID = nil
-            } else if observation.status == .connected, !self.hasObservedDisconnection {
-                // Starting/restarting the GUI during an existing connection
-                // must not undo startup recovery or a previous emergency release.
-                self.inhibitedSessionID = id
             }
             if changed, self.isRunning { self.restartPolling() }
         }
@@ -174,7 +168,6 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
 
     private func beginRunning() {
         isBusy = false
-        hasObservedDisconnection = false
         if showsConfirmation { DisplayControlTermination.owner = self }
         syncMonitor()
         restartPolling()
@@ -449,7 +442,6 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         if isRunning && settings.uuPolicy != .none { monitor.start() }
         else {
             monitor.stop(); uuObservation = .init(status: .disconnected); sessionID = nil
-            hasObservedDisconnection = false
         }
     }
 
