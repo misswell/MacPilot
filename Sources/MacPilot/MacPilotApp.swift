@@ -2740,6 +2740,7 @@ final class MacPilotModel: ObservableObject {
         // A previous session may have died while holding a blank screen; replay
         // its saved backlight levels before anything else touches a display.
         DisplayBlankRecovery.recover(store: .standard)
+        DisplayPower.scheduleDisplayRecoveryRetries()
         awake = AwakeSessionManager(
             closedLidSleepController: ClosedLidSleepController(),
             lidStateMonitor: LidStateMonitor()

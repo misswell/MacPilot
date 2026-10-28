@@ -163,6 +163,27 @@ struct DisplayBlankRecoveryTests {
 }
 
 extension DisplayBlankRecoveryTests {
+    @Test func unavailableMonitorRemainsQueuedUntilPowerOnIsConfirmed() throws {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        store.save(DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: [:], ddcBacklight: [:], ddcPowerOff: ["2"]))
+        var available = false
+        var writes = 0
+        let appliers = DisplayBlankRecovery.Appliers(
+            readSystem: { _ in nil }, writeSystem: { _, _ in false },
+            readDDC: { _ in nil }, writeDDC: { _, _ in false },
+            readPower: { _ in available ? DDCPacket.powerStandby : nil },
+            writePower: { _, _ in writes += 1; return available }
+        )
+
+        DisplayBlankRecovery.recover(store: store, appliers: appliers)
+        #expect(store.load()?.poweredOffDisplays == ["2"])
+        available = true
+        DisplayBlankRecovery.recover(store: store, appliers: appliers)
+        #expect(writes == 2)
+        #expect(store.load() == nil)
+    }
+
     /// Recovery of a switched-off display is decided by state, not by level. Any
     /// dark DPMS state counts as "still MacPilot's blank", because a monitor is
     /// free to answer a soft-off with standby — the `SSN-24` here does — and

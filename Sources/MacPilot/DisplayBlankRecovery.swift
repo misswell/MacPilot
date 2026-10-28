@@ -243,8 +243,14 @@ enum DisplayBlankRecovery {
         }
         for key in snapshot.poweredOffDisplays {
             guard let id = UInt32(key) else { continue }
-            guard powerDecision(current: appliers.readPower(id)) == .restore else { continue }
-            restored += 1
+            switch powerDecision(current: appliers.readPower(id)) {
+            case .alreadyRepaired:
+                continue
+            case .restore, .undrivable:
+                // A sleeping/disconnected display may not answer reads but may
+                // still accept an on command. A failed attempt remains journaled.
+                restored += 1
+            }
             if !appliers.writePower(id, DDCPacket.powerOn) {
                 unresolvedPower.append(key)
             }

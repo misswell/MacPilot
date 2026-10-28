@@ -161,6 +161,8 @@ enum DisplayPower {
     /// applying it immediately. The retry count is finite; an unresolved state
     /// remains in the crash snapshot for the next launch.
     @MainActor private static var keyboardRestoreRetryTask: Task<Void, Never>?
+    @MainActor private static var displayRestoreRetryTask: Task<Void, Never>?
+    @MainActor private static var displayRecoveryObserver: NSObjectProtocol?
     private static let keyboardRestoreRetryDelays: [Duration] = [
         .milliseconds(100),
         .milliseconds(250),
@@ -191,6 +193,13 @@ enum DisplayPower {
     static func blankDisplay() -> Bool {
         guard !topologyControlIsActive else { return false }
         if isBlanked { return true }
+        // Do not overwrite a previous, unresolved power-off transaction.
+        DisplayBlankRecovery.recover(store: snapshotStore)
+        if !(snapshotStore.load()?.poweredOffDisplays.isEmpty ?? true) {
+            scheduleDisplayRecoveryRetries()
+            DiagnosticLog.write("DisplayPower", "display blank refused reason=pendingPowerRecovery")
+            return false
+        }
 
         let steps = ScreenBlankPlanner.steps(for: onlineCandidates())
         guard !steps.isEmpty else {
@@ -350,7 +359,7 @@ enum DisplayPower {
         }
         blankedDisplays.removeAll()
         var poweredOn = 0
-        var stillWaiting: [CGDirectDisplayID] = []
+        var stillWaiting = Array(ddcPoweredOffDisplays)
         if let ddc = DDCBacklight.shared {
             // Power first: a display MacPilot switched off has to be answering
             // DDC again before a brightness write to it can land, and the driver
@@ -359,13 +368,9 @@ enum DisplayPower {
                 let write = ddc.setPowerMode(DDCPacket.powerOn, displayID)
                 if write.didConfirm {
                     poweredOn += 1
-                } else if write.sent {
-                    // The command went out and the monitor never acknowledged.
-                    // Dropping it here is what leaves a panel dark with nothing
-                    // left that knows to try again, so it goes into the crash
-                    // snapshot for the next launch to retry.
-                    stillWaiting.append(displayID)
+                    stillWaiting.removeAll { $0 == displayID }
                 }
+                DiagnosticLog.write("DisplayPower", "unblank DDC power display=\(displayID) sent=\(write.sent) confirmed=\(write.didConfirm)")
             }
             for (displayID, original) in ddcBlankedDisplays {
                 // Best effort: the level the user had before the blank is the one
@@ -397,11 +402,55 @@ enum DisplayPower {
         if !unresolvedKeyboards.isEmpty {
             scheduleKeyboardBacklightRetries()
         }
+        if !stillWaiting.isEmpty { scheduleDisplayRecoveryRetries() }
         DiagnosticLog.write(
             "DisplayPower",
             "display unblanked backlight=\(restoredBacklights) ddcOn=\(poweredOn) ddcOnPending=\(stillWaiting.count) overlay=\(hidOverlay ? 1 : 0) keyboardCaptured=\(capturedKeyboards) keyboardPending=\(unresolvedKeyboards.count)"
         )
         NotificationCenter.default.post(name: blankStateDidChangeNotification, object: nil)
+    }
+
+    /// Monitors can disappear from DDC while the system wakes. Keep the journal
+    /// until an on state is confirmed, and retry as the display link settles.
+    @MainActor
+    static func scheduleDisplayRecoveryRetries() {
+        if displayRecoveryObserver == nil {
+            displayRecoveryObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    guard !isDisplayBlanked else { return }
+                    scheduleDisplayRecoveryRetries()
+                }
+            }
+        }
+        guard !(snapshotStore.load()?.poweredOffDisplays.isEmpty ?? true) else { return }
+        displayRestoreRetryTask?.cancel()
+        displayRestoreRetryTask = Task { @MainActor in
+            for delay in [Duration.seconds(1), .seconds(3), .seconds(10), .seconds(30), .seconds(60)] {
+                do { try await Task.sleep(for: delay) } catch { return }
+                guard !Task.isCancelled, !isDisplayBlanked else { return }
+                DisplayBlankRecovery.recover(store: snapshotStore)
+                let remaining = snapshotStore.load()?.poweredOffDisplays.count ?? 0
+                DiagnosticLog.write("DisplayPower", "display power recovery retry pending=\(remaining)")
+                if remaining == 0 { break }
+            }
+            // A display may remain unavailable for hours. A later key or mouse
+            // input is another opportunity to recover, without polling DDC while
+            // the user is away.
+            var inputCounter = CGEventSource.counterForEventType(.combinedSessionState, eventType: anyInputEventType)
+            var pending = !(snapshotStore.load()?.poweredOffDisplays.isEmpty ?? true)
+            while pending {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                guard !Task.isCancelled, !isDisplayBlanked else { return }
+                let current = CGEventSource.counterForEventType(.combinedSessionState, eventType: anyInputEventType)
+                guard current != inputCounter else { continue }
+                inputCounter = current
+                DisplayBlankRecovery.recover(store: snapshotStore)
+                pending = !(snapshotStore.load()?.poweredOffDisplays.isEmpty ?? true)
+            }
+            displayRestoreRetryTask = nil
+        }
     }
 
     /// Keeps only state that the just-finished unblank still needs to retry.
