@@ -55,7 +55,7 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
         logger.info("MacPilotFinderSync launched from \(Bundle.main.bundlePath)")
 
         // 设置监听目录（全盘监听）
-        setupObservingDirectories()
+        FIFinderSyncController.default().directoryURLs = []
 
         // 注册消息处理器
         setupMessageHandlers()
@@ -111,6 +111,7 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
                 // 可以根据 payload 更新监听目录
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+                    self.setupObservingDirectories()
                     self.heartbeatLifecycle.mainAppDidStart(
                         startHeartbeat: { self.startHeartbeat() },
                         requestConfiguration: { self.requestMenuConfig() }
@@ -128,15 +129,24 @@ class MacPilotFinderSyncExt: FIFinderSync, @unchecked Sendable {
                 self.heartbeatLifecycle.mainAppDidQuit {
                     self.stopHeartbeat()
                 }
+                FIFinderSyncController.default().directoryURLs = []
+                self.cachedMenuConfig = nil
+                self.clearIconCache()
+                self.iconProvider.clearCache()
             }
         }
     }
 
     /// 处理菜单配置
     private func handleMenuConfig(_ config: MenuConfigPayload) {
-        cachedMenuConfig = config
-        clearIconCache()
-        logger.debug("Menu config cached: version=\(config.version), actions=\(config.actions.count), apps=\(config.apps.count), icons cleared")
+        Task { @MainActor [weak self] in
+            guard let self, self.heartbeatLifecycle.configurationDidArrive(startHeartbeat: {
+                self.startHeartbeat()
+            }) else { return }
+            self.setupObservingDirectories()
+            self.cachedMenuConfig = config
+            self.clearIconCache()
+        }
     }
 
     /// 请求菜单配置

@@ -23,9 +23,16 @@
 		<true/>
 	</dict>
 	<key>RunAtLoad</key>
-	<true/>
+	<false/>
 	<key>KeepAlive</key>
-	<true/>
+	<dict>
+		<!-- Crash recovery stays resident only while MacPilot owns power state. -->
+		<key>PathState</key>
+		<dict>
+			<key>/Library/Application Support/MacPilot/power-helper-owned</key>
+			<true/>
+		</dict>
+	</dict>
 	<key>ProcessType</key>
 	<string>Background</string>
 </dict>

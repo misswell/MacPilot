@@ -13,12 +13,44 @@ final class SleepDisabledManager: @unchecked Sendable {
     private let pmsetURL = URL(fileURLWithPath: "/usr/bin/pmset")
     private let stateURL: URL
     private let state: OSAllocatedUnfairLock<SleepDisabledRuntimeState>
-    private let queue = DispatchQueue(label: "com.misswell.macpilot.powerhelper.manager")
+    let operationQueue = DispatchQueue(label: "com.misswell.macpilot.powerhelper.manager")
     private let now: @Sendable () -> Date
 
     private let heartbeatTimeout: TimeInterval
     private let watchdogInterval: TimeInterval
     private var watchdog: DispatchSourceTimer?
+    private var idleState = PowerHelperIdleState()
+    private var idleGeneration: UInt64 = 0
+
+    func admitClient(_ client: UUID) -> Bool {
+        operationQueue.sync {
+            guard idleState.admit(client) else { return false }
+            idleGeneration &+= 1
+            return true
+        }
+    }
+
+    func removeClient(_ client: UUID) {
+        operationQueue.async { [self] in
+            idleState.remove(client)
+            scheduleIdleExit()
+        }
+    }
+
+    /// Called only on operationQueue, also used by every request and watchdog.
+    private func scheduleIdleExit() {
+        idleGeneration &+= 1
+        let generation = idleGeneration
+        operationQueue.asyncAfter(deadline: .now() + 2) { [self] in
+            guard generation == idleGeneration,
+                  !FileManager.default.fileExists(atPath: stateURL.deletingLastPathComponent()
+                    .appendingPathComponent(MacPilotPowerService.ownershipMarkerName).path),
+                  idleState.commitIdleExit(ownsPowerState: isOwned) else { return }
+            watchdog?.cancel()
+            watchdog = nil
+            exit(EXIT_SUCCESS)
+        }
+    }
 
     init(
         stateDirectory: URL = URL(fileURLWithPath: MacPilotPowerService.stateDirectoryPath, isDirectory: true),
@@ -32,6 +64,9 @@ final class SleepDisabledManager: @unchecked Sendable {
         self.now = now
         self.state = OSAllocatedUnfairLock(initialState: Self.loadState(from: stateURL))
         logger.notice("Power helper started; owned=\(self.state.withLock { $0.macPilotOwnedSleepDisable }, privacy: .public)")
+        // Upgrade from builds predating conditional launchd recovery: preserve
+        // an already-owned lease before any idle-exit decision is possible.
+        persist()
     }
 
     // MARK: - Public surface
@@ -61,11 +96,19 @@ final class SleepDisabledManager: @unchecked Sendable {
             logger.notice("SleepDisabled left unchanged by MacPilot; owned=\(updated.macPilotOwnedSleepDisable, privacy: .public)")
             return .success(updated.macPilotOwnedSleepDisable)
         case .enableByRunningPMSet:
+            // Persist ownership and the launchd crash-recovery condition before
+            // changing the system. A failed write must never leave an unguarded
+            // disablesleep=1 setting behind.
+            guard armRecoveryBeforeEnable(snapshot) else {
+                return .failure(PowerHelperOperationError("Could not persist power recovery ownership."))
+            }
             guard let output = runPMSet(arguments: ["-a", "disablesleep", "1"]) else {
+                if currentSystemSleepDisabled() == false { _ = disable() }
                 return .failure(PowerHelperOperationError("pmset could not enable SleepDisabled."))
             }
             _ = output
             guard currentSystemSleepDisabled() == true else {
+                if currentSystemSleepDisabled() == false { _ = disable() }
                 return .failure(PowerHelperOperationError("SleepDisabled did not stay enabled after pmset."))
             }
             let didOwn = snapshot.macPilotOwnedSleepDisable || !current
@@ -93,8 +136,11 @@ final class SleepDisabledManager: @unchecked Sendable {
                 return .failure(PowerHelperOperationError("pmset could not disable SleepDisabled."))
             }
         }
+        guard currentSystemSleepDisabled() == false else {
+            return .failure(PowerHelperOperationError("Could not verify SleepDisabled restoration."))
+        }
         let updated = SleepDisabledPlanner.stateAfterDisable(
-            currentSleepDisabled: currentSystemSleepDisabled() ?? false,
+            currentSleepDisabled: false,
             state: snapshot
         )
         store(updated)
@@ -125,12 +171,19 @@ final class SleepDisabledManager: @unchecked Sendable {
     // MARK: - Watchdog
 
     func startWatchdog() {
-        queue.async { [self] in
+        operationQueue.async { [self] in
             recoverIfStale(reason: "startup")
-            let timer = DispatchSource.makeTimerSource(queue: queue)
+            scheduleIdleExit()
+            let timer = DispatchSource.makeTimerSource(queue: operationQueue)
             timer.schedule(deadline: .now() + watchdogInterval, repeating: watchdogInterval)
             timer.setEventHandler { [weak self] in
-                self?.recoverIfStale(reason: "watchdog")
+                guard let self else { return }
+                self.recoverIfStale(reason: "watchdog")
+                if !self.isOwned, FileManager.default.fileExists(atPath: self.stateURL.deletingLastPathComponent()
+                    .appendingPathComponent(MacPilotPowerService.ownershipMarkerName).path) {
+                    self.persist()
+                }
+                self.scheduleIdleExit()
             }
             watchdog = timer
             timer.resume()
@@ -180,6 +233,41 @@ final class SleepDisabledManager: @unchecked Sendable {
 
     // MARK: - Persistence
 
+    private func prepareStateDirectory(_ directory: URL) throws {
+        let files = FileManager.default
+        try files.createDirectory(at: directory, withIntermediateDirectories: true,
+                                  attributes: [.posixPermissions: 0o700])
+        let attributes = try files.attributesOfItem(atPath: directory.path)
+        guard attributes[.type] as? FileAttributeType == .typeDirectory,
+              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == 0 else {
+            throw PowerHelperOperationError("Power recovery directory is not root-owned.")
+        }
+        try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+    }
+
+    private func armRecoveryBeforeEnable(_ snapshot: SleepDisabledRuntimeState) -> Bool {
+        var owned = snapshot
+        owned.macPilotOwnedSleepDisable = true
+        owned.previousSleepDisabled = false
+        owned.lastHeartbeat = now()
+        do {
+            let directory = stateURL.deletingLastPathComponent()
+            try prepareStateDirectory(directory)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .secondsSince1970
+            try encoder.encode(owned).write(to: stateURL, options: .atomic)
+            try Data().write(to: directory.appendingPathComponent(MacPilotPowerService.ownershipMarkerName), options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600],
+                ofItemAtPath: directory.appendingPathComponent(MacPilotPowerService.ownershipMarkerName).path)
+            let persistedOwnership = owned
+            state.withLock { $0 = persistedOwnership }
+            return true
+        } catch {
+            logger.error("Could not arm power recovery: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
     private func store(_ newState: SleepDisabledRuntimeState) {
         state.withLock { $0 = newState }
         persist()
@@ -189,11 +277,18 @@ final class SleepDisabledManager: @unchecked Sendable {
         let snapshot = state.withLock { $0 }
         do {
             let directory = stateURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try prepareStateDirectory(directory)
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .secondsSince1970
             let data = try encoder.encode(snapshot)
             try data.write(to: stateURL, options: .atomic)
+            let marker = directory.appendingPathComponent(MacPilotPowerService.ownershipMarkerName)
+            if snapshot.macPilotOwnedSleepDisable {
+                try Data().write(to: marker, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
+            } else if FileManager.default.fileExists(atPath: marker.path) {
+                try FileManager.default.removeItem(at: marker)
+            }
         } catch {
             logger.error("Could not persist helper state: \(error.localizedDescription, privacy: .public)")
         }

@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import ServiceManagement
 import MacPilotDisplayControlCore
 import Testing
 @testable import MacPilot
@@ -285,6 +286,142 @@ struct DisplayControlIntegrationTests {
         client.state = .active
         await model.refresh()
         #expect(publications > 0)
+    }
+
+    @Test func disablingFeatureRestoresBeforeUnregisteringItsHelper() async throws {
+        let client = MockDisplayClient(ready: true)
+        let service = MockRecoveryService()
+        let model = DisplayControlModel(client: client,
+            monitor: UUSessionMonitor(read: { .init(status: .disconnected) }),
+            showsConfirmation: false, prepareVisibleOutputs: { true }, controlStateChanged: { _ in },
+            recoveryService: service)
+        service.onUnregister = { #expect(client.requests.contains { $0.command == .restore }) }
+        model.stop()
+        for _ in 0..<200 where model.isServiceCleanupPending { await Task.yield() }
+        #expect(service.unregisterCount == 1)
+        #expect(service.status == .notRegistered)
+        #expect(model.snapshot == nil)
+    }
+
+    @Test func disabledUnregisteredServiceDoesNotStartAHelperDuringCleanupOrTermination() async {
+        let client = MockDisplayClient(ready: true)
+        let service = MockRecoveryService()
+        service.status = .notRegistered
+        let model = DisplayControlModel(client: client, showsConfirmation: false,
+            prepareVisibleOutputs: { true }, controlStateChanged: { _ in }, recoveryService: service)
+        model.removeUnusedServiceRegistration()
+        for _ in 0..<200 where model.isServiceCleanupPending { await Task.yield() }
+        #expect(client.requests.isEmpty)
+        #expect(service.unregisterCount == 0)
+        #expect(await model.restoreBeforeTermination())
+        #expect(client.requests.isEmpty)
+    }
+
+    @Test func applicationTerminationWaitsForFeatureCleanupWithoutRestartingTheHelper() async {
+        let client = MockDisplayClient(ready: true)
+        let service = MockRecoveryService()
+        service.holdUnregister = true
+        let model = DisplayControlModel(client: client, showsConfirmation: false,
+            prepareVisibleOutputs: { true }, controlStateChanged: { _ in }, recoveryService: service)
+        model.stop()
+        for _ in 0..<200 where service.pendingUnregister == nil { await Task.yield() }
+        let termination = Task { await model.restoreBeforeTermination() }
+        for _ in 0..<20 { await Task.yield() }
+        #expect(service.unregisterCount == 1)
+        #expect(service.registerCount == 0)
+        service.finishUnregister()
+        #expect(await termination.value)
+        #expect(client.requests.count == 1)
+        #expect(service.status == .notRegistered)
+    }
+
+    @Test func rapidReenableWaitsUntilOldRegistrationIsRemoved() async throws {
+        let client = MockDisplayClient(ready: true)
+        let service = MockRecoveryService()
+        service.holdUnregister = true
+        let model = DisplayControlModel(client: client,
+            monitor: UUSessionMonitor(read: { .init(status: .disconnected) }),
+            showsConfirmation: false, prepareVisibleOutputs: { true }, controlStateChanged: { _ in },
+            recoveryService: service)
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        model.applyLoadedSettings(settings)
+        model.stop()
+        for _ in 0..<200 where service.pendingUnregister == nil { await Task.yield() }
+        model.start()
+        #expect(service.registerCount == 0)
+        service.finishUnregister()
+        for _ in 0..<200 where service.registerCount == 0 { await Task.yield() }
+        #expect(service.unregisterCount == 1)
+        #expect(service.registerCount == 1)
+        #expect(service.status == .enabled)
+        service.holdUnregister = false
+        model.stop()
+        for _ in 0..<200 where model.isServiceCleanupPending { await Task.yield() }
+    }
+
+    @Test func enablingInANewModelRestoresTheRegistrationRemovedByThePreviousModel() async {
+        let client = MockDisplayClient(ready: true)
+        let service = MockRecoveryService()
+        let previous = DisplayControlModel(client: client, showsConfirmation: false,
+            prepareVisibleOutputs: { true }, controlStateChanged: { _ in }, recoveryService: service)
+        previous.stop()
+        for _ in 0..<200 where previous.isServiceCleanupPending { await Task.yield() }
+        #expect(service.status == .notRegistered)
+        let restarted = DisplayControlModel(client: client, showsConfirmation: false,
+            prepareVisibleOutputs: { true }, controlStateChanged: { _ in }, recoveryService: service)
+        restarted.removeUnusedServiceRegistration()
+        for _ in 0..<200 where restarted.isServiceCleanupPending { await Task.yield() }
+        #expect(service.registerCount == 0)
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        restarted.applyLoadedSettings(settings)
+        restarted.start()
+        #expect(service.registerCount == 1)
+        #expect(service.status == .enabled)
+        restarted.stop()
+        for _ in 0..<200 where restarted.isServiceCleanupPending { await Task.yield() }
+    }
+
+    @Test func enablingAServiceAwaitingApprovalDoesNotPollOrReregisterIt() async {
+        let client = MockDisplayClient(ready: true)
+        let service = MockRecoveryService()
+        service.status = .requiresApproval
+        let model = DisplayControlModel(client: client, showsConfirmation: false,
+            prepareVisibleOutputs: { true }, controlStateChanged: { _ in }, recoveryService: service)
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        model.applyLoadedSettings(settings)
+        model.start()
+        for _ in 0..<20 { await Task.yield() }
+        #expect(service.registerCount == 0)
+        #expect(client.requests.isEmpty)
+        #expect(model.errorKey == "displayHelperApproval")
+        model.stop()
+        for _ in 0..<200 where model.isServiceCleanupPending { await Task.yield() }
+    }
+
+    private final class MockRecoveryService: DisplayRecoveryRegistering {
+        var status: SMAppService.Status = .enabled
+        var registerCount = 0
+        var unregisterCount = 0
+        var holdUnregister = false
+        var pendingUnregister: CheckedContinuation<Void, Never>?
+        var onUnregister: (() -> Void)?
+        func register() throws { registerCount += 1; status = .enabled }
+        func unregister() async throws {
+            unregisterCount += 1
+            onUnregister?()
+            if holdUnregister {
+                await withCheckedContinuation { pendingUnregister = $0 }
+            }
+            status = .notRegistered
+        }
+        func finishUnregister() {
+            let pending = pendingUnregister
+            pendingUnregister = nil
+            pending?.resume()
+        }
     }
 
     private func makeModel(_ client: MockDisplayClient) -> DisplayControlModel {

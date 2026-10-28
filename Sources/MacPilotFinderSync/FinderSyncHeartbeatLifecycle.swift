@@ -6,6 +6,7 @@ import Foundation
 final class FinderSyncHeartbeatLifecycle {
     private var heartbeatIsRunning = false
     private var mainAppHasQuit = false
+    private var bootstrapRequested = false
 
     var isHeartbeatRunning: Bool { heartbeatIsRunning }
 
@@ -13,11 +14,20 @@ final class FinderSyncHeartbeatLifecycle {
         startHeartbeat: () -> Void,
         requestConfiguration: () -> Void
     ) {
-        guard !mainAppHasQuit else { return }
-        guard !heartbeatIsRunning else { return }
-        heartbeatIsRunning = true
-        startHeartbeat()
+        guard !mainAppHasQuit, !bootstrapRequested, !heartbeatIsRunning else { return }
+        bootstrapRequested = true
+        // Ask once. Finder may launch an enabled extension while the main
+        // feature is off; no timer is justified until an authenticated reply.
         requestConfiguration()
+    }
+
+    func configurationDidArrive(startHeartbeat: () -> Void) -> Bool {
+        guard !mainAppHasQuit else { return false }
+        if !heartbeatIsRunning {
+            heartbeatIsRunning = true
+            startHeartbeat()
+        }
+        return true
     }
 
     func mainAppDidQuit(stopHeartbeat: () -> Void) {
@@ -32,6 +42,7 @@ final class FinderSyncHeartbeatLifecycle {
         requestConfiguration: () -> Void
     ) {
         mainAppHasQuit = false
+        bootstrapRequested = true
         if !heartbeatIsRunning {
             heartbeatIsRunning = true
             startHeartbeat()

@@ -2763,6 +2763,12 @@ final class MacPilotModel: ObservableObject {
         updater.setChannel(updateChannel)
         isLoading = false
         FeatureRegistry.shared.registerAll(model: self, in: featureLifecycle)
+        if !isFeatureEnabled(.displayControl) {
+            displayControl.removeUnusedServiceRegistration()
+        }
+        if !isFeatureEnabled(.awake) {
+            awake.cleanupUnusedPowerServiceIfDisabled()
+        }
         save()
         refreshLoginItemApprovalState()
         restoreLoginItemIfNeeded()

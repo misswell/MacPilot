@@ -228,3 +228,12 @@ The repo-root `SUMMARY.md` is the project's Chinese development summary (feature
 ## Remote desktop touch behavior
 
 - PilotNest remote desktop uses one continuous relative mouse trackpad across the video and lower content area, both with the keyboard shown and hidden. Never map video touches to absolute screen coordinates. A two-finger pinch on the preview only changes local video zoom; other gestures keep relative mouse semantics. Keep buttons and the system keyboard interactive above the touch surface.
+
+## 按需资源与辅助进程生命周期（2026-10-28）
+
+- 用户要求：功能仅在实际使用时占用对应资源。关闭功能必须停止该功能的任务、定时器、监听、事件 tap、采集、编码和连接，并释放可重建的缓存；隐藏窗口不能被误当成功能关闭。
+- 专属辅助进程须按需启动，关闭所属功能后正常退出；不能仅把 CPU 降为接近零却永久驻留。共享辅助进程按实际使用者/租约计数，最后一个使用者结束后退出。注册安装状态与进程运行状态应分离，避免每次使用反复索要管理员授权。
+- 显示控制与电源辅助进程须先完成屏幕拓扑/原始电源状态恢复并确认，再退出；恢复未完成时只保留必要恢复工作，并明确失败，不能通过 kill 绕过安全事务。快速关闭再开启、崩溃恢复和延迟回调不得误停新会话。
+- launchd 的 RunAtLoad/KeepAlive 必须有实际必要性；无活动租约的辅助服务应支持按需启动及安全空闲退出，防止退出后又被无条件拉起。
+- FinderSync、系统自动填充等由 macOS 托管的扩展，必须在关闭功能时停止自身工作并释放资源；不得为移除进程而重启系统宿主、强杀系统进程或重置用户权限。不可保证进程消失时，应说明系统控制边界。
+- 生命周期验证必须覆盖：关闭后后台工作计数归零、缓存释放、专属进程正常退出/不重启、快速重开、恢复失败、旧回调隔离。测试应使用 mock，不在用户会话中真实锁屏、黑屏、休眠或改变电源策略。

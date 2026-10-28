@@ -21,6 +21,9 @@ public final class FileTypeIconProvider: @unchecked Sendable {
     /// 内存缓存: [扩展名: NSImage]
     private var cache: [String: NSImage] = [:]
 
+    /// Feature shutdown releases file-type icons retained by this process.
+    public func clearCache() { cache.removeAll(keepingCapacity: false) }
+
     private init() {}
 
     // MARK: - Public API

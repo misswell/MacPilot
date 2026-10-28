@@ -10,12 +10,8 @@
 //
 //  * **面板先上屏**：`show()` 只做「读配置 → 算尺寸 → 建面板 → 显示」，
 //    解析与图标交给 `model.loadContent()` 在显示之后跑。
-//  * **进程留在原地，面板不留**：浮层关掉只收起面板并交出它占的内存，不 `terminate`。
-//    下一次点 Dock 图标走 `applicationShouldHandleReopen` / `applicationDidBecomeActive`，
-//    重建面板仍是毫秒级；冷启动要重新走 LaunchServices + 进程启动 + 解析，
-//    实测 0.25 秒起，机器忙时更久 —— 这才是「点开后要等」的唯一来源。
-//    空转 `warmLifetime` 后自动退出，配合 `NSSupportsAutomaticTermination`
-//    让系统在内存吃紧时提前回收，所以「不留后台进程」的约束仍在，只是有了时长上限。
+//  * 浮层关闭后释放内容并正常退出进程，不保留热待命窗口。
+//    主功能关闭时，通过限定配置根目录和生命周期代际的通知退出正在使用的 Helper。
 //
 
 import AppKit
@@ -63,16 +59,28 @@ final class DockHelperPanelController {
     private var dismissalPolicy: DockGroupPanelDismissalPolicy?
     /// 只在真正禁用过自动终止之后才恢复，保证 disable/enable 成对。
     private var disabledAutomaticTermination = false
-    /// 空转退出的定时器（只在浮层关掉后跑）。
-    private var warmExitTimer: Timer?
-    /// 待命期间的内存压力监听，与 `warmExitTimer` 同生同灭。
-    private var pressureSource: DispatchSourceMemoryPressure?
+    /// Invalidates a queued close when a reopen arrives before the run-loop returns.
+    private var terminationGeneration = UUID()
     private let model: DockHelperModel
+    private let startedAt = Date()
+    private var lifecycleObserver: NSObjectProtocol?
     /// 系统选择面板打开期间，浮层会失去 key 状态；那不是「用户点了别处」。
     private var isPresentingModal = false
 
     init(model: DockHelperModel) {
         self.model = model
+        lifecycleObserver = DistributedNotificationCenter.default().addObserver(
+            forName: DockHelperLifecycle.shutdownNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let generation = notification.object as? String,
+                  let root = notification.userInfo?["root"] as? String else { return }
+            Task { @MainActor [weak self] in
+                guard let self, root == self.model.rootDirectory.standardizedFileURL.path,
+                      DockHelperLifecycle.acceptsShutdown(generation: generation,
+                          root: self.model.rootDirectory, startedAt: self.startedAt) else { return }
+                self.terminate()
+            }
+        }
         model.onGroupChanged = { [weak self] in self?.resizePanelToFitGroup() }
         model.prepareForModalPresentation = { [weak self] in self?.beginModalPresentation() }
         model.modalPresentationDidFinish = { [weak self] in self?.endModalPresentation() }
@@ -82,6 +90,7 @@ final class DockHelperPanelController {
     var isPanelVisible: Bool { panel?.isVisible ?? false }
 
     func show() {
+        guard DockHelperLifecycle.permitsLaunch(root: model.rootDirectory) else { terminate(); return }
         cancelWarmExit()
         disableAutomaticTermination()
 
@@ -178,11 +187,16 @@ final class DockHelperPanelController {
 
     /// 进程退出前的兜底清理（不触发 terminate，避免递归）。
     func shutdown() {
+        if let lifecycleObserver {
+            DistributedNotificationCenter.default().removeObserver(lifecycleObserver)
+            self.lifecycleObserver = nil
+        }
         stopObservingDismissal(for: panel)
         panel = nil
         dismissalPolicy = nil
         cancelWarmExit()
         model.stopRefreshing()
+        model.releaseContent()
         restoreAutomaticTermination()
     }
 
@@ -193,36 +207,18 @@ final class DockHelperPanelController {
     }
 
     private func scheduleWarmExit() {
-        warmExitTimer?.invalidate()
-        warmExitTimer = Timer.scheduledTimer(withTimeInterval: Self.warmLifetime, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.terminate() }
+        let generation = UUID()
+        terminationGeneration = generation
+        // Finish AppKit's dismissal callback before terminating. A reopen or
+        // modal picker owns the helper until its own operation finishes.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.terminationGeneration == generation,
+                  !self.isPanelVisible, !self.isPresentingModal else { return }
+            self.terminate()
         }
-        startPressureWatch()
     }
 
-    private func cancelWarmExit() {
-        warmExitTimer?.invalidate()
-        warmExitTimer = nil
-        pressureSource?.cancel()
-        pressureSource = nil
-    }
-
-    /// 待命期间内存吃紧：不等 45 秒，立刻退出。
-    ///
-    /// 面板和图标已经在 `dismiss()` 里交还了，进程自身（实测 20 MB 上下）是那时
-    /// 唯一还能给出去的东西；换回来的代价只有一次冷启动。
-    private func startPressureWatch() {
-        pressureSource?.cancel()
-        let source = DispatchSource.makeMemoryPressureSource(
-            eventMask: [.warning, .critical],
-            queue: .main
-        )
-        source.setEventHandler { [weak self] in
-            Task { @MainActor in self?.terminate() }
-        }
-        pressureSource = source
-        source.resume()
-    }
+    private func cancelWarmExit() { terminationGeneration = UUID() }
 
     private func disableAutomaticTermination() {
         guard !disabledAutomaticTermination else { return }

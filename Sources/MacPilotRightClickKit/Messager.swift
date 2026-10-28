@@ -38,7 +38,7 @@ public enum ExtensionToMainAction: String, Codable {
 // MARK: - 消息载荷
 
 /// 菜单配置消息载荷
-public struct MenuConfigPayload: Codable {
+public struct MenuConfigPayload: Codable, Sendable {
     /// 菜单版本号，用于防重复和防乱序
     public let version: Int
     /// 动作菜单项列表

@@ -24,6 +24,11 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     @Published private(set) var isPreparingHelper = false
     private var pollTask: Task<Void, Never>?
     private var operationTask: Task<Void, Never>?
+    private var serviceLifecycleTask: Task<Void, Never>?
+    private var serviceLifecycleGeneration = UUID()
+    private var resumeServiceRegistration = false
+    private let managesServiceLifecycle: Bool
+    private let hasInjectedClient: Bool
     private var sessionID: String?
     private var appliedSessionID: String?
     private var inhibitedSessionID: String?
@@ -40,6 +45,11 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
          controlStateChanged: ((Bool) -> Void)? = nil,
          recoveryService: (any DisplayRecoveryRegistering)? = nil) {
         self.client = client ?? DisplayRecoveryClient()
+        self.hasInjectedClient = client != nil
+        // Injected clients never acquire or remove the user's real service.
+        self.managesServiceLifecycle = recoveryService != nil || (
+            client == nil && !SmartCaptureToast.isTestHost && Bundle.main.bundleURL.pathExtension != "xctest"
+        )
         self.recoveryService = recoveryService ?? DisplayRecoveryRegistration()
         self.monitor = monitor ?? UUSessionMonitor()
         self.showsConfirmation = showsConfirmation
@@ -121,6 +131,48 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     func start() {
         guard !isRunning, settings.isEnabled else { return }
         isRunning = true
+        serviceLifecycleGeneration = UUID()
+        let generation = serviceLifecycleGeneration
+        if serviceLifecycleTask != nil || resumeServiceRegistration {
+            isBusy = true
+            let pending = serviceLifecycleTask
+            serviceLifecycleTask = Task { [weak self] in
+                await pending?.value
+                guard let self, self.isRunning,
+                      generation == self.serviceLifecycleGeneration else { return }
+                self.serviceLifecycleTask = nil
+                self.isBusy = false
+                guard self.activateServiceIfNeeded() else { return }
+                self.beginRunning()
+            }
+            return
+        }
+        guard activateServiceIfNeeded() else { return }
+        beginRunning()
+    }
+
+    /// Registration is persisted by launchd, while the in-memory resume flag
+    /// is not. Re-enabling after a full app restart must restore it as well.
+    private func activateServiceIfNeeded() -> Bool {
+        guard managesServiceLifecycle else { return true }
+        do {
+            if recoveryService.status != .enabled, recoveryService.status != .requiresApproval {
+                try recoveryService.register()
+            }
+            guard recoveryService.status == .enabled else {
+                errorKey = "displayHelperApproval"
+                return false
+            }
+            resumeServiceRegistration = false
+            return true
+        } catch {
+            errorKey = "displayHelperInstallFailed"
+            return false
+        }
+    }
+
+    private func beginRunning() {
+        isBusy = false
         hasObservedDisconnection = false
         if showsConfirmation { DisplayControlTermination.owner = self }
         syncMonitor()
@@ -144,17 +196,72 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
 
     func stop() {
         isRunning = false
+        serviceLifecycleGeneration = UUID()
         monitor.stop()
         pollTask?.cancel()
         pollTask = nil
-        restore()
-        // Recovery outlives GUI teardown: helper lease expiration also restores
-        // if termination ends this asynchronous request before it is delivered.
+        guard managesServiceLifecycle else {
+            if hasInjectedClient { restore() }
+            return
+        }
+        inhibitedSessionID = sessionID
+        operationEpoch = UUID()
+        operationTask?.cancel()
+        operationTask = nil
+        isBusy = false
+        confirmationPanel?.close()
+        confirmationPanel = nil
+        let pending = serviceLifecycleTask
+        let generation = serviceLifecycleGeneration
+        serviceLifecycleTask = Task { [weak self] in
+            await pending?.value
+            guard let self else { return }
+            await self.releaseRecoveryService()
+            if generation == self.serviceLifecycleGeneration, !self.isRunning {
+                self.serviceLifecycleTask = nil
+            }
+        }
+    }
+
+    func removeUnusedServiceRegistration() {
+        guard managesServiceLifecycle, !isRunning else { return }
+        stop()
+    }
+
+    var isServiceCleanupPending: Bool { serviceLifecycleTask != nil }
+
+    /// Finish recovery before removing launchd's registration. An unsuccessful
+    /// recovery deliberately keeps the helper alive as a safety obligation.
+    private func releaseRecoveryService() async {
+        guard recoveryService.status == .enabled || recoveryService.status == .requiresApproval else {
+            if !isRunning { snapshot = nil }
+            return
+        }
+        resumeServiceRegistration = true
+        if recoveryService.status == .enabled {
+            var restored = false
+            for attempt in 0..<5 {
+                do {
+                    let response = try await client.send(.init(command: attempt == 0 ? .restore : .status))
+                    apply(response)
+                    if response.state == .idle { restored = true; break }
+                } catch { recordUnavailable() }
+                if attempt < 4 { try? await Task.sleep(for: .seconds(1)) }
+            }
+            guard restored else { return }
+        }
+        do {
+            try await recoveryService.unregister()
+            if !isRunning { snapshot = nil }
+        } catch {
+            if errorKey != "displayHelperUnavailable" { errorKey = "displayHelperUnavailable" }
+        }
     }
 
     func restoreBeforeTermination() async -> Bool {
         let wasRunning = isRunning
         isRunning = false
+        serviceLifecycleGeneration = UUID()
         monitor.stop()
         pollTask?.cancel()
         pollTask = nil
@@ -165,6 +272,11 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         isBusy = false
         confirmationPanel?.close()
         confirmationPanel = nil
+        if managesServiceLifecycle {
+            await serviceLifecycleTask?.value
+            serviceLifecycleTask = nil
+            if recoveryService.status != .enabled, !hasControl { return true }
+        }
         for attempt in 0..<5 {
             do {
                 let response = try await client.send(.init(command: attempt == 0 ? .restore : .status))
@@ -182,7 +294,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     }
 
     func prepareHelperAndRefresh() async {
-        guard !isPreparingHelper, !isBusy, !hasControl else { return }
+        guard !isPreparingHelper, !isBusy, !hasControl, serviceLifecycleTask == nil else { return }
         guard recoveryShortcutConflict?() != true else { errorKey = "displayRecoveryShortcutConflict"; return }
         isPreparingHelper = true
         pollTask?.cancel()

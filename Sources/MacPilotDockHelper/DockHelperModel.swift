@@ -62,6 +62,7 @@ final class DockHelperModel: ObservableObject {
 
     let language: DockHelperLanguage
     private let store: DockGroupStore
+    var rootDirectory: URL { store.rootDirectory }
     private let groupID: String?
     private var refreshTimer: Timer?
     /// 每次重新读配置都自增：让上一轮还没跑完的异步加载结果作废。

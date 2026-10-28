@@ -124,6 +124,11 @@ final class AwakeSessionManager: ObservableObject, ManagedFeature {
         closedLidSleepController.reenableIfPending()
     }
 
+    /// Called only after Home-page feature intent has finished loading.
+    func cleanupUnusedPowerServiceIfDisabled() {
+        closedLidSleepController?.cleanupUnusedPowerServiceIfDisabled()
+    }
+
     func openClosedLidServiceSettings() {
         closedLidSleepController?.openSystemSettings()
     }

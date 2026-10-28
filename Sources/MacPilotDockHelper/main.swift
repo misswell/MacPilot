@@ -12,8 +12,7 @@
 //  配置编辑只经由共享的 `DockGroupStore.update`（跨进程写锁），只写自己那一组；
 //  不加载外部 dylib、不执行第三方脚本、不运行 shell 命令、不修改任何第三方 App。
 //
-//  生命周期：浮层关掉之后进程继续待命 `DockHelperPanelController.warmLifetime`，
-//  这样再次点 Dock 图标是立刻展开；到期（或被系统按 TAL 回收）才退出。
+//  生命周期：浮层关闭即释放内容并正常退出，不保留空闲待命进程。
 //
 
 import AppKit

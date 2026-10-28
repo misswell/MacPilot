@@ -261,7 +261,7 @@ extension NewFile {
 // MARK: - Menu Item Models for Extension Communication
 
 /// Menu item for opening files with external applications
-public struct AppMenuItem: Codable, Equatable {
+public struct AppMenuItem: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let icon: String
@@ -278,7 +278,7 @@ public struct AppMenuItem: Codable, Equatable {
 }
 
 /// Menu item for custom actions (copy path, delete, etc.)
-public struct ActionMenuItem: Codable, Equatable {
+public struct ActionMenuItem: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let icon: String
@@ -293,7 +293,7 @@ public struct ActionMenuItem: Codable, Equatable {
 }
 
 /// Menu item for creating new files
-public struct NewFileMenuItem: Codable, Equatable {
+public struct NewFileMenuItem: Codable, Equatable, Sendable {
     static let customFileId = "__rclick_custom_new_file"
 
     public let id: String
@@ -310,7 +310,7 @@ public struct NewFileMenuItem: Codable, Equatable {
 }
 
 /// Menu item for common directories
-public struct CommonDirMenuItem: Codable, Equatable {
+public struct CommonDirMenuItem: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let icon: String

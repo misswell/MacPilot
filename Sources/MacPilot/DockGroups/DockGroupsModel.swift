@@ -117,6 +117,7 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
     func activateFromConfiguration() {
         guard settings.isEnabled else { return }
         isActive = true
+        try? DockHelperLifecycle.publish(enabled: true, root: store.rootDirectory)
         reload()
         // 早期版本把 1024×1024 原图当缩略图存过（单个 1–3 MB），顺手清一次。
         let purged = iconCacheStore.removeOversizedThumbnails()
@@ -138,6 +139,7 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
     }
 
     func shutdown() {
+        if isActive { try? DockHelperLifecycle.publish(enabled: false, root: store.rootDirectory) }
         isActive = false
         cancelPendingIconLoads()
         iconCache.removeAll()

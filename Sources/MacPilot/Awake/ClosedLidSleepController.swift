@@ -27,6 +27,11 @@ protocol ClosedLidSleepControlling: AnyObject {
     /// the real system setting when the user returns to the settings page.
     func reenableIfPending()
     func shutdown()
+    func cleanupUnusedPowerServiceIfDisabled()
+}
+
+extension ClosedLidSleepControlling {
+    func cleanupUnusedPowerServiceIfDisabled() {}
 }
 
 /// Turns the aggregate `preventClosedLidSleep` state into the system-level
@@ -70,6 +75,7 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         self.heartbeatInterval = heartbeatInterval
         self.reconnectDelays = reconnectDelays
         self.serviceState = helper.registrationState
+
     }
 
     var isServiceReady: Bool {
@@ -80,9 +86,32 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
 
     func prepareIfNeeded() async {
         guard !isShutdown else { return }
+        do { try await helper.prepareRegistrationForUse() }
+        catch {
+            recordFailure(error as? ClosedLidSleepFailure ?? .registrationFailed(error.localizedDescription))
+            notifyStateChange()
+            return
+        }
         await ensureRegistration()
         guard !isShutdown, !Task.isCancelled else { return }
         notifyStateChange()
+    }
+
+    func cleanupUnusedPowerServiceIfDisabled() {
+        guard !desiredEnabled, !isActive, !mayOwnSleepDisabled, !isShutdown else { return }
+        workTask?.cancel()
+        workTask = Task { @MainActor [weak self] in
+            guard let self, !self.desiredEnabled, !self.isShutdown else { return }
+            do { try await self.helper.cleanupUnusedLegacyRegistration() }
+            catch {
+                guard !self.desiredEnabled, !self.isShutdown else { return }
+                self.lastFailure = error as? ClosedLidSleepFailure ?? .requestFailed(error.localizedDescription)
+            }
+            if !self.desiredEnabled, !self.isShutdown {
+                self.serviceState = self.helper.registrationState
+                self.notifyStateChange()
+            }
+        }
     }
 
     func openSystemSettings() {
@@ -118,6 +147,10 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         if ownsSleepDisabled || isActive || mayOwnSleepDisabled {
             helper.releaseSynchronously()
         }
+        Task { @MainActor [helper] in
+            await helper.invalidate()
+            try? await helper.cleanupUnusedLegacyRegistration()
+        }
         ownsSleepDisabled = false
         mayOwnSleepDisabled = false
         desiredEnabled = false
@@ -133,6 +166,13 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
         // to completion next to its replacement and duplicate the request.
         guard !Task.isCancelled else { return }
         reconnectAttempt = 0
+        do { try await helper.prepareRegistrationForUse() }
+        catch {
+            guard desiredEnabled, !isShutdown, !Task.isCancelled else { return }
+            recordFailure(error as? ClosedLidSleepFailure ?? .registrationFailed(error.localizedDescription))
+            notifyStateChange()
+            return
+        }
         await ensureRegistration()
         guard desiredEnabled, !isShutdown, !Task.isCancelled else { return }
         switch helper.registrationState {
@@ -188,6 +228,12 @@ final class ClosedLidSleepController: ClosedLidSleepControlling {
             // The feature is off and the setting is confirmed released, so the
             // cached privileged connection is no longer needed.
             await helper.invalidate()
+            do { try await helper.cleanupUnusedLegacyRegistration() }
+            catch {
+                guard !desiredEnabled, !isShutdown else { return }
+                lastFailure = error as? ClosedLidSleepFailure ?? .requestFailed(error.localizedDescription)
+                serviceState = .error(lastFailure?.message ?? error.localizedDescription)
+            }
         case .failure(let failure):
             ownsSleepDisabled = false
             isActive = false

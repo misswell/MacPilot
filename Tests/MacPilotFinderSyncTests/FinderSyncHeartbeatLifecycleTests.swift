@@ -10,13 +10,14 @@ struct FinderSyncHeartbeatLifecycleTests {
             startHeartbeat: { effects.append("start") },
             requestConfiguration: { effects.append("request-config") }
         )
+        #expect(lifecycle.configurationDidArrive { effects.append("start") })
         lifecycle.mainAppDidQuit { effects.append("stop") }
         lifecycle.mainAppDidStart(
             startHeartbeat: { effects.append("start") },
             requestConfiguration: { effects.append("request-config") }
         )
 
-        #expect(effects == ["start", "request-config", "stop", "start", "request-config"])
+        #expect(effects == ["request-config", "start", "stop", "start", "request-config"])
         #expect(lifecycle.isHeartbeatRunning)
     }
 
@@ -59,6 +60,7 @@ struct FinderSyncHeartbeatLifecycleTests {
             startHeartbeat: { startCount += 1 },
             requestConfiguration: {}
         )
+        #expect(lifecycle.configurationDidArrive { startCount += 1 })
         lifecycle.mainAppDidQuit { stopCount += 1 }
         lifecycle.mainAppDidQuit { stopCount += 1 }
 
@@ -117,4 +119,21 @@ struct FinderSyncHeartbeatLifecycleTests {
         #expect(configRequestCount == 1)
         #expect(lifecycle.isHeartbeatRunning)
     }
+    @Test @MainActor func launchWithoutAnActiveMainFeatureNeverStartsPolling() {
+        let lifecycle = FinderSyncHeartbeatLifecycle()
+        var starts = 0
+        var requests = 0
+        for _ in 0..<100 {
+            lifecycle.extensionDidLaunch(startHeartbeat: { starts += 1 }, requestConfiguration: { requests += 1 })
+        }
+        #expect(starts == 0)
+        #expect(requests == 1)
+        lifecycle.mainAppDidQuit {}
+        #expect(!lifecycle.configurationDidArrive { starts += 1 })
+        #expect(starts == 0)
+        lifecycle.mainAppDidStart(startHeartbeat: { starts += 1 }, requestConfiguration: { requests += 1 })
+        #expect(starts == 1)
+        #expect(requests == 2)
+    }
+
 }

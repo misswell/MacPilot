@@ -8,10 +8,11 @@ import Security
 final class PowerHelperService: NSObject, NSXPCListenerDelegate, MacPilotPowerHelperProtocol {
     private let logger = Logger(subsystem: "com.misswell.macpilot", category: "PowerHelper")
     private let manager: SleepDisabledManager
-    private let queue = DispatchQueue(label: "com.misswell.macpilot.powerhelper.xpc")
+    private let queue: DispatchQueue
 
     init(manager: SleepDisabledManager) {
         self.manager = manager
+        self.queue = manager.operationQueue
         super.init()
     }
 
@@ -22,6 +23,9 @@ final class PowerHelperService: NSObject, NSXPCListenerDelegate, MacPilotPowerHe
             logger.error("Rejected XPC connection from pid \(newConnection.processIdentifier, privacy: .public)")
             return false
         }
+        let clientID = UUID()
+        guard manager.admitClient(clientID) else { return false }
+        newConnection.invalidationHandler = { [manager] in manager.removeClient(clientID) }
         newConnection.exportedInterface = NSXPCInterface(with: MacPilotPowerHelperProtocol.self)
         newConnection.exportedObject = self
         newConnection.resume()

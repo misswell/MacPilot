@@ -154,11 +154,8 @@ struct ScrollShotStitcherTests {
 }
 
 struct DockHelperLifetimeTests {
-    /// 验收口径是「浮层关掉后 60 秒内退出」；下限则是热展开仍然划算。
-    /// 曾经是 5 分钟，正是「后台留了一堆 Helper 进程」的来源。
-    @Test func warmResidencyIsBounded() {
-        #expect(DockHelperWarmLifetimePolicy.seconds > 10)
-        #expect(DockHelperWarmLifetimePolicy.seconds <= 60)
+    @Test func closingThePanelDoesNotRetainAnIdleHelper() {
+        #expect(DockHelperWarmLifetimePolicy.seconds == 0)
     }
 }
 

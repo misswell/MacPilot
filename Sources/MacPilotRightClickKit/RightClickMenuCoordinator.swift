@@ -232,6 +232,7 @@ public final class RightClickMenuCoordinator {
         messager.sendQuitNotification()
         messager.stopObserving()
         IconCache.shared.clear()
+        FileTypeIconProvider.shared.clearCache()
         pluginRunning = false
         logger.info("RightClickMenuCoordinator.stop() called")
     }

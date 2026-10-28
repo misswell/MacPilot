@@ -11,7 +11,6 @@
 import Foundation
 
 public enum DockHelperWarmLifetimePolicy {
-    /// 待命秒数。下限是热展开仍然值得（重建面板是毫秒级，冷启动 0.25 秒起），
-    /// 上限是验收口径「关闭后 60 秒内退出」。
-    public static let seconds: TimeInterval = 45
+    /// Closing the panel ends use: do not keep an idle helper resident.
+    public static let seconds: TimeInterval = 0
 }

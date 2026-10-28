@@ -27,6 +27,8 @@ public enum MacPilotPowerService {
     /// Root-owned directory holding the tiny helper runtime state file.
     public static let stateDirectoryPath = "/Library/Application Support/MacPilot"
     public static let stateFileName = "power-helper-state.json"
+    /// A root-owned launchd KeepAlive condition, present only during ownership.
+    public static let ownershipMarkerName = "power-helper-owned"
 }
 
 /// The complete privileged surface exposed over XPC.

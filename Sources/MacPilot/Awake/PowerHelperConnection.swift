@@ -51,6 +51,8 @@ protocol PowerHelperServicing: AnyObject {
     var registrationState: ClosedLidSleepServiceState { get }
 
     func register() throws
+    func prepareRegistrationForUse() async throws
+    func cleanupUnusedLegacyRegistration() async throws
     func openSystemSettings()
     func setSleepDisabled(_ disabled: Bool) async -> Result<Bool, ClosedLidSleepFailure>
     func sleepDisabled() async -> Result<Bool, ClosedLidSleepFailure>
@@ -63,6 +65,8 @@ protocol PowerHelperServicing: AnyObject {
 }
 
 extension PowerHelperServicing {
+    func prepareRegistrationForUse() async throws {}
+    func cleanupUnusedLegacyRegistration() async throws {}
     /// Test doubles and fakes need no implementation.
     func invalidate() async {}
 }
@@ -74,6 +78,12 @@ final class PrivilegedPowerHelper: PowerHelperServicing {
     private let plistName: String
     private let service: SMAppService?
     private let client: PowerHelperClient
+    private let lifecycle = PowerHelperLifecycleBarrier.shared
+    // Advance only when the launchd job/lifecycle contract changes, not for
+    // ordinary app releases. Registration must survive routine Beta upgrades.
+    private let definitionStamp = "power-on-demand-v1"
+    private var stampKey: String { "powerHelper.definition." + Bundle.main.bundleURL.standardizedFileURL.path }
+    private var hasCurrentDefinition: Bool { UserDefaults.standard.string(forKey: stampKey) == definitionStamp }
 
     init(plistName: String = MacPilotPowerService.daemonPlistName) {
         // `SMAppService.daemon` returns a service even when the plist is
@@ -133,6 +143,7 @@ final class PrivilegedPowerHelper: PowerHelperServicing {
         }
         do {
             try service.register()
+            UserDefaults.standard.set(definitionStamp, forKey: stampKey)
             logger.notice("Registered background power service")
         } catch {
             logger.error("Background power service registration failed: \(error.localizedDescription, privacy: .public)")
@@ -144,25 +155,69 @@ final class PrivilegedPowerHelper: PowerHelperServicing {
         SMAppService.openSystemSettingsLoginItems()
     }
 
+    func prepareRegistrationForUse() async throws {
+        try await lifecycle.run { [self] in try await prepareRegistrationUnserialized() }
+    }
+
+    private func prepareRegistrationUnserialized() async throws {
+        guard Self.isDaemonPlistPresent(plistName: plistName, bundleURL: Bundle.main.bundleURL) else {
+            throw ClosedLidSleepFailure.helperUnavailable()
+        }
+        guard let service else { throw ClosedLidSleepFailure.helperUnavailable() }
+        if service.status == .enabled, !hasCurrentDefinition {
+            try await retireLegacyJob(service)
+            guard service.status != .enabled else {
+                throw ClosedLidSleepFailure.registrationFailed("The old power service did not unload.")
+            }
+        }
+        if service.status != .enabled, service.status != .requiresApproval { try register() }
+    }
+
+    private func retireLegacyJob(_ service: SMAppService) async throws {
+        try await PowerHelperJobRetirement.run(
+            release: { [client] in await client.setSleepDisabled(false) },
+            read: { [client] in await client.sleepDisabled() },
+            invalidate: { [client] in await client.invalidate() },
+            unregister: { try await service.unregister() }
+        )
+    }
+
+    func cleanupUnusedLegacyRegistration() async throws {
+        guard Self.isDaemonPlistPresent(plistName: plistName, bundleURL: Bundle.main.bundleURL) else { return }
+        try await lifecycle.run { [self] in
+            guard let service, service.status == .enabled, !hasCurrentDefinition else { return }
+            try await retireLegacyJob(service)
+            // No registration stamp until the next successful registration.
+        }
+    }
+
     func setSleepDisabled(_ disabled: Bool) async -> Result<Bool, ClosedLidSleepFailure> {
-        await client.setSleepDisabled(disabled)
+        do {
+            return try await lifecycle.run { [self] in
+                if disabled { try await prepareRegistrationUnserialized() }
+                return await client.setSleepDisabled(disabled)
+            }
+        } catch {
+            return .failure(error as? ClosedLidSleepFailure ?? .registrationFailed(error.localizedDescription))
+        }
     }
 
     func sleepDisabled() async -> Result<Bool, ClosedLidSleepFailure> {
-        await client.sleepDisabled()
+        do { return try await lifecycle.run { [self] in await client.sleepDisabled() } }
+        catch { return .failure(.requestFailed(error.localizedDescription)) }
     }
 
     func heartbeat() async -> Result<Bool, ClosedLidSleepFailure> {
-        await client.heartbeat()
+        do { return try await lifecycle.run { [self] in await client.heartbeat() } }
+        catch { return .failure(.requestFailed(error.localizedDescription)) }
     }
 
-    func releaseSynchronously() {
-        client.releaseSynchronously()
-    }
+    func releaseSynchronously() { client.releaseSynchronously() }
 
     func invalidate() async {
-        await client.invalidate()
+        _ = try? await lifecycle.run { [self] in await client.invalidate() }
     }
+
 }
 
 /// Serialized XPC access. Lives in an actor so the non-`Sendable`
@@ -170,22 +225,23 @@ final class PrivilegedPowerHelper: PowerHelperServicing {
 actor PowerHelperClient {
     private let logger = Logger(subsystem: "com.misswell.macpilot", category: "Awake.ClosedLid")
     private let machServiceName: String
-    private var connection: NSXPCConnection?
+    private var activeConnections: [UUID: NSXPCConnection] = [:]
 
     init(machServiceName: String) {
         self.machServiceName = machServiceName
     }
 
     func setSleepDisabled(_ disabled: Bool) async -> Result<Bool, ClosedLidSleepFailure> {
-        await perform { proxy, reply in
+        let result = await perform { proxy, reply in
             proxy.setSleepDisabled(disabled) { success, message in
                 reply(success ? .success(true) : .failure(.requestFailed(message ?? "The power service rejected the request.")))
             }
         }
+        return result
     }
 
     func sleepDisabled() async -> Result<Bool, ClosedLidSleepFailure> {
-        await perform { proxy, reply in
+        let result = await perform { proxy, reply in
             proxy.getSleepDisabled { disabled, message in
                 if let message {
                     reply(.failure(.requestFailed(message)))
@@ -194,6 +250,7 @@ actor PowerHelperClient {
                 }
             }
         }
+        return result
     }
 
     func heartbeat() async -> Result<Bool, ClosedLidSleepFailure> {
@@ -205,17 +262,15 @@ actor PowerHelperClient {
     }
 
     func invalidate() {
-        connection?.invalidate()
-        connection = nil
+        for connection in activeConnections.values { connection.invalidate() }
+        activeConnections.removeAll()
     }
 
-    /// Drops a broken connection so the next request recreates it.
+    /// Each request owns a short-lived connection. An idle client must not
+    /// pin the helper process between uses.
     private func liveConnection() -> NSXPCConnection {
-        if let connection { return connection }
         let newConnection = NSXPCConnection(machServiceName: machServiceName, options: .privileged)
         newConnection.remoteObjectInterface = NSXPCInterface(with: MacPilotPowerHelperProtocol.self)
-        newConnection.resume()
-        connection = newConnection
         return newConnection
     }
 
@@ -223,8 +278,26 @@ actor PowerHelperClient {
         _ body: @escaping @Sendable (MacPilotPowerHelperProtocol, @escaping @Sendable (Result<Bool, ClosedLidSleepFailure>) -> Void) -> Void
     ) async -> Result<Bool, ClosedLidSleepFailure> {
         let connection = liveConnection()
+        let requestID = UUID()
+        activeConnections[requestID] = connection
+        defer {
+            activeConnections.removeValue(forKey: requestID)
+            connection.invalidate()
+        }
+        var timeout: Task<Void, Never>?
         let result: Result<Bool, ClosedLidSleepFailure> = await withCheckedContinuation { continuation in
             let box = SingleShot(continuation)
+            timeout = Task {
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                box.resume(.failure(.requestFailed("The power service request timed out.")))
+            }
+            connection.invalidationHandler = {
+                box.resume(.failure(.requestFailed("The power service connection ended.")))
+            }
+            connection.interruptionHandler = {
+                box.resume(.failure(.requestFailed("The power service connection was interrupted.")))
+            }
+            connection.resume()
             let errorHandler: @Sendable (any Error) -> Void = { error in
                 box.resume(.failure(.requestFailed(error.localizedDescription)))
             }
@@ -236,9 +309,7 @@ actor PowerHelperClient {
                 box.resume(result)
             }
         }
-        if case .failure = result {
-            invalidate()
-        }
+        timeout?.cancel()
         return result
     }
 

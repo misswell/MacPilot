@@ -24,7 +24,7 @@ listener.resume()
 // setting so a helper restart during shutdown never leaves the Mac in a state
 // where it cannot sleep with the lid closed.
 signal(SIGTERM, SIG_IGN)
-let terminationSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global(qos: .utility))
+let terminationSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: manager.operationQueue)
 terminationSource.setEventHandler {
     logger.notice("Received SIGTERM; releasing owned power state")
     manager.releaseIfOwned()
