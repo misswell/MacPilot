@@ -130,10 +130,19 @@ enum MenuBarIcon {
 @MainActor
 enum MenuBarCPUPercent {
     static func menuTitle(model: MacPilotModel) -> String? {
-        guard model.isFeatureEnabled(.cpuMonitor) else { return nil }
-        let snapshot = CPUMonitorModel.menuSnapshot(allowsRefresh: false)
-        guard let system = snapshot.system else { return nil }
-        return CPUPercentFormatter.string(from: system.totalPercent)
+        title(
+            cpuMonitorEnabled: model.isFeatureEnabled(.cpuMonitor),
+            preferenceEnabled: model.showsCPUPercentInMenuBar,
+            totalPercent: CPUMonitorModel.menuSnapshot(allowsRefresh: false).system?.totalPercent
+        )
+    }
+
+    /// Pure gate for the badge: the CPU monitor must be on, the user must not
+    /// have hidden it, and a sample must exist. Kept separate so the rule is
+    /// testable without a live sample.
+    static func title(cpuMonitorEnabled: Bool, preferenceEnabled: Bool, totalPercent: Double?) -> String? {
+        guard cpuMonitorEnabled, preferenceEnabled, let totalPercent else { return nil }
+        return CPUPercentFormatter.string(from: totalPercent)
     }
 }
 
@@ -566,6 +575,8 @@ enum AppText {
         "startAtLoginHint": "登录 Mac 后自动在后台启动 MacPilot。",
         "appPresence": "窗口与图标", "appPresenceHint": "选择 MacPilot 在系统中的入口。安装后 Dock 图标与菜单栏图标都显示，可在这里手动隐藏其中一个。",
         "showDockIcon": "显示 Dock 图标", "showMenuBarIcon": "显示菜单栏图标",
+        "showCPUPercentInMenuBar": "在菜单栏显示 CPU 占用",
+        "showCPUPercentInMenuBarHint": "关闭后菜单栏图标旁不再显示 CPU 百分比。CPU 监控本身仍会继续运行；这个开关只在「CPU 监控」功能开启时可调整。",
         "appPresenceOneRequiredHint": "Dock 图标与菜单栏图标至少保留一个，否则将无法再打开 MacPilot。关闭主窗口后 Dock 图标会一并隐藏；只保留 Dock 图标时它会一直显示。",
         "quitApp": "退出 MacPilot", "enabledStatus": "MacPilot：已启用",
         "disabledStatus": "MacPilot：已停用", "disableApp": "停用 MacPilot", "enableApp": "启用 MacPilot",
@@ -1885,6 +1896,8 @@ enum AppText {
             "startAtLogin": "Start at Login", "startAtLoginHint": "Launch MacPilot automatically in the background when you log in.", "quitApp": "Quit MacPilot", "enabledStatus": "MacPilot: Enabled",
             "appPresence": "Windows & Icons", "appPresenceHint": "Choose how MacPilot appears in the system. The Dock icon and the menu-bar icon are both shown after installation; hide either one here.",
             "showDockIcon": "Show Dock icon", "showMenuBarIcon": "Show menu-bar icon",
+            "showCPUPercentInMenuBar": "Show CPU usage in the menu bar",
+            "showCPUPercentInMenuBarHint": "When off, the CPU percentage is hidden beside the menu-bar icon. CPU monitoring keeps running; this switch only applies while the CPU Monitor feature is on.",
             "appPresenceOneRequiredHint": "Keep at least one of the two icons, or MacPilot can no longer be opened. Closing the main window also hides the Dock icon; if the Dock icon is the only one kept, it stays visible.",
             "disabledStatus": "MacPilot: Disabled", "disableApp": "Disable MacPilot", "enableApp": "Enable MacPilot",
             "loginError": "Couldn’t update the login item: %@", "loginItemNeedsApproval": "macOS is waiting for you to allow MacPilot to start at login. Turn it on in System Settings → General → Login Items & Extensions.", "aboutAutomation": "AUTOMATION", "manageRules": "Manage app rules and interface preferences.", "githubProject": "GitHub Project", "githubProjectDescription": "View MacPilot’s source code, releases, and issue tracker on GitHub.", "githubProjectLink": "github.com/%@",
@@ -2696,6 +2709,11 @@ final class MacPilotModel: ObservableObject {
     /// controller that applies it lives in `MacPilotApp`, because it needs the
     /// status item that the app owns.
     @Published private(set) var appPresence = AppPresenceSettings.standard
+    /// Whether the CPU percentage is drawn beside the status item. Only
+    /// meaningful while the CPU monitor feature is enabled; see
+    /// `MenuBarBadgePreference`. A `@Published` change also wakes the status
+    /// item so the number disappears immediately.
+    @Published private(set) var showsCPUPercentInMenuBar = MenuBarBadgePreference.showsCPUPercent()
     /// True while the main window is on screen; the Dock icon follows it when
     /// both entry points are enabled. Seeded from the launch context so the
     /// first applied policy already matches the window that is about to
@@ -4237,6 +4255,14 @@ extension MacPilotModel {
         appPresence = normalized
         presenceController?.update(settings: normalized)
         saveIfReady()
+    }
+
+    /// Shows or hides the CPU percentage beside the status item. The CPU
+    /// monitor keeps running either way; only the badge changes.
+    func setShowsCPUPercentInMenuBar(_ shows: Bool) {
+        guard shows != showsCPUPercentInMenuBar else { return }
+        MenuBarBadgePreference.setShowsCPUPercent(shows)
+        showsCPUPercentInMenuBar = shows
     }
 
     /// Called when the main window appears or closes. Only the Dock icon
@@ -6734,6 +6760,16 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .disabled(!model.appPresence.showsDockIcon)
                     Text(model.t("appPresenceOneRequiredHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Divider()
+                    Toggle(model.t("showCPUPercentInMenuBar"), isOn: Binding(
+                        get: { model.showsCPUPercentInMenuBar },
+                        set: { model.setShowsCPUPercentInMenuBar($0) }
+                    ))
+                    .toggleStyle(.switch)
+                    .disabled(!model.isFeatureEnabled(.cpuMonitor))
+                    Text(model.t("showCPUPercentInMenuBarHint"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
