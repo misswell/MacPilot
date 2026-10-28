@@ -13,6 +13,23 @@ struct DisplayControlSettingsView: View {
                     Text(model.t("displayControl")).font(.system(size: 30, weight: .bold))
                     Text(model.t("displayControlSubtitle")).foregroundStyle(.secondary)
                 }
+                // Failures used to appear at the bottom of the page only, below
+                // the recovery card — after a UU confirmation timeout the page
+                // looked normal even though nothing had been applied.
+                if let key = control.errorKey {
+                    InlineWarningBox {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(translatedError(key))
+                            if control.uuObservation.status == .connected, control.settings.uuPolicy != .none {
+                                Button(model.t("displayApplyUUNow")) {
+                                    control.applyRemotePolicy(userInitiated: true)
+                                }
+                                .controlSize(.small)
+                                .disabled(!control.canChange)
+                            }
+                        }
+                    }
+                }
                 SettingsCard {
                     Text(model.t("displayCurrentScreens")).font(.headline)
                     Text(model.t("displayState_" + (control.snapshot?.state.rawValue ?? "unavailable")))
@@ -66,7 +83,7 @@ struct DisplayControlSettingsView: View {
                                 NSWorkspace.shared.open(url)
                             }
                         }
-                        Button(model.t("displayApplyUUNow")) { control.applyRemotePolicy() }
+                        Button(model.t("displayApplyUUNow")) { control.applyRemotePolicy(userInitiated: true) }
                             .disabled(!control.canChange || control.settings.uuPolicy == .none
                                       || control.uuObservation.status != .connected)
                     }
@@ -95,18 +112,15 @@ struct DisplayControlSettingsView: View {
                     }
                     Text(model.t("displayRecoveryHint")).font(.caption).foregroundStyle(.secondary)
                     Text(model.t("displayPrivateAPIHint")).font(.caption).foregroundStyle(.secondary)
-                    if let key = control.errorKey {
-                        let translated = model.t(key)
-                        Text(translated == key ? model.t("displayOperationFailed") : translated)
-                            .font(.subheadline)
-                            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.orange.opacity(0.35)))
-                    }
                 }
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
         }
+    }
+
+    private func translatedError(_ key: String) -> String {
+        let translated = model.t(key)
+        return translated == key ? model.t("displayOperationFailed") : translated
     }
 
     private func setting<Value>(_ path: WritableKeyPath<DisplayControlSettings, Value>) -> Binding<Value> {
@@ -166,5 +180,30 @@ struct DisplayControlConfirmationView: View {
                 }.macPilotProminentButtonStyle().disabled(control.isBusy)
             }
         }.padding(24).frame(width: 470, height: 220)
+    }
+}
+
+/// Non-interactive instructions on the screen the user is currently looking at.
+///
+/// The confirmation control itself must stay on the virtual display; this note
+/// only explains how to get there, because otherwise the user is told to switch
+/// displays by a window they cannot see yet.
+struct DisplayControlGuidanceView: View {
+    @ObservedObject var control: DisplayControlModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(control.t("displayGuidanceTitle")).font(.headline)
+            Text(AppText.value("displayGuidanceHint", language: control.language,
+                               arguments: [control.remainingSeconds]))
+                .font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(control.t("displayGuidanceEmergency"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(24)
+        .frame(width: 470, height: 168, alignment: .leading)
     }
 }

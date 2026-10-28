@@ -401,6 +401,34 @@ struct DisplayControlIntegrationTests {
         for _ in 0..<200 where model.isServiceCleanupPending { await Task.yield() }
     }
 
+    /// Only the settings-page button may ask the helper to clear the override
+    /// a confirmation timeout left for this UU session; the automatic rule is
+    /// indistinguishable from it except for this one field.
+    @Test func onlyTheUserInitiatedUUApplyAsksTheHelperToClearTheSessionOverride() {
+        var settings = DisplayControlSettings()
+        settings.uuPolicy = .virtualOnly
+        let automatic = DisplayControlModel.remotePolicyRequest(
+            settings: settings, sessionID: "uu-session", generation: nil, userInitiated: false)
+        let manual = DisplayControlModel.remotePolicyRequest(
+            settings: settings, sessionID: "uu-session", generation: nil, userInitiated: true)
+        #expect(automatic?.command == .prepareVirtual)
+        #expect(automatic?.confirmed == false)
+        #expect(manual?.command == .prepareVirtual)
+        #expect(manual?.confirmed == true)
+        #expect(automatic?.remoteSessionID == manual?.remoteSessionID)
+
+        settings.uuPolicy = .keepPhysical
+        settings.targetUUID = "display"
+        #expect(DisplayControlModel.remotePolicyRequest(
+            settings: settings, sessionID: "uu-session", generation: nil, userInitiated: false)?.confirmed == false)
+        #expect(DisplayControlModel.remotePolicyRequest(
+            settings: settings, sessionID: "uu-session", generation: nil, userInitiated: true)?.confirmed == true)
+
+        settings.uuPolicy = .none
+        #expect(DisplayControlModel.remotePolicyRequest(
+            settings: settings, sessionID: "uu-session", generation: nil, userInitiated: true) == nil)
+    }
+
     private final class MockRecoveryService: DisplayRecoveryRegistering {
         var status: SMAppService.Status = .enabled
         var registerCount = 0

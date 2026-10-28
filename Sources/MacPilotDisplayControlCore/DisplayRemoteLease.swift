@@ -42,6 +42,15 @@ public struct DisplayRemoteLease: Equatable, Sendable {
         clearLease()
     }
 
+    /// Forgets the override for the current session.
+    ///
+    /// Only an explicit user re-apply may call this. A confirmation timeout or
+    /// an emergency release sets the override on purpose so the automatic UU
+    /// rule cannot immediately undo the desktop the user just got back.
+    public mutating func clearOverride() {
+        manualOverrideSessionID = nil
+    }
+
     /// A newly observed remote session clears an override belonging to the
     /// previous session. Heartbeat cannot override the active session itself.
     @discardableResult

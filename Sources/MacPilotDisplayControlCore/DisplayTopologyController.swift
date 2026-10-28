@@ -392,6 +392,10 @@ public final class DisplayTopologyController: @unchecked Sendable {
             messageCode = .uuSessionRequired
             return
         }
+        // A confirmation timeout or an emergency release remembers the session
+        // so the automatic rule cannot immediately undo the restored desktop.
+        // `confirmed` on this command means the user explicitly re-applied.
+        guard clearOverrideForExplicitRetry(request, session: session) else { return }
         guard let requestedGeneration = request.generation,
               let activeGeneration = prepareActiveGeneration(requested: requestedGeneration),
               lease.beginControl(
@@ -632,6 +636,7 @@ public final class DisplayTopologyController: @unchecked Sendable {
         if policy == .remoteVirtualOnly || policy == .remotePhysical || policy == .remoteVirtualWithPhysical {
             guard let session = request.remoteSessionID,
                   let requestedGeneration = request.generation else { messageCode = .uuSessionRequired; return nil }
+            guard clearOverrideForExplicitRetry(request, session: session) else { return nil }
             if lease.sessionID == nil {
                 guard lease.beginControl(
                     sessionID: session,
@@ -673,6 +678,19 @@ public final class DisplayTopologyController: @unchecked Sendable {
 
     private func activeJournalGeneration() -> UUID? { loadJournal()?.generation }
     private func loadJournal() -> DisplayRecoveryJournal? { try? store.load() }
+
+    /// Only an explicit user re-apply may forget the per-session override left
+    /// by a confirmation timeout or an emergency release. The automatic UU rule
+    /// must keep respecting it, otherwise it would immediately undo the desktop
+    /// the user just got back.
+    private func clearOverrideForExplicitRetry(_ request: DisplayControlRequest, session: String) -> Bool {
+        guard lease.manualOverrideSessionID == session else { return true }
+        guard request.confirmed else { messageCode = .uuSessionRequired; return false }
+        do { try overrideStore.clear() }
+        catch { messageCode = .recoveryIncomplete; return false }
+        lease.clearOverride()
+        return true
+    }
 
     private func persistOverride(for sessionID: String) throws {
         lease.beginNewSession(sessionID)

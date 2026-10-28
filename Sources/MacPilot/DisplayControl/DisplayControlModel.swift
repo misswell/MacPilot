@@ -39,6 +39,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     private let prepareVisibleOutputs: () -> Bool
     private let controlStateChanged: (Bool) -> Void
     private var confirmationPanel: NSPanel?
+    private var guidancePanel: NSPanel?
 
     init(client: (any DisplayRecoverySending)? = nil, monitor: UUSessionMonitor? = nil,
          showsConfirmation: Bool = true, prepareVisibleOutputs: (() -> Bool)? = nil,
@@ -211,6 +212,8 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         isBusy = false
         confirmationPanel?.close()
         confirmationPanel = nil
+        guidancePanel?.close()
+        guidancePanel = nil
         let pending = serviceLifecycleTask
         let generation = serviceLifecycleGeneration
         serviceLifecycleTask = Task { [weak self] in
@@ -272,6 +275,8 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         isBusy = false
         confirmationPanel?.close()
         confirmationPanel = nil
+        guidancePanel?.close()
+        guidancePanel = nil
         if managesServiceLifecycle {
             await serviceLifecycleTask?.value
             serviceLifecycleTask = nil
@@ -368,32 +373,66 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         operationTask = nil
         confirmationPanel?.close()
         confirmationPanel = nil
+        guidancePanel?.close()
+        guidancePanel = nil
         // Emergency release cannot be rejected merely because a topology reply
         // or a confirmation changed the generation since the last poll.
         perform(.init(command: .restore, targetUUID: targetUUID), restoring: true)
     }
 
-    func applyRemotePolicy() {
+    /// Applies the UU rule for the current connection.
+    ///
+    /// `userInitiated` is true only for the button in the settings page. That
+    /// explicit request is the one thing allowed to clear the per-session
+    /// override left by a confirmation timeout or an emergency release; the
+    /// automatic rule must never clear it and undo the user's restored desktop.
+    func applyRemotePolicy(userInitiated: Bool = false) {
         guard canChange, uuObservation.status == .connected, let sessionID else {
             errorKey = "displayUURequired"
+            DiagnosticLog.write("DisplayControl",
+                "remote policy ignored reason=noUUState state=\(snapshot?.state.rawValue ?? "none") uu=\(uuObservation.status.rawValue)")
             return
         }
-        guard settings.uuPolicy != .none else { return }
+        guard let request = Self.remotePolicyRequest(
+            settings: settings,
+            sessionID: sessionID,
+            generation: snapshot?.generation,
+            userInitiated: userInitiated
+        ) else {
+            errorKey = settings.uuPolicy == .keepPhysical ? "displaySelectTarget" : "displayInvalidSize"
+            return
+        }
         appliedSessionID = sessionID
         inhibitedSessionID = nil
-        let generation = snapshot?.generation
+        DiagnosticLog.write("DisplayControl",
+            "remote policy apply policy=\(settings.uuPolicy.rawValue) userInitiated=\(userInitiated) session=\(sessionID.prefix(8))")
+        perform(request)
+    }
+
+    /// Builds the helper request for the UU rule.
+    ///
+    /// A pure seam so the automatic and the explicit paths can be proven to
+    /// differ in exactly one field: `confirmed`, which the helper treats as
+    /// permission to clear the per-session override.
+    static func remotePolicyRequest(
+        settings: DisplayControlSettings,
+        sessionID: String,
+        generation: UUID?,
+        userInitiated: Bool
+    ) -> DisplayControlRequest? {
         switch settings.uuPolicy {
-        case .none: break
+        case .none:
+            return nil
         case .keepPhysical:
-            guard !settings.targetUUID.isEmpty else { errorKey = "displaySelectTarget"; return }
-            perform(.init(command: .keepOnly, targetUUID: settings.targetUUID, generation: generation,
-                          remoteSessionID: sessionID, policy: .remotePhysical))
+            guard !settings.targetUUID.isEmpty else { return nil }
+            return .init(command: .keepOnly, targetUUID: settings.targetUUID, generation: generation,
+                         remoteSessionID: sessionID, confirmed: userInitiated, policy: .remotePhysical)
         case .virtualOnly, .addVirtual:
-            guard settings.hasValidVirtualSize else { errorKey = "displayInvalidSize"; return }
-            perform(.init(command: .prepareVirtual,
-                          virtualSpec: .init(width: settings.virtualWidth, height: settings.virtualHeight, hiDPI: settings.hiDPI),
-                          generation: generation, remoteSessionID: sessionID,
-                          policy: settings.uuPolicy == .virtualOnly ? .remoteVirtualOnly : .remoteVirtualWithPhysical))
+            guard settings.hasValidVirtualSize else { return nil }
+            return .init(command: .prepareVirtual,
+                         virtualSpec: .init(width: settings.virtualWidth, height: settings.virtualHeight, hiDPI: settings.hiDPI),
+                         generation: generation, remoteSessionID: sessionID, confirmed: userInitiated,
+                         policy: settings.uuPolicy == .virtualOnly ? .remoteVirtualOnly : .remoteVirtualWithPhysical)
         }
     }
 
@@ -480,29 +519,42 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         consecutiveIdleFailures = 0
         let nextError = response.message.map { "displayError_" + $0 }
         if errorKey != nextError { errorKey = nextError }
+        // The helper is the only place the transaction state exists, so the
+        // diagnostics file is the only way to explain a later "nothing happened"
+        // report. Log transitions only, never every poll.
+        if snapshot?.state != response.state || snapshot?.message != response.message {
+            DiagnosticLog.write("DisplayControl",
+                "state=\(response.state.rawValue) message=\(response.message ?? "none") uu=\(uuObservation.status.rawValue)"
+                    + " session=\(sessionID.map { String($0.prefix(8)) } ?? "none")"
+                    + " physical=\(response.displays.filter { !$0.isVirtual && $0.isUsable }.count)"
+                    + " virtual=\(response.displays.filter { $0.isVirtual && $0.isUsable }.count)")
+        }
         // Also clear an optimistic control mark when a rejected command returns
         // the same idle snapshot as before it was sent.
         controlStateChanged(![.idle, .unavailable].contains(response.state))
         guard snapshot != response else {
-            if response.confirmationDeadline != nil, confirmationPanel == nil { updateConfirmationPanel() }
+            updateTransientPanels()
             return
         }
         snapshot = response
         if response.confirmationDeadline != nil { now = Date() }
+        updateTransientPanels()
+    }
+
+    private func updateTransientPanels() {
+        guard showsConfirmation else { return }
         updateConfirmationPanel()
+        updateGuidancePanel()
     }
 
     private func updateConfirmationPanel() {
-        guard showsConfirmation else { return }
         guard snapshot?.confirmationDeadline != nil else {
             confirmationPanel?.close(); confirmationPanel = nil
             return
         }
         let target = isConfirmingVirtual ? snapshot?.virtualDisplayUUID : displays.first(where: \.isMain)?.uuid
         guard let display = displays.first(where: { $0.uuid == target }),
-              let screen = NSScreen.screens.first(where: {
-                  ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
-              }) else { return } // Never put remote confirmation on an arbitrary physical screen.
+              let screen = screen(for: display) else { return } // Never put remote confirmation on an arbitrary physical screen.
         if confirmationPanel == nil {
             let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 470, height: 220),
                                 styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -516,6 +568,46 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         let frame = screen.visibleFrame
         confirmationPanel?.setFrameOrigin(NSPoint(x: frame.midX - 235, y: frame.midY - 110))
         confirmationPanel?.orderFrontRegardless()
+    }
+
+    /// The confirmation itself has to live on the virtual display, but until UU
+    /// is switched to that display the user cannot see it — so the current
+    /// physical screen gets a non-interactive note with the exact steps. This is
+    /// guidance only: it can never confirm on the user's behalf.
+    private func updateGuidancePanel() {
+        guard snapshot?.state == .awaitingVirtualConfirmation else {
+            guidancePanel?.close(); guidancePanel = nil
+            return
+        }
+        if guidancePanel == nil {
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 470, height: 168),
+                                styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.title = t("displayGuidanceTitle")
+            panel.isReleasedWhenClosed = false
+            panel.level = .floating
+            panel.hidesOnDeactivate = false
+            panel.contentView = NSHostingView(rootView: DisplayControlGuidanceView(control: self))
+            guidancePanel = panel
+        }
+        if let screen = currentPhysicalScreen {
+            let frame = screen.visibleFrame
+            guidancePanel?.setFrameOrigin(NSPoint(x: frame.midX - 235, y: frame.midY + 150))
+        }
+        guidancePanel?.orderFrontRegardless()
+    }
+
+    private func screen(for display: DisplayControlDisplay) -> NSScreen? {
+        NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
+        }
+    }
+
+    /// The screen the user is actually looking at: the virtual display only
+    /// becomes main after the confirmation.
+    private var currentPhysicalScreen: NSScreen? {
+        let physical = displays.first(where: { $0.isMain && !$0.isVirtual })
+            ?? displays.first(where: { !$0.isVirtual && $0.isUsable })
+        return physical.flatMap(screen(for:)) ?? NSScreen.main
     }
 }
 

@@ -3,6 +3,41 @@ import Testing
 @testable import MacPilotDisplayControlCore
 
 struct DisplayTopologyControllerTests {
+    @Test func anExplicitReapplyClearsTheSessionOverrideLeftByAConfirmationTimeout() {
+        let fixture = ControllerFixture(displays: [
+            screen("one", id: 1, main: true),
+            screen("two", id: 2)
+        ])
+        fixture.driver.removesVirtualOnDestroy = true
+        let start = Date()
+        let spec = DisplayVirtualSpec(width: 1920, height: 1080)
+        func prepare(confirmed: Bool, at now: Date) {
+            fixture.controller.handle(.init(command: .prepareVirtual, virtualSpec: spec,
+                generation: fixture.controller.response().generation,
+                remoteSessionID: "uu-session", confirmed: confirmed, policy: .remoteVirtualOnly), now: now)
+        }
+
+        prepare(confirmed: false, at: start)
+        #expect(fixture.controller.response().state == .awaitingVirtualConfirmation)
+
+        // The confirmation deadline passes: the physical desktop comes back and
+        // the session is remembered so the automatic rule cannot undo it.
+        fixture.controller.expireLeases(now: start.addingTimeInterval(31))
+        fixture.controller.expireLeases(now: Date().addingTimeInterval(1.1))
+        #expect(fixture.controller.response().state == .idle)
+
+        prepare(confirmed: false, at: Date())
+        #expect(fixture.controller.response().state == .idle)
+        #expect(fixture.controller.response().message == DisplayControlMessageCode.uuSessionRequired.rawValue)
+        #expect(!fixture.driver.displays().contains(where: { $0.uuid == "owned-virtual" }))
+
+        // The button in the settings page is an explicit re-apply, and that is
+        // the only path allowed to forget the override for this session.
+        prepare(confirmed: true, at: Date())
+        #expect(fixture.controller.response().state == .awaitingVirtualConfirmation)
+        #expect(fixture.driver.displays().contains(where: { $0.uuid == "owned-virtual" && $0.isUsable }))
+    }
+
     @Test func idleResponseAlwaysProvidesGenerationForFirstOperation() {
         let fixture = ControllerFixture(displays: [screen("one", id: 1, main: true)])
         #expect(fixture.controller.response().generation != nil)
@@ -256,6 +291,9 @@ private final class FakeDisplayTopologyDriver: DisplayTopologyDriving, @unchecke
     private var currentDisplays: [DisplayControlDisplay]
     var failedEnables = 0
     var dropOwnedVirtualAfterFirstDisable = false
+    /// A real release removes the display; most fixtures keep it visible so
+    /// other invariants can still be exercised.
+    var removesVirtualOnDestroy = false
     private(set) var disableCalls = 0
 
     init(displays: [DisplayControlDisplay]) { currentDisplays = displays }
@@ -355,5 +393,8 @@ private final class FakeDisplayTopologyDriver: DisplayTopologyDriving, @unchecke
         ))
         return DisplayVirtualCreation(uuid: "owned-virtual", settingsApplied: true)
     }
-    func destroyVirtual(uuid: String, now: Date) -> Bool { true }
+    func destroyVirtual(uuid: String, now: Date) -> Bool {
+        if removesVirtualOnDestroy { currentDisplays.removeAll { $0.uuid == uuid } }
+        return true
+    }
 }

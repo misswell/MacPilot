@@ -103,6 +103,16 @@ UUyc-companion 的 README 明确说明：仅创建虚拟屏时，需要用户在
 
 手动解除必须设置本次会话的 override：同一次 UU 连接不再自动关屏，直到用户显式重新应用，或确认断开后建立新会话。仅点击恢复、500 毫秒后又被自动规则关闭，不能算有效恢复。
 
+### 确认超时、引导与显式重新应用（2026-10-28 实机问题修正）
+
+实机现象：UU 已连接、自动创建虚拟屏成功，但 30 秒内没有在虚拟屏上完成确认，于是按安全规则恢复实体屏；之后页面看起来一切正常，自动规则也不再重试，用户无法判断发生了什么。
+
+- **确认控件必须留在虚拟屏**，但用户切到虚拟屏之前看不到它。因此进入 `awaitingVirtualConfirmation` 时，同时在该屏之外的**当前实体屏**上显示一块不可交互的引导窗口：说明要在 UU 显示面板选择 `MacPilot Remote Display`、再在虚拟屏上确认，并显示倒计时。引导窗口不能代替确认，也不能放在任意物理屏上执行确认。
+- **一次确认超时 / 紧急解除 = 本次会话 override**，自动规则不得重试，否则会立刻把用户刚恢复的桌面再次关掉。设置页的「应用当前 UU 策略」是唯一的显式重新应用路径：`prepareVirtual` / `keepOnly` 带 `confirmed: true` 时才会清除 `DisplayControlOverride.json`；自动路径始终为 `false`，无权清除。禁止把「清除 override」做成自动重试的一部分。
+- **失败必须在页面顶部可见**：错误提示从「安全恢复」卡片移到页头下方，UU 已连接且规则非 `none` 时在同一处提供「应用当前 UU 策略」重试按钮。
+- **状态迁移与策略决定写入 `~/Library/Logs/MacPilot/Diagnostics.log`（`DisplayControl`）**：状态 / message 变化时才记录，附带 UU 状态、会话前缀与实体/虚拟屏数量。没有这条记录，「没有反应」无法回溯。
+- 回归：`DisplayTopologyControllerTests.anExplicitReapplyClearsTheSessionOverrideLeftByAConfirmationTimeout`、`DisplayControlIntegrationTests.theManualUUButtonIsMarkedAsAnExplicitReapplyButTheAutomaticRuleIsNot`；`DisplayControlTranslationsHaveMatchingKeys` 保证两份文案同步。
+
 ## 4. 运行时、恢复记录和会话策略
 
 ### 恢复助手与并发
