@@ -926,6 +926,16 @@ public final class DisplayTopologyController: @unchecked Sendable {
             messageCode = .recoveryIncomplete
             return false
         }
+        if originalJournal.virtualSpec != nil, originalJournal.virtualDisplayUUID == nil {
+            let originalUUIDs = Set(journal.originalDisplays.map(\.uuid))
+            if driver.displays().contains(where: { $0.isVirtual && !originalUUIDs.contains($0.uuid) }) {
+                // The UUID commit may have failed before this helper restarted.
+                // An unrecorded virtual output cannot be claimed or released by
+                // guessing ownership, nor may its durable creation intent vanish.
+                messageCode = .orphanVirtualDisplay
+                return false
+            }
+        }
         if let virtualUUID = journal.virtualDisplayUUID {
             guard hasUsablePhysicalDisplay(), driver.destroyVirtual(uuid: virtualUUID, now: Date()) else {
                 let orphan = driver.displays().contains { $0.uuid == virtualUUID && !$0.isOwned }

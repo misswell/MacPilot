@@ -3,6 +3,29 @@ import Testing
 @testable import MacPilotDisplayControlCore
 
 struct DisplayTopologyLifecycleTests {
+    @Test func restartRetainsCreationIntentWhenUUIDCommitFailedAndAnUnclaimedVirtualRemains() throws {
+        let f = LifecycleFixture()
+        defer { f.removeFiles() }
+        var journal = DisplayRecoveryJournal(generation: UUID(), policy: .remoteVirtualOnly,
+            originalDisplays: f.driver.current)
+        journal.remoteSessionID = "tablet"
+        journal.virtualSpec = .init(width: 1920, height: 1080)
+        journal.phase = .creatingVirtual
+        try f.store.save(journal)
+        f.driver.current.append(.init(uuid: "unclaimed", displayID: 3, name: "unclaimed", isBuiltIn: false,
+            isVirtual: true, isOnline: true, isActive: true, isMain: false, width: 1920, height: 1080))
+        f.controller.recoverAtStartup()
+        #expect(f.controller.response().state == .recoveryRequired)
+        #expect(f.controller.response().message == DisplayControlMessageCode.orphanVirtualDisplay.rawValue)
+        #expect(try f.store.load()?.isComplete == false)
+        #expect(f.driver.destroyCount == 0)
+        f.controller.restoreAll()
+        #expect(try f.store.load()?.isComplete == false)
+        f.driver.current.removeAll { $0.uuid == "unclaimed" }
+        f.controller.restoreAll()
+        #expect(try f.store.load()?.isComplete == true)
+    }
+
     @Test func readinessTimeoutKeepsTheCreatedUUIDAndPhysicalDisplays() throws {
         let f = LifecycleFixture(readinessTimeout: 0)
         defer { f.removeFiles() }
