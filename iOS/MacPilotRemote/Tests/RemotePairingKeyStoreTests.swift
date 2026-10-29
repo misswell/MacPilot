@@ -9,17 +9,24 @@ struct RemotePairingKeyStoreTests {
         private var keys: [String: Data] = ["mac": Data([1, 2, 3])]
         private var accesses = 0
         private var touchedMain = false
-        let loadEntered = DispatchSemaphore(value: 0)
+        private var didEnterLoad = false
+        private var loadWaiters: [CheckedContinuation<Void, Never>] = []
         let releaseLoad = DispatchSemaphore(value: 0)
         let deleteFinished = DispatchSemaphore(value: 0)
         var blocksLoad = false
 
         func load() throws -> [String: Data] {
             record()
-            loadEntered.signal()
-            if blocksLoad, releaseLoad.wait(timeout: .now() + 2) == .timedOut {
-                throw Failure.timedOut
-            }
+            lock.lock()
+            didEnterLoad = true
+            let waiters = loadWaiters
+            loadWaiters.removeAll()
+            lock.unlock()
+            for waiter in waiters { waiter.resume() }
+            // Detect the original bug immediately instead of deadlocking a
+            // test runner by simulating securityd on its main thread.
+            guard !Thread.isMainThread else { throw Failure.ranOnMainThread }
+            if blocksLoad { releaseLoad.wait() }
             lock.lock()
             defer { lock.unlock() }
             return keys
@@ -55,15 +62,20 @@ struct RemotePairingKeyStoreTests {
             return (accesses, touchedMain)
         }
 
-        func waitForLoad() async -> Bool {
+        func waitForLoad() async {
             await withCheckedContinuation { continuation in
-                DispatchQueue.global().async {
-                    continuation.resume(returning: self.loadEntered.wait(timeout: .now() + 1) == .success)
+                lock.lock()
+                if didEnterLoad {
+                    lock.unlock()
+                    continuation.resume()
+                } else {
+                    loadWaiters.append(continuation)
+                    lock.unlock()
                 }
             }
         }
 
-        enum Failure: Error { case timedOut }
+        enum Failure: Error { case unavailable, ranOnMainThread }
     }
 
     private func store(_ backend: Backend) -> RemotePairingKeyStore {
@@ -79,7 +91,7 @@ struct RemotePairingKeyStoreTests {
         let first = Task { await store.prepare() }
         let second = Task { await store.prepare() }
         // This main-actor continuation must run while the worker is blocked.
-        #expect(await backend.waitForLoad())
+        await backend.waitForLoad()
         #expect(!store.isPrepared)
         backend.releaseLoad.signal()
         #expect(await first.value)
@@ -97,7 +109,7 @@ struct RemotePairingKeyStoreTests {
         backend.blocksLoad = true
         let store = store(backend)
         let loading = Task { await store.prepare() }
-        #expect(await backend.waitForLoad())
+        await backend.waitForLoad()
         store.remove("mac")
         backend.releaseLoad.signal()
         #expect(await loading.value)
@@ -116,7 +128,7 @@ struct RemotePairingKeyStoreTests {
     }
 
     @Test func anUnavailableKeychainDoesNotBecomeAnEmptySuccessfulSnapshot() async {
-        let store = RemotePairingKeyStore(load: { throw Backend.Failure.timedOut },
+        let store = RemotePairingKeyStore(load: { throw Backend.Failure.unavailable },
                                          save: { _, _ in true }, remove: { _ in true })
         #expect(!(await store.prepare()))
         #expect(!store.isPrepared)
@@ -129,7 +141,7 @@ struct RemotePairingKeyStoreTests {
         backend.blocksLoad = true
         let store = store(backend)
         let saving = Task { await store.save(Data([9]), for: "mac") }
-        #expect(await backend.waitForLoad())
+        await backend.waitForLoad()
         let removal = store.remove("mac")
         backend.releaseLoad.signal()
         #expect(!(await saving.value))
