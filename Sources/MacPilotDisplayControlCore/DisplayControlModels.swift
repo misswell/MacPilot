@@ -58,8 +58,9 @@ public struct DisplayVirtualSpec: Codable, Equatable, Sendable {
     }
 }
 
-public struct DisplayControlRequest: Codable, Sendable {
+public struct DisplayControlRequest: Codable, Equatable, Sendable {
     public let command: DisplayControlCommand
+    public let operationID: UUID?
     public let targetUUID: String?
     public let virtualSpec: DisplayVirtualSpec?
     public let generation: UUID?
@@ -69,6 +70,7 @@ public struct DisplayControlRequest: Codable, Sendable {
 
     public init(
         command: DisplayControlCommand,
+        operationID: UUID? = nil,
         targetUUID: String? = nil,
         virtualSpec: DisplayVirtualSpec? = nil,
         generation: UUID? = nil,
@@ -77,6 +79,7 @@ public struct DisplayControlRequest: Codable, Sendable {
         policy: DisplayControlPolicy? = nil
     ) {
         self.command = command
+        self.operationID = operationID
         self.targetUUID = targetUUID
         self.virtualSpec = virtualSpec
         self.generation = generation
@@ -154,7 +157,15 @@ public struct DisplayControlDisplay: Codable, Equatable, Identifiable, Sendable 
     }
 }
 
+public enum DisplayOperationStatus: String, Codable, Sendable {
+    case accepted, completed, interrupted
+}
+
 public struct DisplayControlResponse: Codable, Equatable, Sendable {
+    public let operationID: UUID?
+    public let operationStatus: DisplayOperationStatus?
+    public let policy: DisplayControlPolicy?
+    public let remoteSessionID: String?
     public let displays: [DisplayControlDisplay]
     public let state: DisplayControlState
     public let message: String?
@@ -170,8 +181,14 @@ public struct DisplayControlResponse: Codable, Equatable, Sendable {
         generation: UUID? = nil,
         confirmationDeadline: Date? = nil,
         helperReady: Bool,
-        virtualDisplayUUID: String? = nil
+        virtualDisplayUUID: String? = nil,
+        operationID: UUID? = nil,
+        operationStatus: DisplayOperationStatus? = nil,
+        policy: DisplayControlPolicy? = nil,
+        remoteSessionID: String? = nil
     ) {
+        self.policy = policy
+        self.remoteSessionID = remoteSessionID
         self.displays = displays
         self.state = state
         self.message = message
@@ -179,6 +196,8 @@ public struct DisplayControlResponse: Codable, Equatable, Sendable {
         self.confirmationDeadline = confirmationDeadline
         self.helperReady = helperReady
         self.virtualDisplayUUID = virtualDisplayUUID
+        self.operationID = operationID
+        self.operationStatus = operationStatus
     }
 }
 
@@ -233,5 +252,22 @@ public enum DisplayControlSafety {
         guard let target = displays.first(where: { $0.uuid == targetUUID }), target.isUsable else { return false }
         if !target.isVirtual { return true }
         return policy == .remoteVirtualOnly && remoteSessionIsFresh && virtualSelectionConfirmed
+    }
+}
+
+public extension DisplayControlRequest {
+    var isMutation: Bool { command != .status && command != .heartbeat }
+    func identifyingOperation(_ id: UUID) -> Self {
+        Self(command: command, operationID: id, targetUUID: targetUUID, virtualSpec: virtualSpec,
+             generation: generation, remoteSessionID: remoteSessionID, confirmed: confirmed, policy: policy)
+    }
+}
+
+public extension DisplayControlResponse {
+    func operation(_ id: UUID, status: DisplayOperationStatus) -> Self {
+        Self(displays: displays, state: state, message: message, generation: generation,
+             confirmationDeadline: confirmationDeadline, helperReady: helperReady,
+             virtualDisplayUUID: virtualDisplayUUID, operationID: id, operationStatus: status,
+             policy: policy, remoteSessionID: remoteSessionID)
     }
 }

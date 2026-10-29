@@ -158,6 +158,7 @@ public enum DisplayControlMessageCode: String, Codable, Sendable {
     case staleGeneration
     case helperUnavailable
     case virtualNotReady
+    case orphanVirtualDisplay
     case recoveryIncomplete
     case invalidTarget
     case invalidSize

@@ -30,19 +30,25 @@ public final class DisplayTopologyController: @unchecked Sendable {
     private var controlRevocationPersistenceFailed = false
     private var emergencyHotKeyReady = false
     private var authenticationReady = false
+    // A failed UUID commit must not let subsequent commands replace its intent.
+    private var uncommittedRecovery: DisplayRecoveryJournal?
+    private var journalReadFailed = false
+    private let virtualReadinessTimeout: TimeInterval
 
     public init(
         store: DisplayRecoveryJournalStore = .standard,
         overrideStore: DisplaySessionOverrideStore = .standard,
         driver: any DisplayTopologyDriving = MacDisplayTopologyDriver(),
         emergencyHotKeyReady: Bool = false,
-        authenticationReady: Bool = false
+        authenticationReady: Bool = false,
+        virtualReadinessTimeout: TimeInterval = 10
     ) {
         self.store = store
         self.overrideStore = overrideStore
         self.driver = driver
         self.emergencyHotKeyReady = emergencyHotKeyReady
         self.authenticationReady = authenticationReady
+        self.virtualReadinessTimeout = max(0, virtualReadinessTimeout)
         do { lease.restoreOverride(try overrideStore.load()) }
         catch { messageCode = .recoveryIncomplete }
     }
@@ -52,6 +58,7 @@ public final class DisplayTopologyController: @unchecked Sendable {
             && authenticationReady
             && driver.displayEnableAPIAvailable
             && messageCode != .recoveryIncomplete
+            && state != .recoveryRequired && state != .recovering
             && DisplayRecoverySession.identifier != "display-session-unknown"
     }
 
@@ -59,7 +66,7 @@ public final class DisplayTopologyController: @unchecked Sendable {
     public func setAuthenticationReady(_ ready: Bool) { authenticationReady = ready }
 
     public func response(now: Date = Date()) -> DisplayControlResponse {
-        let journal = try? store.load()
+        let journal = loadJournal()
         let displays = snapshot(journal: journal)
         return DisplayControlResponse(
             displays: displays,
@@ -68,7 +75,9 @@ public final class DisplayTopologyController: @unchecked Sendable {
             generation: journal?.generation ?? generation,
             confirmationDeadline: journal?.confirmationDeadline,
             helperReady: helperReady,
-            virtualDisplayUUID: journal?.virtualDisplayUUID
+            virtualDisplayUUID: journal?.virtualDisplayUUID,
+            policy: journal?.policy,
+            remoteSessionID: journal?.remoteSessionID
         )
     }
 
@@ -76,13 +85,8 @@ public final class DisplayTopologyController: @unchecked Sendable {
         do {
             guard let journal = try store.load() else { return }
             generation = journal.generation
-            if journal.systemSessionID != DisplayRecoverySession.identifier {
-                state = .recoveryRequired
-                messageCode = .recoveryIncomplete
-                return
-            }
             _ = revokeControl(for: journal.remoteSessionID)
-            if journal.isComplete {
+            if journal.isComplete && journal.systemSessionID == DisplayRecoverySession.identifier {
                 state = .recovering
                 _ = finalizeRestorationIfStable(journal, now: Date())
                 return
@@ -90,7 +94,7 @@ public final class DisplayTopologyController: @unchecked Sendable {
             state = .recovering
             guard restore(journal: journal) else {
                 state = .recoveryRequired
-                messageCode = .recoveryIncomplete
+                if messageCode != .orphanVirtualDisplay { messageCode = .recoveryIncomplete }
                 return
             }
             guard let completed = try store.load(), completed.isComplete else {
@@ -118,6 +122,18 @@ public final class DisplayTopologyController: @unchecked Sendable {
             messageCode = .recoveryIncomplete
             return
         }
+        if request.command != .status && request.command != .restore {
+            guard !journalReadFailed, uncommittedRecovery == nil else {
+                state = .recoveryRequired
+                messageCode = .recoveryIncomplete
+                return
+            }
+            if [.disable, .keepOnly, .prepareVirtual, .confirmVirtual, .confirmChange].contains(request.command),
+               let journal = loadJournal(), !validateTransaction(request, journal: journal, now: now) { return }
+        }
+        // A local emergency restore remains available even after lease expiry.
+        if request.command == .restore, request.remoteSessionID != nil,
+           let journal = loadJournal(), !validateTransaction(request, journal: journal, now: now) { return }
         switch request.command {
         case .status:
             clearStaleOverrideMessage(for: request.remoteSessionID)
@@ -149,7 +165,7 @@ public final class DisplayTopologyController: @unchecked Sendable {
 
     public func expireLeases(now: Date = Date()) {
         guard let journal = loadJournal() else { return }
-        if journal.isComplete {
+        if journal.isComplete && journal.systemSessionID == DisplayRecoverySession.identifier {
             _ = revokeControl(for: journal.remoteSessionID)
             _ = finalizeRestorationIfStable(journal, now: now)
             return
@@ -187,7 +203,7 @@ public final class DisplayTopologyController: @unchecked Sendable {
 
     public func restoreAll() {
         do {
-            guard let journal = try store.load() else {
+            guard let journal = try uncommittedRecovery ?? store.load() else {
                 _ = revokeControl(for: lease.sessionID)
                 state = .idle
                 generation = UUID()
@@ -196,13 +212,13 @@ public final class DisplayTopologyController: @unchecked Sendable {
             }
             _ = revokeControl(for: journal.remoteSessionID ?? lease.sessionID)
             state = .recovering
-            if journal.isComplete {
+            if journal.isComplete && journal.systemSessionID == DisplayRecoverySession.identifier {
                 _ = finalizeRestorationIfStable(journal, now: Date())
                 return
             }
             guard restore(journal: journal) else {
                 state = .recoveryRequired
-                messageCode = .recoveryIncomplete
+                if messageCode != .orphanVirtualDisplay { messageCode = .recoveryIncomplete }
                 return
             }
             guard let completed = try store.load(), completed.isComplete else {
@@ -432,6 +448,17 @@ public final class DisplayTopologyController: @unchecked Sendable {
             return
         }
         journal.virtualDisplayUUID = creation.uuid
+        journal.updatedAt = Date()
+        do { try store.save(journal) }
+        catch {
+            // Keep the known target in memory even if the durable store failed.
+            // Never proceed to confirmation or disable any physical display.
+            uncommittedRecovery = journal
+            if hasUsablePhysicalDisplay() { _ = driver.destroyVirtual(uuid: creation.uuid, now: Date()) }
+            state = .recoveryRequired
+            messageCode = .recoveryIncomplete
+            return
+        }
         guard creation.settingsApplied else {
             messageCode = .transactionFailed
             journal.phase = .creatingVirtual
@@ -442,7 +469,7 @@ public final class DisplayTopologyController: @unchecked Sendable {
             return
         }
 
-        guard waitForUsableDisplay(uuid: creation.uuid, timeout: 10) else {
+        guard waitForUsableDisplay(uuid: creation.uuid, timeout: virtualReadinessTimeout) else {
             messageCode = .virtualNotReady
             // Keep the object alive and retain physical screens. Do not
             // rapidly destroy a display that failed to settle.
@@ -455,9 +482,21 @@ public final class DisplayTopologyController: @unchecked Sendable {
             return
         }
         journal.virtualDisplayUUID = virtual.uuid
+        let readyAt = Date()
+        // Long creation may use up the initial lease while the serial helper
+        // cannot service heartbeats. Give the authenticated caller a fresh
+        // response window only when that lease actually elapsed.
+        if readyAt >= now, !lease.isFresh(now: readyAt) {
+            guard lease.renew(sessionID: session, generation: journal.generation, now: readyAt) else {
+                state = .recoveryRequired
+                messageCode = .uuSessionRequired
+                return
+            }
+            journal.remoteLeaseExpiresAt = readyAt.addingTimeInterval(DisplayRemoteLease.lifetime)
+        }
         journal.phase = .awaitingVirtualConfirmation
-        journal.confirmationDeadline = now.addingTimeInterval(30)
-        journal.updatedAt = Date()
+        journal.confirmationDeadline = readyAt.addingTimeInterval(30)
+        journal.updatedAt = readyAt
         do { try store.save(journal) }
         catch { state = .recoveryRequired; messageCode = .recoveryIncomplete; return }
         state = .awaitingVirtualConfirmation
@@ -478,6 +517,8 @@ public final class DisplayTopologyController: @unchecked Sendable {
             messageCode = .virtualNotReady
             return
         }
+        guard let expanded = expandingSnapshot(journal, now: now) else { return }
+        journal = expanded
         journal.virtualSelectionConfirmed = true
         journal.updatedAt = now
         do { try store.save(journal) }
@@ -625,14 +666,19 @@ public final class DisplayTopologyController: @unchecked Sendable {
             guard existing.generation == request.generation,
                   existing.policy == policy,
                   !existing.isComplete,
-                  existing.systemSessionID == DisplayRecoverySession.identifier else {
+                  existing.systemSessionID == DisplayRecoverySession.identifier,
+                  validateTransaction(request, journal: existing, now: now) else {
                 messageCode = .staleGeneration
                 return nil
             }
-            return existing
+            return expandingSnapshot(existing, now: now)
         }
         guard let generation = request.generation else { messageCode = .staleGeneration; return nil }
         var journal = DisplayRecoveryJournal(generation: generation, policy: policy, originalDisplays: snapshot(), now: now)
+        guard policy != .localPhysical || request.remoteSessionID == nil else {
+            messageCode = .uuSessionRequired
+            return nil
+        }
         controlHeartbeatAt = now
         if policy == .remoteVirtualOnly || policy == .remotePhysical || policy == .remoteVirtualWithPhysical {
             guard let session = request.remoteSessionID,
@@ -655,6 +701,28 @@ public final class DisplayTopologyController: @unchecked Sendable {
         }
         do { try store.save(journal); self.generation = generation; return journal }
         catch { messageCode = .recoveryIncomplete; return nil }
+    }
+
+    private func expandingSnapshot(_ journal: DisplayRecoveryJournal, now: Date) -> DisplayRecoveryJournal? {
+        // Snapshot every newly observed target before setMain/disable can
+        // touch it. Never replace the original state of an existing UUID.
+        var expanded = journal
+        let recorded = Set(journal.originalDisplays.map(\.uuid))
+        let additions = driver.displays().filter {
+            !recorded.contains($0.uuid) && $0.uuid != journal.virtualDisplayUUID
+        }
+        guard additions.allSatisfy({ $0.isUsable }),
+              expanded.originalDisplays.count + additions.count <= 32 else {
+            messageCode = .invalidTarget
+            return nil
+        }
+        if !additions.isEmpty {
+            expanded.originalDisplays += additions
+            expanded.updatedAt = now
+            do { try store.save(expanded) }
+            catch { state = .recoveryRequired; messageCode = .recoveryIncomplete; return nil }
+        }
+        return expanded
     }
 
     private func validateGeneration(_ proposed: UUID?, allowNew: Bool) -> Bool {
@@ -691,7 +759,40 @@ public final class DisplayTopologyController: @unchecked Sendable {
     }
 
     private func activeJournalGeneration() -> UUID? { loadJournal()?.generation }
-    private func loadJournal() -> DisplayRecoveryJournal? { try? store.load() }
+    private func loadJournal() -> DisplayRecoveryJournal? {
+        if let uncommittedRecovery { return uncommittedRecovery }
+        do {
+            let journal = try store.load()
+            journalReadFailed = false
+            return journal
+        } catch {
+            journalReadFailed = true
+            state = .recoveryRequired
+            messageCode = .recoveryIncomplete
+            return nil
+        }
+    }
+
+    private func validateTransaction(_ request: DisplayControlRequest, journal: DisplayRecoveryJournal, now: Date) -> Bool {
+        guard request.generation == journal.generation,
+              request.remoteSessionID == journal.remoteSessionID else {
+            messageCode = .staleGeneration
+            return false
+        }
+        if let session = journal.remoteSessionID {
+            guard lease.sessionID == session, lease.isFresh(now: now),
+                  journal.remoteLeaseExpiresAt.map({ now <= $0 }) == true else {
+                messageCode = .uuSessionRequired
+                return false
+            }
+        }
+        if request.command == .confirmVirtual, let target = request.targetUUID,
+           target != journal.virtualDisplayUUID {
+            messageCode = .invalidTarget
+            return false
+        }
+        return true
+    }
 
     /// Only an explicit user re-apply may forget the per-session override left
     /// by a confirmation timeout or an emergency release. The automatic UU rule
@@ -739,7 +840,6 @@ public final class DisplayTopologyController: @unchecked Sendable {
         do {
             guard var journal = try store.load(),
                   journal.disabledDisplayUUIDs.contains(targetUUID),
-                  journal.systemSessionID == DisplayRecoverySession.identifier,
                   let original = journal.originalDisplays.first(where: { $0.uuid == targetUUID }) else {
                 messageCode = .invalidTarget
                 return
@@ -775,12 +875,15 @@ public final class DisplayTopologyController: @unchecked Sendable {
     }
 
     private func restore(journal originalJournal: DisplayRecoveryJournal) -> Bool {
-        guard originalJournal.systemSessionID == DisplayRecoverySession.identifier else { return false }
         var journal = originalJournal
         journal.phase = .restoringDisplays
         journal.confirmationDeadline = nil
         journal.updatedAt = Date()
-        do { try store.save(journal) }
+        do {
+            try store.save(journal)
+            uncommittedRecovery = nil
+            journalReadFailed = false
+        }
         catch { messageCode = .recoveryIncomplete; return false }
 
         // A prior attempt may have successfully re-enabled a display, removed
@@ -788,20 +891,13 @@ public final class DisplayTopologyController: @unchecked Sendable {
         // or layout. If that display disappeared again, the next retry must
         // still rediscover it from the original topology.
         let online = driver.displays()
-        let replacedIDs = Set(journal.originalDisplays.compactMap { original in
-            online.contains(where: { $0.displayID == original.displayID && $0.uuid != original.uuid })
-                ? original.displayID : nil
-        })
-        let mayRetryMissingOriginals = originalJournal.phase == .restoringDisplays
         let missingOriginals = journal.originalDisplays.filter { original in
-            mayRetryMissingOriginals
-                && original.isActive
-                && !original.isVirtual
-                && !replacedIDs.contains(original.displayID)
+            original.isActive && !original.isVirtual
                 && !online.contains(where: { $0.uuid == original.uuid && $0.isUsable })
         }
         let toRestore = Set(journal.disabledDisplayUUIDs + journal.pendingRestoreUUIDs + missingOriginals.map(\.uuid))
-        for uuid in toRestore {
+        var pendingFailure = false
+        for uuid in toRestore.sorted() {
             guard let original = journal.originalDisplays.first(where: { $0.uuid == uuid }) else {
                 messageCode = .recoveryIncomplete
                 return false
@@ -813,7 +909,10 @@ public final class DisplayTopologyController: @unchecked Sendable {
                 do { try store.save(journal) }
                 catch { messageCode = .recoveryIncomplete; return false }
             }
-            guard restoreDisplay(original, journal: journal) else { messageCode = .recoveryIncomplete; return false }
+            guard restoreDisplay(original, journal: journal) else {
+                pendingFailure = true
+                continue
+            }
             journal.pendingRestoreUUIDs.removeAll { $0 == uuid }
             journal.disabledDisplayUUIDs.removeAll { $0 == uuid }
             journal.updatedAt = Date()
@@ -821,22 +920,26 @@ public final class DisplayTopologyController: @unchecked Sendable {
             catch { messageCode = .recoveryIncomplete; return false }
         }
 
+        let layoutRestored = restoreOriginalMainAndLayout(journal: journal)
+        guard !pendingFailure, layoutRestored,
+              journal.originalDisplays.allSatisfy({ identityCanCrossSession($0.uuid, journal: journal) }) else {
+            messageCode = .recoveryIncomplete
+            return false
+        }
         if let virtualUUID = journal.virtualDisplayUUID {
             guard hasUsablePhysicalDisplay(), driver.destroyVirtual(uuid: virtualUUID, now: Date()) else {
-                messageCode = .recoveryIncomplete
+                let orphan = driver.displays().contains { $0.uuid == virtualUUID && !$0.isOwned }
+                messageCode = orphan ? .orphanVirtualDisplay : .recoveryIncomplete
                 return false
             }
         }
         if let virtualUUID = journal.virtualDisplayUUID,
-           snapshot().contains(where: { $0.uuid == virtualUUID && $0.isUsable }) {
+           snapshot().contains(where: { $0.uuid == virtualUUID }) {
             messageCode = .recoveryIncomplete
             return false
         }
 
-        guard restoreOriginalMainAndLayout(journal: journal) else {
-            messageCode = .recoveryIncomplete
-            return false
-        }
+        journal.systemSessionID = DisplayRecoverySession.identifier
         journal.phase = .complete
         journal.virtualDisplayUUID = nil
         journal.updatedAt = Date()
@@ -872,7 +975,6 @@ public final class DisplayTopologyController: @unchecked Sendable {
         let expected = journal.originalDisplays.filter(\.isActive)
         let identitiesMatch = expected.allSatisfy { original in
             current.contains(where: { $0.uuid == original.uuid && $0.isUsable })
-                && !current.contains(where: { $0.displayID == original.displayID && $0.uuid != original.uuid })
         }
         let mainMatches = journal.originalMainDisplayUUID.map { mainUUID in
             current.contains(where: { $0.uuid == mainUUID && $0.isMain && $0.isUsable })
@@ -907,12 +1009,13 @@ public final class DisplayTopologyController: @unchecked Sendable {
     }
 
     private func restoreDisplay(_ original: DisplayControlDisplay, journal: DisplayRecoveryJournal) -> Bool {
-        guard journal.systemSessionID == DisplayRecoverySession.identifier else { return false }
-        let online = snapshot()
+        guard identityCanCrossSession(original.uuid, journal: journal) else { return false }
+        let online = driver.displays()
         if let existing = online.first(where: { $0.uuid == original.uuid }) {
             guard original.isActive else { return true }
             if existing.isUsable { return true }
-            guard driver.setEnabled(original, enabled: true) else { return false }
+            // Resolve the current numeric ID from the stable UUID.
+            guard driver.setEnabled(existing, enabled: true) else { return false }
             for _ in 0..<20 {
                 Thread.sleep(forTimeInterval: 0.25)
                 if let restored = snapshot().first(where: { $0.uuid == original.uuid }) {
@@ -927,6 +1030,9 @@ public final class DisplayTopologyController: @unchecked Sendable {
             return false
         }
         guard original.isActive else { return true }
+        // A numeric display ID from a previous login may belong to a different
+        // device. An absent UUID must wait for reconnection in that session.
+        guard journal.systemSessionID == DisplayRecoverySession.identifier else { return false }
         let configured = driver.setEnabled(original, enabled: true)
         guard configured else { return false }
         for _ in 0..<20 {
@@ -942,14 +1048,24 @@ public final class DisplayTopologyController: @unchecked Sendable {
     }
 
     private func restoreOriginalMainAndLayout(journal: DisplayRecoveryJournal) -> Bool {
-        guard let mainUUID = journal.originalMainDisplayUUID,
-              let main = snapshot().first(where: { $0.uuid == mainUUID && $0.isUsable }) else {
-            return journal.originalMainDisplayUUID == nil
+        let current = driver.displays()
+        let usableOriginals = journal.originalDisplays.filter { original in
+            identityCanCrossSession(original.uuid, journal: journal) && current.contains { $0.uuid == original.uuid && $0.isUsable }
         }
-        guard !journal.disabledDisplayUUIDs.contains(mainUUID) else { return false }
-        guard driver.setMain(main),
-              snapshot().contains(where: { $0.uuid == mainUUID && $0.isMain && $0.isUsable }) else { return false }
-        return driver.restoreLayout(journal.originalDisplays)
+        var mainRestored = journal.originalMainDisplayUUID == nil
+        if let mainUUID = journal.originalMainDisplayUUID,
+           identityCanCrossSession(mainUUID, journal: journal),
+           let main = current.first(where: { $0.uuid == mainUUID && $0.isUsable }) {
+            mainRestored = (main.isMain || driver.setMain(main))
+                && driver.displays().contains { $0.uuid == mainUUID && $0.isMain && $0.isUsable }
+        }
+        let layoutRestored = driver.restoreLayout(usableOriginals)
+        return mainRestored && layoutRestored
+    }
+
+    private func identityCanCrossSession(_ uuid: String, journal: DisplayRecoveryJournal) -> Bool {
+        // The bridge's numeric-ID fallback is explicitly session-local.
+        journal.systemSessionID == DisplayRecoverySession.identifier || !uuid.hasPrefix("cg-")
     }
 
     private func restoreAfterFailure() {
@@ -1122,14 +1238,17 @@ public final class MacDisplayTopologyDriver: DisplayTopologyDriving, @unchecked 
         lock.lock()
         defer { lock.unlock() }
         guard let handle = virtualDisplays[uuid] else {
-            return releasedVirtualDisplays.contains(uuid) && !displays().contains(where: { $0.uuid == uuid && $0.isUsable })
+            // After a helper restart an absent UUID is already released. A
+            // still-present orphan has no owned handle: retain recovery and
+            // report failure rather than pretending it was destroyed.
+            return !displays().contains(where: { $0.uuid == uuid })
         }
         guard now.timeIntervalSince(handle.createdAt) >= 2.5 else { return false }
         guard displays().contains(where: { !$0.isVirtual && $0.isUsable }) else { return false }
         MDVirtualDisplayRelease(handle.token)
         virtualDisplays.removeValue(forKey: uuid)
         releasedVirtualDisplays.insert(uuid)
-        return !displays().contains(where: { $0.uuid == uuid && $0.isUsable })
+        return !displays().contains(where: { $0.uuid == uuid })
     }
 
     private func display(id: CGDirectDisplayID) -> DisplayControlDisplay? {
