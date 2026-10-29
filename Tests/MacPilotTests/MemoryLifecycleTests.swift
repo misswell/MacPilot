@@ -17,6 +17,13 @@ import Testing
 @testable import MacPilot
 
 struct MainWindowContentStateTests {
+    @MainActor @Test func windowOpenRequestSurvivesTheViewThatInstalledIt() {
+        let opener = MainWindowOpener()
+        var opens = 0
+        opener.install { opens += 1 }
+        NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
+        #expect(opens == 1)
+    }
     /// 登录启动不该带着一整份设置界面在后台待命。
     @Test func startsUnloadedWhenLaunchedAtLogin() {
         let state = MainWindowContentState(loadedAtLaunch: false)
