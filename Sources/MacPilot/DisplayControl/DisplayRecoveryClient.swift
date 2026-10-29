@@ -6,26 +6,70 @@ protocol DisplayRecoverySending: AnyObject {
     func send(_ request: DisplayControlRequest) async throws -> DisplayControlResponse
 }
 
-enum DisplayRecoveryClientError: Error { case unavailable, invalidResponse, timeout }
+enum DisplayRecoveryClientError: Error, Equatable { case unavailable, invalidResponse, timeout }
 
 @MainActor
 final class DisplayRecoveryClient: DisplayRecoverySending {
     private let connectionFactory: @MainActor () -> NSXPCConnection
-    private let timeout: Duration
+    private let timeout: Duration?
 
-    init(machServiceName: String = DisplayRecoveryService.serviceName, timeout: Duration = .seconds(4)) {
+    init(machServiceName: String = DisplayRecoveryService.serviceName, timeout: Duration? = nil) {
         connectionFactory = { NSXPCConnection(machServiceName: machServiceName, options: []) }
         self.timeout = timeout
     }
 
-    init(connectionFactory: @escaping @MainActor () -> NSXPCConnection, timeout: Duration = .seconds(4)) {
+    init(connectionFactory: @escaping @MainActor () -> NSXPCConnection, timeout: Duration? = nil) {
         self.connectionFactory = connectionFactory
         self.timeout = timeout
     }
 
     func send(_ request: DisplayControlRequest) async throws -> DisplayControlResponse {
+        let request = request.isMutation ? request.identifyingOperation(request.operationID ?? UUID()) : request
+        let deadline = ContinuousClock.now + .seconds(90)
+        let initial: DisplayControlResponse
+        do { initial = try await exchange(request) }
+        catch {
+            guard request.isMutation, let id = request.operationID,
+                  (error as? DisplayRecoveryClientError) == .timeout else { throw error }
+            // An XPC timeout does not cancel the helper's operation. Query the
+            // same durable identity rather than retrying the mutation.
+            return try await poll(id, deadline: deadline)
+        }
+        // Old helpers omit the optional fields and keep their synchronous reply.
+        guard initial.operationStatus == .accepted, let id = request.operationID else { return initial }
+        return try await poll(id, deadline: deadline)
+    }
+
+    private func poll(_ id: UUID, deadline: ContinuousClock.Instant) async throws -> DisplayControlResponse {
+        while ContinuousClock.now < deadline {
+            try Task.checkCancellation()
+            do {
+                let response = try await exchange(.init(command: .status, operationID: id))
+                guard response.operationID == id || response.operationStatus == nil else {
+                    throw DisplayRecoveryClientError.invalidResponse
+                }
+                if response.operationStatus != .accepted { return response }
+            } catch is CancellationError { throw CancellationError() }
+            catch {
+                if (error as? DisplayRecoveryClientError) == .invalidResponse { throw error }
+            }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        throw DisplayRecoveryClientError.timeout
+    }
+
+    static func timeout(for command: DisplayControlCommand) -> Duration {
+        switch command {
+        case .status, .heartbeat: .seconds(4)
+        case .prepareVirtual: .seconds(30)
+        case .restore: .seconds(60)
+        case .disable, .keepOnly, .confirmVirtual, .confirmChange: .seconds(15)
+        }
+    }
+
+    private func exchange(_ request: DisplayControlRequest) async throws -> DisplayControlResponse {
         let data = try JSONEncoder().encode(request)
-        let timeout = timeout
+        let timeout = timeout ?? Self.timeout(for: request.command)
         return try await withCheckedThrowingContinuation { continuation in
             let connection = connectionFactory()
             connection.remoteObjectInterface = NSXPCInterface(with: DisplayRecoveryXPC.self)
