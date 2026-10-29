@@ -671,6 +671,12 @@ struct QuickSearchQueryConcurrencyTests {
         #expect(harness.model.fileResults.map(\.title) == ["old-report.pdf"])
 
         harness.model.updateQuery("report final")
+        // Old rows disappear before the new debounce fires, and cannot be selected.
+        #expect(harness.model.fileResults.isEmpty)
+        #expect(!harness.model.results.contains { $0.title == "old-report.pdf" })
+        #expect(!harness.fileQuery.hasActiveQuery)
+        harness.fileQuery.deliver(fromStart: 0, .results(hits: [fileHit("/Users/me/Desktop/late.pdf")], isFinal: true, issue: nil))
+        #expect(harness.model.fileResults.isEmpty)
         harness.clock.fireAll()
         let newerGeneration = harness.fileQuery.generations[1]
         #expect(newerGeneration != olderGeneration)
@@ -720,6 +726,10 @@ struct QuickSearchQueryConcurrencyTests {
         #expect(harness.model.fileResults.isEmpty)
         #expect(harness.model.searchPhase == .idle)
         #expect(harness.clock.pendingCount == 0)
+        let applications = harness.model.applicationResults.map(\.title)
+        harness.fileQuery.deliver(fromStart: 0, .results(hits: [fileHit("/Users/me/Desktop/late.txt")], isFinal: true, issue: nil))
+        #expect(harness.model.fileResults.isEmpty)
+        #expect(harness.model.applicationResults.map(\.title) == applications)
     }
 
     @Test func singleCharacterQueriesNeverReachSpotlight() async {
@@ -2825,6 +2835,25 @@ struct QuickSearchFavoritesModelTests {
         #expect(harness.model.results.map(\.title) == ["Safari", "计算器"])
         #expect(harness.model.isFavorite(harness.model.results[0]))
         #expect(!harness.model.isFavorite(harness.model.results[1]))
+    }
+
+    @Test func openingEmptyQueryDoesNotAddNewRunningApplicationsAsRows() async {
+        let harness = Harness()
+        await harness.enable(entries: sampleApps)
+        defer { harness.model.shutdown() }
+        harness.model.usage.recordLaunch(of: sampleApps[1])
+        harness.model.toggleFavorite(QuickSearchResult(application: sampleApps[0]))
+        // This app appears only after the initial index has settled.
+        harness.scan.running = [QuickSearchRunningApplication(
+            url: URL(fileURLWithPath: "/Users/me/Downloads/Beta.app"),
+            bundleIdentifier: "com.test.beta",
+            name: "Beta App"
+        )]
+
+        harness.model.openPanel()
+
+        #expect(harness.model.applicationResults.map(\.title) == ["Safari", "计算器"])
+        #expect(harness.inventory.entries.contains { $0.name == "Beta App" })
     }
 
     @Test func emptyQueryShowsFavoritesRecentsAndThenTheRestOfTheIndexUpToFifty() async {

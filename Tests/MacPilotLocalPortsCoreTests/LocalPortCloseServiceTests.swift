@@ -16,7 +16,7 @@ struct LocalPortCloseServiceTests {
             pid: nil,
             currentUID: uid,
             currentPID: 99,
-            startTime: { _ in "start" }
+            identity: { pid in Self.identity(pid: pid, uid: uid) }
         )
         #expect(plan.otherPorts == [3001])
         #expect(plan.peerPIDs.isEmpty)
@@ -28,7 +28,7 @@ struct LocalPortCloseServiceTests {
                 pid: nil,
                 currentUID: uid,
                 currentPID: 99,
-                startTime: { _ in "start" }
+                identity: { pid in Self.identity(pid: pid, uid: uid) }
             )
         }
     }
@@ -65,7 +65,7 @@ struct LocalPortCloseServiceTests {
             pid: nil,
             currentUID: uid,
             currentPID: 99,
-            startTime: { _ in "start" }
+            identity: { pid in Self.identity(pid: pid, uid: uid, path: app.process.executablePath!) }
         )
         #expect(plan?.executablePath == "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
     }
@@ -103,7 +103,7 @@ struct LocalPortCloseServiceTests {
             pid: 42,
             uid: uid,
             executablePath: original.process.executablePath,
-            processStartTime: "start-one",
+            processIdentity: Self.identity(uid: uid),
             activity: original,
             otherPorts: [],
             peerPIDs: []
@@ -113,7 +113,7 @@ struct LocalPortCloseServiceTests {
             try LocalPortCloseService.verify(
                 plan: plan,
                 activities: [makeActivity(pid: 42, path: "/opt/local/bin/python", uid: uid)],
-                freshStartTime: "start-one",
+                freshIdentity: Self.identity(uid: uid),
                 currentUID: uid,
                 currentPID: 99
             )
@@ -122,7 +122,7 @@ struct LocalPortCloseServiceTests {
             try LocalPortCloseService.verify(
                 plan: plan,
                 activities: [original, makeActivity(pid: 43, uid: uid)],
-                freshStartTime: "start-one",
+                freshIdentity: Self.identity(uid: uid),
                 currentUID: uid,
                 currentPID: 99
             )
@@ -132,7 +132,7 @@ struct LocalPortCloseServiceTests {
             try LocalPortCloseService.verify(
                 plan: plan,
                 activities: [makeActivity(pid: 42, uid: uid + 1)],
-                freshStartTime: "start-one",
+                freshIdentity: Self.identity(uid: uid),
                 currentUID: uid,
                 currentPID: 99
             )
@@ -141,7 +141,7 @@ struct LocalPortCloseServiceTests {
             try LocalPortCloseService.verify(
                 plan: plan,
                 activities: [original],
-                freshStartTime: "start-two",
+                freshIdentity: Self.identity(uid: uid, microseconds: 2),
                 currentUID: uid,
                 currentPID: 99
             )
@@ -156,7 +156,7 @@ struct LocalPortCloseServiceTests {
             pid: 42,
             uid: uid,
             executablePath: activity.process.executablePath,
-            processStartTime: "start",
+            processIdentity: Self.identity(uid: uid),
             activity: activity,
             otherPorts: [],
             peerPIDs: []
@@ -165,7 +165,7 @@ struct LocalPortCloseServiceTests {
         let environment = LocalPortCloseEnvironment(
             scan: { LocalPortSnapshot(activities: [activity]) },
             listenerScan: { [] },
-            startTime: { _ in "start" },
+            identity: { pid in Self.identity(pid: pid, uid: uid) },
             signal: { _, signal in recorder.record(signal); return 0 },
             sleep: { _ in },
             currentUID: { uid },
@@ -187,7 +187,7 @@ struct LocalPortCloseServiceTests {
             pid: 42,
             uid: uid,
             executablePath: activity.process.executablePath,
-            processStartTime: "start",
+            processIdentity: Self.identity(uid: uid),
             activity: activity,
             otherPorts: [],
             peerPIDs: []
@@ -196,7 +196,7 @@ struct LocalPortCloseServiceTests {
         let environment = LocalPortCloseEnvironment(
             scan: { LocalPortSnapshot(activities: [activity]) },
             listenerScan: { [] },
-            startTime: { _ in "start" },
+            identity: { pid in Self.identity(pid: pid, uid: uid) },
             signal: { _, signal in recorder.record(signal); return 0 },
             sleep: { _ in },
             currentUID: { uid },
@@ -222,7 +222,7 @@ struct LocalPortCloseServiceTests {
             pid: 42,
             uid: uid,
             executablePath: activity.process.executablePath,
-            processStartTime: "start",
+            processIdentity: Self.identity(uid: uid),
             activity: activity,
             otherPorts: [],
             peerPIDs: []
@@ -230,7 +230,7 @@ struct LocalPortCloseServiceTests {
         let environment = LocalPortCloseEnvironment(
             scan: { LocalPortSnapshot(activities: [activity]) },
             listenerScan: { [] },
-            startTime: { _ in "start" },
+            identity: { pid in Self.identity(pid: pid, uid: uid) },
             signal: { _, _ in EPERM },
             sleep: { _ in },
             currentUID: { uid },
@@ -258,7 +258,7 @@ struct LocalPortCloseServiceTests {
             pid: 42,
             uid: uid,
             executablePath: activity.process.executablePath,
-            processStartTime: "start",
+            processIdentity: Self.identity(uid: uid),
             activity: activity,
             otherPorts: [],
             peerPIDs: []
@@ -267,7 +267,7 @@ struct LocalPortCloseServiceTests {
         let environment = LocalPortCloseEnvironment(
             scan: { LocalPortSnapshot(activities: [activity]) },
             listenerScan: { [] },
-            startTime: { _ in nil },
+            identity: { _ in nil },
             signal: { _, signal in recorder.record(signal); return 0 },
             sleep: { _ in },
             currentUID: { uid },
@@ -278,6 +278,74 @@ struct LocalPortCloseServiceTests {
             try await LocalPortCloseService.execute(plan, environment: environment)
         }
         #expect(recorder.value == nil)
+    }
+
+    @Test func bothSignalsRefuseReusedPIDsIncompleteIdentityAndNewOwners() async throws {
+        let uid = Int32(getuid())
+        let activity = makeActivity(pid: 42, uid: uid)
+        let plan = try LocalPortCloseService.makePlan(
+            activities: [activity], port: 3000, pid: nil, currentUID: uid, currentPID: 99,
+            identity: { _ in Self.identity(uid: uid) }
+        )
+        for force in [false, true] {
+            for scenario in 0..<4 {
+                let recorder = SignalRecorder()
+                let activities = scenario == 2 ? [activity, makeActivity(pid: 43, uid: uid)] : (scenario == 3 ? [] : [activity])
+                let environment = LocalPortCloseEnvironment(
+                    scan: { LocalPortSnapshot(activities: activities) }, listenerScan: { [] },
+                    identity: { _ in scenario == 1 ? nil : Self.identity(uid: uid, microseconds: scenario == 0 ? 2 : 1) },
+                    signal: { _, signal in recorder.record(signal); return 0 }, sleep: { _ in },
+                    currentUID: { uid }, currentPID: { 99 }
+                )
+                await #expect(throws: LocalPortCloseError.self) {
+                    try await LocalPortCloseService.execute(plan, forceKill: force, environment: environment)
+                }
+                #expect(recorder.value == nil)
+            }
+        }
+    }
+
+    @Test func timeoutDoesNotEscalateAndLaterForceRequestRevalidates() async throws {
+        let uid = Int32(getuid())
+        let activity = makeActivity(pid: 42, uid: uid)
+        let plan = try LocalPortCloseService.makePlan(
+            activities: [activity], port: 3000, pid: nil, currentUID: uid, currentPID: 99,
+            identity: { _ in Self.identity(uid: uid) }
+        )
+        let recorder = SignalRecorder()
+        let termEnvironment = LocalPortCloseEnvironment(
+            scan: { LocalPortSnapshot(activities: [activity]) }, listenerScan: { [activity.listener] },
+            identity: { _ in Self.identity(uid: uid) },
+            signal: { _, signal in recorder.record(signal); return 0 }, sleep: { _ in },
+            currentUID: { uid }, currentPID: { 99 }
+        )
+        let timedOut = try await LocalPortCloseService.execute(plan, environment: termEnvironment)
+        #expect(!timedOut.targetStoppedListening)
+        #expect(recorder.value == Int32(SIGTERM))
+        let forceEnvironment = LocalPortCloseEnvironment(
+            scan: { LocalPortSnapshot(activities: [activity]) }, listenerScan: { [] },
+            identity: { _ in Self.identity(uid: uid, microseconds: 2) },
+            signal: { _, signal in recorder.record(signal); return 0 }, sleep: { _ in },
+            currentUID: { uid }, currentPID: { 99 }
+        )
+        await #expect(throws: LocalPortCloseError.identityChanged(pid: 42)) {
+            try await LocalPortCloseService.execute(plan, forceKill: true, environment: forceEnvironment)
+        }
+        #expect(recorder.value == Int32(SIGTERM))
+    }
+
+    @Test func preparationRefusesMissingExecutablePath() {
+        let uid = Int32(getuid())
+        #expect(throws: LocalPortCloseError.missingStartTime(pid: 42)) {
+            try LocalPortCloseService.makePlan(
+                activities: [makeActivity(pid: 42, path: nil, uid: uid)], port: 3000, pid: nil,
+                currentUID: uid, currentPID: 99, identity: { _ in Self.identity(uid: uid) }
+            )
+        }
+    }
+
+    private static func identity(pid: Int32 = 42, uid: Int32, microseconds: UInt64 = 1, path: String = CommandLine.arguments.first ?? "/usr/bin/true") -> LocalPortProcessIdentity {
+        LocalPortProcessIdentity(pid: pid, uid: uid, startSeconds: 100, startMicroseconds: microseconds, executablePath: path)
     }
 
     private func makeActivity(

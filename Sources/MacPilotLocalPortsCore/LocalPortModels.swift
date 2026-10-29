@@ -263,12 +263,34 @@ public enum LocalPortCloseError: Error, Sendable, Equatable {
     case rescanFailed
 }
 
+/// Kernel-derived identity; start microseconds distinguish PID reuse within one second.
+public struct LocalPortProcessIdentity: Sendable, Equatable {
+    public let pid: Int32
+    public let uid: Int32
+    public let startSeconds: UInt64
+    public let startMicroseconds: UInt64
+    public let executablePath: String
+
+    public init(pid: Int32, uid: Int32, startSeconds: UInt64, startMicroseconds: UInt64, executablePath: String) {
+        self.pid = pid
+        self.uid = uid
+        self.startSeconds = startSeconds
+        self.startMicroseconds = startMicroseconds
+        self.executablePath = executablePath
+    }
+
+    public var isComplete: Bool {
+        pid > 1 && uid >= 0 && startSeconds > 0 && startMicroseconds < 1_000_000
+            && executablePath.hasPrefix("/")
+    }
+}
+
 public struct LocalPortClosePlan: Sendable, Equatable, Identifiable {
     public let port: Int
     public let pid: Int32
     public let uid: Int32
     public let executablePath: String?
-    public let processStartTime: String
+    public let processIdentity: LocalPortProcessIdentity
     public let activity: LocalPortActivity
     public let otherPorts: [Int]
     public let peerPIDs: [Int32]
@@ -278,7 +300,7 @@ public struct LocalPortClosePlan: Sendable, Equatable, Identifiable {
         pid: Int32,
         uid: Int32,
         executablePath: String?,
-        processStartTime: String,
+        processIdentity: LocalPortProcessIdentity,
         activity: LocalPortActivity,
         otherPorts: [Int],
         peerPIDs: [Int32]
@@ -287,7 +309,7 @@ public struct LocalPortClosePlan: Sendable, Equatable, Identifiable {
         self.pid = pid
         self.uid = uid
         self.executablePath = executablePath
-        self.processStartTime = processStartTime
+        self.processIdentity = processIdentity
         self.activity = activity
         self.otherPorts = otherPorts
         self.peerPIDs = peerPIDs
