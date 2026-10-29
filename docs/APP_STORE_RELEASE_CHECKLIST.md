@@ -417,3 +417,15 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - 外层 profile CMS 与 `DER-Encoded-Profile` 内层 CMS 均通过 Apple Root 验证；已认证的内层 DER 确认 `ProfileDistributionType=STORE`。分别翻转外层和内层 CMS 一字节，二者验证都失败。
 - ASC Build ID `7caed7d9-5d96-4cc1-a882-07b033c7092a`，`processingState=VALID`、`internalBuildState=IN_BETA_TESTING`；现有内部组「内部」`dbf86047-0ba9-4944-bc39-7c78e92b0cd8` 为 `hasAccessToAllBuilds=true`，build relationship 已包含构建 51。en-US 与 zh-Hans What to Test 已写入并读回。
 - 仅分发至现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未执行 `asc metadata push`。真实 iPhone 后台/锁屏行为仍待用户验收；`VALID` 不等于 Apple 审核批准。
+
+## 2026-10-29 / 1.2.5 / build 52
+
+- build 51 源码提交 `b3b8ee9` 的稳定 CI 为 98/98；随后仅文档变化的主线提交 `d2e8c5c` 上，两个 `RemoteReconnectLifecycleTests` 用例在 mock Mac 已完成配对、手机仍为 `.connecting` 时超时。[该 run](https://github.com/misswell/MacPilot/actions/runs/40872132546) 暴露出本地密钥持久化与 15 秒对端握手时限耦合。build 52 将已验证配对密钥的本地持久化分离，设独立 60 秒上限；网络生命周期测试注入内存密钥库但保留真实 TCP、加密与重连，真实 Keychain I/O 调度和撤销继续由 store 测试覆盖。build 51 的 98/98 结果与有效分发记录保留。
+- 代码提交 `f775f078a5fd3989337ef20ef30657bf7d6d3437`；稳定 Xcode 26.3 CI 在 iPhone 16 Pro / iOS 26.2（23C54）上通过 **100/100** 测试，并完成稳定 SDK Release unsigned archive。[CI run](https://github.com/misswell/MacPilot/actions/runs/40875694300)。
+- 本机 Xcode 27.0 仅用于快速 `build-for-testing` 与 Release 编译检查，均成功；未使用该 beta SDK 签名或上传。稳定 Xcode 26.6（`DTXcodeBuild=17F113`）手动导出 CI archive，IPA 元数据为 `DTXcodeBuild=17C529`、`DTSDKName=iphoneos26.2` / `DTSDKBuild=23C57`。
+- 最终 IPA：`/Users/guofeng/Downloads/PilotNest-1.2.5-52/PilotNest.ipa`，2,852,536 字节，SHA-256 `90bfaac2d91edcea64d9ad37dd78867bad52ba5f385b74f8b494c5f8e914e687`；`com.misswell.macpilot.remote`，`1.2.5 (52)`，Team `U8U443D7ZL`，最低 iOS 17.0，`ITSAppUsesNonExemptEncryption=false`。
+- `codesign --verify --deep --strict` 通过；签名为 `Apple Distribution: Guofeng Liu (U8U443D7ZL)`。Signer leaf DER SHA-256 `62e7580e4e86da3c0c5a015e89f2074bb8439ecc34148575ed3d88499a233704`，与唯一 `DeveloperCertificates` 项相同；app entitlements 均与 profile 授权相符。
+- Embedded profile UUID `df12e579-3dec-4e63-b2df-86c5e2d37281`，有效至 2027-07-20；Team / application-identifier 正确，`get-task-allow=false`、`beta-reports-active=true`，无设备白名单及企业分发标记。
+- 外层 profile CMS 与 `DER-Encoded-Profile` 内层 CMS 均经 Apple Root 验证；已认证的内层 DER 确认 `ProfileDistributionType=STORE`。分别翻转外层和内层 CMS 一字节，二者验证都失败。
+- ASC Build ID `1a4375b7-3b0e-47d6-aa01-fa4b3f8def5d`，`processingState=VALID`、`internalBuildState=IN_BETA_TESTING`；现有内部组「内部」`dbf86047-0ba9-4944-bc39-7c78e92b0cd8` 为 `hasAccessToAllBuilds=true`，build relationship 已包含构建 52。en-US 与 zh-Hans What to Test 已写入并读回。
+- 仅分发至现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未执行 `asc metadata push`。真实 iPhone 后台/锁屏行为仍待用户验收；`VALID` 不等于 Apple 审核批准。
