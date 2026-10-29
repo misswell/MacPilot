@@ -405,3 +405,15 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - 未提交 App Store 审核、未推外部 Beta 审核、未新增测试员
 - build 49 未挂到 1.2.5 版本对象上、未执行 `asc metadata push`
 - `VALID` 不等于 Apple 已批准
+
+## 2026-10-29 / 1.2.5 / build 51
+
+- 内容：Keychain 读取移出主线程并恢复重连生命周期；唯一可见的已配对 Mac 自动切换等待 3 秒；重连提示一致。代码提交 `b3b8ee9984abc6822f0145e9f0437d3dd2874614`。
+- 本机 iOS Simulator 因 `deviceservice.lockdown` 无法执行完整测试；稳定 Xcode 26.3 CI 在 iPhone 16 Pro / iOS 26.2 上通过 **98/98** 测试，并以 `-warnings-as-errors` 完成 Release unsigned archive。[CI run](https://github.com/misswell/MacPilot/actions/runs/40869935837)。
+- 旧 build 50 使用 Xcode 27.0 / iOS 27 SDK，ASC upload ID `489dd787-4074-4421-baab-757a97fff9be` 以 `90534` 拒绝（不支持的 Xcode/SDK）；该包不可分发。稳定 Xcode 26.3 archive 元数据为 `DTXcodeBuild=17C529`、`DTSDKName=iphoneos26.2`，本机 Xcode 26.6 完成手动 App Store 导出；自动导出因 Developer Program License Agreement 暂不可用而失败，仓库签名配置未改。
+- 最终 IPA：`/Users/guofeng/Downloads/PilotNest-1.2.5-51/PilotNest.ipa`，2,849,670 字节，SHA-256 `677322cbdcddcaf6bf4723073623fc41a7d2025c9404941373a8f7410677e512`；`com.misswell.macpilot.remote`，`1.2.5 (51)`，Team `U8U443D7ZL`，最低 iOS 17.0，`ITSAppUsesNonExemptEncryption=false`。
+- `codesign --verify --deep --strict` 通过；签名为 `Apple Distribution: Guofeng Liu (U8U443D7ZL)`。Signer leaf DER SHA-256 `62e7580e4e86da3c0c5a015e89f2074bb8439ecc34148575ed3d88499a233704`，与唯一 `DeveloperCertificates` 项相同。
+- Embedded profile UUID `df12e579-3dec-4e63-b2df-86c5e2d37281`，有效至 2027-07-20；Team / application-identifier 正确，`get-task-allow=false`、`beta-reports-active=true`，无设备白名单及企业分发标记，所有 app entitlements 均获 profile 授权。
+- 外层 profile CMS 与 `DER-Encoded-Profile` 内层 CMS 均通过 Apple Root 验证；已认证的内层 DER 确认 `ProfileDistributionType=STORE`。分别翻转外层和内层 CMS 一字节，二者验证都失败。
+- ASC Build ID `7caed7d9-5d96-4cc1-a882-07b033c7092a`，`processingState=VALID`、`internalBuildState=IN_BETA_TESTING`；现有内部组「内部」`dbf86047-0ba9-4944-bc39-7c78e92b0cd8` 为 `hasAccessToAllBuilds=true`，build relationship 已包含构建 51。en-US 与 zh-Hans What to Test 已写入并读回。
+- 仅分发至现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未执行 `asc metadata push`。真实 iPhone 后台/锁屏行为仍待用户验收；`VALID` 不等于 Apple 审核批准。
