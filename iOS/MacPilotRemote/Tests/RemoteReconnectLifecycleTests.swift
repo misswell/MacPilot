@@ -236,8 +236,6 @@ struct RemoteReconnectLifecycleTests {
         try await server.start()
         defer { server.stop() }
 
-        RemoteKeychain.deletePairingKey(for: server.deviceID.uuidString)
-        defer { RemoteKeychain.deletePairingKey(for: server.deviceID.uuidString) }
 
         store.upsert(PairedMac(
             id: server.deviceID.uuidString,
@@ -249,7 +247,9 @@ struct RemoteReconnectLifecycleTests {
         ))
         store.preferredMacID = server.deviceID.uuidString
 
-        let model = RemoteAppModel(store: store)
+        let model = RemoteAppModel(store: store, pairingKeys: RemotePairingKeyStore(
+            load: { [:] }, save: { _, _ in true }, remove: { _ in true }
+        ))
         await model.start()
 
         // First connect pairs against the mock without any user interaction.
@@ -272,8 +272,9 @@ struct RemoteReconnectLifecycleTests {
         let server = MockMacServer()
         try await server.start()
         defer { server.stop() }
-        defer { RemoteKeychain.deletePairingKey(for: server.deviceID.uuidString) }
-        let model = RemoteAppModel(store: store)
+        let model = RemoteAppModel(store: store, pairingKeys: RemotePairingKeyStore(
+            load: { [:] }, save: { _, _ in true }, remove: { _ in true }
+        ))
         await model.start()
         let address = try #require(ManualMacAddress(host: "localhost", port: String(server.port)))
         model.connect(to: address)

@@ -77,22 +77,38 @@ final class RemoteConnectionManager {
 
     private var pingTask: Task<Void, Never>?
     private var pairConfirmationTask: Task<Void, Never>?
+    private var pairingSaveTimeoutTask: Task<Void, Never>?
     private var didReportDisconnect = false
     private var lifecycleID = UUID()
     private var connectStartedAt: Date?
     private(set) var transportReadyAt: Date?
     private let credentialsAreReady: @MainActor () -> Bool
     private let prepareCredentials: @MainActor () async -> Bool
+    private let pairingKeys: RemotePairingKeyStore
+    private let pairingSaveTimeout: Duration
 
     init(
-        credentialsAreReady: @escaping @MainActor () -> Bool = { RemoteKeychain.isPrepared },
-        prepareCredentials: @escaping @MainActor () async -> Bool = { await RemoteKeychain.prepare() }
+        pairingKeys: RemotePairingKeyStore = RemoteKeychain.store,
+        credentialsAreReady: (@MainActor () -> Bool)? = nil,
+        prepareCredentials: (@MainActor () async -> Bool)? = nil,
+        pairingSaveTimeout: Duration = .seconds(60)
     ) {
-        self.credentialsAreReady = credentialsAreReady
-        self.prepareCredentials = prepareCredentials
+        self.pairingKeys = pairingKeys
+        self.credentialsAreReady = credentialsAreReady ?? { pairingKeys.isPrepared }
+        self.prepareCredentials = prepareCredentials ?? { await pairingKeys.prepare() }
+        self.pairingSaveTimeout = pairingSaveTimeout
     }
 
     var isReady: Bool { phase == .ready }
+    var isPersistingPairing: Bool { phase == .savingPairing }
+
+    /// A verified peer awaiting local durability is no longer waiting on the
+    /// network handshake. Its independent save deadline still bounds the wait.
+    func shouldRetry(method: RemoteConnectionMethod, startedAt: Date, now: Date) -> Bool {
+        !isPersistingPairing && RemoteConnectionRetryPolicy.shouldRetry(
+            method: method, startedAt: startedAt, transportReadyAt: transportReadyAt, now: now
+        )
+    }
     var isPairing: Bool { phase == .pairing }
     /// The Mac accepts realtime input batches (the trackpad channel).
     var supportsRemoteDesktop: Bool { serverCapabilities.contains(.remoteDesktop) }
@@ -194,6 +210,8 @@ final class RemoteConnectionManager {
 
     func disconnect(report: Bool = true) {
         lifecycleID = UUID()
+        pairingSaveTimeoutTask?.cancel()
+        pairingSaveTimeoutTask = nil
         cancelPing()
         pairConfirmationTask?.cancel()
         pairConfirmationTask = nil
@@ -441,7 +459,7 @@ final class RemoteConnectionManager {
         resolvedEndpoint.serviceName = resolvedServiceName()
 
         let paired = message.paired == true
-        let storedKey = RemoteKeychain.pairingKey(for: deviceID.uuidString)
+        let storedKey = pairingKeys.key(for: deviceID.uuidString)
 
         if paired, let storedKey {
             phase = .authenticating
@@ -506,10 +524,23 @@ final class RemoteConnectionManager {
             }
             phase = .savingPairing
             let token = lifecycleID
+            onDiagnostic?("pairing credentials save started")
+            onStateChange?(.authenticating)
+            guard lifecycleID == token, phase == .savingPairing else { return }
+            pairingSaveTimeoutTask?.cancel()
+            let timeout = pairingSaveTimeout
+            pairingSaveTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                guard !Task.isCancelled, let self, self.lifecycleID == token,
+                      self.phase == .savingPairing else { return }
+                self.onDiagnostic?("pairing credentials save timed out")
+                self.fail(.network("pairing credentials could not be saved in time"))
+            }
             Task { [weak self] in
                 guard let self, self.lifecycleID == token, self.phase == .savingPairing else { return }
-                let saved = await RemoteKeychain.storePairingKey(key, for: deviceID.uuidString)
+                let saved = await self.pairingKeys.save(key, for: deviceID.uuidString)
                 guard self.lifecycleID == token, self.phase == .savingPairing else { return }
+                self.onDiagnostic?(saved ? "pairing credentials save completed" : "pairing credentials save failed")
                 guard saved else {
                     self.fail(.network("could not persist pairing credentials"))
                     return
@@ -536,7 +567,7 @@ final class RemoteConnectionManager {
         }
         guard let deviceID = targetDeviceID,
               let clientNonce, let serverNonce,
-              let key = RemoteKeychain.pairingKey(for: deviceID.uuidString),
+              let key = pairingKeys.key(for: deviceID.uuidString),
               let proof = message.proof else {
             fail(.notPaired)
             return
@@ -555,6 +586,8 @@ final class RemoteConnectionManager {
         serverNonce: Data,
         deviceID: UUID
     ) {
+        pairingSaveTimeoutTask?.cancel()
+        pairingSaveTimeoutTask = nil
         sessionKey = RemoteCrypto.sessionKey(pairingKey: pairingKey, clientNonce: clientNonce, serverNonce: serverNonce)
         phase = .ready
         reportMetrics()

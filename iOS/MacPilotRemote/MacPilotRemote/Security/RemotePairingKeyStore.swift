@@ -4,7 +4,7 @@ import Foundation
 /// read this memory snapshot; only the serial worker accesses persisted keys.
 @MainActor
 final class RemotePairingKeyStore {
-    private let queue = DispatchQueue(label: "com.misswell.pilotnest.keychain", qos: .utility)
+    private let queue = DispatchQueue(label: "com.misswell.pilotnest.keychain", qos: .userInitiated)
     private let loadKeys: @Sendable () throws -> [String: Data]
     private let saveKey: @Sendable (String, Data) -> Bool
     private let removeKey: @Sendable (String) -> Bool

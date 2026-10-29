@@ -7,6 +7,64 @@ import MacPilotRemoteTransport
 @MainActor
 @Suite("Background connection authentication")
 struct RemoteConnectionHandshakeTests {
+    @Test(.timeLimit(.minutes(1)))
+    func stalledLocalPairingSaveHasItsOwnBoundedFailureAndCannotReopenTheLink() async throws {
+        let releaseSave = DispatchSemaphore(value: 0)
+        let keys = RemotePairingKeyStore(load: { [:] }, save: { _, _ in
+            releaseSave.wait()
+            return true
+        }, remove: { _ in true })
+        #expect(await keys.prepare())
+        let manager = RemoteConnectionManager(pairingKeys: keys, pairingSaveTimeout: .milliseconds(10))
+        let transport = HandshakeTransport()
+        let (events, failed) = AsyncStream<Void>.makeStream()
+        manager.onFailure = { _ in failed.yield(()) }
+        manager.connect(using: transport, deviceID: nil, name: "Mac",
+                        clientID: UUID().uuidString, clientName: "Phone")
+        try transport.receiveUnpairedHello(deviceID: UUID())
+        try transport.receiveAcceptedPairing()
+        var iterator = events.makeAsyncIterator()
+        await iterator.next()
+        #expect(!manager.isPersistingPairing)
+        #expect(!manager.isReady)
+        releaseSave.signal()
+        try? await Task.sleep(for: .milliseconds(20))
+        #expect(!manager.isReady)
+        failed.finish()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func verifiedPairingWaitsForLocalDurabilityInsteadOfNetworkHandshakeRetry() async throws {
+        let releaseSave = DispatchSemaphore(value: 0)
+        let keys = RemotePairingKeyStore(load: { [:] }, save: { _, _ in
+            releaseSave.wait()
+            return true
+        }, remove: { _ in true })
+        #expect(await keys.prepare())
+        let manager = RemoteConnectionManager(pairingKeys: keys)
+        let transport = HandshakeTransport()
+        let (events, connected) = AsyncStream<Void>.makeStream()
+        manager.onStateChange = { state in
+            if state == .connected { connected.yield(()) }
+        }
+        manager.connect(using: transport, deviceID: nil, name: "Mac",
+                        clientID: UUID().uuidString, clientName: "Phone")
+        try transport.receiveUnpairedHello(deviceID: UUID())
+        try transport.receiveAcceptedPairing()
+        #expect(manager.isPersistingPairing)
+        #expect(!manager.isReady)
+        let readyAt = try #require(manager.transportReadyAt)
+        #expect(!manager.shouldRetry(method: .localNetwork, startedAt: readyAt,
+                                    now: readyAt.addingTimeInterval(16)))
+        releaseSave.signal()
+        var iterator = events.makeAsyncIterator()
+        await iterator.next()
+        #expect(manager.isReady)
+        #expect(!manager.isPersistingPairing)
+        connected.finish()
+        manager.disconnect(report: false)
+    }
+
     @Test func disconnectWhileCredentialsLoadCannotStartARetiredTransport() async {
         var release: CheckedContinuation<Bool, Never>?
         let (events, entered) = AsyncStream<Void>.makeStream()
@@ -97,6 +155,8 @@ private final class HandshakeTransport: RemoteTransport {
     var remotePort: UInt16? { nil }
     var remoteServiceName: String? { nil }
     private var sent = Data()
+    private var serverExchange: RemotePairingExchange?
+    private var serverNonce: Data?
     private(set) var startCount = 0
 
     func start() {
@@ -116,11 +176,26 @@ private final class HandshakeTransport: RemoteTransport {
     }
     func receiveUnpairedHello(deviceID: UUID) throws {
         let nonce = RemoteCrypto.randomData(count: RemoteCrypto.nonceLength)
-        let exchange = RemotePairingExchange(clientNonce: nonce, serverNonce: nonce)
+        let hello = try #require(try sentMessages().first)
+        let clientNonce = try #require(hello.clientNonce)
+        let exchange = RemotePairingExchange(clientNonce: clientNonce, serverNonce: nonce)
+        serverExchange = exchange
+        serverNonce = nonce
         onReceive?(try RemoteFrameCodec.encodePlain(RemoteHandshakeMessage(
             kind: .serverHello, deviceID: deviceID, paired: false,
             serverNonce: nonce, publicKey: exchange.publicKeyData
         )))
+    }
+
+    func receiveAcceptedPairing() throws {
+        let exchange = try #require(serverExchange)
+        let nonce = try #require(serverNonce)
+        let messages = try sentMessages()
+        let clientNonce = try #require(messages.first?.clientNonce)
+        let publicKey = try #require(messages.last(where: { $0.kind == .pairRequest })?.publicKey)
+        let key = try exchange.pairingKey(withPeerPublicKey: publicKey)
+        let proof = RemoteCrypto.serverProof(pairingKey: key, clientNonce: clientNonce, serverNonce: nonce)
+        onReceive?(try RemoteFrameCodec.encodePlain(RemoteHandshakeMessage(kind: .pairResult, proof: proof)))
     }
 }
 

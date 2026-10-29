@@ -571,6 +571,14 @@ enabled; a stale link-local address is no longer the only recovery path. This
 unbound service may resolve over LAN, so promotion uses the actual link rather
 than labeling every peer-enabled connection as AWDL.
 
+After a pairing proof has been verified, local Keychain persistence is a separate
+phase: it reports authentication in progress, has its own 60-second deadline,
+and is excluded from the 15-second peer-handshake retry. Only a successful
+durable save establishes the session. A timeout or cancellation retires the
+connection token, so a late save cannot reopen it. Connection-lifecycle tests
+use an isolated credential store while exercising real TCP/crypto; credential
+I/O scheduling, durability failures and revocation have separate regression tests.
+
 Bluetooth takes part from the first attempt instead of waiting for the network to
 fail. That is what makes it useful — establishing the link takes seconds, so
 starting it late means arriving late — and the cost is a radio advertisement for

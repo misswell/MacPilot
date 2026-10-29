@@ -5,7 +5,7 @@ import Security
 /// never issue a synchronous securityd request from a Bluetooth/UI callback.
 @MainActor
 enum RemoteKeychain {
-    private static let store = RemotePairingKeyStore(
+    static let store = RemotePairingKeyStore(
         load: { try PairingKeychainBackend.load() },
         save: { PairingKeychainBackend.save($1, for: $0) },
         remove: { PairingKeychainBackend.remove($0) }

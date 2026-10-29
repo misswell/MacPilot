@@ -163,7 +163,8 @@ final class RemoteAppModel: ObservableObject {
     let discovery = RemoteDiscoveryService()
     /// The link carrying the session. A race promotes its winner here, so this
     /// is replaced rather than reused; higher-ranked candidates keep running.
-    private(set) var connection = RemoteConnectionManager()
+    private(set) var connection: RemoteConnectionManager
+    private let pairingKeys: RemotePairingKeyStore
     /// The Bluetooth path, dialled on the same footing as the network ones.
     ///
     /// The phone is the peripheral: the Mac connects to us. That is the only BLE
@@ -262,8 +263,10 @@ final class RemoteAppModel: ObservableObject {
         #endif
     }
 
-    init(store: PairedMacStore = PairedMacStore()) {
+    init(store: PairedMacStore = PairedMacStore(), pairingKeys: RemotePairingKeyStore = RemoteKeychain.store) {
         self.store = store
+        self.pairingKeys = pairingKeys
+        self.connection = RemoteConnectionManager(pairingKeys: pairingKeys)
         controlPreferences.objectWillChange
             .sink { [weak self] in
                 MainActor.assumeIsolated { self?.objectWillChange.send() }
@@ -286,7 +289,7 @@ final class RemoteAppModel: ObservableObject {
 
     func start() async {
         guard !didStart else { return }
-        guard await RemoteKeychain.prepare() else {
+        guard await pairingKeys.prepare() else {
             errorKey = "errorNetwork"
             return
         }
@@ -314,8 +317,8 @@ final class RemoteAppModel: ObservableObject {
         // A rotated BLE address is authenticated by the Mac with a fresh
         // challenge. Answering needs only the long-term key, so it works while
         // PilotNest is asleep in the background.
-        ble.onPresenceChallenge = { challenge in
-            guard let key = RemoteKeychain.pairingKey(for: challenge.macID.uuidString) else {
+        ble.onPresenceChallenge = { [pairingKeys] challenge in
+            guard let key = pairingKeys.key(for: challenge.macID.uuidString) else {
                 return nil
             }
             return challenge.response(pairingKey: key)
@@ -324,8 +327,8 @@ final class RemoteAppModel: ObservableObject {
         // direction: the Mac advertises and this phone answers. Reusing the
         // identical keyed proof means one pairing key covers both paths and no
         // second secret is introduced.
-        ProximityBLECentral.shared.presenceChallengeResponder = { challenge in
-            guard let key = RemoteKeychain.pairingKey(for: challenge.macID.uuidString) else {
+        ProximityBLECentral.shared.presenceChallengeResponder = { [pairingKeys] challenge in
+            guard let key = pairingKeys.key(for: challenge.macID.uuidString) else {
                 return nil
             }
             return challenge.response(pairingKey: key)
@@ -901,10 +904,7 @@ final class RemoteAppModel: ObservableObject {
     private func retryExpiredCandidates() {
         let now = Date()
         let expired = candidates.filter {
-            RemoteConnectionRetryPolicy.shouldRetry(
-                method: $0.method, startedAt: $0.startedAt,
-                transportReadyAt: $0.manager.transportReadyAt, now: now
-            )
+            $0.manager.shouldRetry(method: $0.method, startedAt: $0.startedAt, now: now)
         }
         for candidate in expired {
             let phase = candidate.manager.isTransportReady ? "handshake" : "dial"
@@ -936,7 +936,7 @@ final class RemoteAppModel: ObservableObject {
     private var isRacingFirstPairing: Bool {
         if manualTarget != nil { return true }
         guard let target = raceTarget else { return false }
-        return !RemoteKeychain.hasPairingKey(for: target.deviceID.uuidString)
+        return pairingKeys.key(for: target.deviceID.uuidString) == nil
     }
 
     /// Sends every reachable path out at once.
@@ -1013,7 +1013,7 @@ final class RemoteAppModel: ObservableObject {
         endpoint: String? = nil,
         identityProbe: Bool = false
     ) {
-        let manager = RemoteConnectionManager()
+        let manager = RemoteConnectionManager(pairingKeys: pairingKeys)
         manager.dialEndpoint = endpoint
         wire(manager, path: path)
         candidates.append(Candidate(
@@ -1127,7 +1127,7 @@ final class RemoteAppModel: ObservableObject {
     /// is never auto-connected either.
     private func adoptAlreadyPairedMacs(from macs: [DiscoveredMac]) {
         for mac in macs where !store.isPaired(id: mac.id)
-            && RemoteKeychain.hasPairingKey(for: mac.id.uuidString) {
+            && pairingKeys.key(for: mac.id.uuidString) != nil {
             store.ensurePaired(id: mac.id, name: mac.name)
         }
     }
@@ -1269,7 +1269,7 @@ final class RemoteAppModel: ObservableObject {
         // The Keychain key is the proof of an existing pairing. A stale visible
         // row must never turn this automatic path into a first-pairing prompt.
         let pairedIDs = Set(store.pairedMacs.compactMap { mac in
-            RemoteKeychain.hasPairingKey(for: mac.id) ? mac.id : nil
+            pairingKeys.key(for: mac.id) != nil ? mac.id : nil
         })
         let discoveredIDs = Set(discoveredMacs.map { $0.id.uuidString })
         let selectedHasAuthenticatedSession = connection.isReady
@@ -1314,7 +1314,7 @@ final class RemoteAppModel: ObservableObject {
         case let .switchTo(targetID, generation):
             cancelAutomaticMacSwitchTask()
             guard let target = store.pairedMacs.first(where: { $0.id == targetID }),
-                  RemoteKeychain.hasPairingKey(for: targetID) else { return }
+                  pairingKeys.key(for: targetID) != nil else { return }
             guard automaticMacSelection.consumeSwitch(targetID: targetID, generation: generation) else { return }
             appendLinkDiagnostic("automatic Mac selection: \(target.name) remained the only visible paired Mac for \(RemoteAutomaticMacSelection.confirmationDuration) seconds")
             selectPairedMac(target, manually: false)
@@ -1374,7 +1374,7 @@ final class RemoteAppModel: ObservableObject {
         connection.disconnect(report: false)
         authenticatedDeviceID = nil
         // A fresh manager makes late callbacks from the previous Mac irrelevant.
-        connection = RemoteConnectionManager()
+        connection = RemoteConnectionManager(pairingKeys: pairingKeys)
         activeMethod = nil
         macState = nil
         latencyMs = nil
