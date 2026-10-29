@@ -18,6 +18,7 @@ struct MacPilotApp: App {
     @StateObject private var model: MacPilotModel
     @StateObject private var menuBar: MenuBarDisplayController
     @StateObject private var presence: AppPresenceController
+    @StateObject private var mainWindowOpener: MainWindowOpener
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
@@ -72,6 +73,10 @@ struct MacPilotApp: App {
         _model = StateObject(wrappedValue: model)
         _menuBar = StateObject(wrappedValue: controller)
         _presence = StateObject(wrappedValue: presence)
+        _mainWindowOpener = StateObject(wrappedValue: MainWindowOpener(
+            loadContent: { [weak model] in model?.loadMainWindowContent() },
+            activate: { NSApp.activate(ignoringOtherApps: true) }
+        ))
     }
 
     var body: some Scene {
@@ -89,7 +94,7 @@ struct MacPilotApp: App {
 
     private var mainWindowScene: some Scene {
         Window("MacPilot", id: "main") {
-            MainWindowRoot().environmentObject(model)
+            MainWindowRoot(opener: mainWindowOpener).environmentObject(model)
         }
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {

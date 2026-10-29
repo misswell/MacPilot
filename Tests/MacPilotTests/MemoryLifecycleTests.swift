@@ -65,6 +65,54 @@ struct MainWindowContentStateTests {
     }
 }
 
+@MainActor
+struct MainWindowOpenerTests {
+    @Test func requestsReopenTheAttachedWindowWithoutCreatingAnother() {
+        let center = NotificationCenter()
+        var state = MainWindowContentState(loadedAtLaunch: true)
+        var showCount = 0
+        var activationCount = 0
+        let opener = MainWindowOpener(center: center, loadContent: { state.load() }, activate: { activationCount += 1 })
+        opener.attach(show: { showCount += 1 })
+
+        let closing = state.beginClose()
+        state.completeClose(requestedGeneration: closing)
+        #expect(!state.isLoaded)
+        center.post(name: .macPilotShowMainWindow, object: nil)
+        #expect(state.isLoaded)
+        #expect(showCount == 1)
+        #expect(activationCount == 1)
+
+        // Repeated requests use the same attached window, including after
+        // another close and before the deferred close has completed.
+        let nextClose = state.beginClose()
+        center.post(name: .macPilotShowMainWindow, object: nil)
+        center.post(name: .macPilotShowMainWindow, object: nil)
+        state.completeClose(requestedGeneration: nextClose)
+        #expect(state.isLoaded)
+        #expect(showCount == 3)
+        #expect(activationCount == 3)
+    }
+
+    @Test func requestsBeforeAttachmentAreCoalescedAndDrainedOnAttachment() {
+        let center = NotificationCenter()
+        var loads = 0
+        var shows = 0
+        var activations = 0
+        let opener = MainWindowOpener(center: center, loadContent: { loads += 1 }, activate: { activations += 1 })
+        center.post(name: .macPilotShowMainWindow, object: nil)
+        center.post(name: .macPilotShowMainWindow, object: nil)
+        #expect(loads == 0)
+
+        opener.attach(show: { shows += 1 })
+        #expect(loads == 1)
+        #expect(shows == 1)
+        #expect(activations == 1)
+        opener.attach(show: { shows += 1 })
+        #expect(shows == 1)
+    }
+}
+
 struct WindowSwitcherPanelLifetimeTests {
     @Test func panelIsReleasedOnlyWhileNothingIsShowing() {
         #expect(WindowSwitcherPanelLifetimePolicy.canRelease(isShowing: false, hasPendingSession: false))
