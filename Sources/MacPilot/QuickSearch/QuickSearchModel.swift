@@ -522,11 +522,11 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         searchGeneration &+= 1
         query = text
         selectedRowIndex = 0
+        fileDebounceTask.stop()
+        fileQuery.cancelActiveQuery()
+        fileResults = []
         fileSearchIssue = nil
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            fileDebounceTask.stop()
-            fileQuery.cancelActiveQuery()
-            fileResults = []
             searchPhase = .idle
             showFavoritesAndRecents()
             return
@@ -613,7 +613,7 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
 
     private func receive(_ outcome: QuickSearchFileQueryOutcome, generation: Int) {
         // 只处理当前这一次查询：旧查询晚到的结果不能覆盖新结果。
-        guard generation == searchGeneration else { return }
+        guard isRunning, presentation == .visible, generation == searchGeneration else { return }
         switch outcome {
         case .results(let hits, let isFinal, let issue):
             // 先按打开次数提一遍再截断：Spotlight 排在第 60 位但天天开的文件，

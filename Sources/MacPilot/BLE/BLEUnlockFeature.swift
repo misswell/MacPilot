@@ -696,13 +696,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             log("reverse sample rejected reason=rssiRange value=\(rssi)")
             return false
         }
-        let age = now.timeIntervalSince(sampledAt)
-        guard age.isFinite,
-              age >= -RemoteBLEReversePresenceSample.maximumFutureSkew,
-              age <= RemoteBLEReversePresenceSample.maximumAge else {
-            log("reverse sample rejected reason=staleTimestamp ageMs=\(Int(age * 1000))")
-            return false
-        }
+        // GATT already authenticated and consumed a live Mac-local challenge.
+        // The phone timestamp remains diagnostic and may use a different clock.
         guard logicalDeviceUUIDs.contains(primaryUUID),
               settings.identityRegistry.bindings.contains(where: {
                   UUID(uuidString: $0.primaryUUID) == primaryUUID
@@ -762,7 +757,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
         resetReverseSignalTimer(for: runtime)
         refreshPublishedMonitoringState()
-        log("reverse RSSI sample rssi=\(rssi) ageMs=\(Int(age * 1000)) device=\(primaryUUID.uuidString) presence=\(runtime.presence)")
+        log("reverse RSSI sample rssi=\(rssi) clockDeltaSeconds=\(now.timeIntervalSince(sampledAt)) device=\(primaryUUID.uuidString) presence=\(runtime.presence)")
 
         // The sample enters the same unlock gate as a legacy advertisement.
         // Authentication only proves identity; this RSSI must still clear the

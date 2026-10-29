@@ -936,13 +936,14 @@ It signs the sample with the Mac's long-term pairing key:
 
 The legacy `RemoteBLEPresenceChallenge.response(pairingKey:)` encoding is
 unchanged. The reverse sample uses a separate domain label, so an identity proof
-can never be replayed as a proximity sample. A sample older than 12 seconds, or
-more than 3 seconds in the future, is rejected. Only a verified sample consumes
+can never be replayed as a proximity sample. The Mac expires its challenge using
+local continuous monotonic elapsed time including system sleep (15 seconds); the signed phone timestamp is diagnostic
+only, so device wall-clock skew cannot reject an otherwise valid sample. Only a verified sample consumes
 the pending nonce, so a duplicate write has nothing left to match.
 
 On the Mac, the model revalidates everything the GATT layer cannot own: the
 feature and reverse toggle are enabled, the session is on the console, the
-system is not asleep, the RSSI and timestamp are in range, the
+system is not asleep, the RSSI is in range, the
 `clientID + keyFingerprint` still maps to a configured `primaryUUID`, and a
 pairing key is still available. The reported `clientID`, fingerprint, primary
 UUID, RSSI and sample time are the only data that cross into the unlock model.

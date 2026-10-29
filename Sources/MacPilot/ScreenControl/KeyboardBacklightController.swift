@@ -120,7 +120,7 @@ final class KeyboardBacklightController: Sendable {
     ///
     /// - Returns: the pre-blank state, empty when there is nothing to darken.
     @discardableResult
-    func blank() -> [KeyboardBacklightState] {
+    func blank(persistIntent: ([KeyboardBacklightState]) -> Bool = { _ in true }) -> [KeyboardBacklightState] {
         let states = captureState()
         if states.isEmpty {
             // The two ways this happens are worth telling apart from the log: a
@@ -133,6 +133,7 @@ final class KeyboardBacklightController: Sendable {
                 : "keyboard backlight unavailable reason=noAnswer keyboards=\(listed)")
             return []
         }
+        guard persistIntent(states) else { return [] }
         for state in states {
             if state.autoBrightnessEnabled {
                 _ = setAutoBrightnessEnabled(false, for: state.keyboardID)

@@ -121,6 +121,7 @@ struct DisplayTopologyControllerTests {
         fixture.controller.handle(DisplayControlRequest(
             command: .confirmChange,
             generation: activeGeneration,
+            remoteSessionID: "uu-session",
             confirmed: true
         ), now: now.addingTimeInterval(1))
         fixture.controller.handle(DisplayControlRequest(
@@ -145,7 +146,7 @@ struct DisplayTopologyControllerTests {
         fixture.controller.handle(.init(command: .keepOnly, targetUUID: "one", generation: generation,
             remoteSessionID: "uu-session", policy: .remotePhysical), now: now)
         let activeGeneration = fixture.controller.response().generation
-        fixture.controller.handle(.init(command: .confirmChange, generation: activeGeneration, confirmed: true),
+        fixture.controller.handle(.init(command: .confirmChange, generation: activeGeneration, remoteSessionID: "uu-session", confirmed: true),
             now: now.addingTimeInterval(1))
         fixture.driver.removeDisplay("one")
         fixture.controller.handle(.init(command: .heartbeat, generation: activeGeneration,
@@ -173,7 +174,7 @@ struct DisplayTopologyControllerTests {
             remoteSessionID: "uu-session", confirmed: true), now: now.addingTimeInterval(1))
         let changed = fixture.controller.response()
         fixture.controller.handle(.init(command: .confirmChange, generation: changed.generation,
-            confirmed: true), now: now.addingTimeInterval(2))
+            remoteSessionID: "uu-session", confirmed: true), now: now.addingTimeInterval(2))
         fixture.driver.removeDisplay("owned-virtual")
         fixture.controller.handle(.init(command: .heartbeat, generation: changed.generation,
             remoteSessionID: "uu-session"), now: now.addingTimeInterval(3))

@@ -3,7 +3,7 @@
 //  MacPilot
 //
 //  Crash safety net for the held-black state. `blankDisplay()` drives real
-//  backlights to zero and remembers the originals in memory only, so a force
+//  backlights to zero. A durable intent precedes each effect, so a force
 //  quit or a crash while blank would leave the panel dark with no way back
 //  except the brightness keys. The captured levels are therefore persisted
 //  for as long as the blank is held and replayed on the next launch.
@@ -15,6 +15,8 @@
 //
 
 import Foundation
+import CoreGraphics
+import Darwin
 
 /// The captured pre-blank state of everything MacPilot was holding dark when a
 /// session died: displays, keyed by CoreGraphics display ID, and keyboards,
@@ -46,12 +48,59 @@ struct DisplayBlankSnapshot: Codable, Equatable {
     /// The keyboards recorded as darkened.
     var keyboardStates: [KeyboardBacklightState] { keyboardBacklights ?? [] }
 
-    static let currentVersion = 3
+    /// Additional transaction metadata. Historical dictionaries remain encoded so
+    /// older builds can still recover a journal written by this build.
+    var keyboardRestoreRequired: Bool? = nil
+    var displayRecords: [String: DisplayBlankRecord]? = nil
+
+    var hasPendingRecovery: Bool {
+        !systemBacklight.isEmpty || !ddcBacklight.isEmpty || !poweredOffDisplays.isEmpty || !keyboardStates.isEmpty
+    }
+
+    static let currentVersion = 4
 }
 
-/// Reads and writes the snapshot file. Every operation is best effort: the
-/// snapshot only has to survive a crash, and persistence must never be able
-/// to break blanking or unblanking.
+struct DisplayBlankRecord: Codable, Equatable {
+    var displayUUID: String?
+    var originalBrightness: Float?
+    var originalDDCBrightness: Double?
+    var originalPowerState: UInt16?
+    var operationIntent: String
+    var restoreRequired = true
+    var restoreAttempts = 0
+    var lastError: String?
+}
+
+/// Stable identity prevents a reconnected panel's old numeric ID from driving
+/// another display. Legacy journals use their original ID only while online.
+enum DisplayBlankIdentity {
+    private typealias CreateUUID = @convention(c) (UInt32) -> Unmanaged<CFUUID>?
+    private static let createUUID: CreateUUID? = {
+        guard let handle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY),
+              let symbol = dlsym(handle, "CGDisplayCreateUUIDFromDisplayID") else { return nil }
+        return unsafeBitCast(symbol, to: CreateUUID.self)
+    }()
+
+    static func uuid(for id: UInt32) -> String? {
+        guard let uuid = createUUID?(id)?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String
+    }
+
+    static func resolve(_ key: String, uuid: String?) -> UInt32? {
+        if let uuid {
+            var count: UInt32 = 0
+            guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return nil }
+            var displays = [UInt32](repeating: 0, count: Int(count))
+            guard CGGetOnlineDisplayList(count, &displays, &count) == .success else { return nil }
+            return displays.prefix(Int(count)).first { Self.uuid(for: $0) == uuid }
+        }
+        guard let id = UInt32(key), CGDisplayIsOnline(id) != 0 else { return nil }
+        return id
+    }
+}
+
+/// Atomic, flushed recovery journal. A failed write blocks darkening hardware;
+/// recovery retains the preceding journal until verified writes replace it.
 struct DisplayBlankSnapshotStore {
     let fileURL: URL
 
@@ -67,16 +116,39 @@ struct DisplayBlankSnapshotStore {
         fileURL = directory.appendingPathComponent(Self.fileName)
     }
 
-    func save(_ snapshot: DisplayBlankSnapshot) {
+    @discardableResult
+    func save(_ snapshot: DisplayBlankSnapshot) -> Bool {
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
             try JSONEncoder().encode(snapshot).write(to: fileURL, options: .atomic)
+            // Flush the committed journal before any hardware effect may follow.
+            let handle = try FileHandle(forWritingTo: fileURL)
+            defer { try? handle.close() }
+            try handle.synchronize()
+            let directoryFD = open(fileURL.deletingLastPathComponent().path, O_RDONLY)
+            guard directoryFD >= 0 else { return false }
+            defer { close(directoryFD) }
+            guard fsync(directoryFD) == 0 else { return false }
+            return true
         } catch {
             DiagnosticLog.write("DisplayPower", "blank snapshot save failed error=\(error.localizedDescription)")
+            return false
         }
+    }
+
+    /// The effect must never precede a durable recovery intent. A crash inside
+    /// the effect deliberately leaves the original values on disk.
+    @discardableResult
+    func commitIntent<Result>(_ snapshot: DisplayBlankSnapshot, effect: () -> Result) -> Result? {
+        guard save(snapshot) else { return nil }
+        return effect()
+    }
+
+    var hasUnreadableJournal: Bool {
+        FileManager.default.fileExists(atPath: fileURL.path) && load() == nil
     }
 
     func load() -> DisplayBlankSnapshot? {
@@ -108,6 +180,7 @@ enum DisplayBlankRecovery {
     /// without a display or a keyboard attached. Rebuilt per call: the closures
     /// are stateless views over the shared drivers.
     struct Appliers {
+        let resolveDisplay: (String, String?) -> UInt32?
         let readSystem: (UInt32) -> Float?
         let writeSystem: (UInt32, Float) -> Bool
         let readDDC: (UInt32) -> Double?
@@ -123,6 +196,7 @@ enum DisplayBlankRecovery {
         /// without a controllable keyboard backlight looks like to recovery: every
         /// keyboard entry is then skipped rather than guessed at.
         init(
+            resolveDisplay: @escaping (String, String?) -> UInt32? = { key, _ in UInt32(key) },
             readSystem: @escaping (UInt32) -> Float?,
             writeSystem: @escaping (UInt32, Float) -> Bool,
             readDDC: @escaping (UInt32) -> Double?,
@@ -134,6 +208,7 @@ enum DisplayBlankRecovery {
             readKeyboardAuto: @escaping (UInt64) -> Bool? = { _ in nil },
             writeKeyboardAuto: @escaping (UInt64, Bool) -> Bool = { _, _ in false }
         ) {
+            self.resolveDisplay = resolveDisplay
             self.readSystem = readSystem
             self.writeSystem = writeSystem
             self.readDDC = readDDC
@@ -148,6 +223,7 @@ enum DisplayBlankRecovery {
 
         static var live: Appliers {
             Appliers(
+                resolveDisplay: { DisplayBlankIdentity.resolve($0, uuid: $1) },
                 readSystem: { BrightnessDriver.shared?.current($0) },
                 writeSystem: { id, level in BrightnessDriver.shared?.apply(level, to: id) ?? false },
                 readDDC: { DDCBacklight.shared?.level($0) },
@@ -216,7 +292,8 @@ enum DisplayBlankRecovery {
     @discardableResult
     static func recover(
         store: DisplayBlankSnapshotStore,
-        appliers: Appliers = .live
+        appliers: Appliers = .live,
+        forceOriginal: Bool = false
     ) -> Int {
         guard var snapshot = store.load() else { return 0 }
         var restored = 0
@@ -225,34 +302,52 @@ enum DisplayBlankRecovery {
         var unresolvedPower: [String] = []
         var unresolvedKeyboard: [KeyboardBacklightState] = []
 
-        for (key, original) in snapshot.systemBacklight {
-            guard let id = UInt32(key) else { continue }
-            guard decision(current: appliers.readSystem(id).map(Double.init)) == .restore else { continue }
-            restored += 1
-            if !appliers.writeSystem(id, original) {
-                unresolvedSystem[key] = original
-            }
-        }
-        for (key, original) in snapshot.ddcBacklight {
-            guard let id = UInt32(key) else { continue }
-            guard decision(current: appliers.readDDC(id)) == .restore else { continue }
-            restored += 1
-            if !appliers.writeDDC(id, original) {
-                unresolvedDDC[key] = original
-            }
-        }
         for key in snapshot.poweredOffDisplays {
-            guard let id = UInt32(key) else { continue }
+            guard let id = appliers.resolveDisplay(key, snapshot.displayRecords?[key]?.displayUUID) else {
+                unresolvedPower.append(key)
+                continue
+            }
             switch powerDecision(current: appliers.readPower(id)) {
             case .alreadyRepaired:
-                continue
+                let originalPower = snapshot.displayRecords?[key]?.originalPowerState ?? DDCPacket.powerOn
+                if !forceOriginal, appliers.readPower(id) == originalPower { continue }
+                restored += 1
             case .restore, .undrivable:
                 // A sleeping/disconnected display may not answer reads but may
                 // still accept an on command. A failed attempt remains journaled.
                 restored += 1
             }
-            if !appliers.writePower(id, DDCPacket.powerOn) {
+            let originalPower = snapshot.displayRecords?[key]?.originalPowerState ?? DDCPacket.powerOn
+            if !appliers.writePower(id, originalPower) || appliers.readPower(id) != originalPower {
                 unresolvedPower.append(key)
+            }
+        }
+
+
+        for (key, original) in snapshot.systemBacklight {
+            guard let id = appliers.resolveDisplay(key, snapshot.displayRecords?[key]?.displayUUID) else {
+                unresolvedSystem[key] = original
+                continue
+            }
+            let verdict = decision(current: appliers.readSystem(id).map(Double.init))
+            if verdict == .undrivable { unresolvedSystem[key] = original; continue }
+            guard forceOriginal || (snapshot.displayRecords?[key]?.restoreAttempts ?? 0) > 0 || snapshot.displayRecords?[key]?.lastError != nil || verdict == .restore else { continue }
+            restored += 1
+            if !appliers.writeSystem(id, original) || !matches(appliers.readSystem(id).map(Double.init), Double(original), tolerance: 0.01) {
+                unresolvedSystem[key] = original
+            }
+        }
+        for (key, original) in snapshot.ddcBacklight {
+            guard let id = appliers.resolveDisplay(key, snapshot.displayRecords?[key]?.displayUUID) else {
+                unresolvedDDC[key] = original
+                continue
+            }
+            let verdict = decision(current: appliers.readDDC(id))
+            if verdict == .undrivable { unresolvedDDC[key] = original; continue }
+            guard forceOriginal || (snapshot.displayRecords?[key]?.restoreAttempts ?? 0) > 0 || snapshot.displayRecords?[key]?.lastError != nil || verdict == .restore else { continue }
+            restored += 1
+            if !appliers.writeDDC(id, original) || !matches(appliers.readDDC(id), original, tolerance: 1) {
+                unresolvedDDC[key] = original
             }
         }
 
@@ -262,6 +357,17 @@ enum DisplayBlankRecovery {
             // back on, and that is still MacPilot's mess to clean up.
             var touched = false
             var needsAnotherLaunch = false
+            if forceOriginal || snapshot.keyboardRestoreRequired == true {
+                _ = appliers.writeKeyboardBrightness(state.keyboardID, state.brightness)
+                _ = appliers.writeKeyboardAuto(state.keyboardID, state.autoBrightnessEnabled)
+                if !keyboardBrightnessMatches(appliers.readKeyboardBrightness(state.keyboardID), target: state.brightness)
+                    || appliers.readKeyboardAuto(state.keyboardID) != state.autoBrightnessEnabled {
+                    unresolvedKeyboard.append(state)
+                } else {
+                    restored += 1
+                }
+                continue
+            }
             switch decision(current: appliers.readKeyboardBrightness(state.keyboardID).map(Double.init)) {
             case .restore:
                 touched = true
@@ -270,8 +376,13 @@ enum DisplayBlankRecovery {
                 if !keyboardBrightnessMatches(actual, target: state.brightness) {
                     needsAnotherLaunch = true
                 }
-            case .alreadyRepaired, .undrivable:
+            case .undrivable:
+                needsAnotherLaunch = true
+            case .alreadyRepaired:
                 break
+            }
+            if state.autoBrightnessEnabled && appliers.readKeyboardAuto(state.keyboardID) == nil {
+                needsAnotherLaunch = true
             }
             if autoBrightnessDecision(
                 snapshotEnabled: state.autoBrightnessEnabled,
@@ -293,16 +404,37 @@ enum DisplayBlankRecovery {
         if unresolvedSystem.isEmpty, unresolvedDDC.isEmpty, unresolvedPower.isEmpty, unresolvedKeyboard.isEmpty {
             store.clear()
         } else {
+            snapshot.version = DisplayBlankSnapshot.currentVersion
+            let pending = Set(unresolvedSystem.keys).union(unresolvedDDC.keys).union(unresolvedPower)
+            var records = snapshot.displayRecords ?? [:]
+            for key in pending where records[key] == nil {
+                records[key] = DisplayBlankRecord(
+                    originalBrightness: unresolvedSystem[key], originalDDCBrightness: unresolvedDDC[key],
+                    operationIntent: "legacyRecovery"
+                )
+            }
+            snapshot.displayRecords = records.filter { pending.contains($0.key) }.mapValues {
+                var record = $0
+                record.restoreAttempts += 1
+                record.lastError = "restoreUnconfirmedOrUnavailable"
+                return record
+            }
             snapshot.systemBacklight = unresolvedSystem
             snapshot.ddcBacklight = unresolvedDDC
             snapshot.ddcPowerOff = unresolvedPower
             snapshot.keyboardBacklights = unresolvedKeyboard
+            snapshot.keyboardRestoreRequired = !unresolvedKeyboard.isEmpty
             store.save(snapshot)
         }
         if restored > 0 {
             DiagnosticLog.write("DisplayPower", "blank snapshot restored items=\(restored) capturedAt=\(snapshot.capturedAt)")
         }
         return restored
+    }
+
+    private static func matches(_ value: Double?, _ target: Double, tolerance: Double) -> Bool {
+        guard let value else { return false }
+        return abs(value - target) <= tolerance
     }
 
     private static func keyboardBrightnessMatches(_ current: Float?, target: Float) -> Bool {

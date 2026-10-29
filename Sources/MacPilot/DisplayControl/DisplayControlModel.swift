@@ -435,7 +435,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
             guard uuObservation.status == .connected, sessionID != nil else { restore(); return }
         }
         perform(.init(command: isConfirmingVirtual ? .confirmVirtual : .confirmChange,
-                      generation: snapshot?.generation, remoteSessionID: sessionID, confirmed: true))
+                      generation: snapshot?.generation, remoteSessionID: snapshot?.policy == .localPhysical ? nil : sessionID, confirmed: true))
     }
 
     private func syncMonitor() {
@@ -463,7 +463,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
                 command = .status
             }
             let response = try await client.send(.init(command: command, generation: snapshot?.generation,
-                remoteSessionID: uuObservation.status == .connected ? sessionID : nil))
+                remoteSessionID: command == .restore || snapshot?.policy == .localPhysical ? nil : (uuObservation.status == .connected ? sessionID : nil)))
             guard isRunning, !Task.isCancelled, epoch == operationEpoch else { return }
             let hadControl = hasControl
             apply(response)
@@ -479,6 +479,11 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     }
 
     private func recordUnavailable() {
+        // Keep a pending/recovering helper transaction visible while transport
+        // reconnects. The helper remains responsible for hardware recovery.
+        if let state = snapshot?.state, [.managing, .recovering, .recoveryRequired].contains(state) {
+            return
+        }
         consecutiveIdleFailures = min(consecutiveIdleFailures + 1, 6)
         if errorKey != "displayHelperUnavailable" { errorKey = "displayHelperUnavailable" }
     }
@@ -499,7 +504,12 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
                 self.apply(response)
             } catch {
                 guard token == self.operationEpoch, !Task.isCancelled else { return }
-                self.recordUnavailable()
+                if (error as? DisplayRecoveryClientError) == .timeout {
+                    // A timed-out caller does not own cancellation of a helper
+                    // transaction. Preserve our obligation until status resolves it.
+                    if let response = try? await self.client.send(.init(command: .status)),
+                       token == self.operationEpoch, !Task.isCancelled { self.apply(response) }
+                } else { self.recordUnavailable() }
             }
             self.isBusy = false
             // A command may acquire a lease while the idle loop is asleep.

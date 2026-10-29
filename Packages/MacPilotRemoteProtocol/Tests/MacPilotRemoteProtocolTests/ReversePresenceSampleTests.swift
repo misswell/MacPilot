@@ -33,6 +33,43 @@ struct ReversePresenceSampleTests {
         )!
     }
 
+    @Test func localChallengeAcceptsClockSkewAndConsumesNonceExactlyOnce() {
+        for skew in [-1800.0, 0, 1800] {
+            var challenge = RemoteBLEReversePresenceChallenge(macID: macID, nonce: nonce, issuedAt: 100)
+            let signed = sample(sampledAt: now.addingTimeInterval(skew))
+            let verdict1 = challenge.consume(signed, pairingKey: pairingKey, at: 101)
+            #expect(verdict1)
+            let verdict2 = !challenge.consume(signed, pairingKey: pairingKey, at: 102)
+            #expect(verdict2)
+            let verdict3 = !challenge.consume(sample(rssi: -20), pairingKey: pairingKey, at: 102)
+            #expect(verdict3)
+        }
+    }
+
+    @Test func localChallengeRejectsExpiryIdentityAndTamperingWithoutConsuming() throws {
+        var challenge = RemoteBLEReversePresenceChallenge(macID: macID, nonce: nonce, issuedAt: 100)
+        let verdict4 = !challenge.consume(sample(), pairingKey: pairingKey, at: 116)
+        #expect(verdict4)
+        let verdict5 = !challenge.consume(sample(), pairingKey: pairingKey, at: 99)
+        #expect(verdict5)
+        let verdict6 = !challenge.consume(sample(macID: otherMac), pairingKey: pairingKey, at: 101)
+        #expect(verdict6)
+        let verdict7 = !challenge.consume(sample(nonce: Data(repeating: 0, count: 16)), pairingKey: pairingKey, at: 101)
+        #expect(verdict7)
+        let verdict8 = !challenge.consume(sample(key: strangerKey), pairingKey: pairingKey, at: 101)
+        #expect(verdict8)
+        for offset in [1 + 16 + 16, 1 + 16 + 16 + 1 + 7] {
+            var bytes = sample().encoded
+            bytes[offset] ^= 1
+            let tampered = try #require(RemoteBLEReversePresenceSample(encoded: bytes))
+            let verdict9 = !challenge.consume(tampered, pairingKey: pairingKey, at: 101)
+            #expect(verdict9)
+        }
+        #expect(!challenge.consumed)
+        let verdict10 = challenge.consume(sample(), pairingKey: pairingKey, at: 115)
+        #expect(verdict10)
+    }
+
     private func accepts(_ sample: RemoteBLEReversePresenceSample, now: Date? = nil) -> Bool {
         sample.isValid(
             pairingKey: pairingKey,

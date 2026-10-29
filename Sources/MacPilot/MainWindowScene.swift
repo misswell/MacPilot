@@ -54,6 +54,71 @@ struct MainWindowContentState {
     }
 }
 
+/// Owns the window independently of the lifetime of its SwiftUI content.
+@MainActor
+final class MainWindowOpener: NSObject, ObservableObject {
+    private let loadContent: () -> Void
+    private let activate: () -> Void
+    private var showWindow: (() -> Void)?
+    private var pendingRequest = false
+
+    init(center: NotificationCenter = .default, loadContent: @escaping () -> Void, activate: @escaping () -> Void) {
+        self.loadContent = loadContent
+        self.activate = activate
+        super.init()
+        center.addObserver(self, selector: #selector(requestOpen), name: .macPilotShowMainWindow, object: nil)
+    }
+
+    @objc func requestOpen() {
+        guard let showWindow else {
+            pendingRequest = true
+            return
+        }
+        loadContent()
+        showWindow()
+        activate()
+    }
+
+    func attach(window: NSWindow) {
+        // SwiftUI can discard the content on close, but the resident app must
+        // keep the same window available for the next menu or Dock request.
+        window.isReleasedWhenClosed = false
+        attach { [window] in window.makeKeyAndOrderFront(nil) }
+    }
+
+    // Also provides a window-free seam for lifecycle tests.
+    func attach(show: @escaping () -> Void) {
+        showWindow = show
+        guard pendingRequest else { return }
+        pendingRequest = false
+        requestOpen()
+    }
+}
+
+private struct MainWindowAttachment: NSViewRepresentable {
+    let opener: MainWindowOpener
+
+    func makeNSView(context: Context) -> WindowAttachmentView {
+        let view = WindowAttachmentView()
+        view.opener = opener
+        return view
+    }
+
+    func updateNSView(_ view: WindowAttachmentView, context: Context) {
+        view.opener = opener
+        if let window = view.window { opener.attach(window: window) }
+    }
+
+    final class WindowAttachmentView: NSView {
+        weak var opener: MainWindowOpener?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let window { opener?.attach(window: window) }
+        }
+    }
+}
+
 /// The main window's content, built only while the window is actually in use.
 ///
 /// A hidden window is not free. `orderOut` keeps the whole view graph, its
@@ -63,7 +128,11 @@ struct MainWindowContentState {
 /// restoration belong to it — while `ContentView` comes and goes with it.
 struct MainWindowRoot: View {
     @EnvironmentObject private var model: MacPilotModel
-    @Environment(\.openWindow) private var openWindow
+    let opener: MainWindowOpener
+
+    init(opener: MainWindowOpener) {
+        self.opener = opener
+    }
 
     var body: some View {
         Group {
@@ -74,10 +143,6 @@ struct MainWindowRoot: View {
             }
         }
         .frame(minWidth: 900, minHeight: 620)
-        .onReceive(NotificationCenter.default.publisher(for: .macPilotShowMainWindow)) { _ in
-            model.loadMainWindowContent()
-            openWindow(id: "main")
-            DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
-        }
+        .background(MainWindowAttachment(opener: opener))
     }
 }

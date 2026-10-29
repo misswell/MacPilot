@@ -11,14 +11,14 @@ import Foundation
 public struct LocalPortCloseEnvironment: Sendable {
     public typealias Scan = @Sendable () throws -> LocalPortSnapshot
     public typealias ListenerScan = @Sendable () throws -> [LocalPortListener]
-    public typealias StartTime = @Sendable (Int32) -> String?
+    public typealias Identity = @Sendable (Int32) -> LocalPortProcessIdentity?
     public typealias Signal = @Sendable (Int32, Int32) -> Int32
     public typealias Sleep = @Sendable (Duration) async throws -> Void
     public typealias IntValue = @Sendable () -> Int32
 
     public let scan: Scan
     public let listenerScan: ListenerScan
-    public let startTime: StartTime
+    public let identity: Identity
     public let signal: Signal
     public let sleep: Sleep
     public let currentUID: IntValue
@@ -27,7 +27,7 @@ public struct LocalPortCloseEnvironment: Sendable {
     public init(
         scan: @escaping Scan,
         listenerScan: @escaping ListenerScan,
-        startTime: @escaping StartTime,
+        identity: @escaping Identity,
         signal: @escaping Signal,
         sleep: @escaping Sleep,
         currentUID: @escaping IntValue,
@@ -35,7 +35,7 @@ public struct LocalPortCloseEnvironment: Sendable {
     ) {
         self.scan = scan
         self.listenerScan = listenerScan
-        self.startTime = startTime
+        self.identity = identity
         self.signal = signal
         self.sleep = sleep
         self.currentUID = currentUID
@@ -46,7 +46,7 @@ public struct LocalPortCloseEnvironment: Sendable {
         LocalPortCloseEnvironment(
             scan: { try LocalPortScanner.scan() },
             listenerScan: { try LocalPortScanner.scanListeners() },
-            startTime: { LocalPortCloseService.processStartTime(for: $0) },
+            identity: { LocalPortCloseService.processIdentity(for: $0) },
             signal: { pid, signal in
                 Darwin.kill(pid, signal) == 0 ? 0 : errno
             },
@@ -96,7 +96,7 @@ public enum LocalPortCloseService {
             pid: pid,
             currentUID: environment.currentUID(),
             currentPID: environment.currentPID(),
-            startTime: environment.startTime
+            identity: environment.identity
         )
     }
 
@@ -106,7 +106,7 @@ public enum LocalPortCloseService {
         pid: Int32?,
         currentUID: Int32,
         currentPID: Int32,
-        startTime: @escaping @Sendable (Int32) -> String?
+        identity: @escaping @Sendable (Int32) -> LocalPortProcessIdentity?
     ) throws -> LocalPortClosePlan {
         let matches = activities.filter { $0.listener.port == port }
         guard !matches.isEmpty else { throw LocalPortCloseError.nothingListening(port: port) }
@@ -127,7 +127,9 @@ public enum LocalPortCloseService {
         guard let uid = activity.process.uid else {
             throw LocalPortCloseError.missingIdentity(pid: selectedPID)
         }
-        guard let processStartTime = startTime(selectedPID) else {
+        guard let processIdentity = identity(selectedPID), processIdentity.isComplete,
+              processIdentity.pid == selectedPID, processIdentity.uid == uid,
+              processIdentity.executablePath == activity.process.executablePath else {
             throw LocalPortCloseError.missingStartTime(pid: selectedPID)
         }
 
@@ -140,7 +142,7 @@ public enum LocalPortCloseService {
             pid: selectedPID,
             uid: uid,
             executablePath: activity.process.executablePath,
-            processStartTime: processStartTime,
+            processIdentity: processIdentity,
             activity: activity,
             otherPorts: otherPorts,
             peerPIDs: pids.filter { $0 != selectedPID }
@@ -150,7 +152,7 @@ public enum LocalPortCloseService {
     public static func verify(
         plan: LocalPortClosePlan,
         activities: [LocalPortActivity],
-        freshStartTime: String?,
+        freshIdentity: LocalPortProcessIdentity?,
         currentUID: Int32 = Int32(getuid()),
         currentPID: Int32 = Int32(getpid())
     ) throws {
@@ -164,7 +166,10 @@ public enum LocalPortCloseService {
             throw LocalPortCloseError.newPortOwner(port: plan.port, pid: newPID)
         }
 
-        guard freshStartTime == plan.processStartTime,
+        guard let freshIdentity, freshIdentity.isComplete,
+              freshIdentity == plan.processIdentity,
+              freshIdentity.pid == plan.pid, freshIdentity.uid == plan.uid,
+              freshIdentity.executablePath == plan.executablePath,
               activity.process.uid == plan.uid,
               activity.process.executablePath == plan.executablePath else {
             throw LocalPortCloseError.identityChanged(pid: plan.pid)
@@ -190,14 +195,14 @@ public enum LocalPortCloseService {
             throw LocalPortCloseError.verificationFailed
         }
 
-        guard let freshStartTime = environment.startTime(plan.pid) else {
+        guard let freshIdentity = environment.identity(plan.pid), freshIdentity.isComplete else {
             throw LocalPortCloseError.missingStartTime(pid: plan.pid)
         }
 
         try verify(
             plan: plan,
             activities: freshSnapshot.activities,
-            freshStartTime: freshStartTime,
+            freshIdentity: freshIdentity,
             currentUID: environment.currentUID(),
             currentPID: environment.currentPID()
         )
@@ -230,12 +235,27 @@ public enum LocalPortCloseService {
         )
     }
 
-    public static func processStartTime(for pid: Int32) -> String? {
-        guard let output = try? LocalPortCommandRunner.output(
-            "/bin/ps",
-            ["-p", String(pid), "-o", "lstart="]
-        ) else { return nil }
-        let value = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : value
+    /// Reading a process identity and kill(pid, ...) cannot be atomic on macOS.
+    /// Revalidation narrows the race; it does not eliminate it.
+    public static func processIdentity(for pid: Int32) -> LocalPortProcessIdentity? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+              info.pbi_pid == UInt32(pid) else { return nil }
+        var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return nil }
+        // Confirm that the path lookup did not straddle PID reuse.
+        var confirmed = proc_bsdinfo()
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &confirmed, size) == size,
+              confirmed.pbi_pid == info.pbi_pid, confirmed.pbi_uid == info.pbi_uid,
+              confirmed.pbi_start_tvsec == info.pbi_start_tvsec,
+              confirmed.pbi_start_tvusec == info.pbi_start_tvusec else { return nil }
+        guard let uid = Int32(exactly: info.pbi_uid) else { return nil }
+        let identity = LocalPortProcessIdentity(
+            pid: pid, uid: uid,
+            startSeconds: info.pbi_start_tvsec, startMicroseconds: info.pbi_start_tvusec,
+            executablePath: String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        )
+        return identity.isComplete ? identity : nil
     }
 }

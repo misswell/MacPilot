@@ -46,6 +46,8 @@ final class DisplayRecoveryAgent: NSObject, NSXPCListenerDelegate, @unchecked Se
     private let heartbeatTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
     private var terminationSignals: [DispatchSourceSignal] = []
     private let statusCache = DisplayRecoveryStatusCache()
+    private let operationStore = DisplayOperationStore.standard
+    private let admissionLock = NSLock()
 
     private override init() {
         listener = NSXPCListener(machServiceName: DisplayRecoveryService.serviceName)
@@ -55,7 +57,11 @@ final class DisplayRecoveryAgent: NSObject, NSXPCListenerDelegate, @unchecked Se
 
     @MainActor func run() -> Never {
         guard acquireJournalLock() else { exit(EXIT_FAILURE) }
-        operations.sync { controller.recoverAtStartup() }
+        operations.sync {
+            controller.recoverAtStartup()
+            do { try operationStore.interruptPending(afterRecovery: controller.response()) }
+            catch { NSLog("Display operation recovery ledger unavailable: %@", String(describing: error)) }
+        }
         let hotKeyReady = registerEmergencyHotKey()
         let authenticationReady = isAuthenticHelper()
         operations.sync {
@@ -142,7 +148,7 @@ final class DisplayRecoveryAgent: NSObject, NSXPCListenerDelegate, @unchecked Se
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         guard isAuthorizedCaller(connection.processIdentifier, effectiveUserID: connection.effectiveUserIdentifier) else { return false }
         connection.exportedInterface = NSXPCInterface(with: DisplayRecoveryXPC.self)
-        connection.exportedObject = DisplayRecoveryProxy(controller: controller, queue: operations, cache: statusCache)
+        connection.exportedObject = DisplayRecoveryProxy(controller: controller, queue: operations, cache: statusCache, operationStore: operationStore, admissionLock: admissionLock)
         connection.invalidationHandler = {}
         connection.resume()
         return true
@@ -210,11 +216,15 @@ private final class DisplayRecoveryProxy: NSObject, DisplayRecoveryXPC, @uncheck
     private let decoder = JSONDecoder.displayControlDecoder
     private let encoder = JSONEncoder.displayControlEncoder
     private let cache: DisplayRecoveryStatusCache
+    private let operationStore: DisplayOperationStore
+    private let admissionLock: NSLock
 
-    init(controller: DisplayTopologyController, queue: DispatchQueue, cache: DisplayRecoveryStatusCache) {
+    init(controller: DisplayTopologyController, queue: DispatchQueue, cache: DisplayRecoveryStatusCache, operationStore: DisplayOperationStore, admissionLock: NSLock) {
         self.controller = controller
         self.queue = queue
         self.cache = cache
+        self.operationStore = operationStore
+        self.admissionLock = admissionLock
     }
 
     func execute(_ data: Data, reply: @escaping @Sendable (Data) -> Void) {
@@ -229,7 +239,46 @@ private final class DisplayRecoveryProxy: NSObject, DisplayRecoveryXPC, @uncheck
             return
         }
         if request.command == .status {
-            reply(cache.encodedResponse())
+            if let id = request.operationID {
+                do {
+                    if let response = try operationStore.status(id) {
+                        reply((try? encoder.encode(response)) ?? Data())
+                    } else {
+                        reply(operationFailure(id, message: "operationUnknown"))
+                    }
+                } catch { reply(operationFailure(id, message: "operationStorageUnavailable")) }
+            } else { reply(cache.encodedResponse()) }
+            return
+        }
+        // All XPC connections share admission ordering. Work is enqueued
+        // before ACK, so a following restore cannot overtake its mutation.
+        admissionLock.lock()
+        defer { admissionLock.unlock() }
+        if request.isMutation, let id = request.operationID {
+            do {
+                let current = try decoder.decode(DisplayControlResponse.self, from: cache.encodedResponse())
+                let managing = DisplayControlResponse(displays: current.displays, state: .managing,
+                    generation: current.generation, helperReady: current.helperReady,
+                    virtualDisplayUUID: current.virtualDisplayUUID, policy: current.policy, remoteSessionID: current.remoteSessionID)
+                let accepted = try operationStore.accept(request, response: managing)
+                guard accepted.isNew else {
+                    reply((try? encoder.encode(accepted.response)) ?? Data())
+                    return
+                }
+                cache.markManaging(for: request.command)
+                queue.async { [controller, cache, operationStore] in
+                    controller.handle(request, now: Date())
+                    let response = controller.response()
+                    cache.update(response)
+                    do { try operationStore.complete(id, response: response) }
+                    catch {
+                        controller.restoreAll()
+                        cache.update(controller.response())
+                        NSLog("Display operation result could not be persisted: %@", String(describing: error))
+                    }
+                }
+                reply((try? encoder.encode(accepted.response)) ?? Data())
+            } catch { reply(operationFailure(id, message: "operationRejected")) }
             return
         }
         let receivedAt = Date()
@@ -244,6 +293,11 @@ private final class DisplayRecoveryProxy: NSObject, DisplayRecoveryXPC, @uncheck
             responseRelay.send((try? encoder.encode(response)) ?? Data())
         }
     }
+    private func operationFailure(_ id: UUID, message: String) -> Data {
+        (try? encoder.encode(DisplayControlResponse(displays: [], state: .recoveryRequired,
+            message: message, helperReady: false, operationID: id, operationStatus: .interrupted))) ?? Data()
+    }
+
 }
 
 private final class DisplayRecoveryReply: Sendable {
@@ -281,7 +335,8 @@ private final class DisplayRecoveryStatusCache: @unchecked Sendable {
             generation: response.generation,
             confirmationDeadline: response.confirmationDeadline,
             helperReady: response.helperReady,
-            virtualDisplayUUID: response.virtualDisplayUUID
+            virtualDisplayUUID: response.virtualDisplayUUID,
+            policy: response.policy, remoteSessionID: response.remoteSessionID
         )
         if let data = try? JSONEncoder.displayControlEncoder.encode(managing) { encoded = data }
     }

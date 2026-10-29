@@ -74,6 +74,13 @@ enum ScreenBlankPlanner {
         let action: Action
     }
 
+    /// A power-off transaction must have an observed, recognized state to
+    /// restore. An unreadable power register can use brightness plus overlay.
+    static func canPowerOff(originalPower: UInt16?) -> Bool {
+        guard let originalPower else { return false }
+        return originalPower == DDCPacket.powerOn || DDCPacket.isPoweredDown(originalPower)
+    }
+
     /// Every candidate gets exactly one step. Built-in panels and
     /// backlight-capable displays come first, so a MacBook panel is blacked the
     /// cheap way even when an external display happens to be the main one; a
@@ -160,14 +167,8 @@ enum DisplayPower {
     /// Retries keyboard restoration after CoreBrightness accepts a write without
     /// applying it immediately. The retry count is finite; an unresolved state
     /// remains in the crash snapshot for the next launch.
-    @MainActor private static var keyboardRestoreRetryTask: Task<Void, Never>?
     @MainActor private static var displayRestoreRetryTask: Task<Void, Never>?
     @MainActor private static var displayRecoveryObserver: NSObjectProtocol?
-    private static let keyboardRestoreRetryDelays: [Duration] = [
-        .milliseconds(100),
-        .milliseconds(250),
-        .milliseconds(500)
-    ]
     /// Where the held-blank brightness snapshot lives while the screen is black.
     @MainActor private static let snapshotStore = DisplayBlankSnapshotStore.standard
 
@@ -194,10 +195,11 @@ enum DisplayPower {
         guard !topologyControlIsActive else { return false }
         if isBlanked { return true }
         // Do not overwrite a previous, unresolved power-off transaction.
+        guard !snapshotStore.hasUnreadableJournal else { return false }
         DisplayBlankRecovery.recover(store: snapshotStore)
-        if !(snapshotStore.load()?.poweredOffDisplays.isEmpty ?? true) {
+        if snapshotStore.load()?.hasPendingRecovery == true {
             scheduleDisplayRecoveryRetries()
-            DiagnosticLog.write("DisplayPower", "display blank refused reason=pendingPowerRecovery")
+            DiagnosticLog.write("DisplayPower", "display blank refused reason=pendingRecovery")
             return false
         }
 
@@ -214,6 +216,8 @@ enum DisplayPower {
             eventType: anyInputEventType
         )
 
+        var journal = DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: [:], ddcBacklight: [:])
+        journal.displayRecords = [:]
         var blanked: [CGDirectDisplayID: Float] = [:]
         var ddcBlanked: [CGDirectDisplayID: Double] = [:]
         var ddcPoweredOff: Set<CGDirectDisplayID> = []
@@ -227,11 +231,30 @@ enum DisplayPower {
             if step.action == .backlight,
                let driver = BrightnessDriver.shared,
                let original = driver.current(step.displayID) {
-                let write = driver.writeAndReadBack(0, to: step.displayID)
-                // A sent write may have changed the panel even if the read-back
-                // failed. Preserve its original level for unblank/recovery.
-                if write.sent { blanked[step.displayID] = original }
+                guard let displayUUID = DisplayBlankIdentity.uuid(for: step.displayID) else {
+                    unblankDisplay()
+                    return false
+                }
+                let key = String(step.displayID)
+                journal.systemBacklight[key] = original
+                journal.displayRecords?[key] = DisplayBlankRecord(
+                    displayUUID: displayUUID,
+                    originalBrightness: original, operationIntent: "systemBrightnessZero"
+                )
+                guard let write = snapshotStore.commitIntent(journal, effect: {
+                    driver.writeAndReadBack(0, to: step.displayID)
+                }) else {
+                    blankedDisplays = blanked
+                    ddcBlankedDisplays = ddcBlanked
+                    ddcPoweredOffDisplays = ddcPoweredOff
+                    unblankDisplay()
+                    return false
+                }
+                // Keep even a rejected write pending until recovery reads it.
+                blanked[step.displayID] = original
                 DiagnosticLog.write("DisplayPower", "blank backlight display=\(step.displayID) sent=\(write.sent) readback=\(String(describing: write.readback)) confirmed=\(write.confirms(0))")
+                journal.displayRecords?[key]?.lastError = write.confirms(0) ? nil : "blankUnconfirmed"
+                snapshotStore.save(journal)
                 if write.confirms(0) {
                     coveredDisplays.insert(step.displayID)
                     continue
@@ -242,31 +265,68 @@ enum DisplayPower {
                 // actually dark: on plenty of them — the HP 24w included —
                 // brightness zero is a *dim but visible* level, which is exactly
                 // the "black screen that is only dimmed" MacPilot must not ship.
-                let write = ddc.setPowerMode(DDCPacket.powerOff, step.displayID)
-                DiagnosticLog.write("DisplayPower", "blank DDC power display=\(step.displayID) sent=\(write.sent) confirmed=\(write.didConfirm)")
-                if write.mayHavePoweredDown {
-                    // Recorded from the write, not from the confirmation. The
-                    // monitor may be dark already and simply refuse to say so —
-                    // this machine's SSN-24 answers a soft-off with "standby",
-                    // and some panels stop answering DDC at all — and a wake
-                    // with no record of the switch-off has nothing to power
-                    // back on. That is the external monitor that "never wakes".
+                guard let displayUUID = DisplayBlankIdentity.uuid(for: step.displayID) else {
+                    unblankDisplay()
+                    return false
+                }
+                let key = String(step.displayID)
+                let originalPower = ddc.powerMode(step.displayID)
+                let originalBrightness = ddc.level(step.displayID)
+                journal.displayRecords?[key] = DisplayBlankRecord(
+                    displayUUID: displayUUID,
+                    originalDDCBrightness: originalBrightness, originalPowerState: originalPower,
+                    operationIntent: "ddcPowerOff"
+                )
+                if ScreenBlankPlanner.canPowerOff(originalPower: originalPower) {
+                    journal.ddcPowerOff = (journal.ddcPowerOff ?? []) + [key]
+                    guard let write = snapshotStore.commitIntent(journal, effect: {
+                        ddc.setPowerMode(DDCPacket.powerOff, step.displayID)
+                    }) else {
+                        blankedDisplays = blanked
+                        ddcBlankedDisplays = ddcBlanked
+                        ddcPoweredOffDisplays = ddcPoweredOff
+                        unblankDisplay()
+                        return false
+                    }
                     ddcPoweredOff.insert(step.displayID)
-                    if write.didConfirm {
-                        confirmedPowerOff.insert(step.displayID)
-                        coveredDisplays.insert(step.displayID)
-                        continue
+                    journal.displayRecords?[key]?.lastError = write.didConfirm ? nil : "blankUnconfirmed"
+                    snapshotStore.save(journal)
+                    DiagnosticLog.write("DisplayPower", "blank DDC power display=\(step.displayID) sent=\(write.sent) confirmed=\(write.didConfirm)")
+                    if write.mayHavePoweredDown {
+                        // Recorded from the write, not from the confirmation. The
+                        // monitor may be dark already and simply refuse to say so —
+                        // this machine's SSN-24 answers a soft-off with "standby",
+                        // and some panels stop answering DDC at all — and a wake
+                        // with no record of the switch-off has nothing to power
+                        // back on. That is the external monitor that "never wakes".
+                        ddcPoweredOff.insert(step.displayID)
+                        if write.didConfirm {
+                            confirmedPowerOff.insert(step.displayID)
+                            coveredDisplays.insert(step.displayID)
+                            continue
+                        }
                     }
                 }
                 // Unconfirmed: still fall back, so a monitor that ignored the
                 // write is dark *now* rather than left lit behind a claim of
                 // black. Monitors that do not implement power mode still take
                 // brightness.
-                if let original = ddc.level(step.displayID), ddc.setLevel(0, step.displayID) {
-                    // Already confirmed at zero by the read-back inside setLevel.
+                if let original = originalBrightness {
+                    journal.ddcBacklight[key] = original
+                    journal.displayRecords?[key]?.operationIntent = ScreenBlankPlanner.canPowerOff(originalPower: originalPower)
+                        ? "ddcPowerOffAndBrightnessZero" : "ddcBrightnessZero"
+                    guard let confirmed = snapshotStore.commitIntent(journal, effect: {
+                        ddc.setLevel(0, step.displayID)
+                    }) else {
+                        blankedDisplays = blanked
+                        ddcBlankedDisplays = ddcBlanked
+                        ddcPoweredOffDisplays = ddcPoweredOff
+                        unblankDisplay()
+                        return false
+                    }
                     ddcBlanked[step.displayID] = original
-                    // Zero luminance can still leave a visible desktop on an
-                    // external panel. Cover it too when power-off is unverified.
+                    journal.displayRecords?[key]?.lastError = confirmed ? nil : "blankUnconfirmed"
+                    snapshotStore.save(journal)
                 }
             }
             let covers = screens(for: step.displayID)
@@ -290,27 +350,11 @@ enum DisplayPower {
         // same state the user asked for. Its own captures are best effort — a
         // blank that blacked a screen has already succeeded, whatever CoreBrightness
         // says about the keys.
-        let keyboards = KeyboardBacklightController.shared?.blank() ?? []
+        let keyboards = KeyboardBacklightController.shared?.blank(persistIntent: { states in
+            journal.keyboardBacklights = states
+            return snapshotStore.save(journal)
+        }) ?? []
         blankedKeyboardBacklights = keyboards
-        // Persist the state for as long as the blank is held: a force quit or
-        // crash would otherwise leave the panels dark with the values needed to
-        // bring them back lost. A cover over a display whose backlight was never
-        // touched, on a Mac with no keyboard to darken, has nothing to lose, so
-        // nothing is written for it.
-        if needsCrashSnapshot(
-            systemBacklights: blanked.count,
-            ddcBacklights: ddcBlanked.count,
-            ddcPoweredOff: ddcPoweredOff.count,
-            keyboardBacklights: keyboards.count
-        ) {
-            snapshotStore.save(DisplayBlankSnapshot(
-                capturedAt: Date(),
-                systemBacklight: Dictionary(uniqueKeysWithValues: blanked.map { (String($0.key), $0.value) }),
-                ddcBacklight: Dictionary(uniqueKeysWithValues: ddcBlanked.map { (String($0.key), $0.value) }),
-                ddcPowerOff: ddcPoweredOff.map(String.init),
-                keyboardBacklights: keyboards
-            ))
-        }
         if !overlayScreens.isEmpty {
             ScreenBlankOverlay.shared.show(covering: overlayScreens)
             isOverlayShowing = true
@@ -345,68 +389,20 @@ enum DisplayPower {
     static func unblankDisplay() {
         unblankWatcher?.cancel()
         unblankWatcher = nil
-        keyboardRestoreRetryTask?.cancel()
-        keyboardRestoreRetryTask = nil
-        guard isBlanked else { return }
-
-        let restoredBacklights = blankedDisplays.count
-        let capturedKeyboards = blankedKeyboardBacklights.count
-        let hidOverlay = isOverlayShowing
-        if let driver = BrightnessDriver.shared {
-            for (displayID, original) in blankedDisplays {
-                driver.apply(original, to: displayID)
-            }
-        }
+        guard isBlanked || snapshotStore.load()?.hasPendingRecovery == true else { return }
+        // The durable journal is the single source of recovery state. Retire
+        // held-session state before scheduling retries so failed restores do
+        // not masquerade as an intentional ongoing blank.
         blankedDisplays.removeAll()
-        var poweredOn = 0
-        var stillWaiting = Array(ddcPoweredOffDisplays)
-        if let ddc = DDCBacklight.shared {
-            // Power first: a display MacPilot switched off has to be answering
-            // DDC again before a brightness write to it can land, and the driver
-            // waits for it to come back rather than assuming it is there.
-            for displayID in ddcPoweredOffDisplays {
-                let write = ddc.setPowerMode(DDCPacket.powerOn, displayID)
-                if write.didConfirm {
-                    poweredOn += 1
-                    stillWaiting.removeAll { $0 == displayID }
-                }
-                DiagnosticLog.write("DisplayPower", "unblank DDC power display=\(displayID) sent=\(write.sent) confirmed=\(write.didConfirm)")
-            }
-            for (displayID, original) in ddcBlankedDisplays {
-                // Best effort: the level the user had before the blank is the one
-                // thing worth restoring even if the monitor does not confirm it.
-                _ = ddc.setLevel(original, displayID)
-            }
-        }
-        ddcPoweredOffDisplays.removeAll()
         ddcBlankedDisplays.removeAll()
-        // The keyboard comes back in the same pass as the displays, from the
-        // values captured when they went dark — the level the user chose, and
-        // their automatic control if they ran it from the light sensor. Restoring
-        // is skipped when nothing was captured, which is every Mac without a
-        // backlit keyboard and every macOS without the private framework.
-        let unresolvedKeyboards = KeyboardBacklightController.shared?.restore(blankedKeyboardBacklights, attempt: 1)
-            ?? blankedKeyboardBacklights
-        blankedKeyboardBacklights = unresolvedKeyboards
+        ddcPoweredOffDisplays.removeAll()
+        blankedKeyboardBacklights.removeAll()
         if isOverlayShowing {
             ScreenBlankOverlay.shared.hide()
             isOverlayShowing = false
         }
-        // The snapshot is cleared only after every attempted restore has been
-        // read back. Any keyboard CoreBrightness did not actually restore stays
-        // queued alongside a monitor that is still waiting to power on.
-        persistPendingRecovery(
-            keyboardBacklights: unresolvedKeyboards,
-            poweredOffDisplays: stillWaiting
-        )
-        if !unresolvedKeyboards.isEmpty {
-            scheduleKeyboardBacklightRetries()
-        }
-        if !stillWaiting.isEmpty { scheduleDisplayRecoveryRetries() }
-        DiagnosticLog.write(
-            "DisplayPower",
-            "display unblanked backlight=\(restoredBacklights) ddcOn=\(poweredOn) ddcOnPending=\(stillWaiting.count) overlay=\(hidOverlay ? 1 : 0) keyboardCaptured=\(capturedKeyboards) keyboardPending=\(unresolvedKeyboards.count)"
-        )
+        DisplayBlankRecovery.recover(store: snapshotStore, forceOriginal: true)
+        scheduleDisplayRecoveryRetries()
         NotificationCenter.default.post(name: blankStateDidChangeNotification, object: nil)
     }
 
@@ -414,6 +410,15 @@ enum DisplayPower {
     /// until an on state is confirmed, and retry as the display link settles.
     @MainActor
     static func scheduleDisplayRecoveryRetries() {
+        guard snapshotStore.load()?.hasPendingRecovery == true else {
+            displayRestoreRetryTask?.cancel()
+            displayRestoreRetryTask = nil
+            if let observer = displayRecoveryObserver {
+                NotificationCenter.default.removeObserver(observer)
+                displayRecoveryObserver = nil
+            }
+            return
+        }
         if displayRecoveryObserver == nil {
             displayRecoveryObserver = NotificationCenter.default.addObserver(
                 forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
@@ -424,98 +429,24 @@ enum DisplayPower {
                 }
             }
         }
-        guard !(snapshotStore.load()?.poweredOffDisplays.isEmpty ?? true) else { return }
-        displayRestoreRetryTask?.cancel()
+        guard displayRestoreRetryTask == nil else { return }
         displayRestoreRetryTask = Task { @MainActor in
-            for delay in [Duration.seconds(1), .seconds(3), .seconds(10), .seconds(30), .seconds(60)] {
+            defer {
+                displayRestoreRetryTask = nil
+                if snapshotStore.load()?.hasPendingRecovery != true, let observer = displayRecoveryObserver {
+                    NotificationCenter.default.removeObserver(observer)
+                    displayRecoveryObserver = nil
+                }
+            }
+            for delay in [Duration.milliseconds(100), .milliseconds(250), .seconds(1), .seconds(3), .seconds(10), .seconds(30), .seconds(60)] {
                 do { try await Task.sleep(for: delay) } catch { return }
                 guard !Task.isCancelled, !isDisplayBlanked else { return }
                 DisplayBlankRecovery.recover(store: snapshotStore)
-                let remaining = snapshotStore.load()?.poweredOffDisplays.count ?? 0
-                DiagnosticLog.write("DisplayPower", "display power recovery retry pending=\(remaining)")
-                if remaining == 0 { break }
+                if snapshotStore.load()?.hasPendingRecovery != true { return }
             }
-            // A display may remain unavailable for hours. A later key or mouse
-            // input is another opportunity to recover, without polling DDC while
-            // the user is away.
-            var inputCounter = CGEventSource.counterForEventType(.combinedSessionState, eventType: anyInputEventType)
-            var pending = !(snapshotStore.load()?.poweredOffDisplays.isEmpty ?? true)
-            while pending {
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
-                guard !Task.isCancelled, !isDisplayBlanked else { return }
-                let current = CGEventSource.counterForEventType(.combinedSessionState, eventType: anyInputEventType)
-                guard current != inputCounter else { continue }
-                inputCounter = current
-                DisplayBlankRecovery.recover(store: snapshotStore)
-                pending = !(snapshotStore.load()?.poweredOffDisplays.isEmpty ?? true)
-            }
-            displayRestoreRetryTask = nil
-        }
-    }
-
-    /// Keeps only state that the just-finished unblank still needs to retry.
-    /// `poweredOffDisplays` is optional for keyboard-only retries: in that case
-    /// the monitor state already persisted by the first pass must be retained.
-    @MainActor
-    private static func persistPendingRecovery(
-        keyboardBacklights: [KeyboardBacklightState],
-        poweredOffDisplays: [CGDirectDisplayID]? = nil
-    ) {
-        let existing = snapshotStore.load()
-        let pendingPoweredOff = poweredOffDisplays
-            ?? existing?.poweredOffDisplays.compactMap(UInt32.init)
-            ?? []
-        guard !keyboardBacklights.isEmpty || !pendingPoweredOff.isEmpty else {
-            snapshotStore.clear()
-            return
-        }
-        var snapshot = existing
-            ?? DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: [:], ddcBacklight: [:])
-        snapshot.systemBacklight = [:]
-        snapshot.ddcBacklight = [:]
-        snapshot.ddcPowerOff = pendingPoweredOff.map(String.init)
-        snapshot.keyboardBacklights = keyboardBacklights
-        snapshotStore.save(snapshot)
-    }
-
-    /// CoreBrightness can acknowledge a write before the keyboard controller has
-    /// applied it. Retry only the unresolved keyboards, at bounded intervals; if
-    /// all attempts fail the snapshot remains for the next launch to recover.
-    @MainActor
-    private static func scheduleKeyboardBacklightRetries() {
-        guard !blankedKeyboardBacklights.isEmpty else { return }
-        keyboardRestoreRetryTask?.cancel()
-        keyboardRestoreRetryTask = Task { @MainActor in
-            for (index, delay) in keyboardRestoreRetryDelays.enumerated() {
-                do {
-                    try await Task.sleep(for: delay)
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled, !blankedKeyboardBacklights.isEmpty else { return }
-
-                let attempt = index + 2
-                let unresolved = KeyboardBacklightController.shared?.restore(
-                    blankedKeyboardBacklights,
-                    attempt: attempt
-                )
-                    ?? blankedKeyboardBacklights
-                blankedKeyboardBacklights = unresolved
-                persistPendingRecovery(keyboardBacklights: unresolved)
-                DiagnosticLog.write(
-                    "DisplayPower",
-                    "keyboard backlight restore retry attempt=\(attempt) unresolved=\(unresolved.count)"
-                )
-                if unresolved.isEmpty {
-                    keyboardRestoreRetryTask = nil
-                    return
-                }
-            }
-            keyboardRestoreRetryTask = nil
-            DiagnosticLog.write(
-                "DisplayPower",
-                "keyboard backlight restore retries exhausted unresolved=\(blankedKeyboardBacklights.count)"
-            )
+            // Keep unresolved originals for a later topology change, explicit
+            // unblank or launch. No second keyboard timer or endless poller.
+            DiagnosticLog.write("DisplayPower", "blank recovery retries exhausted pending=true")
         }
     }
 
@@ -584,7 +515,10 @@ enum DisplayPower {
     static func setBrightness(_ value: Double) -> Bool {
         guard !topologyControlIsActive || value > 0 else { return false }
         guard let displayID = brightnessTarget(in: onlineCandidates()) else { return false }
-        if isBlanked { unblankDisplay() }
+        if isBlanked || snapshotStore.load()?.hasPendingRecovery == true { unblankDisplay() }
+        // Do not let a new slider write race an unresolved original-state
+        // transaction. A later user action retries recovery before applying it.
+        guard snapshotStore.load()?.hasPendingRecovery != true else { return false }
         let level = min(max(value, 0), 1)
         if let driver = BrightnessDriver.shared, driver.current(displayID) != nil {
             return driver.apply(Float(level), to: displayID)

@@ -238,3 +238,33 @@ public struct RemoteBLEReversePresenceSample: Equatable, Sendable {
         return RemoteCrypto.hmacSHA256(key: pairingKey, data: data)
     }
 }
+
+/// Mac-local lifetime for one reverse-presence nonce. Phone wall-clock time is
+/// authenticated diagnostic data, never the clock that expires this challenge.
+public struct RemoteBLEReversePresenceChallenge: Sendable {
+    public let macID: UUID
+    public let nonce: Data
+    public let issuedAt: TimeInterval
+    public let lifetime: TimeInterval
+    public private(set) var consumed = false
+
+    public init(macID: UUID, nonce: Data, issuedAt: TimeInterval, lifetime: TimeInterval = 15) {
+        self.macID = macID
+        self.nonce = nonce
+        self.issuedAt = issuedAt
+        self.lifetime = lifetime
+    }
+
+    public func isPending(at uptime: TimeInterval) -> Bool {
+        let elapsed = uptime - issuedAt
+        return !consumed && elapsed.isFinite && elapsed >= 0 && elapsed <= lifetime
+    }
+
+    public mutating func consume(_ sample: RemoteBLEReversePresenceSample, pairingKey: Data, at uptime: TimeInterval) -> Bool {
+        guard isPending(at: uptime), sample.macID == macID,
+              RemoteCrypto.constantTimeEquals(sample.nonce, nonce),
+              sample.isValidSignature(pairingKey: pairingKey) else { return false }
+        consumed = true
+        return true
+    }
+}

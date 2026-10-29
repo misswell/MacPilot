@@ -217,7 +217,7 @@ struct LocalPortsModelTests {
         let environment = LocalPortCloseEnvironment(
             scan: { sequence.next() },
             listenerScan: { [] },
-            startTime: { _ in "start" },
+            identity: { pid in LocalPortProcessIdentity(pid: pid, uid: 501, startSeconds: 100, startMicroseconds: 1, executablePath: CommandLine.arguments.first ?? "/usr/bin/true") },
             signal: { _, signal in signals.record(signal); return 0 },
             sleep: { _ in },
             currentUID: { 501 },
@@ -259,7 +259,7 @@ struct LocalPortsModelTests {
         LocalPortCloseEnvironment(
             scan: scan,
             listenerScan: { [] },
-            startTime: { _ in "start" },
+            identity: { pid in LocalPortProcessIdentity(pid: pid, uid: 501, startSeconds: 100, startMicroseconds: 1, executablePath: CommandLine.arguments.first ?? "/usr/bin/true") },
             signal: { _, _ in 0 },
             sleep: { duration in try await Task.sleep(for: duration) },
             currentUID: { 501 },

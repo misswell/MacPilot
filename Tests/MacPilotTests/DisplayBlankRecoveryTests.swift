@@ -127,8 +127,8 @@ struct DisplayBlankRecoveryTests {
         #expect(powerWrites.first?.0 == 4)
         #expect(powerWrites.first?.1 == DDCPacket.powerOn)
         #expect(powerModes[5] == DDCPacket.powerOn)
-        // Fully successful: nothing may survive for a second launch to replay.
-        #expect(store.load() == nil)
+        // A disconnected display remains journaled until it can be checked.
+        #expect(store.load()?.ddcBacklight == ["9": 55])
     }
 
     /// A write the display does not confirm — a locked session can refuse one —
@@ -169,11 +169,12 @@ extension DisplayBlankRecoveryTests {
         store.save(DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: [:], ddcBacklight: [:], ddcPowerOff: ["2"]))
         var available = false
         var writes = 0
+        var mode = DDCPacket.powerStandby
         let appliers = DisplayBlankRecovery.Appliers(
             readSystem: { _ in nil }, writeSystem: { _, _ in false },
             readDDC: { _ in nil }, writeDDC: { _, _ in false },
-            readPower: { _ in available ? DDCPacket.powerStandby : nil },
-            writePower: { _, _ in writes += 1; return available }
+            readPower: { _ in available ? mode : nil },
+            writePower: { _, value in writes += 1; if available { mode = value }; return available }
         )
 
         DisplayBlankRecovery.recover(store: store, appliers: appliers)
@@ -219,5 +220,120 @@ extension DisplayBlankRecoveryTests {
         let snapshot = try #require(store.load())
         #expect(snapshot.systemBacklight == ["1": 0.5])
         #expect(snapshot.poweredOffDisplays.isEmpty)
+    }
+}
+
+extension DisplayBlankRecoveryTests {
+    @Test func journalFailurePreventsTheHardwareEffect() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // A regular file in place of the directory injects an atomic-save failure.
+        try Data().write(to: directory)
+        let store = DisplayBlankSnapshotStore(directory: directory)
+        var effects = 0
+        let result: Void? = store.commitIntent(
+            DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: ["1": 0.7], ddcBacklight: [:])
+        ) { effects += 1 }
+        #expect(result == nil)
+        #expect(effects == 0)
+    }
+
+    @Test func originalIsDurableBeforeAnEffectCanInterruptTheTransaction() throws {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        let original = DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: ["1": 0.7], ddcBacklight: [:])
+        var observed: DisplayBlankSnapshot?
+        // No post-effect save: this is the exact journal a force-quit leaves.
+        let result = store.commitIntent(original) {
+            observed = store.load()
+            return false
+        }
+        #expect(result == false)
+        #expect(observed == original)
+        #expect(store.load() == original)
+    }
+
+    @Test func acceptedBrightnessWritesWithFailedReadbackKeepTheOriginalAcrossRetries() throws {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        store.save(DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: ["1": 0.7], ddcBacklight: ["2": 65]))
+        var systemLevel: Float? = 0
+        var ddcLevel: Double? = 0
+        var confirm = false
+        let appliers = DisplayBlankRecovery.Appliers(
+            readSystem: { _ in systemLevel },
+            writeSystem: { _, value in systemLevel = confirm ? value : nil; return true },
+            readDDC: { _ in ddcLevel },
+            writeDDC: { _, value in ddcLevel = confirm ? value : nil; return true },
+            readPower: { _ in nil }, writePower: { _, _ in false }
+        )
+        DisplayBlankRecovery.recover(store: store, appliers: appliers)
+        #expect(store.load()?.systemBacklight == ["1": 0.7])
+        #expect(store.load()?.ddcBacklight == ["2": 65])
+        DisplayBlankRecovery.recover(store: store, appliers: appliers)
+        #expect(store.load()?.displayRecords?["1"]?.restoreAttempts == 2)
+        #expect(store.load()?.systemBacklight == ["1": 0.7])
+        // A reconnect can report a partially applied, nonzero brightness. A
+        // failed restore must not mistake that partial value for user repair.
+        confirm = true
+        systemLevel = 0.1
+        ddcLevel = 5
+        DisplayBlankRecovery.recover(store: store, appliers: appliers)
+        #expect(systemLevel == 0.7)
+        #expect(ddcLevel == 65)
+        #expect(store.load() == nil)
+    }
+
+    @Test func stableIdentityWaitsForTheSameMonitorAndUsesItsNewDisplayID() {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        var snapshot = DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: ["1": 0.7], ddcBacklight: [:])
+        snapshot.displayRecords = ["1": DisplayBlankRecord(displayUUID: "panel-A", originalBrightness: 0.7, operationIntent: "systemBrightnessZero")]
+        store.save(snapshot)
+        var online = false
+        var level: Float = 0
+        var writtenIDs: [UInt32] = []
+        let appliers = DisplayBlankRecovery.Appliers(
+            resolveDisplay: { key, uuid in
+                #expect(key == "1")
+                #expect(uuid == "panel-A")
+                return online ? 9 : nil
+            },
+            readSystem: { _ in level },
+            writeSystem: { id, value in writtenIDs.append(id); level = value; return true },
+            readDDC: { _ in nil }, writeDDC: { _, _ in false },
+            readPower: { _ in nil }, writePower: { _, _ in false }
+        )
+        DisplayBlankRecovery.recover(store: store, appliers: appliers)
+        #expect(writtenIDs.isEmpty)
+        #expect(store.load()?.systemBacklight == ["1": 0.7])
+        online = true
+        DisplayBlankRecovery.recover(store: store, appliers: appliers)
+        #expect(writtenIDs == [9])
+        #expect(store.load() == nil)
+    }
+
+    @Test func acceptedPowerOnWithoutConfirmationKeepsItsRecoveryIntent() {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        store.save(DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: [:], ddcBacklight: [:], ddcPowerOff: ["1"]))
+        let appliers = DisplayBlankRecovery.Appliers(
+            readSystem: { _ in nil }, writeSystem: { _, _ in false },
+            readDDC: { _ in nil }, writeDDC: { _, _ in false },
+            readPower: { _ in nil }, writePower: { _, _ in true }
+        )
+        DisplayBlankRecovery.recover(store: store, appliers: appliers)
+        #expect(store.load()?.poweredOffDisplays == ["1"])
+    }
+}
+
+
+extension DisplayBlankRecoveryTests {
+    @Test func unknownPowerStateCannotAuthorizeHardwarePowerOff() {
+        #expect(!ScreenBlankPlanner.canPowerOff(originalPower: nil))
+        #expect(!ScreenBlankPlanner.canPowerOff(originalPower: 0))
+        #expect(!ScreenBlankPlanner.canPowerOff(originalPower: 0xFFFF))
+        #expect(ScreenBlankPlanner.canPowerOff(originalPower: DDCPacket.powerOn))
+        #expect(ScreenBlankPlanner.canPowerOff(originalPower: DDCPacket.powerStandby))
     }
 }

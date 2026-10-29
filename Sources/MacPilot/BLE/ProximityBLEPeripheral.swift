@@ -37,6 +37,15 @@ struct ProximityReversePresenceReport: Sendable, Equatable {
 class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeripheralManagerDelegate {
     static let shared = ProximityBLEPeripheral()
 
+    private nonisolated static let presenceClockOrigin = ContinuousClock.now
+
+    /// ContinuousClock counts sleep too: a pre-sleep nonce must not become
+    /// fresh again merely because the machine spent its lifetime suspended.
+    private nonisolated static var presenceTime: TimeInterval {
+        let elapsed = presenceClockOrigin.duration(to: ContinuousClock.now).components
+        return Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+    }
+
     enum Status: Equatable {
         case idle
         case starting
@@ -46,9 +55,10 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
     }
 
     private struct PendingPresenceChallenge {
-        let macID: UUID
-        let nonce: Data
-        let issuedAt: Date
+        var challenge: RemoteBLEReversePresenceChallenge
+        var macID: UUID { challenge.macID }
+        var nonce: Data { challenge.nonce }
+        var issuedAt: TimeInterval { challenge.issuedAt }
         var delivered: Bool
     }
 
@@ -603,12 +613,12 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
             peripheral.respond(to: request, withResult: .insufficientAuthentication)
             return
         }
-        guard sample.isFresh(now: now) else {
-            logRejectedSample("stale timestamp", centralID: centralID)
+        guard pending.challenge.isPending(at: Self.presenceTime) else {
+            logRejectedSample("expired challenge", centralID: centralID)
             peripheral.respond(to: request, withResult: .insufficientAuthentication)
             return
         }
-        guard let matched = matchIdentity(for: sample, expectedMacID: pending.macID, expectedNonce: pending.nonce, now: now) else {
+        guard let matched = matchIdentity(for: sample, challenge: pending.challenge) else {
             logRejectedSample("no matching pairing key", centralID: centralID)
             peripheral.respond(to: request, withResult: .insufficientAuthentication)
             return
@@ -639,20 +649,14 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
 
     private func matchIdentity(
         for sample: RemoteBLEReversePresenceSample,
-        expectedMacID: UUID,
-        expectedNonce: Data,
-        now: Date
+        challenge: RemoteBLEReversePresenceChallenge
     ) -> ProximityReversePresenceIdentity? {
         guard let identities = productionIdentityProvider?(),
               let keyProvider = productionPairingKeyProvider else { return nil }
         for identity in identities {
             guard let key = keyProvider(identity.clientID) else { continue }
-            if sample.isValid(
-                pairingKey: key,
-                expectedMacID: expectedMacID,
-                expectedNonce: expectedNonce,
-                now: now
-            ) {
+            var candidate = challenge
+            if candidate.consume(sample, pairingKey: key, at: Self.presenceTime) {
                 return identity
             }
         }
@@ -729,10 +733,10 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
             cadenceSkipReason = nil
             logPersisted("challenge cadence resumed after \(previous) subscribers=\(presenceSubscribedCentrals.count)")
         }
-        let now = Date.now
+        let now = Self.presenceTime
         for (centralID, central) in presenceSubscribedCentrals {
             if let pending = pendingPresence[centralID] {
-                let age = now.timeIntervalSince(pending.issuedAt)
+                let age = now - pending.issuedAt
                 if age > challengeTTL {
                     pendingPresence.removeValue(forKey: centralID)
                 } else if pending.delivered, age >= challengeInterval {
@@ -753,14 +757,12 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
     private func issuePresenceChallenge(
         to central: CBCentral,
         on peripheral: CBPeripheralManager,
-        at now: Date = .now
+        at now: TimeInterval = ProximityBLEPeripheral.presenceTime
     ) -> Bool {
         guard productionWantsRun, let macID = productionMacID else { return false }
         let nonce = RemoteCrypto.randomData(count: RemoteBLEReversePresenceSample.nonceLength)
         pendingPresence[central.identifier] = PendingPresenceChallenge(
-            macID: macID,
-            nonce: nonce,
-            issuedAt: now,
+            challenge: RemoteBLEReversePresenceChallenge(macID: macID, nonce: nonce, issuedAt: now, lifetime: challengeTTL),
             delivered: false
         )
         return sendPresenceChallenge(nonce, macID: macID, to: central, on: peripheral)

@@ -85,6 +85,34 @@ struct DisplayRecoveryClientTests {
         #expect(server.replyCount == 1)
     }
 
+    @Test func acceptedMutationPollsItsStableOperationIDAcrossRealXPC() async throws {
+        let server = AnonymousDisplayRecoveryServer(mode: .operation(dropAcceptance: false))
+        defer { server.stop() }
+        let response = try await clientConnected(to: server, timeout: .seconds(1)).send(.init(command: .prepareVirtual))
+        #expect(response.operationStatus == .completed)
+        #expect(response.state == .active)
+        #expect(server.mutationCount == 1)
+        #expect(server.operationIDs.count >= 2)
+        #expect(Set(server.operationIDs).count == 1)
+    }
+
+    @Test func timedOutAcceptanceQueriesOperationWithoutRepeatingMutation() async throws {
+        let server = AnonymousDisplayRecoveryServer(mode: .operation(dropAcceptance: true))
+        defer { server.stop() }
+        let response = try await clientConnected(to: server, timeout: .milliseconds(50)).send(.init(command: .prepareVirtual))
+        #expect(response.operationStatus == .completed)
+        #expect(server.mutationCount == 1)
+        #expect(Set(server.operationIDs).count == 1)
+    }
+
+    @Test func commandTimeoutsMatchTheOperationCost() {
+        #expect(DisplayRecoveryClient.timeout(for: .status) == .seconds(4))
+        #expect(DisplayRecoveryClient.timeout(for: .heartbeat) == .seconds(4))
+        #expect(DisplayRecoveryClient.timeout(for: .disable) == .seconds(15))
+        #expect(DisplayRecoveryClient.timeout(for: .prepareVirtual) == .seconds(30))
+        #expect(DisplayRecoveryClient.timeout(for: .restore) == .seconds(60))
+    }
+
     private func missingServiceClient() -> DisplayRecoveryClient {
         let serviceName = "\(DisplayRecoveryService.serviceName).test.\(UUID().uuidString)"
         return DisplayRecoveryClient(machServiceName: serviceName, timeout: .seconds(1))
@@ -136,6 +164,7 @@ private final class AnonymousDisplayRecoveryServer: NSObject, NSXPCListenerDeleg
         case reply(delay: TimeInterval)
         case replyAndInvalidate(delay: TimeInterval)
         case hold
+        case operation(dropAcceptance: Bool)
     }
 
     private let listener: NSXPCListener
@@ -143,11 +172,22 @@ private final class AnonymousDisplayRecoveryServer: NSObject, NSXPCListenerDeleg
     private let responseData: Data
     private let lock = NSLock()
     private var connections: [NSXPCConnection] = []
+    private var receivedRequests: [DisplayControlRequest] = []
     private var requestsReceived = 0
     private var repliesSent = 0
     private var heldReply: (@Sendable (Data) -> Void)?
 
     var endpoint: NSXPCListenerEndpoint { listener.endpoint }
+    var operationIDs: [UUID] {
+        lock.lock()
+        defer { lock.unlock() }
+        return receivedRequests.compactMap(\.operationID)
+    }
+    var mutationCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return receivedRequests.filter(\.isMutation).count
+    }
 
     var replyCount: Int {
         lock.lock()
@@ -194,9 +234,22 @@ private final class AnonymousDisplayRecoveryServer: NSObject, NSXPCListenerDeleg
     func execute(_ data: Data, reply: @escaping @Sendable (Data) -> Void) {
         lock.lock()
         requestsReceived += 1
+        let request = try? JSONDecoder().decode(DisplayControlRequest.self, from: data)
+        if let request { receivedRequests.append(request) }
         lock.unlock()
 
         switch mode {
+        case let .operation(dropAcceptance):
+            guard let request, let id = request.operationID else { reply(responseData); return }
+            if request.isMutation && dropAcceptance { return }
+            let response = DisplayControlResponse(displays: [], state: request.isMutation ? .managing : .active,
+                helperReady: true, operationID: id, operationStatus: request.isMutation ? .accepted : .completed)
+            let encoded = (try? JSONEncoder().encode(response)) ?? Data()
+            DispatchQueue.global().async {
+                self.recordReply()
+                reply(encoded)
+            }
+
         case let .reply(delay):
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + delay) { [responseData, weak self] in
                 self?.recordReply()

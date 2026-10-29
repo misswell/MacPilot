@@ -414,13 +414,15 @@ private extension FakeKeyboardBacklight {
         systemLevels: [UInt32: Float] = [:],
         powerModes: [UInt32: UInt16] = [:]
     ) -> DisplayBlankRecovery.Appliers {
-        DisplayBlankRecovery.Appliers(
-            readSystem: { systemLevels[$0] },
-            writeSystem: { _, _ in true },
+        var liveSystemLevels = systemLevels
+        var livePowerModes = powerModes
+        return DisplayBlankRecovery.Appliers(
+            readSystem: { liveSystemLevels[$0] },
+            writeSystem: { id, value in liveSystemLevels[id] = value; return true },
             readDDC: { _ in nil },
             writeDDC: { _, _ in false },
-            readPower: { powerModes[$0] },
-            writePower: { _, _ in true },
+            readPower: { livePowerModes[$0] },
+            writePower: { id, value in livePowerModes[id] = value; return true },
             readKeyboardBrightness: { self.levels[$0] },
             writeKeyboardBrightness: { id, level in
                 self.brightnessWrites.append((id, level))
@@ -440,5 +442,22 @@ private extension FakeKeyboardBacklight {
                 return true
             }
         )
+    }
+}
+
+extension KeyboardBacklightTests {
+    @Test func aFailedRecoveryJournalPreventsBothKeyboardEffects() {
+        let keyboard = FakeKeyboardBacklight([1: (0.7, true)])
+        let captured = keyboard.controller().blank(persistIntent: { states in
+            #expect(states == [KeyboardBacklightState(keyboardID: 1, brightness: 0.7, autoBrightnessEnabled: true)])
+            #expect(keyboard.brightnessWrites.isEmpty)
+            #expect(keyboard.autoWrites.isEmpty)
+            return false
+        })
+        #expect(captured.isEmpty)
+        #expect(keyboard.brightnessWrites.isEmpty)
+        #expect(keyboard.autoWrites.isEmpty)
+        #expect(keyboard.levels[1] == 0.7)
+        #expect(keyboard.sensors[1] == true)
     }
 }

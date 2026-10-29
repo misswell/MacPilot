@@ -96,7 +96,12 @@ public struct DisplayRecoveryJournal: Codable, Equatable, Sendable {
 public struct DisplayRecoveryJournalStore: Sendable {
     public let fileURL: URL
 
-    public init(fileURL: URL) { self.fileURL = fileURL }
+    private let beforeSave: (@Sendable (DisplayRecoveryJournal) throws -> Void)?
+
+    public init(fileURL: URL, beforeSave: (@Sendable (DisplayRecoveryJournal) throws -> Void)? = nil) {
+        self.fileURL = fileURL
+        self.beforeSave = beforeSave
+    }
 
     public static var standard: DisplayRecoveryJournalStore {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -124,6 +129,7 @@ public struct DisplayRecoveryJournalStore: Sendable {
     /// Creates private storage and commits one complete journal atomically.
     /// A failed write leaves the previous recoverable record untouched.
     public func save(_ journal: DisplayRecoveryJournal) throws {
+        try beforeSave?(journal)
         if let reason = journal.validationError() { throw StoreError.invalidJournal(reason) }
         let directory = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(
@@ -140,6 +146,13 @@ public struct DisplayRecoveryJournalStore: Sendable {
         let data = try JSONEncoder.displayControlEncoder.encode(journal)
         try data.write(to: fileURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        let handle = try FileHandle(forWritingTo: fileURL)
+        defer { try? handle.close() }
+        try handle.synchronize()
+        let directoryFD = open(directory.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard directoryFD >= 0 else { throw StoreError.writeVerificationFailed }
+        defer { close(directoryFD) }
+        guard fsync(directoryFD) == 0 else { throw StoreError.writeVerificationFailed }
         // Read back after the write so a truncated or malformed record can
         // never authorize a display operation.
         let saved = try load()

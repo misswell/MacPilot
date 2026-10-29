@@ -67,26 +67,26 @@ struct BLEReversePresenceTests {
         #expect(h.model.reverseRuntime(for: h.phone) == nil)
     }
 
-    @Test func staleFutureAndOutOfRangeSamplesAreRejected() {
+    @Test func phoneClockSkewIsDiagnosticAndOutOfRangeSamplesAreRejected() {
         let h = Harness()
         defer { h.model.shutdown() }
         let sampledAt = Date(timeIntervalSince1970: 1_700_000_000)
-        #expect(!h.model.acceptReversePresenceSample(
+        #expect(h.model.acceptReversePresenceSample(
             clientID: "phone", keyFingerprint: "fp",
             primaryUUID: h.phone, rssi: -50, sampledAt: sampledAt,
-            now: sampledAt.addingTimeInterval(RemoteBLEReversePresenceSample.maximumAge + 1)
+            now: sampledAt.addingTimeInterval(1800)
         ))
-        #expect(!h.model.acceptReversePresenceSample(
+        #expect(h.model.acceptReversePresenceSample(
             clientID: "phone", keyFingerprint: "fp",
             primaryUUID: h.phone, rssi: -50, sampledAt: sampledAt,
-            now: sampledAt.addingTimeInterval(-RemoteBLEReversePresenceSample.maximumFutureSkew - 1)
+            now: sampledAt.addingTimeInterval(-1800)
         ))
         #expect(!h.model.acceptReversePresenceSample(
             clientID: "phone", keyFingerprint: "fp",
             primaryUUID: h.phone, rssi: 5, sampledAt: Date()
         ))
-        #expect(!h.model.presence)
-        #expect(h.model.reverseRuntime(for: h.phone) == nil)
+
+        #expect(h.model.reverseRuntime(for: h.phone)?.sampleCount == 2)
     }
 
     @Test func disabledFeatureToggleSleepAndBackgroundConsoleAllReject() {
