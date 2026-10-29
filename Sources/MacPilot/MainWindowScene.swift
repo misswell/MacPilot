@@ -54,24 +54,6 @@ struct MainWindowContentState {
     }
 }
 
-/// Lives for the process lifetime, including after SwiftUI destroys the
-/// closed window's view. The menu must not rely on a closed view observing it.
-@MainActor
-final class MainWindowOpener: NSObject {
-    static let shared = MainWindowOpener()
-    private var open: (() -> Void)?
-
-    override init() {
-        super.init()
-        NotificationCenter.default.addObserver(self, selector: #selector(show),
-                                               name: .macPilotShowMainWindow, object: nil)
-    }
-
-    func install(_ action: @escaping () -> Void) { open = action }
-
-    @objc private func show() { open?() }
-}
-
 /// The main window's content, built only while the window is actually in use.
 ///
 /// A hidden window is not free. `orderOut` keeps the whole view graph, its
@@ -92,13 +74,10 @@ struct MainWindowRoot: View {
             }
         }
         .frame(minWidth: 900, minHeight: 620)
-        .onAppear {
-            let openWindow = openWindow
-            MainWindowOpener.shared.install { [weak model] in
-                model?.loadMainWindowContent()
-                openWindow(id: "main")
-                DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
-            }
+        .onReceive(NotificationCenter.default.publisher(for: .macPilotShowMainWindow)) { _ in
+            model.loadMainWindowContent()
+            openWindow(id: "main")
+            DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
         }
     }
 }
