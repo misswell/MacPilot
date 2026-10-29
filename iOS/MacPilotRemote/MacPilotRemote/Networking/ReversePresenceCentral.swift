@@ -107,6 +107,7 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
 
     private let defaults: UserDefaults
     private let pairingKeyLookup: @MainActor (UUID) -> Data?
+    private let requiresKeychainPreparation: Bool
     private let radioFactory: (@MainActor () -> CBCentralManager?)?
     private var manager: CBCentralManager?
     private var connections: [UUID: Connection] = [:]
@@ -135,13 +136,12 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
 
     init(
         defaults: UserDefaults = .standard,
-        pairingKeyLookup: @escaping @MainActor (UUID) -> Data? = {
-            RemoteKeychain.pairingKey(for: $0.uuidString)
-        },
+        pairingKeyLookup: (@MainActor (UUID) -> Data?)? = nil,
         radioFactory: (@MainActor () -> CBCentralManager?)? = nil
     ) {
         self.defaults = defaults
-        self.pairingKeyLookup = pairingKeyLookup
+        self.requiresKeychainPreparation = pairingKeyLookup == nil
+        self.pairingKeyLookup = pairingKeyLookup ?? { RemoteKeychain.pairingKey(for: $0.uuidString) }
         self.radioFactory = radioFactory
         self.isEnabled = defaults.bool(forKey: Self.enabledKey)
         self.userDisabled = defaults.bool(forKey: Self.userDisabledKey)
@@ -162,6 +162,13 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
     /// Called at launch. Upgrades from versions without production BLE presence
     /// opt existing paired users in once, unless they explicitly opted out.
     func resumeAtLaunch() {
+        if requiresKeychainPreparation && !RemoteKeychain.isPrepared {
+            Task { [weak self] in
+                guard await RemoteKeychain.prepare() else { return }
+                self?.resumeAtLaunch()
+            }
+            return
+        }
         migrateAutoEnableIfNeeded()
         guard isEnabled else {
             status = .off
@@ -292,6 +299,13 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
     }
 
     private func startIfPossible() {
+        if requiresKeychainPreparation && !RemoteKeychain.isPrepared {
+            Task { [weak self] in
+                guard await RemoteKeychain.prepare() else { return }
+                self?.startIfPossible()
+            }
+            return
+        }
         guard isEnabled else {
             status = .off
             return

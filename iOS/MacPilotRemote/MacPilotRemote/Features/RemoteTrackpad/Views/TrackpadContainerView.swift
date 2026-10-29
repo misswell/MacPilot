@@ -44,7 +44,7 @@ struct TrackpadContainerView: View {
                                 Text("Duration: \(debug.durationMs)ms")
                                 Text("Velocity: \(debug.velocity, specifier: "%.1f")")
                                 Text("Score: \(debug.score, specifier: "%.2f")")
-                                Text("State: \(debug.state)")
+                                Text("State: \(String(describing: debug.state))")
                             }
                             .font(.caption2.monospaced())
                             .foregroundStyle(.secondary)

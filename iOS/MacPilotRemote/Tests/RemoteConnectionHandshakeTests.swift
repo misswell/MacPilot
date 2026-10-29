@@ -7,7 +7,30 @@ import MacPilotRemoteTransport
 @MainActor
 @Suite("Background connection authentication")
 struct RemoteConnectionHandshakeTests {
-    @Test func upgradeCannotSendPairRequestWhenMacForgetsPairing() throws {
+    @Test func disconnectWhileCredentialsLoadCannotStartARetiredTransport() async {
+        var release: CheckedContinuation<Bool, Never>?
+        let (events, entered) = AsyncStream<Void>.makeStream()
+        let manager = RemoteConnectionManager(credentialsAreReady: { false }, prepareCredentials: {
+            await withCheckedContinuation { continuation in
+                release = continuation
+                entered.yield(())
+            }
+        })
+        let transport = HandshakeTransport()
+        manager.connect(using: transport, deviceID: UUID(), name: "Mac",
+                        clientID: UUID().uuidString, clientName: "Phone")
+        var iterator = events.makeAsyncIterator()
+        await iterator.next()
+        manager.disconnect(report: false)
+        release?.resume(returning: true)
+        entered.finish()
+        try? await Task.sleep(for: .milliseconds(20))
+        #expect(transport.startCount == 0)
+        #expect(!manager.isReady)
+    }
+
+    @Test func upgradeCannotSendPairRequestWhenMacForgetsPairing() async throws {
+        #expect(await RemoteKeychain.prepare())
         let transport = HandshakeTransport()
         let manager = RemoteConnectionManager()
         let deviceID = UUID()
@@ -21,7 +44,8 @@ struct RemoteConnectionHandshakeTests {
         #expect(!manager.isReady)
     }
 
-    @Test func firstConnectionCanStillRequestPairing() throws {
+    @Test func firstConnectionCanStillRequestPairing() async throws {
+        #expect(await RemoteKeychain.prepare())
         let transport = HandshakeTransport()
         let manager = RemoteConnectionManager()
         let deviceID = UUID()
@@ -34,7 +58,8 @@ struct RemoteConnectionHandshakeTests {
         #expect(try transport.sentMessages().map(\.kind) == [.clientHello, .pairRequest])
         manager.disconnect(report: false)
     }
-    @Test func directAddressLearnsIdentityBeforeRequestingPairing() throws {
+    @Test func directAddressLearnsIdentityBeforeRequestingPairing() async throws {
+        #expect(await RemoteKeychain.prepare())
         let transport = HandshakeTransport()
         let manager = RemoteConnectionManager()
         var failure: RemoteConnectionError?
@@ -47,7 +72,8 @@ struct RemoteConnectionHandshakeTests {
         manager.disconnect(report: false)
     }
 
-    @Test func rememberedAddressRejectsAnotherMacIdentity() throws {
+    @Test func rememberedAddressRejectsAnotherMacIdentity() async throws {
+        #expect(await RemoteKeychain.prepare())
         let transport = HandshakeTransport()
         let manager = RemoteConnectionManager()
         var failure: RemoteConnectionError?
@@ -71,8 +97,12 @@ private final class HandshakeTransport: RemoteTransport {
     var remotePort: UInt16? { nil }
     var remoteServiceName: String? { nil }
     private var sent = Data()
+    private(set) var startCount = 0
 
-    func start() { onStateChange?(.ready) }
+    func start() {
+        startCount += 1
+        onStateChange?(.ready)
+    }
     func cancel() {}
     func send(_ data: Data, completion: @escaping @MainActor (Error?) -> Void) {
         sent.append(data)

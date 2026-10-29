@@ -674,6 +674,19 @@ addition is wire-compatible in both directions.
 
 ## Performance
 
+- **Keychain access.** PilotNest loads its pairing-key snapshot on a dedicated
+  serial queue before starting authenticated network/BLE discovery. Bluetooth
+  delegates, retry policies and presence-status refreshes read memory only;
+  `SecItemCopyMatching` must never run on the main actor. New pairings wait for
+  the background write to succeed, and forgetting a Mac invalidates its cached
+  key immediately and removes metadata only after deletion completes. A failed
+  read is unavailable credentials, not an empty Keychain. Two build-49 watchdog
+  reports on 2026-10-29 showed the main thread waiting synchronously on securityd
+  from a CoreBluetooth callback; one exceeded its 10-second scene-update budget.
+- **Automatic Mac selection.** When the selected Mac is unavailable and exactly
+  one other paired Mac remains discoverable, confirm it for 3 seconds before
+  switching. A live authenticated session, an active pairing/authentication,
+  a manual choice or a stale foreground-generation deadline prevents switching.
 - **Fast path.** The iPhone still stores the host and port it last reached the Mac
   on, but a stale one no longer blocks startup: it is one candidate among several,
   so a fresh Bonjour result connects as soon as it resolves rather than waiting for

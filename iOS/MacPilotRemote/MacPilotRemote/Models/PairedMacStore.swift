@@ -144,23 +144,22 @@ final class PairedMacStore: ObservableObject {
         }
     }
 
-    /// Removes the Mac and immediately deletes its Keychain pairing key.
-    func remove(id: UUID) {
+    /// Remove metadata only once the background Keychain deletion is durable.
+    func remove(id: UUID) async -> Bool {
+        guard await RemoteKeychain.deletePairingKey(for: id.uuidString).value else { return false }
         pairedMacs.removeAll { $0.id == id.uuidString }
-        RemoteKeychain.deletePairingKey(for: id.uuidString)
         setLastSidecarDeviceID(nil, macID: id.uuidString)
         if preferredMacID == id.uuidString { preferredMacID = nil }
         persist()
+        return true
     }
 
-    func removeAll() {
+    func removeAll() async -> Bool {
+        var success = true
         for mac in pairedMacs {
-            RemoteKeychain.deletePairingKey(for: mac.id)
-            setLastSidecarDeviceID(nil, macID: mac.id)
+            if let id = mac.deviceID, !(await remove(id: id)) { success = false }
         }
-        pairedMacs.removeAll()
-        preferredMacID = nil
-        persist()
+        return success
     }
 
     private func persist() {

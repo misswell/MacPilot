@@ -28,6 +28,7 @@ final class RemoteConnectionManager {
         case handshaking
         case authenticating
         case pairing
+        case savingPairing
         case ready
         case closed
     }
@@ -77,8 +78,19 @@ final class RemoteConnectionManager {
     private var pingTask: Task<Void, Never>?
     private var pairConfirmationTask: Task<Void, Never>?
     private var didReportDisconnect = false
+    private var lifecycleID = UUID()
     private var connectStartedAt: Date?
     private(set) var transportReadyAt: Date?
+    private let credentialsAreReady: @MainActor () -> Bool
+    private let prepareCredentials: @MainActor () async -> Bool
+
+    init(
+        credentialsAreReady: @escaping @MainActor () -> Bool = { RemoteKeychain.isPrepared },
+        prepareCredentials: @escaping @MainActor () async -> Bool = { await RemoteKeychain.prepare() }
+    ) {
+        self.credentialsAreReady = credentialsAreReady
+        self.prepareCredentials = prepareCredentials
+    }
 
     var isReady: Bool { phase == .ready }
     var isPairing: Bool { phase == .pairing }
@@ -163,10 +175,25 @@ final class RemoteConnectionManager {
         }
         self.transport = transport
         onStateChange?(.connecting)
-        transport.start()
+        if credentialsAreReady() {
+            transport.start()
+        } else {
+            let token = lifecycleID
+            Task { [weak self] in
+                guard let self, self.lifecycleID == token, self.phase == .connecting else { return }
+                let prepared = await self.prepareCredentials()
+                guard self.lifecycleID == token, self.phase == .connecting else { return }
+                guard prepared else {
+                    self.fail(.network("pairing credentials are temporarily unavailable"))
+                    return
+                }
+                transport.start()
+            }
+        }
     }
 
     func disconnect(report: Bool = true) {
+        lifecycleID = UUID()
         cancelPing()
         pairConfirmationTask?.cancel()
         pairConfirmationTask = nil
@@ -443,6 +470,7 @@ final class RemoteConnectionManager {
     }
 
     private func handlePairResult(_ message: RemoteHandshakeMessage) {
+        guard phase != .savingPairing else { return }
         pairConfirmationTask?.cancel()
         pairConfirmationTask = nil
         if let errorCode = message.errorCode {
@@ -476,8 +504,18 @@ final class RemoteConnectionManager {
                 fail(.authenticationFailed)
                 return
             }
-            RemoteKeychain.storePairingKey(key, for: deviceID.uuidString)
-            establishSession(pairingKey: key, clientNonce: clientNonce, serverNonce: serverNonce, deviceID: deviceID)
+            phase = .savingPairing
+            let token = lifecycleID
+            Task { [weak self] in
+                guard let self, self.lifecycleID == token, self.phase == .savingPairing else { return }
+                let saved = await RemoteKeychain.storePairingKey(key, for: deviceID.uuidString)
+                guard self.lifecycleID == token, self.phase == .savingPairing else { return }
+                guard saved else {
+                    self.fail(.network("could not persist pairing credentials"))
+                    return
+                }
+                self.establishSession(pairingKey: key, clientNonce: clientNonce, serverNonce: serverNonce, deviceID: deviceID)
+            }
             return
         }
 

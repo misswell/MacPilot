@@ -1,0 +1,82 @@
+name: Build PilotNest
+
+on:
+  push:
+    branches: [main, "codex/**"]
+    paths:
+      - "iOS/MacPilotRemote/**"
+      - "Packages/MacPilotRemoteProtocol/**"
+      - ".github/workflows/pilotnest.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "iOS/MacPilotRemote/**"
+      - "Packages/MacPilotRemoteProtocol/**"
+      - ".github/workflows/pilotnest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.3"
+      - name: Generate project
+        working-directory: iOS/MacPilotRemote
+        run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen generate
+          xcodebuild -version
+      - name: Select an isolated simulator
+        run: |
+          runtime=$(xcrun simctl list runtimes -j | python3 -c '
+          import json, sys
+          rows = [r for r in json.load(sys.stdin)["runtimes"]
+                  if r.get("isAvailable") and ".iOS-" in r["identifier"]]
+          if not rows:
+              raise SystemExit("No installed iOS runtime is available")
+          print(max(rows, key=lambda r: tuple(map(int, r["version"].split("."))))["identifier"])
+          ')
+          simulator=$(xcrun simctl create "PilotNest CI" "iPhone 16 Pro" "$runtime")
+          echo "PILOTNEST_SIMULATOR=$simulator" >> "$GITHUB_ENV"
+      - name: Run iOS unit tests
+        working-directory: iOS/MacPilotRemote
+        run: |
+          xcodebuild test -project MacPilotRemote.xcodeproj -scheme MacPilotRemote \
+            -destination "platform=iOS Simulator,id=$PILOTNEST_SIMULATOR" \
+            -parallel-testing-enabled NO -resultBundlePath "$RUNNER_TEMP/PilotNestTests.xcresult" \
+            -quiet
+      - name: Archive with the stable SDK without signing credentials
+        working-directory: iOS/MacPilotRemote
+        run: |
+          xcodebuild archive -project MacPilotRemote.xcodeproj -scheme MacPilotRemote \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/PilotNest.xcarchive" CODE_SIGNING_ALLOWED=NO \
+            OTHER_SWIFT_FLAGS='$(inherited) -warnings-as-errors' -quiet
+          ditto -c -k --keepParent "$RUNNER_TEMP/PilotNest.xcarchive" "$RUNNER_TEMP/PilotNest.xcarchive.zip"
+      - name: Upload unsigned archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: PilotNest-unsigned-${{ github.sha }}
+          path: ${{ runner.temp }}/PilotNest.xcarchive.zip
+          retention-days: 7
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PilotNest-tests-${{ github.sha }}
+          path: ${{ runner.temp }}/PilotNestTests.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Shut down the simulator created by this job
+        if: always()
+        run: |
+          if [[ -n "${PILOTNEST_SIMULATOR:-}" ]]; then
+            xcrun simctl shutdown "$PILOTNEST_SIMULATOR" || true
+          fi

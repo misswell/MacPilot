@@ -13,7 +13,7 @@ struct RemoteAutomaticMacSelectionTests {
     private let unpairedCandidate = "unpaired-candidate"
     private let start = Date(timeIntervalSinceReferenceDate: 1_000)
 
-    @Test func switchesAfterOnePairedMacStaysDiscoverableForTenSeconds() {
+    @Test func switchesAfterOnePairedMacStaysDiscoverableForThreeSeconds() {
         var selection = RemoteAutomaticMacSelection()
         let paired = [selected, firstCandidate, secondCandidate]
 
@@ -26,11 +26,11 @@ struct RemoteAutomaticMacSelectionTests {
             now: start
         )
         guard case let .waiting(targetID, generation, deadline) = initial else {
-            Issue.record("Expected a ten-second observation window")
+            Issue.record("Expected a three-second observation window")
             return
         }
         #expect(targetID == firstCandidate)
-        #expect(deadline == start.addingTimeInterval(10))
+        #expect(deadline == start.addingTimeInterval(3))
 
         let beforeDeadline = selection.observe(
             selectedMacID: selected,
@@ -38,10 +38,10 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(9.999)
+            now: start.addingTimeInterval(2.9997)
         )
         guard case .waiting(_, _, _) = beforeDeadline else {
-            Issue.record("The candidate must remain pending before ten seconds")
+            Issue.record("The candidate must remain pending before three seconds")
             return
         }
 
@@ -51,7 +51,7 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(10)
+            now: start.addingTimeInterval(3)
         )
         #expect(atDeadline == .switchTo(targetID: firstCandidate, generation: generation))
         let consumed = selection.consumeSwitch(targetID: firstCandidate, generation: generation)
@@ -81,7 +81,7 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate, secondCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(5)
+            now: start.addingTimeInterval(1.5)
         )
         #expect(ambiguous == .none)
 
@@ -91,14 +91,14 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(10)
+            now: start.addingTimeInterval(3)
         )
         guard case let .waiting(targetID, _, deadline) = uniqueAgain else {
             Issue.record("A newly unique candidate must begin a fresh window")
             return
         }
         #expect(targetID == firstCandidate)
-        #expect(deadline == start.addingTimeInterval(20))
+        #expect(deadline == start.addingTimeInterval(6))
     }
 
     @Test func manualSelectionBlocksAutomaticSwitchUntilForegroundResumes() {
@@ -137,14 +137,14 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(20)
+            now: start.addingTimeInterval(6)
         )
         guard case let .waiting(targetID, _, deadline) = resumed else {
             Issue.record("A fresh foreground cycle should resume observation")
             return
         }
         #expect(targetID == firstCandidate)
-        #expect(deadline == start.addingTimeInterval(30))
+        #expect(deadline == start.addingTimeInterval(9))
     }
 
     @Test func changingTheSelectedMacRestartsTheObservationWindow() {
@@ -169,16 +169,16 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(5)
+            now: start.addingTimeInterval(1.5)
         )
         guard case let .waiting(_, _, deadline) = selectedChanged else {
             Issue.record("A changed selection must restart the observation window")
             return
         }
-        #expect(deadline == start.addingTimeInterval(15))
+        #expect(deadline == start.addingTimeInterval(4.5))
     }
 
-    @Test func candidateDisappearanceAndRediscoveryRequiresAnotherTenSeconds() {
+    @Test func candidateDisappearanceAndRediscoveryRequiresAnotherThreeSeconds() {
         var selection = RemoteAutomaticMacSelection()
         let paired: Set<String> = [selected, firstCandidate]
         let first = selection.observe(
@@ -200,7 +200,7 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(5)
+            now: start.addingTimeInterval(1.5)
         )
         #expect(disappeared == .none)
 
@@ -210,7 +210,7 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(6)
+            now: start.addingTimeInterval(1.8)
         )
         guard case let .waiting(targetID, newGeneration, deadline) = rediscovered else {
             Issue.record("Rediscovery must start a fresh deadline")
@@ -218,7 +218,7 @@ struct RemoteAutomaticMacSelectionTests {
         }
         #expect(targetID == firstCandidate)
         #expect(newGeneration != oldGeneration)
-        #expect(deadline == start.addingTimeInterval(16))
+        #expect(deadline == start.addingTimeInterval(4.8))
 
         let beforeNewDeadline = selection.observe(
             selectedMacID: selected,
@@ -226,7 +226,7 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(15.999)
+            now: start.addingTimeInterval(4.7997)
         )
         guard case .waiting(_, _, _) = beforeNewDeadline else {
             Issue.record("The old deadline must not survive disappearance")
@@ -238,7 +238,7 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(16)
+            now: start.addingTimeInterval(4.8)
         )
         #expect(atNewDeadline == .switchTo(targetID: firstCandidate, generation: newGeneration))
     }
@@ -265,7 +265,7 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: true,
-            now: start.addingTimeInterval(4)
+            now: start.addingTimeInterval(1.2)
         )
         #expect(authenticating == .none)
         let oldHandshakeDeadline = selection.consumeSwitch(
@@ -280,14 +280,14 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(5)
+            now: start.addingTimeInterval(1.5)
         )
         guard case let .waiting(_, secondGeneration, secondDeadline) = afterHandshake else {
             Issue.record("An ended handshake must begin a new window")
             return
         }
         #expect(secondGeneration != firstGeneration)
-        #expect(secondDeadline == start.addingTimeInterval(15))
+        #expect(secondDeadline == start.addingTimeInterval(4.5))
 
         let liveSession = selection.observe(
             selectedMacID: selected,
@@ -295,7 +295,7 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: true,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(8)
+            now: start.addingTimeInterval(2.4)
         )
         #expect(liveSession == .none)
         let oldLiveSessionDeadline = selection.consumeSwitch(
@@ -310,14 +310,14 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(9)
+            now: start.addingTimeInterval(2.7)
         )
         guard case let .waiting(_, thirdGeneration, thirdDeadline) = afterDisconnect else {
             Issue.record("A disconnected selection must start observing afresh")
             return
         }
         #expect(thirdGeneration != secondGeneration)
-        #expect(thirdDeadline == start.addingTimeInterval(19))
+        #expect(thirdDeadline == start.addingTimeInterval(5.7))
     }
 
     @Test func staleDeadlineCannotSwitchAfterCandidateChanges() {
@@ -341,7 +341,7 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [secondCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(4)
+            now: start.addingTimeInterval(1.2)
         )
         guard case let .waiting(targetID, currentGeneration, _) = changed else {
             Issue.record("The replacement candidate should get its own deadline")
@@ -376,13 +376,13 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(8)
+            now: start.addingTimeInterval(2.4)
         )
         guard case let .waiting(_, _, deadline) = afterResume else {
             Issue.record("Foreground return must start a fresh candidate window")
             return
         }
-        #expect(deadline == start.addingTimeInterval(18))
+        #expect(deadline == start.addingTimeInterval(5.4))
     }
 
     @Test func authenticatedSessionAndHandshakePreventSwitching() {
@@ -403,7 +403,7 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: true,
-            now: start.addingTimeInterval(20)
+            now: start.addingTimeInterval(6)
         )
         #expect(handshaking == .none)
     }
@@ -446,7 +446,7 @@ struct RemoteAutomaticMacSelectionTests {
             discoveredMacIDs: [selected, firstCandidate],
             selectedHasAuthenticatedSession: false,
             isPairingOrAuthenticating: false,
-            now: start.addingTimeInterval(20)
+            now: start.addingTimeInterval(6)
         )
         #expect(selectedStillVisible == .none)
     }

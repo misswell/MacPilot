@@ -87,6 +87,10 @@ struct HomeView: View {
         }
         .onChange(of: appModel.connectionState) { _, _ in
             trackpadModel?.connectionStateChanged(appModel.connectionState)
+            discardDisconnectedSuccess()
+        }
+        .onChange(of: appModel.infoKey) { _, _ in
+            discardDisconnectedSuccess()
         }
         .alert(
             appModel.text("trackpadEntry"),
@@ -424,8 +428,15 @@ struct HomeView: View {
     private var messageBanner: some View {
         if let errorKey = appModel.errorKey {
             banner(text: appModel.text(errorKey), systemImage: "exclamationmark.triangle.fill", tint: .orange)
-        } else if let infoKey = appModel.infoKey {
+        } else if HomeConnectionPresentation.showsSuccessBanner(state: appModel.connectionState),
+                  let infoKey = appModel.infoKey {
             banner(text: infoText(infoKey), systemImage: "checkmark.circle.fill", tint: .green)
+        }
+    }
+
+    private func discardDisconnectedSuccess() {
+        if !appModel.connectionState.isConnected, appModel.infoKey != nil, appModel.errorKey == nil {
+            appModel.clearMessages()
         }
     }
 
@@ -465,18 +476,26 @@ struct HomeView: View {
         appModel.discoveredMacs.first { !appModel.store.isPaired(id: $0.id) }
     }
 
-    /// Explains why no Mac is reachable. Order matters: a discovered-but-unpaired
-    /// Mac is the common case and must not be reported as "not found", which
-    /// made a working browse look like a broken network.
-    private var disconnectedTitle: String {
-        if unpairedMac != nil { return appModel.text("foundUnpaired") }
-        return appModel.text("noMac")
+    private var connectionPresentation: HomeConnectionPresentation {
+        HomeConnectionPresentation(state: appModel.connectionState, hasUnpairedMac: unpairedMac != nil)
     }
 
-    private var disconnectedDetail: String {
+    private var disconnectedTitle: String {
+        switch connectionPresentation {
+        case .inProgress(let key): return appModel.text(key)
+        case .failed: return appModel.text("stateFailed")
+        case .unpaired: return appModel.text("foundUnpaired")
+        case .notFound: return appModel.text("noMac")
+        case .connected: return appModel.text("stateConnected")
+        }
+    }
+
+    private var disconnectedDetail: String? {
         if appModel.localNetworkDenied {
             return appModel.text("localNetworkHint")
         }
+        if case .inProgress = connectionPresentation { return nil }
+        if case .failed(let detail) = connectionPresentation { return detail }
         if let mac = unpairedMac {
             return appModel.text("foundUnpairedDetail", mac.name)
         }
@@ -491,13 +510,15 @@ struct HomeView: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(disconnectedTitle).font(.subheadline.weight(.semibold))
-                    Text(disconnectedDetail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                    if let disconnectedDetail {
+                        Text(disconnectedDetail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
                 Spacer(minLength: 0)
-                if unpairedMac != nil {
+                if connectionPresentation == .unpaired {
                     Button(appModel.text("goToPairing")) { selectedTab = .devices }
                         .buttonStyle(.borderedProminent)
                         .frame(minHeight: 44)

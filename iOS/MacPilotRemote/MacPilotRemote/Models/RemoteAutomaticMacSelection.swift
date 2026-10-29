@@ -6,7 +6,7 @@ import Foundation
 /// observation window and its generation token, so tests can advance `now`
 /// without waiting or touching Bluetooth, Network, or UI state.
 struct RemoteAutomaticMacSelection: Equatable {
-    static let confirmationDuration: TimeInterval = 10
+    static let confirmationDuration: TimeInterval = 3
 
     enum Evaluation: Equatable {
         case none

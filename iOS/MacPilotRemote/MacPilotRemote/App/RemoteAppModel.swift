@@ -286,6 +286,11 @@ final class RemoteAppModel: ObservableObject {
 
     func start() async {
         guard !didStart else { return }
+        guard await RemoteKeychain.prepare() else {
+            errorKey = "errorNetwork"
+            return
+        }
+        guard !didStart else { return }
         didStart = true
         discovery.onResultsChanged = { [weak self] macs in
             self?.handleDiscovery(macs)
@@ -344,6 +349,10 @@ final class RemoteAppModel: ObservableObject {
 
     /// Recreate the Bonjour browser when its initial browse missed a Mac.
     func searchDevices() {
+        guard didStart else {
+            Task { await self.start() }
+            return
+        }
         discovery.stop()
         handleDiscovery([])
         discoveryStartedAt = Date()
@@ -359,6 +368,10 @@ final class RemoteAppModel: ObservableObject {
                 cancelAutomaticMacSwitchTask()
             }
             isForeground = true
+            guard didStart else {
+                Task { await self.start() }
+                return
+            }
             // iOS tears down the DNS-SD session behind the browse while the app
             // is suspended: the browser carried across either reports failed or
             // never re-delivers its results, so every dial would race against
@@ -1303,7 +1316,7 @@ final class RemoteAppModel: ObservableObject {
             guard let target = store.pairedMacs.first(where: { $0.id == targetID }),
                   RemoteKeychain.hasPairingKey(for: targetID) else { return }
             guard automaticMacSelection.consumeSwitch(targetID: targetID, generation: generation) else { return }
-            appendLinkDiagnostic("automatic Mac selection: \(target.name) remained the only visible paired Mac for 10 seconds")
+            appendLinkDiagnostic("automatic Mac selection: \(target.name) remained the only visible paired Mac for \(RemoteAutomaticMacSelection.confirmationDuration) seconds")
             selectPairedMac(target, manually: false)
         }
     }
@@ -1389,6 +1402,10 @@ final class RemoteAppModel: ObservableObject {
     }
 
     func retry() {
+        guard didStart else {
+            Task { await self.start() }
+            return
+        }
         errorKey = nil
         // Drop whatever is in flight so the user sees a fresh race now instead of
         // waiting out the current one's window.
@@ -1453,32 +1470,38 @@ final class RemoteAppModel: ObservableObject {
     }
 
     func forget(_ mac: PairedMac) {
-        let wasActive = activeMac?.id == mac.id
-        let removedID = UUID(uuidString: mac.id)
-        store.remove(id: removedID ?? UUID())
-        if let removedID {
-            ReversePresenceCentral.shared.forgetMac(removedID)
-        }
-        if wasActive {
-            if let next = store.preferredMac {
-                connect(to: next)
-            } else {
-                resetConnectionForTarget()
-                activeMac = nil
-                connectionState = .discovering
+        guard let removedID = mac.deviceID else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            guard await self.store.remove(id: removedID) else {
+                self.errorKey = "errorNetwork"
+                return
             }
+            ReversePresenceCentral.shared.forgetMac(removedID)
+            if self.activeMac?.id == mac.id {
+                if let next = self.store.preferredMac {
+                    self.connect(to: next)
+                } else {
+                    self.resetConnectionForTarget()
+                    self.activeMac = nil
+                    self.connectionState = .discovering
+                }
+            }
+            self.updateAutomaticMacSelection()
         }
-        updateAutomaticMacSelection()
     }
 
     func removeAllPairings() {
         resetConnectionForTarget()
-        store.removeAll()
-        ReversePresenceCentral.shared.forgetAllMacs()
         activeMac = nil
         pairingTarget = nil
         connectionState = .discovering
-        updateAutomaticMacSelection()
+        ReversePresenceCentral.shared.forgetAllMacs()
+        Task { [weak self] in
+            guard let self else { return }
+            if !(await self.store.removeAll()) { self.errorKey = "errorNetwork" }
+            self.updateAutomaticMacSelection()
+        }
     }
 
     func status(for mac: PairedMac) -> MacPresence {

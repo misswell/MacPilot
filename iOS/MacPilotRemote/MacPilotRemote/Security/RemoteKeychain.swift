@@ -1,94 +1,80 @@
 import Foundation
 import Security
 
-/// Keychain access for the iPhone side.
-///
-/// The pairing keys are the only secrets stored here. The Mac login password is
-/// never requested, received or stored by this app.
+/// Pairing secrets persist only in Keychain. Main-actor lookups use memory and
+/// never issue a synchronous securityd request from a Bluetooth/UI callback.
+@MainActor
 enum RemoteKeychain {
-    private static let service = "com.misswell.macpilot.remote.ios"
+    private static let store = RemotePairingKeyStore(
+        load: { try PairingKeychainBackend.load() },
+        save: { PairingKeychainBackend.save($1, for: $0) },
+        remove: { PairingKeychainBackend.remove($0) }
+    )
 
-    static func pairingKey(for deviceID: String) -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: account(deviceID),
-            kSecAttrService as String: service,
-            kSecReturnData as String: kCFBooleanTrue!,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var item: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return data
-    }
+    static var isPrepared: Bool { store.isPrepared }
+    static func prepare() async -> Bool { await store.prepare() }
+    static func pairingKey(for deviceID: String) -> Data? { store.key(for: deviceID) }
+    static func hasPairingKey(for deviceID: String) -> Bool { store.key(for: deviceID) != nil }
 
-    /// Whether a long-term pairing key is stored for this Mac, without reading
-    /// the secret itself. This is the real proof of pairing; `PairedMacStore`
-    /// only caches display metadata and can be empty while the key survives.
-    static func hasPairingKey(for deviceID: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: account(deviceID),
-            kSecAttrService as String: service,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    @discardableResult
+    static func storePairingKey(_ key: Data, for deviceID: String) async -> Bool {
+        await store.save(key, for: deviceID)
     }
 
     @discardableResult
-    static func storePairingKey(_ key: Data, for deviceID: String) -> Bool {
+    static func deletePairingKey(for deviceID: String) -> Task<Bool, Never> { store.remove(deviceID) }
+}
+
+/// Accessed exclusively by RemotePairingKeyStore's serial worker.
+private enum PairingKeychainBackend {
+    private static let service = "com.misswell.macpilot.remote.ios"
+
+    static func load() throws -> [String: Data] {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: account(deviceID),
-            kSecAttrService as String: service
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll
         ]
-        SecItemDelete(query as CFDictionary)
+        var item: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return [:] }
+        guard status == errSecSuccess else { throw KeychainReadFailure(status: status) }
+        var keys: [String: Data] = [:]
+        for record in item as? [[String: Any]] ?? [] {
+            guard let account = record[kSecAttrAccount as String] as? String,
+                  account.hasPrefix("pairing."),
+                  let data = record[kSecValueData as String] as? Data else { continue }
+            keys[String(account.dropFirst("pairing.".count))] = data
+        }
+        return keys
+    }
+
+    static func save(_ key: Data, for id: String) -> Bool {
+        let query = query(for: id)
+        // A failed update must not destroy an existing valid key.
+        let changes = [kSecValueData as String: key]
+        let status = SecItemUpdate(query as CFDictionary, changes as CFDictionary)
+        if status == errSecSuccess { return true }
+        guard status == errSecItemNotFound else { return false }
         var item = query
         item[kSecValueData as String] = key
         item[kSecAttrLabel as String] = "PilotNest Pairing"
-        // This device only: pairing is per iPhone and never syncs.
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
     }
 
-    static func deletePairingKey(for deviceID: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: account(deviceID),
-            kSecAttrService as String: service
-        ]
-        SecItemDelete(query as CFDictionary)
+    static func remove(_ id: String) -> Bool {
+        let status = SecItemDelete(query(for: id) as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 
-    static func readString(account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: account,
-            kSecAttrService as String: service,
-            kSecReturnData as String: kCFBooleanTrue!,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var item: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+    private static func query(for id: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrAccount as String: "pairing.\(id)",
+         kSecAttrService as String: service]
     }
 
-    @discardableResult
-    static func writeString(_ value: String, account: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: account,
-            kSecAttrService as String: service
-        ]
-        SecItemDelete(query as CFDictionary)
-        var item = query
-        item[kSecValueData as String] = Data(value.utf8)
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
-    }
-
-    private static func account(_ deviceID: String) -> String {
-        "pairing.\(deviceID)"
-    }
+    private struct KeychainReadFailure: Error { let status: OSStatus }
 }
