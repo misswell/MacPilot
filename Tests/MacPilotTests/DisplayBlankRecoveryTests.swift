@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import Testing
 @testable import MacPilot
 
@@ -224,6 +225,65 @@ extension DisplayBlankRecoveryTests {
 }
 
 extension DisplayBlankRecoveryTests {
+    @Test func sessionBoundFallbackRequiresWindowServerAndDisplayIdentity() {
+        #expect(DisplayBlankIdentity.sessionBoundIdentity(serverIdentity: nil, displayIdentity: "cg-1") == nil)
+        #expect(DisplayBlankIdentity.sessionBoundIdentity(serverIdentity: "ws-1", displayIdentity: nil) == nil)
+        #expect(DisplayBlankIdentity.sessionBoundIdentity(serverIdentity: "ws-1", displayIdentity: "cg-1")
+            == "session:ws-1:cg-1")
+    }
+
+    @Test func sessionBoundRecoveryRejectsAnotherWindowServerOrDisplay() {
+        let saved = DisplayBlankIdentity.sessionBoundIdentity(
+            serverIdentity: "ws-1", displayIdentity: "cg-1"
+        ) ?? ""
+        let online: [UInt32] = [1, 2]
+        #expect(DisplayBlankIdentity.resolveSessionBoundIdentity(
+            saved,
+            serverIdentity: nil,
+            onlineDisplayIDs: online,
+            identityForDisplay: { _ in "cg-1" }
+        ) == nil)
+        #expect(DisplayBlankIdentity.resolveSessionBoundIdentity(
+            saved,
+            serverIdentity: "ws-1",
+            onlineDisplayIDs: [],
+            identityForDisplay: { _ in "cg-1" }
+        ) == nil)
+        #expect(DisplayBlankIdentity.resolveSessionBoundIdentity(
+            saved,
+            serverIdentity: "ws-2",
+            onlineDisplayIDs: online,
+            identityForDisplay: { _ in "cg-1" }
+        ) == nil)
+        #expect(DisplayBlankIdentity.resolveSessionBoundIdentity(
+            saved,
+            serverIdentity: "ws-1",
+            onlineDisplayIDs: online,
+            identityForDisplay: { $0 == 1 ? "cg-other" : "cg-2" }
+        ) == nil)
+        #expect(DisplayBlankIdentity.resolveSessionBoundIdentity(
+            saved,
+            serverIdentity: "ws-1",
+            onlineDisplayIDs: online,
+            identityForDisplay: { $0 == 2 ? "cg-1" : "cg-other" }
+        ) == 2)
+    }
+
+    /// Read-only smoke test: the production fallback must yield an identity for
+    /// the online screens on this macOS version, where the private UUID symbol
+    /// may be absent. This does not change display state or brightness.
+    @Test func onlineDisplaysHaveRecoverableIdentities() throws {
+        var count: UInt32 = 0
+        #expect(CGGetOnlineDisplayList(0, nil, &count) == .success)
+        guard count > 0 else { return }
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        #expect(CGGetOnlineDisplayList(count, &displays, &count) == .success)
+        for id in displays.prefix(Int(count)) {
+            let identity = try #require(DisplayBlankIdentity.uuid(for: id))
+            #expect(DisplayBlankIdentity.resolve(String(id), uuid: identity) == id)
+        }
+    }
+
     @Test func journalFailurePreventsTheHardwareEffect() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

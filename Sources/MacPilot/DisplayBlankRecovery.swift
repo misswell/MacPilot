@@ -17,6 +17,7 @@
 import Foundation
 import CoreGraphics
 import Darwin
+import MacPilotDisplayBridge
 
 /// The captured pre-blank state of everything MacPilot was holding dark when a
 /// session died: displays, keyed by CoreGraphics display ID, and keyboards,
@@ -82,8 +83,17 @@ enum DisplayBlankIdentity {
     }()
 
     static func uuid(for id: UInt32) -> String? {
-        guard let uuid = createUUID?(id)?.takeRetainedValue() else { return nil }
-        return CFUUIDCreateString(nil, uuid) as String
+        if let uuid = createUUID?(id)?.takeRetainedValue() {
+            return CFUUIDCreateString(nil, uuid) as String
+        }
+
+        // The UUID symbol is absent on current macOS releases. The bridge's
+        // fallback identifies a display by its CoreGraphics ID and hardware
+        // fields, so bind it to the current WindowServer instance. It can then
+        // only match during the session that wrote the recovery journal.
+        guard let server = currentDisplayServerIdentity(),
+              let display = bridgeDisplayIdentity(id) else { return nil }
+        return "session:\(server):\(display)"
     }
 
     static func resolve(_ key: String, uuid: String?) -> UInt32? {
@@ -92,10 +102,59 @@ enum DisplayBlankIdentity {
             guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return nil }
             var displays = [UInt32](repeating: 0, count: Int(count))
             guard CGGetOnlineDisplayList(count, &displays, &count) == .success else { return nil }
-            return displays.prefix(Int(count)).first { Self.uuid(for: $0) == uuid }
+            let online = Array(displays.prefix(Int(count)))
+            if uuid.hasPrefix("session:") {
+                return resolveSessionBoundIdentity(
+                    uuid,
+                    serverIdentity: currentDisplayServerIdentity(),
+                    onlineDisplayIDs: online,
+                    identityForDisplay: { id in
+                        bridgeDisplayIdentity(id)
+                    }
+                )
+            }
+            return online.first { Self.uuid(for: $0) == uuid }
         }
         guard let id = UInt32(key), CGDisplayIsOnline(id) != 0 else { return nil }
         return id
+    }
+
+    static func sessionBoundIdentity(
+        serverIdentity: String?,
+        displayIdentity: String?
+    ) -> String? {
+        guard let serverIdentity, !serverIdentity.isEmpty,
+              let displayIdentity, !displayIdentity.isEmpty else { return nil }
+        return "session:\(serverIdentity):\(displayIdentity)"
+    }
+
+    static func resolveSessionBoundIdentity(
+        _ identity: String,
+        serverIdentity: String?,
+        onlineDisplayIDs: [UInt32],
+        identityForDisplay: (UInt32) -> String?
+    ) -> UInt32? {
+        guard let serverIdentity, !serverIdentity.isEmpty,
+              identity.hasPrefix("session:\(serverIdentity):") else { return nil }
+        return onlineDisplayIDs.first { id in
+            guard let displayIdentity = identityForDisplay(id) else { return false }
+            return sessionBoundIdentity(
+                serverIdentity: serverIdentity,
+                displayIdentity: displayIdentity
+            ) == identity
+        }
+    }
+
+    private static func currentDisplayServerIdentity() -> String? {
+        var buffer = [CChar](repeating: 0, count: 256)
+        guard MDCurrentDisplayServerIdentity(&buffer, buffer.count) else { return nil }
+        return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    private static func bridgeDisplayIdentity(_ id: UInt32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 256)
+        guard MDDisplayUUID(id, &buffer, buffer.count) else { return nil }
+        return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 }
 

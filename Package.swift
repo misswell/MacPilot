@@ -39,6 +39,7 @@ let package = Package(
             name: "MacPilot",
             dependencies: [
                 "MacPilotDisplayControlCore",
+                "MacPilotDisplayBridge",
                 "MacPilotRightClickKit",
                 "MacPilotPowerIPC",
                 "MacPilotDockGroupsCore",

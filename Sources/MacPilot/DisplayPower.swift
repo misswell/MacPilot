@@ -192,10 +192,16 @@ enum DisplayPower {
     @MainActor
     @discardableResult
     static func blankDisplay() -> Bool {
-        guard !topologyControlIsActive else { return false }
+        guard !topologyControlIsActive else {
+            DiagnosticLog.write("DisplayPower", "display blank refused reason=topologyControlActive")
+            return false
+        }
         if isBlanked { return true }
         // Do not overwrite a previous, unresolved power-off transaction.
-        guard !snapshotStore.hasUnreadableJournal else { return false }
+        guard !snapshotStore.hasUnreadableJournal else {
+            DiagnosticLog.write("DisplayPower", "display blank refused reason=unreadableRecoveryJournal")
+            return false
+        }
         DisplayBlankRecovery.recover(store: snapshotStore)
         if snapshotStore.load()?.hasPendingRecovery == true {
             scheduleDisplayRecoveryRetries()
@@ -232,6 +238,7 @@ enum DisplayPower {
                let driver = BrightnessDriver.shared,
                let original = driver.current(step.displayID) {
                 guard let displayUUID = DisplayBlankIdentity.uuid(for: step.displayID) else {
+                    DiagnosticLog.write("DisplayPower", "display blank refused reason=displayIdentityUnavailable display=\(step.displayID)")
                     unblankDisplay()
                     return false
                 }
@@ -266,6 +273,7 @@ enum DisplayPower {
                 // brightness zero is a *dim but visible* level, which is exactly
                 // the "black screen that is only dimmed" MacPilot must not ship.
                 guard let displayUUID = DisplayBlankIdentity.uuid(for: step.displayID) else {
+                    DiagnosticLog.write("DisplayPower", "display blank refused reason=displayIdentityUnavailable display=\(step.displayID)")
                     unblankDisplay()
                     return false
                 }
