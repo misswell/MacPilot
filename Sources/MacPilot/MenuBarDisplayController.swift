@@ -322,8 +322,12 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         sender.highlight(true)
         defer { sender.highlight(false); openingOwnedMenu = false }
         _ = withExtendedLifetime(session) {
-            session.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY), in: sender)
+            session.menu.popUp(positioning: nil, at: Self.menuAnchor(in: sender.bounds, isFlipped: sender.isFlipped), in: sender)
         }
+    }
+
+    static func menuAnchor(in bounds: NSRect, isFlipped: Bool) -> NSPoint {
+        NSPoint(x: bounds.minX, y: isFlipped ? bounds.maxY : bounds.minY)
     }
 
     static func liveScreens() -> [MenuBarDisplay] {
