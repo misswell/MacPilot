@@ -2265,3 +2265,20 @@ beta.8 推出去之后没有直接等用户眼睛验收，而是写了一条临�
 第二个问题是唤醒前指针已经停在结果区：面板出现后、尤其输入后结果行重建时，SwiftUI 补发的 hover 会把选中行从第一行挪到指针下。模型新增 `QuickSearchHoverGate`：`openPanel()` 记下呼出瞬间的指针位置，`selectRowByHover(at:)` 在指针离开该位置之前拒绝改选中；行内改用 `onContinuousHover`，指针真正移动后同一行内的移动也能接管，不需要先移出再移入。每次重新呼出都会重新上闸。`pointerLocation` 是一处可注入的读取口，测试用固定坐标模拟「指针没动」与「指针移动了 2pt」。
 
 验证：`swift test --filter "QuickSearch|ConfigStoreTests"` 222 条 / 29 套件全部通过；新增两条测试，一条用真实 NSPanel 找到搜索行里的抓手（断言上沿留白 10pt、高度等于搜索行高、位于左侧），一条验证静止指针不抢第一行、移动后悬停恢复、重新呼出重新上闸。`swift build -Xswiftc -warnings-as-errors` 通过（11.85s）。⚠️ 仍需要人眼验收：抓手并进搜索行后的观感（它会在放大镜左边多占 22pt），以及「连续悬停」在触控板快速划过时是否跟手。
+
+## 八十四、菜单栏右键菜单：位置不该自己算，交给 AppKit 挂（2026-10-30）
+
+现象是右键菜单整体偏高，顶边压在菜单栏里、把右上角的时间文字截掉一截，和系统自己的状态栏菜单放在一起明显不是一个东西。这条被改过好几次（上一次把锚点从按钮上沿换成按钮下沿），每次都只把偏差改小一点，从来没有真正对上。
+
+这次先量，再改。写了一个临时 AppKit 探针（自己的状态栏 item + 定时采样 `NSApp.windows` 的 Cocoa frame），在本机 macOS 27 上量出四组数（菜单栏 30pt，状态栏按钮 22.5×29，按钮下沿比菜单栏底边高 1pt）：
+
+- AppKit 自己摆的位置（`item.menu` + 点一下）：菜单窗口顶边在菜单栏底边**下方 1pt** —— 这才是「系统组件」的位置；
+- `popUp(positioning:at:in:)` 锚在 `bounds.minY`（`NSStatusBarButton` 是 flipped，等于按钮上沿）：**高 24pt**；
+- 锚在 `bounds.maxY`（按钮下沿，也就是上次那版）：**仍高 6pt**；
+- 换到窗口坐标系、锚点算成菜单栏底边：还是 6pt。
+
+原因很直接：`popUp` 把菜单窗口的左上角放在**锚点下方 5pt**，锚点是按钮上的点；而系统菜单是挂在**菜单栏底边**上的。按钮下沿离菜单栏底边还有 1pt，于是 1 + 5 = 6pt 的错位无论怎么调锚点都消不掉，调锚点的思路本身就是错的。
+
+改法是让 item 自己拥有一个真实的 `NSMenu`（`item.menu = ...`），controller 做它的 `NSMenuDelegate`：`menuNeedsUpdate(_:)` 在 AppKit 显示前把最新的 `MenuBarMenuSession` 快照填进这个菜单（原地清空再填，所以 AppKit 量尺寸、定位置时行已经齐了），`menuDidClose(_:)` 再把快照和它持有的 SwiftUI hosting 菜单一起放掉。位置、item 高亮（开菜单时 `isHighlighted = true`，关掉自动复位，原来那段手写 `sender.highlight(true/false)` 删了）、右键与中键、子菜单生命周期全部交回系统。顺手删掉的还有 `openMenuPopUp`、`sendAction(on: [.leftMouseDown, .rightMouseDown])`、`performClick` 那套「模拟一次点击」的写法，以及上次留下的 `menuAnchor(in:isFlipped:)` 锚点助手 —— 留着它们只会让人再算一次。
+
+验证：探针在同一台机器上确认 `item.menu` 路径的菜单位置和按钮高亮都正确；`MenuBarOwnedMenuTests` 4 条新测试（item 拥有菜单且 delegate 是 controller、每次打开都从最新快照原地重填、外来菜单的 update 被忽略、重填后 action 仍经 relay 生效），加上 `MenuBarMenuSessionTests` 新增的「hosting 菜单填进已存在的菜单」一条；`swift test --filter 'MenuBar|MonitorMenu|AppPresence|ConfigurationSchema|ConfigStore|DisplayBlank'` 78 条 / 14 套件通过；`swift build -c release -Xswiftc -warnings-as-errors` 通过。⚠️ 还需要人眼验收：装 beta.86 后看一眼菜单顶边是否和系统菜单齐平；刘海屏（menu bar 高度不同）没有实机验证，不过这条路径本身不读菜单栏高度，位置由 AppKit 决定。
