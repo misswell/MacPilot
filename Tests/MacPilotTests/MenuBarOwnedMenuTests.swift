@@ -86,33 +86,84 @@ struct MenuBarOwnedMenuTests {
         controller.menuDidClose(menu)
     }
 
+    /// macOS 27 performs a chosen menu item's action after `menuDidClose`,
+    /// not before it. `NSMenuItem` holds its target weakly, so a snapshot
+    /// dropped synchronously at close time has zeroed every relay target by
+    /// the time AppKit dispatches — the click closed the menu and nothing
+    /// ran. The snapshot must outlive the close long enough for that dispatch,
+    /// then still be released so the hosting source does not outlive the popup.
+    @Test func relayTargetsSurviveThePostCloseActionDispatchAndDropOneTurnLater() throws {
+        let bar = StatusBar()
+        let center = NotificationCenter()
+        let receiver = Receiver()
+        var pendingDrops: [@MainActor () -> Void] = []
+        var holder: MenuSource?
+        let controller = makeController(center: center, bar: bar, source: {
+            let source = MenuSource(rows: ["act"])
+            source.action = #selector(Receiver.fire(_:))
+            source.target = receiver
+            holder = source
+            return source
+        }, scheduleDeferred: { work in pendingDrops.append(work) })
+        defer { controller.setEnabled(false); controller.stop() }
+        center.post(name: NSApplication.didFinishLaunchingNotification, object: nil)
+        let menu = try #require(bar.items.last?.menu)
+
+        controller.menuNeedsUpdate(menu)
+        weak var weakSourceMenu: NSMenu? = holder?.menu
+        holder = nil
+        let row = try #require(menu.items.first)
+
+        // The macOS 27 order: close first, dispatch second. The relay must
+        // still answer here — this is exactly where the old code went dead.
+        controller.menuDidClose(menu)
+        _ = NSApplication.shared.sendAction(row.action!, to: row.target, from: row)
+        #expect(receiver.count == 1)
+        #expect(weakSourceMenu != nil)
+
+        // And the snapshot is still dropped afterwards, so the hosting source
+        // does not outlive the popup.
+        #expect(pendingDrops.count == 1)
+        pendingDrops.removeFirst()()
+        #expect(weakSourceMenu == nil)
+    }
+
     private func makeController(
         center: NotificationCenter,
         bar: StatusBar,
-        source: @escaping @MainActor () -> MenuSource
+        source: @escaping @MainActor () -> MenuSource,
+        scheduleDeferred: @escaping @MainActor (@escaping @MainActor () -> Void) -> Void = { work in
+            DispatchQueue.main.async(execute: work)
+        }
     ) -> MenuBarDisplayController {
         MenuBarDisplayController(
             notificationCenter: center,
             screens: { [] },
             menuFactory: { _ in source().menu },
             makeStatusItem: { bar.makeItem() },
-            removeItem: { bar.remove($0) }
+            removeItem: { bar.remove($0) },
+            scheduleDeferred: scheduleDeferred
         )
     }
 
     @MainActor
     final class MenuSource {
-        var rows: [String]
-        weak var target: AnyObject?
-        var action: Selector?
+        var rows: [String] { didSet { builtMenu = nil } }
+        weak var target: AnyObject? { didSet { builtMenu = nil } }
+        var action: Selector? { didSet { builtMenu = nil } }
+        private var builtMenu: NSMenu?
         init(rows: [String]) { self.rows = rows }
+        /// Memoized so the snapshot's source is a single instance a test can
+        /// watch with a weak reference; mutations rebuild it.
         var menu: NSMenu {
+            if let builtMenu { return builtMenu }
             let menu = NSMenu()
             for row in rows {
                 let item = NSMenuItem(title: row, action: action, keyEquivalent: "")
                 item.target = target
                 menu.addItem(item)
             }
+            builtMenu = menu
             return menu
         }
     }

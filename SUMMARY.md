@@ -2294,3 +2294,17 @@ beta.8 推出去之后没有直接等用户眼睛验收，而是写了一条临�
 改法：`MainWindowOpener.requestOpen()` 先 `loadContent()`（窗口出现时不会先白屏一帧），把抬窗排到下一轮（此时菜单已关闭），抬窗时先 `makeKeyAndOrderFront`、再 `orderFrontRegardless()`、最后 `activate()` —— 即使系统拒绝前台激活，窗口也一定会出现在屏幕上。没有可用窗口就经场景的 `openWindow(id: "main")` 重建（`MainWindowRoot.onAppear` 把它交给 opener，活到进程结束），重建好的窗口在 attach 时把挂起的请求消费掉；同一个请求只答一次（token 记账），连点不会抬两次。每次结果（`raisedExistingWindow` / `queuedForWindowCreation` / `noWindowAndNoCreator`）写进 `DiagnosticLog` 的 `MainWindow`，下次再出问题就不用猜了。
 
 验证：`MainWindowOpenerTests` 六条新测试覆盖「菜单跟踪期间只排队、下一轮才抬窗」「连点只抬一次」「没有窗口必须经场景重建」「窗口和场景都没有要落日志」「场景丢掉的窗口不复用」「attach 前合并请求」，加上 `MainWindowContentStateTests`、`AppPresenceTests`、`MenuBar*`、`AppLifecycleTests` 共 51 条通过；`swift build -c release -Xswiftc -warnings-as-errors` 通过。⚠️ 仍需实机点一遍：关闭主窗口后分别从菜单「设置」、Dock 图标、Finder 重新打开，并连续关闭重开多次，确认窗口一定出现、内容能重建。
+
+## 八十六、菜单动作全军覆没的真正根因：macOS 27 把动作执行挪到了 menuDidClose 之后（2026-10-31）
+
+「菜单 › 设置」打不开主窗口在 beta.87（含上一节的 `MainWindowOpener` 修复、本地构建验证过）上依旧复现，而且不止「设置」——「内存监控」同样没反应。这次不再猜代码，先取证：装好的 App 二进制里确认已有新枚举字符串（修复在包里），再用 System Events 实点菜单，点「设置」「内存监控」前后窗口数都是 0。据此写了一个最小复现 App（自己的状态栏 item + owned `NSMenu` + `MenuBarMenuSession` 同款快照逻辑 + SwiftUI hosting 菜单 + 分级打点），用真实菜单追踪会话跑，一次定位：
+
+- 菜单打开、条目填充、高亮、关闭全部正常；点击后 `menuDidClose` 先到，**`performActionForItem` 在它之后 3ms 才执行** —— macOS 27 把「执行所选动作」从 `menuDidClose` 之前挪到了之后；
+- `menuDidClose` 里同步 `menuSession = nil` 释放全部 `ActionRelay`，而 `NSMenuItem.target` 是弱引用 —— AppKit 随后分发时 target 已经是 nil，动作被静默丢弃。旧代码注释「Actions have already run by now」的前提在这个系统上不再成立；
+- 对照组（原生 `NSMenuItem` + 常驻 target）始终正常，单变量翻转（保留 session 不放）后整条链路立刻恢复：`invoke` → SwiftUI 闭包 → 通知 → 抬窗，窗口出现。因果闭环。
+
+修复很小：`menuDidClose` 不再同步释放，controller 立刻放弃所有权（`menuSession = nil`），把捕获的快照交给延迟一轮的释放 —— macOS 27 的动作分发在 `menuDidClose` 同一轮内完成（打点证实早于第一个 runloop turn 标记），旧系统动作本来就在关闭前执行，两种顺序下这个时机都安全；下一次弹窗的 `menuNeedsUpdate` 反正会替换 session。释放时机的可注入（`scheduleDeferred`）让测试能手动排水。
+
+教训：上一节（八十五）修的是真问题但不是根因 —— 「点击没有任何痕迹」误导了排查方向，因为 `open request outcome=` 是 info 级别，release 构建的 `DiagnosticLog.minimumLevel = .warning` 根本不落盘；真正的证据（菜单关闭但动作从未分发）只有靠最小复现 App 在真实 tracking 会话里逐层打点才能拿到。AppKit 把动作挪到关闭之后这类跨版本顺序变化，任何「事件 X 时 Y 已发生」的注释都是欠条。
+
+验证：新增 `MenuBarOwnedMenuTests.relayTargetsSurviveThePostCloseActionDispatchAndDropOneTurnLater`（关菜单后动作仍可分发 + 排水后快照确实释放，弱引用盯源菜单），`MenuBarOwnedMenuTests` 5 条、`MenuBarMenuSessionTests`/`MenuBarDisplayControllerTests`/`MenuBarStatusItemVisibilityTests`/`MainWindowOpenerTests` 共 28 条通过；最小复现 App 上「设置」点击后窗口出现（windowsAfter=1）。⚠️ 仍需实机验收：升级后关掉主窗口，右键菜单点「设置」「内存监控」「检查更新…」确认都能打开。

@@ -50,6 +50,9 @@ final class MenuBarDisplayController: NSObject, NSMenuDelegate, ObservableObject
     private var statusItem: (any MenuBarStatusItem)?
     private let makeStatusItem: @MainActor () -> any MenuBarStatusItem
     private let removeItem: @MainActor (any MenuBarStatusItem) -> Void
+    /// Runs a block on a later main-queue turn. Injectable so tests can drain
+    /// the post-close session drop themselves.
+    private let scheduleDeferred: @MainActor (@escaping @MainActor () -> Void) -> Void
     private var lastIconName: String?
     /// The menu the status item owns. AppKit positions, highlights and tracks it
     /// exactly like a system status menu; the controller only supplies content.
@@ -73,6 +76,9 @@ final class MenuBarDisplayController: NSObject, NSMenuDelegate, ObservableObject
         },
         removeItem: @escaping @MainActor (any MenuBarStatusItem) -> Void = { item in
             if let item = item as? NSStatusItem { NSStatusBar.system.removeStatusItem(item) }
+        },
+        scheduleDeferred: @escaping @MainActor (@escaping @MainActor () -> Void) -> Void = { work in
+            DispatchQueue.main.async(execute: work)
         }
     ) {
         center = notificationCenter
@@ -84,6 +90,7 @@ final class MenuBarDisplayController: NSObject, NSMenuDelegate, ObservableObject
         self.iconName = iconName
         self.makeStatusItem = makeStatusItem
         self.removeItem = removeItem
+        self.scheduleDeferred = scheduleDeferred
         topology = screens().sorted { $0.uuid < $1.uuid }
         super.init()
         var tokens: [NSObjectProtocol] = []
@@ -339,9 +346,19 @@ final class MenuBarDisplayController: NSObject, NSMenuDelegate, ObservableObject
 
     func menuDidClose(_ menu: NSMenu) {
         guard menu === ownedMenu else { return }
-        // Actions have already run by now; drop the snapshot so the hosting
-        // source and its relay targets do not outlive the popup.
+        // macOS 27 changed the dispatch order: the chosen item's action runs
+        // after menuDidClose, not before it (measured — menuDidClose, then
+        // performActionForItem, within the same run-loop turn). The snapshot's
+        // relay targets are what that dispatch resolves through, and NSMenuItem
+        // holds its target weakly, so releasing the snapshot here zeroed every
+        // target before AppKit dispatched: the popup closed, the click was
+        // silently dropped, and no error appeared anywhere. The controller
+        // stops owning the snapshot now; the captured reference keeps the
+        // relays alive past the dispatch and is released one turn later. The
+        // next popup replaces the session either way.
+        let snapshot = menuSession
         menuSession = nil
+        scheduleDeferred { _ = snapshot }
     }
 
     /// The snapshot a popup would show. The menu the status item owns installs

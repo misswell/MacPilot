@@ -1,6 +1,6 @@
 # MacPilot 发版前历史问题回归
 
-每次发版读取本清单及全局历史问题与发版回归规则，运行项目要求的安全全套测试和适用的历史回归；全套已在相同源码、工具链与配置通过时可复用，失败按项目规则隔离复测并如实报告。下列套件是入口，不能把 mock 通过称为真机通过。每次修复新问题时补充触发条件和测试入口。
+每次发版读取本清单及全局 `~/.codex/docs/agent-rules/release-regressions.md`，运行项目要求的安全全套测试和适用的历史回归；全套已在相同源码、工具链与配置通过时可复用，失败按项目规则隔离复测并如实报告。下列套件是入口，不能把 mock 通过称为真机通过。每次修复新问题时补充触发条件和测试入口。
 
 | 曾遇到的问题 | 发版前回归 |
 |---|---|
@@ -12,7 +12,7 @@
 | 配置字段变化导致降级解码失败并丢配置 | `ConfigurationSchemaContractTests` 与配置加载/隔离相关测试；旧版升级、降级和真实用户配置迁移分别记录是否实测。 |
 | Dock/菜单栏入口消失或菜单重建异常 | `AppPresenceTests`、`MenuBarDisplayControllerTests`、`MenuBarMenuSessionTests`、`ConfigurationSchemaContractTests`；确保至少一个入口可用。 |
 | 菜单栏右键菜单比系统菜单偏高、顶边压进菜单栏 | `MenuBarOwnedMenuTests`（状态栏 item 必须拥有 AppKit 定位的 `NSMenu`，一旦改回 `popUp` 手算锚点即失败）、`MenuBarDisplayControllerTests`、`MenuBarMenuSessionTests`。锚点实测：`bounds.minY` 高 24pt、`bounds.maxY` 仍高 6pt，而 AppKit 自己挂的菜单在菜单栏底边下方 1pt。 |
-| 点菜单里的「设置」打不开主窗口（历史上反复出现） | `MainWindowOpenerTests`、`MainWindowContentStateTests`、`AppPresenceTests`；覆盖「菜单跟踪期间只排队一次、下一轮才真正抬窗」「没有窗口时必须经 `openWindow(id:)` 重建，不能静默挂起」「场景丢弃的窗口不复用」「每次结果写入 `MainWindow` 诊断日志」。实机回归：关闭主窗口后分别从菜单「设置」、Dock 图标、Finder 重新打开，连续关闭重开多次；即使 macOS 拒绝前台激活，`orderFrontRegardless` 也必须让窗口可见。 |
+| 点菜单里的「设置」打不开主窗口（历史上反复出现） | `MainWindowOpenerTests`、`MainWindowContentStateTests`、`AppPresenceTests`；覆盖「菜单跟踪期间只排队一次、下一轮才真正抬窗」「没有窗口时必须经 `openWindow(id:)` 重建，不能静默挂起」「场景丢弃的窗口不复用」「每次结果写入 `MainWindow` 诊断日志」。另有 `MenuBarOwnedMenuTests.relayTargetsSurviveThePostCloseActionDispatchAndDropOneTurnLater`：macOS 27 在 `menuDidClose` 之后才执行所选动作，快照 session 不得在关闭回调里同步释放（同步释放会清空弱引用 target，让所有菜单动作静默失效）。实机回归：关闭主窗口后分别从菜单「设置」、Dock 图标、Finder 重新打开，连续关闭重开多次；即使 macOS 拒绝前台激活，`orderFrontRegardless` 也必须让窗口可见。 |
 | Dock 组跨进程编辑丢失或面板放置错误 | `DockGroupsCoreTests`、`DockHelperPanelPlacementTests`；覆盖并发写入及布局。 |
 | 远程发现或协议能力宣告不正确 | `RemoteBonjourPublisherTests`、远程连接/能力相关套件；覆盖注册失败恢复、旧回调和版本兼容。 |
 | 搜索查询过期、位置/收藏丢失或索引不可用误报无结果 | `QuickSearchCancellationTests`、`QuickSearchPersistenceTests`、`QuickSearchSpotlightHonestyTests` 及项目搜索测试；覆盖查询取消、状态恢复和不可搜索提示。 |
