@@ -7,6 +7,10 @@ protocol MenuBarStatusItem: AnyObject {
     var autosaveName: NSStatusItem.AutosaveName! { get set }
     var isVisible: Bool { get set }
     var button: NSStatusBarButton? { get }
+    /// The item's own menu. AppKit draws a status-item menu where the menu bar
+    /// puts it; a manual `NSMenu.popUp` cannot reproduce that (it lands above
+    /// the bar), so the item must own a real menu.
+    var menu: NSMenu? { get set }
 }
 
 extension NSStatusItem: MenuBarStatusItem {}
@@ -20,7 +24,7 @@ struct MenuBarDisplay: Equatable, Sendable {
 /// Screen reads and menu construction are injectable; tests never create a
 /// status item or change the user's display configuration.
 @MainActor
-final class MenuBarDisplayController: NSObject, ObservableObject {
+final class MenuBarDisplayController: NSObject, NSMenuDelegate, ObservableObject {
     @Published var isInserted = true
     @Published private(set) var targetUUID: String?
     /// Whether the user wants the menu-bar icon at all. Reattachment and
@@ -47,7 +51,13 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     private let makeStatusItem: @MainActor () -> any MenuBarStatusItem
     private let removeItem: @MainActor (any MenuBarStatusItem) -> Void
     private var lastIconName: String?
-    private var openingOwnedMenu = false
+    /// The menu the status item owns. AppKit positions, highlights and tracks it
+    /// exactly like a system status menu; the controller only supplies content.
+    private var ownedMenu: NSMenu?
+    /// Retains the relay targets of the tree that is on screen, so an action
+    /// still resolves while the menu is closing. Released with the popup, along
+    /// with the hosting source it was copied from.
+    private var menuSession: MenuBarMenuSession?
     var usesNativeMenu: Bool { menuFactory != nil }
 
     init(
@@ -176,7 +186,7 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
             scheduleReinsert()
         case NSMenu.didBeginTrackingNotification:
             guard let menuID else { return }
-            if trackingMenus.isEmpty, !openingOwnedMenu { captureTarget() }
+            if trackingMenus.isEmpty { captureTarget() }
             trackingMenus.insert(menuID)
         case NSMenu.didEndTrackingNotification:
             guard let menuID else { return }
@@ -251,10 +261,12 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         guard isEnabled, menuFactory != nil, statusItem == nil else { return }
         let item = makeStatusItem()
         item.autosaveName = "MacPilotStatusItem"
+        // A status item that owns a menu is the only way to get the system's
+        // placement: AppKit hangs it off the menu bar by itself. Every manual
+        // `popUp(positioning:at:in:)` anchor lands a few points too high,
+        // because the popup is offset from the button, not from the bar.
+        item.menu = makeOwnedMenu()
         statusItem = item
-        item.button?.target = self
-        item.button?.action = #selector(openMenu(_:))
-        item.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         item.button?.setAccessibilityLabel("MacPilot")
         lastIconName = nil
         updateIcon()
@@ -264,10 +276,21 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
         item.isVisible = true
     }
 
+    private func makeOwnedMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.delegate = self
+        ownedMenu = menu
+        return menu
+    }
+
     private func removeStatusItem() {
         guard let item = statusItem else { return }
+        item.menu = nil
         removeItem(item)
         statusItem = nil
+        ownedMenu = nil
+        menuSession = nil
         lastIconName = nil
     }
 
@@ -300,34 +323,33 @@ final class MenuBarDisplayController: NSObject, ObservableObject {
     /// model publishers; exposed so tests can prove the source owns the button.
     func refreshIconForTesting() { updateIcon() }
 
+    /// AppKit asks for the content immediately before it displays the menu, once
+    /// per opening. That keeps the on-screen tree a fixed snapshot for the whole
+    /// tracking session, and it is also what gives the popup the system's own
+    /// placement, item highlight and submenu lifecycle for free — the controller
+    /// never positions a menu window itself.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === ownedMenu, let menuFactory else { return }
+        captureTarget()
+        // Fills the attached menu in place, so AppKit sized and placed a menu
+        // that already has its final rows.
+        menuSession = MenuBarMenuSession(source: menuFactory(self), installingInto: menu)
+        MonitorMenuActivity.shared.register(rootMenu: menu)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === ownedMenu else { return }
+        // Actions have already run by now; drop the snapshot so the hosting
+        // source and its relay targets do not outlive the popup.
+        menuSession = nil
+    }
+
+    /// The snapshot a popup would show. The menu the status item owns installs
+    /// this itself in `menuNeedsUpdate(_:)`; tests read it directly.
     func prepareMenuSession() -> MenuBarMenuSession? {
         guard let menuFactory else { return nil }
         captureTarget()
-        let session = MenuBarMenuSession(source: menuFactory(self))
-        MonitorMenuActivity.shared.register(rootMenu: session.menu)
-        return session
-    }
-
-    @objc private func openMenu(_ sender: NSStatusBarButton) {
-        openMenuPopUp(from: sender)
-    }
-
-    /// Opens the fixed session snapshot on the status button.
-    ///
-    /// Used both by the button's own action and by a SwiftUI label button, so
-    /// the popup always reflects a single snapshot taken at open time.
-    func openMenuPopUp(from sender: NSStatusBarButton) {
-        guard let session = prepareMenuSession() else { return }
-        openingOwnedMenu = true
-        sender.highlight(true)
-        defer { sender.highlight(false); openingOwnedMenu = false }
-        _ = withExtendedLifetime(session) {
-            session.menu.popUp(positioning: nil, at: Self.menuAnchor(in: sender.bounds, isFlipped: sender.isFlipped), in: sender)
-        }
-    }
-
-    static func menuAnchor(in bounds: NSRect, isFlipped: Bool) -> NSPoint {
-        NSPoint(x: bounds.minX, y: isFlipped ? bounds.maxY : bounds.minY)
+        return MenuBarMenuSession(source: menuFactory(self))
     }
 
     static func liveScreens() -> [MenuBarDisplay] {

@@ -7,12 +7,6 @@ import Testing
 
 @MainActor
 struct MenuBarDisplayControllerTests {
-    @Test func menuAnchorUsesTheBottomEdgeInEitherCoordinateSystem() {
-        let bounds = NSRect(x: 3, y: 5, width: 24, height: 22)
-        #expect(MenuBarDisplayController.menuAnchor(in: bounds, isFlipped: true) == NSPoint(x: 3, y: 27))
-        #expect(MenuBarDisplayController.menuAnchor(in: bounds, isFlipped: false) == NSPoint(x: 3, y: 5))
-    }
-
     @Test func displayRemovalAndRestoreEachReattachTheMenuBarController() async {
         let state = TestDisplayState([screen("left", x: -1_280), screen("right", x: 0)])
         let center = NotificationCenter()

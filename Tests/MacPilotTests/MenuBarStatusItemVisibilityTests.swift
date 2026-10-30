@@ -57,5 +57,6 @@ struct MenuBarStatusItemVisibilityTests {
         }
         var isVisible = true { didSet { bar.savedVisibility = isVisible } }
         var button: NSStatusBarButton? { nil }
+        var menu: NSMenu?
     }
 }

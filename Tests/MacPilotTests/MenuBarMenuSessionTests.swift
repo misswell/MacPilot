@@ -150,6 +150,28 @@ struct MenuBarMenuSessionTests {
         }
     }
 
+    @Test func hostingMenuInstallsIntoTheMenuAppKitAlreadyOwns() throws {
+        guard #available(macOS 14.4, *) else { return }
+        let state = HostingMenuProbeState()
+        let source = NSHostingMenu(rootView: MenuBarHostingMenuProbe {
+            state.didInvokeAction = true
+        })
+        // The production path: the status item's own menu is the destination,
+        // so AppKit sized and placed a popup that already has its final rows.
+        let attached = NSMenu()
+        attached.autoenablesItems = false
+        attached.addItem(withTitle: "stale", action: nil, keyEquivalent: "")
+
+        let session = MenuBarMenuSession(source: source, installingInto: attached)
+
+        #expect(session.menu === attached)
+        #expect(attached.items.map(\.title) == ["Parent"])
+        let actionItem = try #require(findItem(titled: "Action", in: attached))
+        let action = try #require(actionItem.action)
+        #expect(NSApplication.shared.sendAction(action, to: actionItem.target, from: actionItem))
+        #expect(state.didInvokeAction)
+    }
+
     private func makeMenu(
         screenTitle: String,
         memoryTitle: String,

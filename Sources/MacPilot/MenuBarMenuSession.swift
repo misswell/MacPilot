@@ -8,23 +8,34 @@ final class MenuBarMenuSession {
     private let source: NSMenu
     private var actions: [ActionRelay] = []
 
-    init(source: NSMenu) {
+    /// Builds the snapshot in a new menu, or fills `destination` when the
+    /// status item already owns the menu AppKit will display. Filling in place
+    /// lets the final rows exist before AppKit sizes and places the popup.
+    init(source: NSMenu, installingInto destination: NSMenu? = nil) {
         self.source = source
         var actions: [ActionRelay] = []
-        menu = Self.snapshot(source, actions: &actions)
+        let menu = destination ?? NSMenu(title: source.title)
+        Self.fill(menu, from: source, actions: &actions)
+        self.menu = menu
         self.actions = actions
     }
 
     private static func snapshot(_ source: NSMenu, actions: inout [ActionRelay]) -> NSMenu {
+        let result = NSMenu(title: source.title)
+        fill(result, from: source, actions: &actions)
+        return result
+    }
+
+    private static func fill(_ menu: NSMenu, from source: NSMenu, actions: inout [ActionRelay]) {
         // Hosting menus and their submenus materialize lazily. Resolve them
         // before copying, without starting native menu tracking or a popup.
         source.delegate?.menuNeedsUpdate?(source)
         source.update()
-        let result = NSMenu(title: source.title)
-        result.autoenablesItems = false
-        result.font = source.font
-        result.minimumWidth = source.minimumWidth
-        result.showsStateColumn = source.showsStateColumn
+        menu.removeAllItems()
+        menu.autoenablesItems = false
+        menu.font = source.font
+        menu.minimumWidth = source.minimumWidth
+        menu.showsStateColumn = source.showsStateColumn
         for original in source.items {
             let item = snapshotItem(original)
             if let submenu = original.submenu {
@@ -36,9 +47,8 @@ final class MenuBarMenuSession {
                 item.target = relay
                 item.action = #selector(ActionRelay.invoke(_:))
             }
-            result.addItem(item)
+            menu.addItem(item)
         }
-        return result
     }
 
     private static func snapshotItem(_ original: NSMenuItem) -> NSMenuItem {
