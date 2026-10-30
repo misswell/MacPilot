@@ -10,6 +10,7 @@
 //  `Scripts/measure-memory.sh` 才是量实际占用的地方。这里只锁状态机。
 //
 
+import AppKit
 import CoreGraphics
 import Foundation
 import MacPilotDockGroupsCore
@@ -67,31 +68,154 @@ struct MainWindowContentStateTests {
 
 @MainActor
 struct MainWindowOpenerTests {
-    @Test func requestsReopenTheAttachedWindowWithoutCreatingAnother() {
+    /// A manual clock for the "next turn" hop, so the tests can prove what
+    /// happens before and after the menu tracking loop ends.
+    @MainActor
+    private final class Turns {
+        private var work: [@MainActor () -> Void] = []
+        var pending: Int { work.count }
+        func schedule(_ block: @escaping @MainActor () -> Void) { work.append(block) }
+        func runNext() {
+            guard !work.isEmpty else { return }
+            work.removeFirst()()
+        }
+        func runAll() {
+            while !work.isEmpty { runNext() }
+        }
+    }
+
+    @Test func requestsRaiseOnlyAfterTheMenuTrackingLoopEnds() {
         let center = NotificationCenter()
-        var state = MainWindowContentState(loadedAtLaunch: true)
-        var showCount = 0
-        var activationCount = 0
-        let opener = MainWindowOpener(center: center, loadContent: { state.load() }, activate: { activationCount += 1 })
-        opener.attach(show: { showCount += 1 })
+        let turns = Turns()
+        var loads = 0
+        var shows = 0
+        var activations = 0
+        var outcomes: [MainWindowOpener.Outcome] = []
+        let opener = MainWindowOpener(
+            center: center,
+            loadContent: { loads += 1 },
+            activate: { activations += 1 },
+            schedule: { turns.schedule($0) },
+            record: { outcomes.append($0) },
+            isWindowUsable: { _ in true }
+        )
+        opener.attach(show: { shows += 1 })
 
-        let closing = state.beginClose()
-        state.completeClose(requestedGeneration: closing)
-        #expect(!state.isLoaded)
         center.post(name: .macPilotShowMainWindow, object: nil)
-        #expect(state.isLoaded)
-        #expect(showCount == 1)
-        #expect(activationCount == 1)
 
-        // Repeated requests use the same attached window, including after
-        // another close and before the deferred close has completed.
-        let nextClose = state.beginClose()
+        // Content is loaded immediately so the window cannot flash empty; the
+        // window itself must wait for the menu to stop tracking.
+        #expect(loads == 1)
+        #expect(shows == 0)
+        #expect(turns.pending == 1)
+
+        turns.runNext()
+        #expect(shows == 1)
+        #expect(activations == 1)
+        #expect(outcomes == [.raisedExistingWindow])
+    }
+
+    @Test func aBurstOfRequestsRaisesTheWindowOnce() {
+        let center = NotificationCenter()
+        let turns = Turns()
+        var shows = 0
+        var activations = 0
+        let opener = MainWindowOpener(
+            center: center,
+            loadContent: {},
+            activate: { activations += 1 },
+            schedule: { turns.schedule($0) },
+            record: { _ in },
+            isWindowUsable: { _ in true }
+        )
+        opener.attach(show: { shows += 1 })
+
         center.post(name: .macPilotShowMainWindow, object: nil)
         center.post(name: .macPilotShowMainWindow, object: nil)
-        state.completeClose(requestedGeneration: nextClose)
-        #expect(state.isLoaded)
-        #expect(showCount == 3)
-        #expect(activationCount == 3)
+        turns.runAll()
+
+        #expect(shows == 1)
+        #expect(activations == 1)
+    }
+
+    @Test func aRequestWithoutAWindowRebuildsItThroughTheScene() {
+        let center = NotificationCenter()
+        let turns = Turns()
+        var created = 0
+        var shows = 0
+        var outcomes: [MainWindowOpener.Outcome] = []
+        let opener = MainWindowOpener(
+            center: center,
+            loadContent: {},
+            activate: {},
+            schedule: { turns.schedule($0) },
+            record: { outcomes.append($0) },
+            isWindowUsable: { _ in true }
+        )
+        opener.install(createWindow: { created += 1 })
+
+        center.post(name: .macPilotShowMainWindow, object: nil)
+        turns.runAll()
+
+        // Nothing was attached, so the scene has to build the window again
+        // instead of the request dying silently.
+        #expect(created == 1)
+        #expect(shows == 0)
+        #expect(outcomes == [.queuedForWindowCreation])
+
+        // The rebuilt window attaches, which drains the queued request once.
+        opener.attach(show: { shows += 1 })
+        #expect(shows == 1)
+        turns.runAll()
+        #expect(shows == 1)
+        #expect(created == 1)
+    }
+
+    @Test func aRequestWithNoWindowAndNoCreatorIsRecordedNotLost() {
+        let center = NotificationCenter()
+        let turns = Turns()
+        var outcomes: [MainWindowOpener.Outcome] = []
+        let opener = MainWindowOpener(
+            center: center,
+            loadContent: {},
+            activate: {},
+            schedule: { turns.schedule($0) },
+            record: { outcomes.append($0) },
+            isWindowUsable: { _ in true }
+        )
+
+        center.post(name: .macPilotShowMainWindow, object: nil)
+        turns.runAll()
+
+        #expect(outcomes == [.noWindowAndNoCreator])
+    }
+
+    @Test func aWindowTheSceneDroppedIsReplacedInsteadOfReused() {
+        let center = NotificationCenter()
+        let turns = Turns()
+        var created = 0
+        let window = NSWindow(
+            contentRect: NSRect(x: -20_000, y: -20_000, width: 1, height: 1),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let opener = MainWindowOpener(
+            center: center,
+            loadContent: {},
+            activate: {},
+            schedule: { turns.schedule($0) },
+            record: { _ in },
+            isWindowUsable: { _ in false }
+        )
+        opener.install(createWindow: { created += 1 })
+        opener.attach(window: window)
+
+        center.post(name: .macPilotShowMainWindow, object: nil)
+        turns.runAll()
+
+        #expect(created == 1)
+        #expect(opener.lastOutcome == .queuedForWindowCreation)
     }
 
     @Test func requestsBeforeAttachmentAreCoalescedAndDrainedOnAttachment() {
@@ -99,13 +223,18 @@ struct MainWindowOpenerTests {
         var loads = 0
         var shows = 0
         var activations = 0
-        let opener = MainWindowOpener(center: center, loadContent: { loads += 1 }, activate: { activations += 1 })
+        let opener = MainWindowOpener(
+            center: center,
+            loadContent: { loads += 1 },
+            activate: { activations += 1 },
+            schedule: { _ in },
+            record: { _ in }
+        )
         center.post(name: .macPilotShowMainWindow, object: nil)
         center.post(name: .macPilotShowMainWindow, object: nil)
-        #expect(loads == 0)
+        #expect(loads == 2)
 
         opener.attach(show: { shows += 1 })
-        #expect(loads == 1)
         #expect(shows == 1)
         #expect(activations == 1)
         opener.attach(show: { shows += 1 })

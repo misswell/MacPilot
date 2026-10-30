@@ -11,6 +11,8 @@
 | FinderSync 更新后被留在禁用状态、后台心跳未恢复 | `FinderSyncRegistrationTests`、`FinderSyncRecoveryJournalTests`、`FinderSyncHeartbeatLifecycleTests`；只读安装状态可用 `zsh Scripts/verify-findersync.sh`，不自动重启 Finder 或重置权限。 |
 | 配置字段变化导致降级解码失败并丢配置 | `ConfigurationSchemaContractTests` 与配置加载/隔离相关测试；旧版升级、降级和真实用户配置迁移分别记录是否实测。 |
 | Dock/菜单栏入口消失或菜单重建异常 | `AppPresenceTests`、`MenuBarDisplayControllerTests`、`MenuBarMenuSessionTests`、`ConfigurationSchemaContractTests`；确保至少一个入口可用。 |
+| 菜单栏右键菜单比系统菜单偏高、顶边压进菜单栏 | `MenuBarOwnedMenuTests`（状态栏 item 必须拥有 AppKit 定位的 `NSMenu`，一旦改回 `popUp` 手算锚点即失败）、`MenuBarDisplayControllerTests`、`MenuBarMenuSessionTests`。锚点实测：`bounds.minY` 高 24pt、`bounds.maxY` 仍高 6pt，而 AppKit 自己挂的菜单在菜单栏底边下方 1pt。 |
+| 点菜单里的「设置」打不开主窗口（历史上反复出现） | `MainWindowOpenerTests`、`MainWindowContentStateTests`、`AppPresenceTests`；覆盖「菜单跟踪期间只排队一次、下一轮才真正抬窗」「没有窗口时必须经 `openWindow(id:)` 重建，不能静默挂起」「场景丢弃的窗口不复用」「每次结果写入 `MainWindow` 诊断日志」。实机回归：关闭主窗口后分别从菜单「设置」、Dock 图标、Finder 重新打开，连续关闭重开多次；即使 macOS 拒绝前台激活，`orderFrontRegardless` 也必须让窗口可见。 |
 | Dock 组跨进程编辑丢失或面板放置错误 | `DockGroupsCoreTests`、`DockHelperPanelPlacementTests`；覆盖并发写入及布局。 |
 | 远程发现或协议能力宣告不正确 | `RemoteBonjourPublisherTests`、远程连接/能力相关套件；覆盖注册失败恢复、旧回调和版本兼容。 |
 | 搜索查询过期、位置/收藏丢失或索引不可用误报无结果 | `QuickSearchCancellationTests`、`QuickSearchPersistenceTests`、`QuickSearchSpotlightHonestyTests` 及项目搜索测试；覆盖查询取消、状态恢复和不可搜索提示。 |

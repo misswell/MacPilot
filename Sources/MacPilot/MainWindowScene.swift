@@ -55,43 +55,146 @@ struct MainWindowContentState {
 }
 
 /// Owns the window independently of the lifetime of its SwiftUI content.
+///
+/// Every request has to end with a visible window. This path failed silently
+/// for a long time because a request that arrived before the window existed was
+/// parked (`pendingRequest`) with nothing that could ever drain it, and because
+/// raising the window from inside the status menu's tracking loop can be undone
+/// when the loop ends. So: leave the tracking loop first, always leave a way to
+/// create the window, and record what actually happened.
 @MainActor
 final class MainWindowOpener: NSObject, ObservableObject {
+    /// How a request ended. Logged to `DiagnosticLog` so a silent failure has
+    /// evidence next time instead of another round of guessing.
+    enum Outcome: String {
+        case raisedExistingWindow
+        /// No usable window: the request now waits for the scene to build one.
+        case queuedForWindowCreation
+        case noWindowAndNoCreator
+    }
+
     private let loadContent: () -> Void
     private let activate: () -> Void
-    private var showWindow: (() -> Void)?
+    private let schedule: @MainActor (@escaping @MainActor () -> Void) -> Void
+    private let record: @MainActor (Outcome) -> Void
+    private let isWindowUsable: @MainActor (NSWindow) -> Bool
+    private var window: NSWindow?
+    private var raise: (() -> Void)?
+    /// SwiftUI's `openWindow(id:)` for the main scene, kept for the process
+    /// lifetime: a closed window must not take the only way back with it.
+    private var createWindow: (() -> Void)?
     private var pendingRequest = false
+    /// Newest request, and the one a reveal has already answered. A request
+    /// that arrives while the window is still being built must not be answered
+    /// twice — once by the attachment drain and once by its own turn.
+    private var latestRequest = 0
+    private var answeredRequest = 0
+    private(set) var lastOutcome: Outcome?
 
-    init(center: NotificationCenter = .default, loadContent: @escaping () -> Void, activate: @escaping () -> Void) {
+    init(
+        center: NotificationCenter = .default,
+        loadContent: @escaping () -> Void,
+        activate: @escaping () -> Void,
+        // The menu is still tracking when this runs; the next turn is the
+        // first moment ordering the window front cannot be undone by the
+        // menu closing again.
+        schedule: @escaping @MainActor (@escaping @MainActor () -> Void) -> Void = { work in
+            DispatchQueue.main.async(execute: work)
+        },
+        record: @escaping @MainActor (Outcome) -> Void = { outcome in
+            DiagnosticLog.write("MainWindow", "open request outcome=\(outcome.rawValue)", level: .info)
+        },
+        // A window that survived in name only (ordered out and dropped by the
+        // scene) must not be treated as somewhere to show content.
+        isWindowUsable: @escaping @MainActor (NSWindow) -> Bool = { $0.isVisible }
+    ) {
         self.loadContent = loadContent
         self.activate = activate
+        self.schedule = schedule
+        self.record = record
+        self.isWindowUsable = isWindowUsable
         super.init()
         center.addObserver(self, selector: #selector(requestOpen), name: .macPilotShowMainWindow, object: nil)
     }
 
     @objc func requestOpen() {
-        guard let showWindow else {
-            pendingRequest = true
+        // Load first, while the menu is still closing: the window then appears
+        // with its content instead of flashing empty.
+        loadContent()
+        // Outstanding until a window is actually on screen; an attachment that
+        // arrives meanwhile drains it.
+        pendingRequest = true
+        latestRequest &+= 1
+        let token = latestRequest
+        schedule { [weak self] in
+            guard let self, self.latestRequest == token else { return }
+            self.reveal(answer: token)
+        }
+    }
+
+    /// Ends the request with a window on screen: raise the one we own, or have
+    /// the scene build a new one.
+    private func reveal(answer token: Int) {
+        guard answeredRequest != token else { return }
+        answeredRequest = token
+        revealNow()
+    }
+
+    private func revealNow() {
+        if let raise {
+            raise()
+            window?.orderFrontRegardless()
+            // Activation is cooperative on modern macOS. Forcing the window
+            // front regardless means a refused activation still shows the
+            // window instead of looking like a dead menu item.
+            activate()
+            if window.map(isWindowUsable) ?? true {
+                pendingRequest = false
+                finish(.raisedExistingWindow)
+                return
+            }
+            // The scene dropped this window; the only way back is a new one.
+            window = nil
+            self.raise = nil
+        }
+        guard let createWindow else {
+            // Keep the request outstanding: a window that attaches later still
+            // has to answer it.
+            finish(.noWindowAndNoCreator)
             return
         }
-        loadContent()
-        showWindow()
-        activate()
+        finish(.queuedForWindowCreation)
+        createWindow()
+    }
+
+    private func finish(_ outcome: Outcome) {
+        lastOutcome = outcome
+        record(outcome)
     }
 
     func attach(window: NSWindow) {
         // SwiftUI can discard the content on close, but the resident app must
         // keep the same window available for the next menu or Dock request.
         window.isReleasedWhenClosed = false
-        attach { [window] in window.makeKeyAndOrderFront(nil) }
+        self.window = window
+        attach { [weak window] in window?.makeKeyAndOrderFront(nil) }
+    }
+
+    /// Provides the scene's `openWindow(id:)` so a request can rebuild a window
+    /// the scene dropped.
+    func install(createWindow: @escaping () -> Void) {
+        self.createWindow = createWindow
     }
 
     // Also provides a window-free seam for lifecycle tests.
     func attach(show: @escaping () -> Void) {
-        showWindow = show
+        raise = show
         guard pendingRequest else { return }
         pendingRequest = false
-        requestOpen()
+        // This answers the queued request: the turn it scheduled must not
+        // reveal a second time.
+        answeredRequest = latestRequest
+        revealNow()
     }
 }
 
@@ -128,6 +231,7 @@ private struct MainWindowAttachment: NSViewRepresentable {
 /// restoration belong to it — while `ContentView` comes and goes with it.
 struct MainWindowRoot: View {
     @EnvironmentObject private var model: MacPilotModel
+    @Environment(\.openWindow) private var openWindow
     let opener: MainWindowOpener
 
     init(opener: MainWindowOpener) {
@@ -144,5 +248,11 @@ struct MainWindowRoot: View {
         }
         .frame(minWidth: 900, minHeight: 620)
         .background(MainWindowAttachment(opener: opener))
+        // The opener outlives this view, so the scene's only way to rebuild a
+        // window it dropped has to outlive it too.
+        .onAppear {
+            let openWindow = openWindow
+            opener.install(createWindow: { openWindow(id: "main") })
+        }
     }
 }

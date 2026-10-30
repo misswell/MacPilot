@@ -75,7 +75,11 @@ struct MacPilotApp: App {
         _presence = StateObject(wrappedValue: presence)
         _mainWindowOpener = StateObject(wrappedValue: MainWindowOpener(
             loadContent: { [weak model] in model?.loadMainWindowContent() },
-            activate: { NSApp.activate(ignoringOtherApps: true) }
+            // `activate(ignoringOtherApps:)` is deprecated and cooperative
+            // since macOS 14; `activate()` is the supported call. The opener
+            // also orders the window front regardless, so a refused activation
+            // still leaves a visible window instead of a dead menu item.
+            activate: { NSApp.activate() }
         ))
     }
 

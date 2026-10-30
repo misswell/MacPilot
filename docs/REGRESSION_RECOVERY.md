@@ -12,7 +12,7 @@
 - BLE：反向 GATT challenge 用 Mac 的 ContinuousClock 计时（包含休眠时间）；已认证的手机时间仅用于诊断。HMAC、Mac/配对身份、nonce 一次性消费、RSSI 范围及过期拒绝保持有效。历史协议验证 API 继续兼容，生产入口使用本地 challenge。
 - Quick Search：输入变化立即撤销上一代、取消查询并清除文件结果。回调同时核对代次、运行状态和面板可见性。空查询继续按收藏、最近使用、其余索引应用回填，最多 50 条；运行状态同步不额外添加结果。
 - Local Ports：身份由 PID、UID、内核启动秒/微秒和绝对可执行路径组成；读取路径前后再次核对内核身份。发送 TERM 或显式 KILL 前均重新扫描所有权和身份。普通超时不会自动升级 KILL。macOS 的身份检查与 kill 之间仍存在无法原子消除的窗口。
-- 主窗口：应用持有轻量打开协调器和实际 NSWindow，关闭只卸载 ContentView；菜单、Dock 和应用重开通知独立于视图订阅。窗口尚未连接时合并打开请求，重复打开复用原窗口。
+- 主窗口：应用持有轻量打开协调器和实际 NSWindow，关闭只卸载 ContentView；菜单、Dock 和应用重开通知独立于视图订阅。窗口尚未连接时合并打开请求，重复打开复用原窗口。打开请求还必须逃出菜单跟踪循环（下一轮才抬窗，否则窗口被菜单关闭时的焦点恢复压下去），并且永远留一条创建路径：场景把窗口丢掉后经 `openWindow(id: "main")` 重建，不能只依赖已缓存的 NSWindow。每次结果（`raisedExistingWindow` / `queuedForWindowCreation` / `noWindowAndNoCreator`）写入 `MainWindow` 诊断日志，前台激活被拒时用 `orderFrontRegardless` 保证窗口仍然可见。
 
 ## 自动化验证
 

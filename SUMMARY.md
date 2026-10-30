@@ -2282,3 +2282,15 @@ beta.8 推出去之后没有直接等用户眼睛验收，而是写了一条临�
 改法是让 item 自己拥有一个真实的 `NSMenu`（`item.menu = ...`），controller 做它的 `NSMenuDelegate`：`menuNeedsUpdate(_:)` 在 AppKit 显示前把最新的 `MenuBarMenuSession` 快照填进这个菜单（原地清空再填，所以 AppKit 量尺寸、定位置时行已经齐了），`menuDidClose(_:)` 再把快照和它持有的 SwiftUI hosting 菜单一起放掉。位置、item 高亮（开菜单时 `isHighlighted = true`，关掉自动复位，原来那段手写 `sender.highlight(true/false)` 删了）、右键与中键、子菜单生命周期全部交回系统。顺手删掉的还有 `openMenuPopUp`、`sendAction(on: [.leftMouseDown, .rightMouseDown])`、`performClick` 那套「模拟一次点击」的写法，以及上次留下的 `menuAnchor(in:isFlipped:)` 锚点助手 —— 留着它们只会让人再算一次。
 
 验证：探针在同一台机器上确认 `item.menu` 路径的菜单位置和按钮高亮都正确；`MenuBarOwnedMenuTests` 4 条新测试（item 拥有菜单且 delegate 是 controller、每次打开都从最新快照原地重填、外来菜单的 update 被忽略、重填后 action 仍经 relay 生效），加上 `MenuBarMenuSessionTests` 新增的「hosting 菜单填进已存在的菜单」一条；`swift test --filter 'MenuBar|MonitorMenu|AppPresence|ConfigurationSchema|ConfigStore|DisplayBlank'` 78 条 / 14 套件通过；`swift build -c release -Xswiftc -warnings-as-errors` 通过。⚠️ 还需要人眼验收：装 beta.86 后看一眼菜单顶边是否和系统菜单齐平；刘海屏（menu bar 高度不同）没有实机验证，不过这条路径本身不读菜单栏高度，位置由 AppKit 决定。
+
+## 八十五、菜单里的「设置」打不开主窗口：请求必须逃出菜单跟踪循环，并且永远留一条重建窗口的路（2026-10-30）
+
+现象是关掉主窗口后，从菜单栏菜单点「设置」什么都不发生：窗口不出现，应用也不到前台。这次先取证再改 —— 诊断日志里那段时间完全没有 `[WindowSwitcher] App activated: MacPilot`，说明点击既没抬窗也没激活，请求是在 `MainWindowOpener` 里被静默吞掉的，而不是窗口被挡住了。
+
+旧实现只有一个出口：`guard let showWindow else { pendingRequest = true; return }`。窗口没有被 `MainWindowAttachment` 挂上时（场景还没建窗，或者场景把窗口丢了），请求就躺在这个布尔值里，而唯一能消费它的只有「窗口挂上」这个事件 —— 死锁，而且一行日志都不留。这条路径「修过很多次」却总复发，正是因为每次都只在 `activate` 那一步打补丁，没人看这个请求有没有真的走完。
+
+顺带修掉另外两个隐患：抬窗发生在菜单的 tracking loop 里，菜单关闭时的焦点恢复可能把它压下去；`NSApp.activate(ignoringOtherApps:)` 在 macOS 14+ 是协作式激活，被拒时窗口就永远留在别人后面。
+
+改法：`MainWindowOpener.requestOpen()` 先 `loadContent()`（窗口出现时不会先白屏一帧），把抬窗排到下一轮（此时菜单已关闭），抬窗时先 `makeKeyAndOrderFront`、再 `orderFrontRegardless()`、最后 `activate()` —— 即使系统拒绝前台激活，窗口也一定会出现在屏幕上。没有可用窗口就经场景的 `openWindow(id: "main")` 重建（`MainWindowRoot.onAppear` 把它交给 opener，活到进程结束），重建好的窗口在 attach 时把挂起的请求消费掉；同一个请求只答一次（token 记账），连点不会抬两次。每次结果（`raisedExistingWindow` / `queuedForWindowCreation` / `noWindowAndNoCreator`）写进 `DiagnosticLog` 的 `MainWindow`，下次再出问题就不用猜了。
+
+验证：`MainWindowOpenerTests` 六条新测试覆盖「菜单跟踪期间只排队、下一轮才抬窗」「连点只抬一次」「没有窗口必须经场景重建」「窗口和场景都没有要落日志」「场景丢掉的窗口不复用」「attach 前合并请求」，加上 `MainWindowContentStateTests`、`AppPresenceTests`、`MenuBar*`、`AppLifecycleTests` 共 51 条通过；`swift build -c release -Xswiftc -warnings-as-errors` 通过。⚠️ 仍需实机点一遍：关闭主窗口后分别从菜单「设置」、Dock 图标、Finder 重新打开，并连续关闭重开多次，确认窗口一定出现、内容能重建。
