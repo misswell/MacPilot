@@ -2308,3 +2308,13 @@ beta.8 推出去之后没有直接等用户眼睛验收，而是写了一条临�
 教训：上一节（八十五）修的是真问题但不是根因 —— 「点击没有任何痕迹」误导了排查方向，因为 `open request outcome=` 是 info 级别，release 构建的 `DiagnosticLog.minimumLevel = .warning` 根本不落盘；真正的证据（菜单关闭但动作从未分发）只有靠最小复现 App 在真实 tracking 会话里逐层打点才能拿到。AppKit 把动作挪到关闭之后这类跨版本顺序变化，任何「事件 X 时 Y 已发生」的注释都是欠条。
 
 验证：新增 `MenuBarOwnedMenuTests.relayTargetsSurviveThePostCloseActionDispatchAndDropOneTurnLater`（关菜单后动作仍可分发 + 排水后快照确实释放，弱引用盯源菜单），`MenuBarOwnedMenuTests` 5 条、`MenuBarMenuSessionTests`/`MenuBarDisplayControllerTests`/`MenuBarStatusItemVisibilityTests`/`MainWindowOpenerTests` 共 28 条通过；最小复现 App 上「设置」点击后窗口出现（windowsAfter=1）。⚠️ 仍需实机验收：升级后关掉主窗口，右键菜单点「设置」「内存监控」「检查更新…」确认都能打开。
+
+## 八十六、Beta 通道被 GitHub 限流就再也检查不了更新：补上发布网页回退，并把误报文案改对（2026-10-31）
+
+现象是设置页报「GitHub Release 信息或 macOS 安装包无效」，可当时既没有坏包、也不是版本信息有问题 —— 用户的出口 IP 已经用完 GitHub 匿名 API 的 60 次/小时配额（`/repos/.../releases` 直接 403）。
+
+Stable 通道原本有网页回退（`/releases/latest` 的重定向标签 → `releases/expanded_assets/<tag>` 取摘要），但 Beta 通道只有 API：`fetchBeta` 分页读 `/releases`，非 200 直接 `invalidResponse`，而 `invalidResponse` 又被映射成「Release 信息或安装包无效」。`/releases/latest` 永远指不到预发布版，所以 Beta 借不到 Stable 那条回退路径，一限流就等于永久检查失败 —— 而 Beta 用户恰恰是最需要能自己更新的一群人。
+
+改法：`fetchBeta` 先走 API，失败（非取消）就按发布网页走一遍：`/releases` 列表页按 `href="/<repo>/releases/tag/<tag>"` 找出通道内最高 SemVer 的 `-beta.N`（新纯函数 `ReleaseFetcher.selectBetaTag`，忽略正式版标签和其它仓库的链接），再从 `releases/expanded_assets/<tag>` 取安装包名与 `sha256:` 摘要（这条 HTML 路径用真实页面验证过：`href` 与 `sha256:` 在同一行，现有正则能正确配对 arm64/x86_64 两个 zip）。`decodeGitHubAssetsHTML` 加了 `channel` 参数，Beta 只接受 `prerelease` 的 `-beta.N`。另外新增 `SoftwareUpdateError.sourceUnavailable`：API 和网页都拿不到版本信息时上报「GitHub 暂时没有返回版本信息（可能触发了 API 限流），请稍后重试。」，不再谎报安装包无效；Stable 网页回退的 HTTP 失败也改用它。
+
+验证：新增 `aRateLimitedBetaAPIFallsBackToTheReleasePage`（两个仓库 API 都 403，网页回退仍选出 `2.0.0-beta.3` 且下载地址指向正确仓库与标签）与 `theBetaTagParserIgnoresStableTagsAndOtherRepositories`（忽略正式版标签和其它仓库）；`SoftwareUpdate*|UpdateChannelTests` 35 条通过；解析逻辑对真实 `/releases` 页面实测能取出 `v1.2.2-beta.87`。⚠️ 实机验收：在限流状态下点「检查更新…」应能正常给出结果，而不是报错。

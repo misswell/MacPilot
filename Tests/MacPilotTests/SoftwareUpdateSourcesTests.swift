@@ -48,6 +48,30 @@ extension SoftwareUpdateTests {
         #expect(release.archiveURL.path.hasPrefix("/jollyfon/MacPilot/releases/download/"))
     }
 
+    @MainActor @Test
+    func aRateLimitedBetaAPIFallsBackToTheReleasePage() async throws {
+        let session = sourceSession("betaWeb")
+        defer { session.invalidateAndCancel() }
+        let updater = SoftwareUpdater(currentVersion: "1.0.0", session: session)
+        updater.setChannel(.beta)
+        await updater.checkForUpdates()
+
+        let release = try #require(updater.state.availableRelease)
+        #expect(release.version.description == "2.0.0-beta.3")
+        #expect(release.isPrerelease)
+        #expect(release.archiveURL.path.hasPrefix("/jollyfon/MacPilot/releases/download/v2.0.0-beta.3/"))
+    }
+
+    @Test func theBetaTagParserIgnoresStableTagsAndOtherRepositories() {
+        let html = Data("""
+        <a href="/misswell/MacPilot/releases/tag/v1.2.2-beta.9">b9</a>
+        <a href="/misswell/MacPilot/releases/tag/v1.2.2-beta.10">b10</a>
+        <a href="/misswell/MacPilot/releases/tag/v1.2.1">stable</a>
+        <a href="/other/MacPilot/releases/tag/v9.0.0-beta.1">other</a>
+        """.utf8)
+        #expect(ReleaseFetcher.selectBetaTag(fromListPage: html, repository: "misswell/MacPilot") == "v1.2.2-beta.10")
+    }
+
     @Test func cancellationOfAReleaseSourceIsNotSwallowedAsAFallbackFailure() async {
         let session = sourceSession("cancel")
         defer { session.invalidateAndCancel() }
@@ -123,6 +147,34 @@ private final class UpdateSourceURLProtocol: URLProtocol {
         let scenario = request.value(forHTTPHeaderField: "X-MacPilot-Test-Scenario") ?? ""
         let old = url.path.contains("misswell/MacPilot")
         if scenario == "cancel", !old { client?.urlProtocol(self, didFailWithError: URLError(.cancelled)); return }
+        if scenario == "betaWeb" {
+            let repository = old ? "misswell/MacPilot" : "jollyfon/MacPilot"
+            let tag = old ? "v1.9.0-beta.1" : "v2.0.0-beta.3"
+            var body = Data()
+            var code = 200
+            if url.host == "api.github.com" {
+                code = 403
+                body = Data(#"{"message":"API rate limit exceeded"}"#.utf8)
+            } else if url.path.hasSuffix("/releases") {
+                // The public release page lists prereleases the API hides.
+                body = Data("""
+                <a href="/\(repository)/releases/tag/\(tag)">\(tag)</a>
+                <a href="/\(repository)/releases/tag/v1.0.0">v1.0.0</a>
+                <a href="/someone-else/MacPilot/releases/tag/v9.9.9-beta.9">other</a>
+                """.utf8)
+            } else if url.path.contains("/releases/expanded_assets/") {
+                let version = String(tag.dropFirst())
+                body = Data("""
+                <a href="/\(repository)/releases/download/\(tag)/MacPilot-\(version)-\(AppArchitecture.current.rawValue)-macos.zip">zip</a>
+                <span>sha256:\(String(repeating: "b", count: 64))</span>
+                """.utf8)
+            }
+            let response = HTTPURLResponse(url: url, statusCode: code, httpVersion: nil, headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body)
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
         var status = 200
         if scenario == "allFailed" || (old && ["oldUnavailable", "empty", "newWeb", "cancel"].contains(scenario)) || (!old && scenario == "newUnavailable") { status = 404 }
         if scenario == "newWeb", !old, url.host == "api.github.com" { status = 403 }

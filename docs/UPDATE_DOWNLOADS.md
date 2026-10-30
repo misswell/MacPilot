@@ -26,7 +26,7 @@ GH-Proxy 地址规则：https://gh-proxy.com/docs/github-accelerator
 
 设置 → 软件更新中选择更新通道。正式安装和缺少 `updateChannel` 的旧配置均使用 Stable；纯 Debug 新配置默认 Beta。启用 Beta 需要确认，切回 Stable 不需要确认。About/设置版本区域显示的是安装包通道，与订阅偏好分开。
 
-Stable 使用各仓库的 GitHub `/releases/latest`，拒绝 draft、prerelease 及预发布版本标签；API 限流时尝试同一仓库的公开发布网页。Beta 分页读取各仓库的 `/releases`，只选 `prerelease=true`、`-beta.N` 且存在适配 CPU 的校验安装包的最高 SemVer。成功来源没有 Beta 时显示已是最新版本。目标版本小于或等于当前版本均不提示更新；Beta 切回 Stable 后须等更高的正式版，不自动降级。切换通道会清除旧结果，正在进行的旧查询不会覆盖新通道结果。Beta API 限流时尝试另一个仓库，不回退到 Stable 网页。
+Stable 使用各仓库的 GitHub `/releases/latest`，拒绝 draft、prerelease 及预发布版本标签；API 限流时尝试同一仓库的公开发布网页（`/releases/latest` 的重定向标签 → `releases/expanded_assets/<tag>`，摘要只从后者取）。Beta 分页读取各仓库的 `/releases`，只选 `prerelease=true`、`-beta.N` 且存在适配 CPU 的校验安装包的最高 SemVer。成功来源没有 Beta 时显示已是最新版本。目标版本小于或等于当前版本均不提示更新；Beta 切回 Stable 后须等更高的正式版，不自动降级。切换通道会清除旧结果，正在进行的旧查询不会覆盖新通道结果。**Beta 的 API 被限流时同样回退到发布网页**：`/releases` 列表页按标签找出通道内最高 SemVer 的 `-beta.N`，再从 `releases/expanded_assets/<tag>` 取安装包名与 `sha256:` 摘要；`/releases/latest` 永远指不到预发布版，所以 Beta 不能沿用 Stable 的单页路径。API 与网页都拿不到版本信息时按「GitHub 暂时没有返回版本信息（可能触发 API 限流）」报告，不再谎报安装包无效。
 
 **自动更新永远只向前；只有版本管理（用户明确选择目标版本）才允许降级。**
 

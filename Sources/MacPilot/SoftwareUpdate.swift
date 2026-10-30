@@ -81,9 +81,12 @@ struct SoftwareRelease: Equatable, Sendable {
     static func decodeGitHubAssetsHTML(
         _ data: Data,
         tagName: String,
-        architecture: AppArchitecture = .current
+        architecture: AppArchitecture = .current,
+        channel: AppChannel = .stable
     ) throws -> SoftwareRelease {
-        guard let version = SoftwareVersion(tagName), !version.isPrerelease else {
+        guard let version = SoftwareVersion(tagName),
+              version.isPrerelease == (channel == .beta),
+              channel != .beta || version.prerelease.first == "beta" else {
             throw SoftwareUpdateError.invalidRelease
         }
         let expectedNames = AppIdentity.archiveNames(
@@ -123,6 +126,9 @@ enum SoftwareUpdateError: Error, Equatable {
     case invalidRelease
     case missingVerifiedArchive
     case invalidResponse
+    /// GitHub answered, but not with release data (rate limit, outage). Not a
+    /// statement about the release itself.
+    case sourceUnavailable
     case digestMismatch
     case invalidApplication
     case versionMismatch
@@ -175,6 +181,7 @@ struct SoftwareUpdateFailure: Equatable {
         case location = "updateErrorLocation"
         case helper = "updateErrorHelper"
         case network = "updateErrorNetwork"
+        case source = "updateErrorSource"
         case command = "updateErrorCommand"
     }
 
@@ -190,6 +197,9 @@ struct SoftwareUpdateFailure: Equatable {
         switch error {
         case .invalidRelease, .missingVerifiedArchive, .invalidResponse:
             message = .release
+            detail = nil
+        case .sourceUnavailable:
+            message = .source
             detail = nil
         case .digestMismatch:
             message = .integrity
