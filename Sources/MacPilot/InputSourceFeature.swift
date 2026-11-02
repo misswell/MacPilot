@@ -391,6 +391,359 @@ enum MacPilotInputSourceCatalog {
     }
 }
 
+// MARK: - Deterministic input-source switching
+
+/// Read/select seam over the Carbon input-source catalog.
+///
+/// `MacPilotInputSourceCatalog` is an enum that talks straight to TIS, so a
+/// unit test could only exercise switching by reading and changing the user's
+/// real keyboard layout. The model takes its catalog through this value
+/// instead; production always uses `.live`, tests pass a scripted stub.
+struct MacPilotInputSourceCatalogSeams: Sendable {
+    var list: @Sendable () -> [MacPilotInputSource]
+    var current: @Sendable () -> MacPilotInputSource?
+    var select: @Sendable (String) -> Bool
+
+    static let live = MacPilotInputSourceCatalogSeams(
+        list: { MacPilotInputSourceCatalog.all() },
+        current: { MacPilotInputSourceCatalog.current() },
+        select: { MacPilotInputSourceCatalog.select(identifier: $0) }
+    )
+}
+
+enum InputSourceSwitchOrigin: String, Sendable {
+    /// Raised by an application activation (default / app rule / browser rule).
+    case automatic
+    /// Raised by the user: global shortcut, cycle shortcut or the settings UI.
+    case manual
+}
+
+enum InputSourceSwitchOutcome: Equatable, Sendable {
+    /// The target was already the live source; nothing was selected.
+    case alreadyCurrent
+    /// The target is the live source after selection and after the settle pass.
+    case verified
+    /// `TISSelectInputSource` refused the identifier: the source is gone.
+    case unavailable
+    /// The live source moved to a third value between attempts: the user
+    /// picked another source, so the chain stops instead of fighting them.
+    case interruptedByUser
+    /// A newer activation owns the switch now, or the app is shutting down.
+    case superseded
+    /// The bounded retry budget ran out; the system kept a different source.
+    case exhausted
+
+    var label: String {
+        switch self {
+        case .alreadyCurrent: "already-current"
+        case .verified: "verified"
+        case .unavailable: "unavailable"
+        case .interruptedByUser: "interrupted-by-user"
+        case .superseded: "superseded"
+        case .exhausted: "exhausted"
+        }
+    }
+
+    var isConfirmed: Bool { self == .alreadyCurrent || self == .verified }
+}
+
+struct InputSourceSwitchRequest: Equatable, Sendable {
+    var desiredIdentifier: String
+    var origin: InputSourceSwitchOrigin
+    var applicationBundleIdentifier: String?
+
+    init(
+        desiredIdentifier: String,
+        origin: InputSourceSwitchOrigin,
+        applicationBundleIdentifier: String? = nil
+    ) {
+        self.desiredIdentifier = desiredIdentifier
+        self.origin = origin
+        self.applicationBundleIdentifier = applicationBundleIdentifier
+    }
+}
+
+struct InputSourceSwitchReport: Equatable, Sendable {
+    var request: InputSourceSwitchRequest
+    var outcome: InputSourceSwitchOutcome
+    var initialIdentifier: String?
+    var finalIdentifier: String?
+    var attempts: Int
+    var elapsedMilliseconds: Int
+
+    /// True only when the live catalog agreed with the target.
+    var isConfirmed: Bool { outcome.isConfirmed }
+
+    /// User-facing description for a chain that could not confirm the target;
+    /// `nil` means the chain left the system in a state it can stand behind.
+    func failureDescription(nameForIdentifier: (String?) -> String) -> String? {
+        switch outcome {
+        case .exhausted:
+            let target = nameForIdentifier(request.desiredIdentifier)
+            let live = nameForIdentifier(finalIdentifier)
+            return "Could not switch to \(target) after \(attempts) attempts; \(live) is still active."
+        case .unavailable:
+            return "The selected input source is no longer available."
+        case .alreadyCurrent, .verified, .interruptedByUser, .superseded:
+            return nil
+        }
+    }
+}
+
+struct InputSourceSwitchPolicy: Equatable, Sendable {
+    /// Pauses before the select attempts. Index 0 is the immediate first
+    /// attempt; the later entries are the bounded retries that re-apply after
+    /// macOS' per-context input-source restore has settled.
+    var retryDelays: [Duration]
+    /// Settle window before the closing confirmation, so a selection that the
+    /// per-context memory overrode afterwards is never recorded as success.
+    var confirmationDelay: Duration
+
+    var maximumAttempts: Int { retryDelays.count }
+
+    /// Immediate, 80 ms, 200 ms, 400 ms, then one confirmation 400 ms after the
+    /// last attempt. A clean first attempt is reported ~480 ms after the select
+    /// (80 ms observation + 400 ms confirmation); the worst case is ~1.1 s.
+    static let standard = InputSourceSwitchPolicy(
+        retryDelays: [.zero, .milliseconds(80), .milliseconds(200), .milliseconds(400)],
+        confirmationDelay: .milliseconds(400)
+    )
+}
+
+/// Runs one verified selection chain.
+///
+/// macOS restores the previous per-app input source around an activation
+/// (`TextInputGlobalPropertyPerContextInput`), so a single unverified
+/// `TISSelectInputSource` call is a race MacPilot can lose silently. Every
+/// attempt here is therefore followed by a read of the live catalog, and success
+/// is only declared when the target survives the settle window.
+@MainActor
+struct InputSourceSwitcher {
+    var seams: MacPilotInputSourceCatalogSeams
+    var policy: InputSourceSwitchPolicy
+    /// `Task.sleep` in production; tests run the chain without waiting.
+    var sleep: @Sendable (Duration) async throws -> Void
+    /// Monotonic seconds, injected so the elapsed time is measurable in tests.
+    var uptime: @Sendable () -> Double
+
+    init(
+        seams: MacPilotInputSourceCatalogSeams,
+        policy: InputSourceSwitchPolicy = .standard,
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        uptime: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime }
+    ) {
+        self.seams = seams
+        self.policy = policy
+        self.sleep = sleep
+        self.uptime = uptime
+    }
+
+    func run(
+        _ request: InputSourceSwitchRequest,
+        isCurrentGeneration: @MainActor () -> Bool = { true }
+    ) async -> InputSourceSwitchReport {
+        let startedAt = uptime()
+        let initialIdentifier = seams.current()?.persistentIdentifier
+        var attempts = 0
+        var lastObserved = initialIdentifier
+
+        func report(_ outcome: InputSourceSwitchOutcome, finalIdentifier: String?) -> InputSourceSwitchReport {
+            InputSourceSwitchReport(
+                request: request,
+                outcome: outcome,
+                initialIdentifier: initialIdentifier,
+                finalIdentifier: finalIdentifier,
+                attempts: attempts,
+                elapsedMilliseconds: Int(((uptime() - startedAt) * 1000).rounded())
+            )
+        }
+
+        repeat {
+            var observedTarget = false
+            for index in policy.retryDelays.indices {
+                if index > 0, !(await pause(policy.retryDelays[index])) {
+                    return report(.superseded, finalIdentifier: lastObserved)
+                }
+                guard isCurrentGeneration() else {
+                    return report(.superseded, finalIdentifier: lastObserved)
+                }
+                let live = seams.current()?.persistentIdentifier
+                if live == request.desiredIdentifier {
+                    observedTarget = true
+                    break
+                }
+                // The live source moved to something neither we nor the
+                // previous observation produced: a manual switch, not a stale
+                // restore. Stop the chain instead of overriding the user.
+                if attempts > 0, let lastObserved, let live, live != lastObserved {
+                    return report(.interruptedByUser, finalIdentifier: live)
+                }
+                guard attempts < policy.maximumAttempts else { break }
+                guard seams.select(request.desiredIdentifier) else {
+                    return report(.unavailable, finalIdentifier: live)
+                }
+                attempts += 1
+                lastObserved = live
+            }
+
+            guard await pause(policy.confirmationDelay) else {
+                return report(.superseded, finalIdentifier: lastObserved)
+            }
+            guard isCurrentGeneration() else {
+                return report(.superseded, finalIdentifier: lastObserved)
+            }
+            let confirmed = seams.current()?.persistentIdentifier
+            if confirmed == request.desiredIdentifier {
+                return report(attempts == 0 ? .alreadyCurrent : .verified, finalIdentifier: confirmed)
+            }
+            if !observedTarget {
+                return report(.exhausted, finalIdentifier: confirmed)
+            }
+            // We reached the target but the system re-applied its own source
+            // afterwards. Re-apply once more while the select budget lasts.
+            if attempts >= policy.maximumAttempts {
+                return report(.exhausted, finalIdentifier: confirmed)
+            }
+            lastObserved = confirmed
+        } while true
+    }
+
+    private func pause(_ duration: Duration) async -> Bool {
+        do {
+            try await sleep(duration)
+            return true
+        } catch {
+            return false
+        }
+    }
+}
+
+/// Owns the generation token for selection chains.
+///
+/// Every application activation starts a new chain; the token makes the older
+/// chain observe the generation change and exit without touching the catalog,
+/// so a slow retry can never overwrite a newer decision. `cancel()` is used by
+/// feature teardown so nothing keeps polling after the feature is switched off.
+@MainActor
+final class InputSourceSwitchScheduler {
+    private let seams: () -> MacPilotInputSourceCatalogSeams
+    private let policy: InputSourceSwitchPolicy
+    private let sleep: @Sendable (Duration) async throws -> Void
+    private let uptime: @Sendable () -> Double
+
+    private(set) var generation = 0
+    private var pending: Task<InputSourceSwitchReport, Never>?
+
+    var onReport: (@MainActor (InputSourceSwitchReport) -> Void)?
+    /// Test seam: production schedules a `Task`; tests may await `begin`'s task.
+    init(
+        seams: @escaping () -> MacPilotInputSourceCatalogSeams = { .live },
+        policy: InputSourceSwitchPolicy = .standard,
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        uptime: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime }
+    ) {
+        self.seams = seams
+        self.policy = policy
+        self.sleep = sleep
+        self.uptime = uptime
+    }
+
+    @discardableResult
+    func begin(_ request: InputSourceSwitchRequest) -> Task<InputSourceSwitchReport, Never> {
+        generation += 1
+        let token = generation
+        pending?.cancel()
+        let switcher = InputSourceSwitcher(
+            seams: seams(),
+            policy: policy,
+            sleep: sleep,
+            uptime: uptime
+        )
+        let task = Task { @MainActor [weak self] () -> InputSourceSwitchReport in
+            let report = await switcher.run(request, isCurrentGeneration: { [weak self] in
+                self?.generation == token
+            })
+            if let self, !Task.isCancelled, self.generation == token {
+                self.onReport?(report)
+            }
+            return report
+        }
+        pending = task
+        return task
+    }
+
+    func cancel() {
+        generation += 1
+        pending?.cancel()
+        pending = nil
+    }
+}
+
+/// Rate-limited, durable evidence for the switch chains.
+///
+/// `DiagnosticLog` is the only place an installed build can show whether the
+/// target was actually selected: the IME's own 中/英 state never reaches TIS,
+/// so "MacPilot says it switched but the IME stayed English" can only be
+/// distinguished from a lost race by the recorded live identifier.
+@MainActor
+final class InputSourceSwitchEvidence {
+    /// Identical evidence inside this window is dropped: one line per chain is
+    /// enough, and rapid app switching must not flood the diagnostic file.
+    var minimumInterval: TimeInterval = 2
+
+    private let now: () -> Date
+    private var lastSignature: String?
+    private var lastRecordedAt = Date.distantPast
+    private(set) var lastLine: String?
+
+    init(now: @escaping () -> Date = { Date() }) {
+        self.now = now
+    }
+
+    static func line(for report: InputSourceSwitchReport) -> String {
+        let measured = "origin=\(report.request.origin.rawValue)"
+            + " app=\(report.request.applicationBundleIdentifier ?? "-")"
+            + " desired=\(report.request.desiredIdentifier)"
+            + " from=\(report.initialIdentifier ?? "-")"
+            + " live=\(report.finalIdentifier ?? "-")"
+            + " attempts=\(report.attempts)"
+            + " elapsedMs=\(report.elapsedMilliseconds)"
+            + " verified=\(report.outcome.isConfirmed)"
+            + " outcome=\(report.outcome.label)"
+        return "switch \(measured)"
+    }
+
+    /// Decides whether this chain deserves a line. False for a superseded chain
+    /// (nothing was done), for an automatic activation that found the target
+    /// already selected (per-activation noise), and for a repeat of the previous
+    /// line inside the throttle window.
+    func shouldRecord(_ report: InputSourceSwitchReport) -> Bool {
+        guard report.outcome != .superseded else { return false }
+        if report.outcome == .alreadyCurrent, report.request.origin == .automatic { return false }
+
+        let signature = [report.outcome.label, report.request.desiredIdentifier,
+                         report.finalIdentifier ?? "-", String(report.attempts)].joined(separator: "|")
+        let date = now()
+        if signature == lastSignature, date.timeIntervalSince(lastRecordedAt) < minimumInterval {
+            return false
+        }
+        lastSignature = signature
+        lastRecordedAt = date
+        return true
+    }
+
+    /// Records one chain and returns the line it wrote, or `nil` when the
+    /// evidence was dropped as redundant.
+    @discardableResult
+    func record(_ report: InputSourceSwitchReport, category: String = "InputSource") -> String? {
+        guard shouldRecord(report) else { return nil }
+        let line = Self.line(for: report)
+        lastLine = line
+        DiagnosticLog.write(category, line)
+        return line
+    }
+}
+
 // MARK: - Browser context lookup
 
 enum MacPilotBrowserURLResolver {
@@ -758,6 +1111,9 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
 
     private let observers = ObserverBag()
     private let browserPollingTask = BackgroundTask()
+    private let catalogSeams: MacPilotInputSourceCatalogSeams
+    private let switchScheduler: InputSourceSwitchScheduler
+    private let switchEvidence: InputSourceSwitchEvidence
     private var lastBrowserPollingSignature: String?
     private var isActive = false
     private var originalFunctionKeyMode: InputSourceFunctionKeyMode?
@@ -770,9 +1126,16 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
         settings.browserRules.contains { $0.isEnabled }
     }
 
-    init() {
+    /// `catalogSeams` is injectable so tests can drive switching without
+    /// reading or changing the user's real input source.
+    init(catalogSeams: MacPilotInputSourceCatalogSeams = .live) {
+        self.catalogSeams = catalogSeams
+        self.switchScheduler = InputSourceSwitchScheduler(seams: { catalogSeams })
+        self.switchEvidence = InputSourceSwitchEvidence()
         refreshSources()
-        currentSource = MacPilotInputSourceCatalog.current()
+        switchScheduler.onReport = { [weak self] report in
+            self?.handleSwitchReport(report)
+        }
     }
 
     func applyLoadedSettings(_ settings: InputSourceSettings) {
@@ -799,14 +1162,15 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
     }
 
     func refreshSources() {
-        availableSources = MacPilotInputSourceCatalog.all()
-        currentSource = MacPilotInputSourceCatalog.current()
+        availableSources = catalogSeams.list()
+        currentSource = catalogSeams.current()
     }
 
     /// Synchronous teardown for app termination: stops polling, removes the
     /// event tap and observers, and hands the function-key mode back.
     func shutdown() {
         stopBrowserPolling()
+        switchScheduler.cancel()
         removeEventTap()
         removeObservers()
         restoreOriginalFunctionKeyMode()
@@ -832,6 +1196,7 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
         } else {
             removeObservers()
             stopBrowserPolling()
+            switchScheduler.cancel()
             removeEventTap()
             indicatorController?.hide()
             indicatorController = nil
@@ -913,17 +1278,37 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
         selectInputSource(identifier: source.persistentIdentifier)
     }
 
+    /// Manual selection (shortcut, cycle, settings). The switch runs through the
+    /// same verified chain as an automatic activation, so the return value only
+    /// reports whether the identifier still exists in the catalog; whether the
+    /// system actually took it is decided by the chain and reported through
+    /// `currentSource` / `lastOperationError`.
     @discardableResult
     func selectInputSource(identifier: String) -> Bool {
-        guard MacPilotInputSourceCatalog.select(identifier: identifier) else {
+        guard availableSources.contains(where: { $0.persistentIdentifier == identifier }) else {
             lastOperationError = "The selected input source is no longer available."
             refreshSources()
             return false
         }
-        currentSource = availableSources.first(where: { $0.persistentIdentifier == identifier })
-            ?? MacPilotInputSourceCatalog.current()
-        showIndicatorIfNeeded()
+        lastOperationError = nil
+        applyInputSourceSelection(identifier, origin: .manual)
         return true
+    }
+
+    /// Starts a verified switch chain. A newer chain supersedes this one through
+    /// the scheduler's generation token, so a stale retry never overwrites a
+    /// decision made after it.
+    @discardableResult
+    func applyInputSourceSelection(
+        _ desiredIdentifier: String,
+        origin: InputSourceSwitchOrigin,
+        applicationBundleIdentifier: String? = nil
+    ) -> Task<InputSourceSwitchReport, Never> {
+        switchScheduler.begin(InputSourceSwitchRequest(
+            desiredIdentifier: desiredIdentifier,
+            origin: origin,
+            applicationBundleIdentifier: applicationBundleIdentifier
+        ))
     }
 
     func cycleInputSource() {
@@ -1124,7 +1509,7 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
         knownBrowserURL: URL? = nil,
         browserURLWasResolved: Bool = false
     ) {
-        currentSource = MacPilotInputSourceCatalog.current() ?? currentSource
+        currentSource = catalogSeams.current() ?? currentSource
         activeApplicationName = application?.localizedName
         let bundleIdentifier = application?.bundleIdentifier
         let isBrowser = bundleIdentifier.map {
@@ -1163,9 +1548,19 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
         let desiredIdentifier = browserRule?.inputSourceIdentifier
             ?? appRule?.inputSourceIdentifier
             ?? settings.defaultInputSourceIdentifier
-        if let desiredIdentifier,
+        // MacPilot's own activation is not a user context switch: re-applying
+        // the default source here would fight the settings window the user is
+        // typing into and feed the switch notification back into this model.
+        let ownBundleIdentifier = Bundle.main.bundleIdentifier ?? AppIdentity.bundleIdentifier
+        let isMacPilotItself = bundleIdentifier?.caseInsensitiveCompare(ownBundleIdentifier) == .orderedSame
+        if !isMacPilotItself,
+           let desiredIdentifier,
            desiredIdentifier != currentSource?.persistentIdentifier {
-            _ = selectInputSource(identifier: desiredIdentifier)
+            applyInputSourceSelection(
+                desiredIdentifier,
+                origin: .automatic,
+                applicationBundleIdentifier: bundleIdentifier
+            )
         }
 
         let functionKeyMode = appRule?.functionKeyMode ?? settings.defaultFunctionKeyMode ?? originalFunctionKeyMode
@@ -1179,9 +1574,34 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
 
     private func handleSelectedInputSourceChanged() {
         let previousIdentifier = currentSource?.persistentIdentifier
-        currentSource = MacPilotInputSourceCatalog.current()
+        currentSource = catalogSeams.current()
         if previousIdentifier != currentSource?.persistentIdentifier {
             showIndicatorIfNeeded()
+        }
+    }
+
+    /// Applies the verified result of a switch chain. The live catalog stays the
+    /// only source of truth: `currentSource` is re-read after every chain, and a
+    /// chain that could not confirm the target reports it through the existing
+    /// error surface instead of pretending the selection succeeded.
+    private func handleSwitchReport(_ report: InputSourceSwitchReport) {
+        guard report.outcome != .superseded else { return }
+        currentSource = catalogSeams.current() ?? currentSource
+        switchEvidence.record(report)
+        switch report.outcome {
+        case .verified:
+            lastOperationError = nil
+            showIndicatorIfNeeded()
+        case .alreadyCurrent:
+            lastOperationError = nil
+            if report.request.origin == .manual { showIndicatorIfNeeded() }
+        case .unavailable:
+            lastOperationError = report.failureDescription { sourceName(for: $0) }
+            refreshSources()
+        case .exhausted:
+            lastOperationError = report.failureDescription { sourceName(for: $0) }
+        case .superseded, .interruptedByUser:
+            break
         }
     }
 
@@ -1307,12 +1727,18 @@ struct InputSourcesView: View {
         }
     }
 
-    /// 开关在首页；这里只保留「系统里没有可用输入法」这类需要用户处理的警告。
+    /// 开关在首页；这里只保留需要用户处理的警告：没有可用输入法，或某次切换在重试后仍未生效。
     @ViewBuilder
     private var availabilityCard: some View {
         if inputSources.availableSources.isEmpty {
             SettingsCard {
                 Label(model.t("inputSourcesUnavailable"), systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+            }
+        }
+        if let error = inputSources.lastOperationError {
+            SettingsCard {
+                Label(error, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
             }
         }
