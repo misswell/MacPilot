@@ -374,7 +374,14 @@ struct SnapzyCaptureTests {
         }
 
         let startedAt = Date()
-        controller.startSnapzySelection(mode: .manualArea, preparation: delayedPreparation)
+        // The probe is pinned to "no popup": a menu someone happens to have open
+        // on this machine must not turn this fast-path assertion into the
+        // capture-first order.
+        controller.startSnapzySelection(
+            mode: .manualArea,
+            popupIsOnScreen: { false },
+            preparation: delayedPreparation
+        )
         let elapsed = Date().timeIntervalSince(startedAt)
 
         #expect(elapsed < 0.1)

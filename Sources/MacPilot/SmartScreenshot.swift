@@ -1738,6 +1738,10 @@ final class SmartScreenshotController {
 
     var testOverlayCount: Int { overlays.count }
     var testShortcutRegistrationAttemptCount: Int { shortcutRegistrationAttemptCount }
+    /// Test seam: the in-flight frozen-backdrop task. The popup ordering tests
+    /// await it instead of sleeping on a clock, and hold the reference after the
+    /// controller clears its own on completion.
+    var testSnapzyPreparationTask: Task<Void, Never>? { snapzyPreparationTask }
     #endif
 
     func start() {
@@ -2559,7 +2563,21 @@ final class SmartScreenshotController {
     }
 
     func cancelSelection() {
-        if SnapzyAreaSelectionController.shared.isPresenting || snapzySessionID != nil {
+        // Only the session this controller actually put on screen may cancel the
+        // shared Snapzy controller. In the popup capture-first order the session
+        // id exists while the overlay is still held back; cancelling the shared
+        // controller then would tear down whatever session is on screen — a
+        // second shortcut press racing the first one, or another instance in a
+        // test run.
+        if let snapzySessionID {
+            if SnapzyAreaSelectionController.shared.isPresenting(sessionID: snapzySessionID) {
+                SnapzyAreaSelectionController.shared.cancelSelection()
+            }
+            resetSnapzyPreparationState()
+            QuickAccessManager.shared.resumeAfterCapture()
+            return
+        }
+        if SnapzyAreaSelectionController.shared.isPresenting {
             SnapzyAreaSelectionController.shared.cancelSelection()
             resetSnapzyPreparationState()
             QuickAccessManager.shared.resumeAfterCapture()
@@ -2651,11 +2669,24 @@ final class SmartScreenshotController {
     /// capture finishes. The preparation closure is injectable so the ordering
     /// can be regression-tested without requiring a live ScreenCaptureKit
     /// permission or waiting for a real display snapshot.
+    ///
+    /// A popup that is already on screen when the shortcut arrives (menu-bar
+    /// menu, combobox dropdown, context menu, popover) is dismissed by the
+    /// overlay's presentation — `makeKeyAndOrderFront` ends that popup's
+    /// tracking — so the present-first order can never contain it. In that case
+    /// the frozen snapshot is taken first, and the overlay is presented only
+    /// once the backdrops that still show the popup are in hand.
+    ///
+    /// `popupIsOnScreen` and `presentSelection` are the injection seams: tests
+    /// prove the ordering without touching the real window server, a real
+    /// ScreenCaptureKit capture or a visible overlay.
     @discardableResult
     func startSnapzySelection(
         mode: SmartCaptureSelectionMode,
         applicationConfiguration providedApplicationConfiguration: AreaSelectionApplicationConfiguration? = nil,
         recordingConfiguration: RecordingSelectionBarConfiguration? = nil,
+        popupIsOnScreen: (@MainActor () -> Bool)? = nil,
+        presentSelection: (@MainActor ([CGDirectDisplayID: AreaSelectionBackdrop]) -> Void)? = nil,
         preparation: @escaping @MainActor () async throws -> FrozenAreaCaptureSession
     ) -> UUID? {
         guard !isSelecting, !SnapzyAreaSelectionController.shared.isPresenting else { return nil }
@@ -2688,46 +2719,76 @@ final class SmartScreenshotController {
         let presentsPostSelectionActions = isRecordingMode
             ? recordingConfiguration != nil
             : true
-        SnapzyAreaSelectionController.shared.startSelection(
-            mode: snapzyMode,
-            backdrops: [:],
-            applicationConfiguration: applicationConfiguration,
-            initialInteractionMode: interactionMode,
-            postSelectionPinShortcut: postSelectionPinShortcut,
-            elementTargetResolver: interactionMode == .smartElement
-                ? { point in SmartAXTargetQuery.target(at: point) }
-                : nil,
-            sessionID: sessionID,
-            recordingConfiguration: recordingConfiguration,
-            selectionPreview: presentsPostSelectionActions
-                ? { [weak self] result in
-                    self?.handleSnapzySelectionPreview(
+        let presentOverlay: @MainActor ([CGDirectDisplayID: AreaSelectionBackdrop]) -> Void =
+            presentSelection ?? { [weak self] backdrops in
+                guard let self else { return }
+                SnapzyAreaSelectionController.shared.startSelection(
+                    mode: snapzyMode,
+                    backdrops: backdrops,
+                    applicationConfiguration: applicationConfiguration,
+                    initialInteractionMode: interactionMode,
+                    postSelectionPinShortcut: self.postSelectionPinShortcut,
+                    elementTargetResolver: interactionMode == .smartElement
+                        ? { point in SmartAXTargetQuery.target(at: point) }
+                        : nil,
+                    sessionID: sessionID,
+                    recordingConfiguration: recordingConfiguration,
+                    selectionPreview: presentsPostSelectionActions
+                        ? { [weak self] result in
+                            self?.handleSnapzySelectionPreview(
+                                result,
+                                requestedMode: mode,
+                                sessionID: sessionID
+                            )
+                        }
+                        : nil,
+                    actionHandler: presentsPostSelectionActions
+                        ? { [weak self] result, action in
+                            self?.handleSnapzySelectionAction(
+                                result,
+                                action: action,
+                                requestedMode: mode,
+                                sessionID: sessionID
+                            )
+                        }
+                        : nil
+                ) { [weak self] result in
+                    self?.handleSnapzySelectionResult(
                         result,
                         requestedMode: mode,
                         sessionID: sessionID
                     )
                 }
-                : nil,
-            actionHandler: presentsPostSelectionActions
-                ? { [weak self] result, action in
-                    self?.handleSnapzySelectionAction(
-                        result,
-                        action: action,
-                        requestedMode: mode,
-                        sessionID: sessionID
-                    )
-                }
-                : nil
-        ) { [weak self] result in
-            self?.handleSnapzySelectionResult(
-                result,
-                requestedMode: mode,
-                sessionID: sessionID
-            )
-        }
+            }
         snapzySessionID = sessionID
 
-        snapzyPreparationTask = Task { [weak self] in
+        // A popup on screen must be photographed before any window of ours takes
+        // key status.  Without one, keep the fast present-first path: the overlay
+        // shows up immediately and the frozen frame streams in behind it.
+        let popupIsOpen = (popupIsOnScreen ?? ScreenshotPopupWindowProbe.hasOpenPopup)()
+        if !popupIsOpen {
+            presentOverlay([:])
+        }
+        snapzyPreparationTask = makeSnapzyBackdropTask(
+            sessionID: sessionID,
+            presentsAfterCapture: popupIsOpen,
+            preparation: preparation,
+            presentOverlay: presentOverlay
+        )
+        return sessionID
+    }
+
+    /// Runs the frozen-display preparation and settles the session state once the
+    /// backdrops exist.  When the overlay was held back (`presentsAfterCapture`),
+    /// this is also what presents it — with the finished backdrops, so the popup
+    /// pixels are on screen from the first composition frame.
+    private func makeSnapzyBackdropTask(
+        sessionID: UUID,
+        presentsAfterCapture: Bool,
+        preparation: @escaping @MainActor () async throws -> FrozenAreaCaptureSession,
+        presentOverlay: @escaping @MainActor ([CGDirectDisplayID: AreaSelectionBackdrop]) -> Void
+    ) -> Task<Void, Never> {
+        Task { [weak self] in
             do {
                 let frozenSession = try await preparation()
                 guard !frozenSession.backdrops.isEmpty else {
@@ -2743,10 +2804,14 @@ final class SmartScreenshotController {
 
                 self.snapzyFrozenSession = frozenSession
                 self.snapzyPreparationTask = nil
-                SnapzyAreaSelectionController.shared.updateBackdrops(
-                    frozenSession.backdrops,
-                    for: sessionID
-                )
+                if presentsAfterCapture {
+                    presentOverlay(frozenSession.backdrops)
+                } else {
+                    SnapzyAreaSelectionController.shared.updateBackdrops(
+                        frozenSession.backdrops,
+                        for: sessionID
+                    )
+                }
                 if let pendingAction = self.pendingSnapzyAction {
                     self.pendingSnapzyAction = nil
                     self.pendingSnapzyResult = nil
@@ -2762,13 +2827,19 @@ final class SmartScreenshotController {
                 return
             } catch {
                 guard let self, self.snapzySessionID == sessionID else { return }
+                // Only a session that actually reached the screen may cancel the
+                // shared controller. In the capture-first order nothing was
+                // presented, so tearing down the shared controller here would
+                // cancel somebody else's overlay.
+                let wasPresented = SnapzyAreaSelectionController.shared.isPresenting(sessionID: sessionID)
                 self.resetSnapzyPreparationState()
-                SnapzyAreaSelectionController.shared.cancelSelection()
+                if wasPresented {
+                    SnapzyAreaSelectionController.shared.cancelSelection()
+                }
                 QuickAccessManager.shared.resumeAfterCapture()
                 self.onError(error)
             }
         }
-        return sessionID
     }
 
     private func handleSnapzySelectionResult(
