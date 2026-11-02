@@ -16,6 +16,9 @@
 | Dock 组跨进程编辑丢失或面板放置错误 | `DockGroupsCoreTests`、`DockHelperPanelPlacementTests`；覆盖并发写入及布局。 |
 | 远程发现或协议能力宣告不正确 | `RemoteBonjourPublisherTests`、远程连接/能力相关套件；覆盖注册失败恢复、旧回调和版本兼容。 |
 | 搜索查询过期、位置/收藏丢失或索引不可用误报无结果 | `QuickSearchCancellationTests`、`QuickSearchPersistenceTests`、`QuickSearchSpotlightHonestyTests` 及项目搜索测试；覆盖查询取消、状态恢复和不可搜索提示。 |
+| 截图时界面上已展开的下拉菜单/弹出菜单被收起，截到的图里没有下拉项 | `ScreenshotPopupWindowProbeTests`、`SnapzyPopupCaptureOrderingTests`；覆盖「有 popup 时先抓冻结帧再显示遮罩」「普通截图仍先显示遮罩」「抓帧失败不显示遮罩」「预抓会话经 backdrops 交给 pending 逻辑」。触发条件：截屏快捷键（默认 F1）在其他 App 弹出菜单/下拉展开时按下。 |
+| 自动切换输入法常常没能落到目标输入法（多次 Shift 才出现中文），或切换后状态与设置不一致 | `InputSourceSwitchTests`、`InputSourceSwitchEvidenceTests`；覆盖选择后校验、逐级重试、用户中途手动切换即停、上限耗尽保留系统实际状态并提示、旧切换链被新激活取代。触发条件：前台 App 切换后目标输入法与系统每应用记忆抢夺输入源。失败可在 Diagnostics.log 的 `[InputSource] switch ...` 行看到 desired/live/attempts/verified。 |
+| 后台窗口切换快捷键（Option+Tab）首次按下无效、多按几次才生效 | `WindowSwitcherFirstPressTests`、`WindowSwitcherTests`；覆盖「AX 清单为空时立即用窗口服务器快照出面板」「等待 AX 1.5s 后回退」「事件 tap 被系统禁用后原地重启用/重建且不重复安装」「非 Tab 按键在 tap 回调里短路」。触发条件：冷启动或 AX 枚举慢；tap 被 timeout/安全输入禁用。相关日志：`[WindowSwitcher] Session cold start`、`Pending session ...`、`Tap disabled by system`、`Tap created (install #n)`。 |
 | 发布包签名身份不一致，升级或权限失效 | `SigningRequirementTests`，并对最终下载包执行项目指定签名要求、strict codesign、公证、stapler、Gatekeeper 和摘要验证。 |
 
 真实显示、电源、锁屏、键盘注入及 Finder/权限状态操作不得在用户当前会话自动执行。未获得授权或缺少安全设备时只运行安全测试，并明确列出未验证的实机项。
