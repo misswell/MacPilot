@@ -567,6 +567,140 @@ enum WindowSwitcherWindowMatching {
     }
 }
 
+// MARK: - Cold-start fallback
+
+/// Application facts the cold-start fallback needs. The accessibility
+/// inventory derives the same data from `NSRunningApplication`; this value type
+/// keeps the fallback builder free of AX and free of live windows, so it can be
+/// exercised in tests without touching the user's window list.
+struct WindowSwitcherFallbackApplication {
+    let processID: pid_t
+    let name: String
+    let bundleIdentifier: String?
+    let isHidden: Bool
+    let icon: NSImage?
+}
+
+/// The window-server-only inventory presented on a cold start.
+///
+/// Building the accessibility inventory walks every running application's
+/// window list and can take seconds on a busy machine. The shortcut must still
+/// put something on screen on the very first press, so a cold start presents
+/// this snapshot from `CGWindowListCopyWindowInfo` instead: stable
+/// `window-<CGWindowID>` identities (the same identities the AX pass assigns to
+/// a matched server record), real frames, and WindowServer titles. No AX call,
+/// no grouping query, no preview capture happens here. The AX refresh then
+/// replaces these items with AX titles, grouping and previews once it lands.
+enum WindowSwitcherWindowServerInventory {
+    static func snapshot(
+        settings: WindowSwitcherSettings,
+        serverRecords: [WindowSwitcherServerRecord],
+        applications: [WindowSwitcherFallbackApplication],
+        excludedWindowIDs: Set<CGWindowID> = []
+    ) -> [WindowSwitcherItem] {
+        let recordsByProcess = Dictionary(grouping: serverRecords, by: \.processID)
+        let orderedApplications = applications.sorted { lhs, rhs in
+            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        let fallbackIcon = defaultIcon()
+        var result: [WindowSwitcherItem] = []
+        for application in orderedApplications {
+            guard !application.isHidden || settings.includeHiddenApplications else { continue }
+            // WindowServer order is the stacking order; scanWindowServer()
+            // already yields it, so no per-record sort is needed here.
+            var items: [WindowSwitcherItem] = []
+            for record in recordsByProcess[application.processID] ?? [] {
+                guard record.isOnScreen,
+                      !excludedWindowIDs.contains(record.windowID),
+                      record.frame.width >= 2,
+                      record.frame.height >= 2 else { continue }
+                items.append(WindowSwitcherItem(
+                    id: "window-\(record.windowID)",
+                    windowID: record.windowID,
+                    processID: application.processID,
+                    appName: application.name,
+                    bundleIdentifier: application.bundleIdentifier,
+                    title: record.title,
+                    icon: application.icon ?? fallbackIcon,
+                    preview: nil,
+                    // No AX element: this item can be activated but not focused
+                    // through AX until the accessibility refresh replaces it.
+                    axWindow: nil,
+                    windowNumber: record.windowID,
+                    frame: record.frame,
+                    isMinimized: false,
+                    isHidden: application.isHidden,
+                    canCapturePreview: true
+                ))
+            }
+            guard !items.isEmpty else { continue }
+            let displayedIndices = WindowSwitcherApplicationGrouping.displayedIndices(
+                isMinimized: items.map(\.isMinimized),
+                applicationBundleIdentifier: application.bundleIdentifier,
+                settings: settings
+            )
+            result.append(contentsOf: displayedIndices.compactMap { items.indices.contains($0) ? items[$0] : nil })
+        }
+        return result
+    }
+
+    /// Reads only already-loaded application facts. `application.icon` is
+    /// AppKit's cached icon reference, never a fresh icon-service request.
+    static func applications(from runningApplications: [NSRunningApplication]) -> [WindowSwitcherFallbackApplication] {
+        runningApplications.compactMap { application in
+            guard !application.isTerminated else { return nil }
+            guard application.activationPolicy == .regular || application.activationPolicy == .accessory else { return nil }
+            return WindowSwitcherFallbackApplication(
+                processID: application.processIdentifier,
+                name: application.localizedName ?? application.bundleIdentifier ?? "Application",
+                bundleIdentifier: application.bundleIdentifier,
+                isHidden: application.isHidden,
+                icon: application.icon
+            )
+        }
+    }
+
+    private static func defaultIcon() -> NSImage {
+        NSImage(systemSymbolName: "app", accessibilityDescription: nil) ?? NSImage()
+    }
+}
+
+/// Decides what a key press can show right now, and what a session that was
+/// left waiting finally resolves to. Pure rules: the model feeds counts, tests
+/// feed the boundary values, no panel and no tap is involved.
+enum WindowSwitcherSessionBootstrap {
+    /// `pendingSession` is a promise that a session will appear because the
+    /// press has already been consumed. If the accessibility inventory has not
+    /// landed by this bound, the promise is kept with the window-server
+    /// snapshot instead of swallowing the shortcut.
+    static let pendingSessionFallbackMilliseconds = 1_500
+    static let pendingSessionFallbackInterval = Duration.milliseconds(pendingSessionFallbackMilliseconds)
+
+    enum Decision: Equatable {
+        case showCachedInventory(count: Int)
+        case showWindowServerFallback(count: Int)
+        case waitForInventory
+    }
+
+    static func decision(cachedCount: Int, fallbackCount: Int) -> Decision {
+        if cachedCount > 0 { return .showCachedInventory(count: cachedCount) }
+        if fallbackCount > 0 { return .showWindowServerFallback(count: fallbackCount) }
+        return .waitForInventory
+    }
+
+    enum PendingResolution: Equatable {
+        case inventoryResolved(count: Int)
+        case windowServerFallback(count: Int)
+        case unresolved
+    }
+
+    static func pendingResolution(inventoryCount: Int, windowServerCount: Int) -> PendingResolution {
+        if inventoryCount > 0 { return .inventoryResolved(count: inventoryCount) }
+        if windowServerCount > 0 { return .windowServerFallback(count: windowServerCount) }
+        return .unresolved
+    }
+}
+
 // MARK: - Global shortcut event tap
 
 final class WindowSwitcherEventTapContext: @unchecked Sendable {
@@ -584,11 +718,16 @@ final class WindowSwitcherEventTapContext: @unchecked Sendable {
         lock.unlock()
     }
 
-    func reenableEventTap() {
+    /// One CGEvent.tapEnable call and one health read. Bounded on purpose: it
+    /// runs inside the event-tap callback.
+    @discardableResult
+    func reenableEventTap() -> Bool {
         lock.lock()
         let eventTap = self.eventTap
         lock.unlock()
-        if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
+        guard let eventTap else { return false }
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+        return CGEvent.tapIsEnabled(tap: eventTap)
     }
 }
 
@@ -600,17 +739,28 @@ private func windowSwitcherEventTapCallback(
 ) -> Unmanaged<CGEvent>? {
     guard let refcon else { return event.map(Unmanaged.passUnretained) }
     let context = Unmanaged<WindowSwitcherEventTapContext>.fromOpaque(refcon).takeUnretainedValue()
-    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        context.reenableEventTap()
+
+    // Bounded by construction: a disabled tap costs one tapEnable call, and
+    // every other event is filtered by type and key code before any model work
+    // (AX enumeration, thumbnails, panel construction) is reached.
+    let keyCode = event?.getIntegerValueField(.keyboardEventKeycode) ?? 0
+    switch WindowSwitcherEventTapRouting.route(type: type, keyCode: keyCode) {
+    case .tapDisabled:
+        let reason = type == .tapDisabledByTimeout ? "timeout" : "user input"
+        let reenabled = context.reenableEventTap()
+        DiagnosticLog.write(
+            "WindowSwitcher",
+            "Tap disabled by system (\(reason)); re-enable \(reenabled ? "ok" : "failed")"
+        )
         return event.map(Unmanaged.passUnretained)
+    case .ignore:
+        return event.map(Unmanaged.passUnretained)
+    case .inspect:
+        break
     }
     guard let event else { return nil }
 
     let typeRawValue = type.rawValue
-    let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-    guard WindowSwitcherEventTapRouting.shouldInspect(type: type, keyCode: keyCode) else {
-        return Unmanaged.passUnretained(event)
-    }
     let flagsRawValue = event.flags.rawValue
     let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
     let owner = Unmanaged<WindowSwitcherModel>.fromOpaque(context.owner).takeUnretainedValue()
@@ -661,7 +811,33 @@ private struct WindowSwitcherPendingSession {
     var startedAt = CFAbsoluteTimeGetCurrent()
 }
 
+/// Where the snapshot that finally resolved a pending session came from. It is
+/// written to the diagnostic log so a swallowed press is attributable.
+private enum WindowSwitcherPendingSessionSource: String {
+    case accessibilityInventory = "AX inventory"
+    case windowServerFallback = "window-server fallback"
+}
+
 enum WindowSwitcherEventTapRouting {
+    /// What the callback should do with one event. `.tapDisabled` is decided
+    /// before any key code is looked at: the system's disable event arrives as
+    /// an event-tap type, not as a keystroke, and it must be repaired even when
+    /// the payload is empty.
+    enum Route: Equatable {
+        case tapDisabled
+        case inspect
+        case ignore
+    }
+
+    static func route(type: CGEventType, keyCode: Int64) -> Route {
+        if isTapDisabled(type: type) { return .tapDisabled }
+        return shouldInspect(type: type, keyCode: keyCode) ? .inspect : .ignore
+    }
+
+    static func isTapDisabled(type: CGEventType) -> Bool {
+        type == .tapDisabledByTimeout || type == .tapDisabledByUserInput
+    }
+
     static func shouldInspect(type: CGEventType, keyCode: Int64) -> Bool {
         switch type {
         case .keyDown, .keyUp:
@@ -671,6 +847,110 @@ enum WindowSwitcherEventTapRouting {
         default:
             return false
         }
+    }
+}
+
+// MARK: - Event tap health watchdog
+
+/// A session event tap can be disabled by the system without any visible
+/// error: `tapDisabledByTimeout` after a slow callback, `tapDisabledByUserInput`
+/// after secure input (a password field, a login window). Re-enabling only from
+/// inside the callback leaves a tap whose callback never runs again dead for the
+/// rest of the session — the shortcut then silently does nothing, and no log
+/// line explains it.
+///
+/// The watchdog owns that health check: an explicit pass on application
+/// activation and on wake, plus one low-frequency periodic pass while the
+/// feature is armed. It never touches AX, never polls faster than `interval`,
+/// and its periodic task is cancelled as soon as the feature stops, so a
+/// switched-off feature keeps no timer alive.
+@MainActor
+protocol WindowSwitcherTapHealthHost: AnyObject {
+    /// The feature wants a tap (runtime active and enabled).
+    var tapHealthIsArmed: Bool { get }
+    var tapHealthHasEventTap: Bool { get }
+    /// Monotonic count of installed taps; proves a repair never duplicates one.
+    var tapHealthInstallCount: Int { get }
+    func tapHealthIsTapEnabled() -> Bool
+    /// Returns whether the tap reports enabled after the in-place re-enable.
+    func tapHealthReenableTap() -> Bool
+    /// Reinstalls the tap and returns whether an enabled tap exists afterwards.
+    func tapHealthRebuildTap() -> Bool
+}
+
+enum WindowSwitcherTapHealthOutcome: Equatable {
+    /// The feature is not armed; nothing was checked or repaired.
+    case notArmed
+    case healthy
+    case reenabled
+    case rebuilt
+    case repairFailed
+}
+
+@MainActor
+final class WindowSwitcherTapHealthWatchdog {
+    /// Low frequency on purpose: a dead tap is repaired by the activation and
+    /// wake passes, the periodic pass only catches a tap that died while the
+    /// user stayed in one app.
+    static let defaultInterval = Duration.seconds(30)
+
+    private weak var host: (any WindowSwitcherTapHealthHost)?
+    private let interval: Duration
+    private let log: @MainActor (String) -> Void
+    private var periodicTask: Task<Void, Never>?
+    private(set) var checkCount = 0
+
+    init(
+        host: any WindowSwitcherTapHealthHost,
+        interval: Duration = defaultInterval,
+        log: @escaping @MainActor (String) -> Void = { DiagnosticLog.write("WindowSwitcher", $0) }
+    ) {
+        self.host = host
+        self.interval = interval
+        self.log = log
+    }
+
+    var isArmed: Bool { periodicTask != nil }
+
+    /// Idempotent: arming twice keeps exactly one periodic pass.
+    func arm() {
+        guard periodicTask == nil else { return }
+        periodicTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                do {
+                    try await Task.sleep(for: self.interval)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                _ = self.check(reason: "periodic")
+            }
+        }
+    }
+
+    func stop() {
+        periodicTask?.cancel()
+        periodicTask = nil
+    }
+
+    @discardableResult
+    func check(reason: String) -> WindowSwitcherTapHealthOutcome {
+        checkCount += 1
+        guard let host, host.tapHealthIsArmed else { return .notArmed }
+        guard host.tapHealthHasEventTap else {
+            let rebuilt = host.tapHealthRebuildTap()
+            log("Tap health (\(reason)): no tap installed; rebuild \(rebuilt ? "ok" : "failed") (installs=\(host.tapHealthInstallCount))")
+            return rebuilt ? .rebuilt : .repairFailed
+        }
+        if host.tapHealthIsTapEnabled() { return .healthy }
+        if host.tapHealthReenableTap() && host.tapHealthIsTapEnabled() {
+            log("Tap health (\(reason)): tap was disabled; re-enabled in place (installs=\(host.tapHealthInstallCount))")
+            return .reenabled
+        }
+        let rebuilt = host.tapHealthRebuildTap()
+        log("Tap health (\(reason)): re-enable failed; rebuilt tap (installs=\(host.tapHealthInstallCount))")
+        return rebuilt ? .rebuilt : .repairFailed
     }
 }
 
@@ -754,7 +1034,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         [inventoryTask != nil, inventoryRefreshDebounceTask != nil, thumbnailTask != nil,
          selectedThumbnailTask != nil, manualDismissTask != nil, panelIdleTask != nil,
          activationConfirmTask != nil, focusTask != nil,
-         focusedWindowResolutionTask != nil].filter { $0 }.count
+         focusedWindowResolutionTask != nil, pendingSessionFallbackTask != nil].filter { $0 }.count
     }
     var diagnosticObserverCount: Int { workspaceObservers.count + focusObservers.count }
     func start() { activateFromConfiguration() }
@@ -820,6 +1100,14 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
     private var eventTapContext: WindowSwitcherEventTapContext?
+    /// Monotonic install count. The watchdog logs it so a repair can be told
+    /// apart from a duplicate tap.
+    private var eventTapInstallCount = 0
+    private var tapHealthWatchdog: WindowSwitcherTapHealthWatchdog?
+    /// The current session was presented from the window-server fallback while
+    /// the accessibility inventory was still running.
+    private var isShowingWindowServerFallback = false
+    private var pendingSessionFallbackTask: Task<Void, Never>?
     private let workspaceObservers = ObserverBag()
     private var focusObservers: [pid_t: AXObserver] = [:]
     private var manualDismissTask: Task<Void, Never>?
@@ -926,6 +1214,9 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         }
         installWorkspaceObserver()
         refreshEventTap()
+        let watchdog = WindowSwitcherTapHealthWatchdog(host: self)
+        tapHealthWatchdog = watchdog
+        watchdog.arm()
         requestInventoryRefresh(priority: inventoryPriority)
     }
 
@@ -973,6 +1264,10 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private func stopRuntime() {
         guard isRuntimeActive else { return }
         isRuntimeActive = false
+        // The watchdog's periodic pass is the only timer this feature owns;
+        // stopping the feature cancels it here so nothing stays resident.
+        tapHealthWatchdog?.stop()
+        tapHealthWatchdog = nil
         cancelSession()
         cancelPendingSession()
         manualDismissTask?.cancel()
@@ -1198,29 +1493,81 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         guard isRuntimeActive else { return false }
         guard !isShowing else { return true }
         let startedAt = CFAbsoluteTimeGetCurrent()
-        let snapshot = orderedForSession(cachedWindows)
-        DiagnosticLog.write(
-            "WindowSwitcher",
-            "Session began: \(snapshot.map { "\($0.appName):\($0.id)" }.joined(separator: ", "))"
-        )
-        guard !snapshot.isEmpty else {
+        let cached = orderedForSession(cachedWindows)
+        // A cold start must not swallow the press. The accessibility inventory
+        // can take seconds on a machine with many applications, so when the
+        // cache is empty the session is presented from the cheap window-server
+        // snapshot inside this same key press.
+        let fallback = cached.isEmpty ? orderedForSession(windowServerFallbackSnapshot()) : []
+        switch WindowSwitcherSessionBootstrap.decision(
+            cachedCount: cached.count,
+            fallbackCount: fallback.count
+        ) {
+        case .showCachedInventory:
+            DiagnosticLog.write(
+                "WindowSwitcher",
+                "Session began: \(inventoryDescription(cached))"
+            )
+            showSession(
+                cached,
+                reverse: reverse,
+                manual: manual,
+                additionalSelectionOffset: 0,
+                startedAt: startedAt,
+                cacheHit: true
+            )
+            return true
+        case .showWindowServerFallback:
+            DiagnosticLog.write(
+                "WindowSwitcher",
+                "Session cold start: AX inventory empty; presenting window-server fallback "
+                    + "(\(fallback.count) windows) \(inventoryDescription(fallback))"
+            )
+            showSession(
+                fallback,
+                reverse: reverse,
+                manual: manual,
+                additionalSelectionOffset: 0,
+                startedAt: startedAt,
+                cacheHit: false,
+                windowServerFallback: true
+            )
+            // The session is already visible; AX titles/grouping/previews are
+            // refined asynchronously by the regular inventory refresh task.
+            requestInventoryRefresh(priority: .userInitiated)
+            return true
+        case .waitForInventory:
+            DiagnosticLog.write(
+                "WindowSwitcher",
+                "Session waiting for inventory: cached and window-server snapshots are both empty"
+            )
             pendingSession = WindowSwitcherPendingSession(
                 reverse: reverse,
                 manual: manual,
                 startedAt: startedAt
             )
             requestInventoryRefresh(priority: .userInitiated)
+            schedulePendingSessionFallback()
             return true
         }
-        showSession(
-            snapshot,
-            reverse: reverse,
-            manual: manual,
-            additionalSelectionOffset: 0,
-            startedAt: startedAt,
-            cacheHit: true
+    }
+
+    /// Cheap, AX-free snapshot used only to keep the first press visible.
+    private func windowServerFallbackSnapshot() -> [WindowSwitcherItem] {
+        let excludedWindowIDs: Set<CGWindowID> = panelController?.panelWindowID.map { [$0] } ?? []
+        let scan = WindowSwitcherInventory.scanWindowServer()
+        return WindowSwitcherWindowServerInventory.snapshot(
+            settings: settings,
+            serverRecords: scan.records,
+            applications: WindowSwitcherWindowServerInventory.applications(
+                from: NSWorkspace.shared.runningApplications
+            ),
+            excludedWindowIDs: excludedWindowIDs
         )
-        return true
+    }
+
+    private func inventoryDescription(_ items: [WindowSwitcherItem]) -> String {
+        items.map { "\($0.appName):\($0.id)" }.joined(separator: ", ")
     }
 
     private func showSession(
@@ -1229,7 +1576,8 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         manual: Bool,
         additionalSelectionOffset: Int,
         startedAt: CFAbsoluteTime,
-        cacheHit: Bool
+        cacheHit: Bool,
+        windowServerFallback: Bool = false
     ) {
         let currentIndex = currentWindowIndex(in: snapshot)
         let initialIndex = WindowSwitcherSelection.initialIndex(
@@ -1256,6 +1604,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         }
         updatePanelContents(snapshot, selectedIndex: resolvedIndex)
         isManualSession = manual
+        isShowingWindowServerFallback = windowServerFallback
         isShowing = true
         resetMouseSelectionLock()
         panelController = panelController ?? WindowSwitcherPanelController(model: self)
@@ -1320,6 +1669,9 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private func finishSession(commit: Bool) {
         manualDismissTask?.cancel()
         manualDismissTask = nil
+        pendingSessionFallbackTask?.cancel()
+        pendingSessionFallbackTask = nil
+        isShowingWindowServerFallback = false
         let selected = selectedIndex.flatMap { windows.indices.contains($0) ? windows[$0] : nil }
         isShowing = false
         isManualSession = false
@@ -1359,6 +1711,9 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
 
     private func cancelPendingSession() {
         pendingSession = nil
+        pendingSessionFallbackTask?.cancel()
+        pendingSessionFallbackTask = nil
+        isShowingWindowServerFallback = false
         tabIsDown = false
     }
 
@@ -1413,7 +1768,9 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
             NSWorkspace.didLaunchApplicationNotification,
             NSWorkspace.didTerminateApplicationNotification,
             NSWorkspace.didHideApplicationNotification,
-            NSWorkspace.didUnhideApplicationNotification
+            NSWorkspace.didUnhideApplicationNotification,
+            NSWorkspace.didWakeNotification,
+            NSWorkspace.screensDidWakeNotification
         ]
         for name in names {
             workspaceObservers.add(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
@@ -1430,6 +1787,16 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                         // once it has actually stayed in the foreground, so they don't get
                         // inserted into the middle of an Alt+Tab cycle.
                         self.scheduleActivationConfirmation(application)
+                        // A tap can die while another app owns the session. Every
+                        // activation is a cheap health check; it logs nothing while
+                        // the tap is healthy.
+                        self.tapHealthWatchdog?.check(reason: "activation")
+                    }
+                    if name == NSWorkspace.didWakeNotification || name == NSWorkspace.screensDidWakeNotification {
+                        // Wake is the other moment macOS is known to leave a
+                        // session tap disabled.
+                        DiagnosticLog.write("WindowSwitcher", "System woke; checking event tap health")
+                        self.tapHealthWatchdog?.check(reason: "wake")
                     }
                     self.requestInventoryRefresh(priority: .utility)
                 }
@@ -1769,7 +2136,16 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                 }
                 if let pending = self.pendingSession {
                     self.pendingSession = nil
-                    self.completePendingSession(pending, snapshot: self.cachedWindows)
+                    self.pendingSessionFallbackTask?.cancel()
+                    self.pendingSessionFallbackTask = nil
+                    self.completePendingSession(
+                        pending,
+                        snapshot: self.cachedWindows,
+                        source: .accessibilityInventory
+                    )
+                }
+                if self.isShowingWindowServerFallback, self.pendingSession == nil {
+                    self.reconcileWindowServerFallbackSession()
                 }
             }
             if revision != self.inventoryRevision || !settingsStillMatch {
@@ -1782,9 +2158,16 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
 
     private func completePendingSession(
         _ pending: WindowSwitcherPendingSession,
-        snapshot: [WindowSwitcherItem]
+        snapshot: [WindowSwitcherItem],
+        source: WindowSwitcherPendingSessionSource
     ) {
         guard !snapshot.isEmpty else { return }
+        let waitedMilliseconds = Int(((CFAbsoluteTimeGetCurrent() - pending.startedAt) * 1_000).rounded())
+        DiagnosticLog.write(
+            "WindowSwitcher",
+            "Pending session resolved after \(waitedMilliseconds) ms via \(source.rawValue) "
+                + "(\(snapshot.count) windows)"
+        )
         let ordered = orderedForSession(snapshot)
         let currentIndex = currentWindowIndex(in: ordered)
         let initialIndex = WindowSwitcherSelection.initialIndex(
@@ -1820,9 +2203,78 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                 manual: pending.manual,
                 additionalSelectionOffset: pending.additionalSelectionOffset,
                 startedAt: pending.startedAt,
-                cacheHit: false
+                cacheHit: false,
+                windowServerFallback: source == .windowServerFallback
             )
         }
+    }
+
+    /// `pendingSession` promised the user a session because the press was
+    /// already consumed. If the accessibility inventory has not landed within
+    /// the bounded interval, keep that promise with the window-server snapshot
+    /// instead of swallowing the shortcut indefinitely.
+    private func schedulePendingSessionFallback() {
+        pendingSessionFallbackTask?.cancel()
+        pendingSessionFallbackTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: WindowSwitcherSessionBootstrap.pendingSessionFallbackInterval)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled, self.isRuntimeActive, let pending = self.pendingSession else { return }
+            self.pendingSessionFallbackTask = nil
+            let timeout = WindowSwitcherSessionBootstrap.pendingSessionFallbackMilliseconds
+            let fallback = self.orderedForSession(self.windowServerFallbackSnapshot())
+            switch WindowSwitcherSessionBootstrap.pendingResolution(
+                inventoryCount: self.cachedWindows.count,
+                windowServerCount: fallback.count
+            ) {
+            case let .inventoryResolved(count):
+                self.pendingSession = nil
+                DiagnosticLog.write(
+                    "WindowSwitcher",
+                    "Pending session resolved after \(timeout) ms timeout via AX inventory (\(count) windows)"
+                )
+                self.completePendingSession(pending, snapshot: self.cachedWindows, source: .accessibilityInventory)
+            case let .windowServerFallback(count):
+                self.pendingSession = nil
+                DiagnosticLog.write(
+                    "WindowSwitcher",
+                    "Pending session unresolved after \(timeout) ms; presenting window-server fallback (\(count) windows)"
+                )
+                self.completePendingSession(pending, snapshot: fallback, source: .windowServerFallback)
+            case .unresolved:
+                DiagnosticLog.write(
+                    "WindowSwitcher",
+                    "Pending session unresolved after \(timeout) ms and no windows exist; session dropped"
+                )
+                self.cancelPendingSession()
+            }
+        }
+    }
+
+    /// The cold-start session was presented from the window-server snapshot.
+    /// When the accessibility inventory lands, replace its items (AX titles,
+    /// grouping, previews) without moving the selection to a different window.
+    private func reconcileWindowServerFallbackSession() {
+        guard isShowing,
+              isShowingWindowServerFallback,
+              pendingSession == nil,
+              !cachedWindows.isEmpty else { return }
+        let ordered = orderedForSession(cachedWindows)
+        guard !ordered.isEmpty else { return }
+        let nextSelection: Int?
+        if let selectedItemID, let index = ordered.firstIndex(where: { $0.id == selectedItemID }) {
+            nextSelection = index
+        } else if let selectedIndex {
+            nextSelection = min(selectedIndex, ordered.count - 1)
+        } else {
+            nextSelection = nil
+        }
+        guard updatePanelContents(ordered, selectedIndex: nextSelection) else { return }
+        isShowingWindowServerFallback = false
+        refreshThumbnails(for: ordered, selectedIndex: nextSelection)
+        scheduleSelectedThumbnailRefresh()
     }
 
     private func reportPresentationLatency(startedAt: CFAbsoluteTime, cacheHit: Bool) {
@@ -2069,7 +2521,14 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private func refreshEventTap() {
         hasAccessibilityPermission = AXIsProcessTrusted()
         removeEventTap()
-        guard isRuntimeActive, settings.isEnabled, hasAccessibilityPermission else { return }
+        guard isRuntimeActive, settings.isEnabled else { return }
+        guard hasAccessibilityPermission else {
+            DiagnosticLog.write(
+                "WindowSwitcher",
+                "Tap not created: Accessibility permission is not granted"
+            )
+            return
+        }
 
         let context = WindowSwitcherEventTapContext(owner: Unmanaged.passUnretained(self).toOpaque())
         let eventMask = (CGEventMask(1) << CGEventType.keyDown.rawValue)
@@ -2082,14 +2541,25 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
             eventsOfInterest: eventMask,
             callback: windowSwitcherEventTapCallback,
             userInfo: Unmanaged.passUnretained(context).toOpaque()
-        ), let source = CFMachPortCreateRunLoopSource(nil, eventTap, 0) else { return }
+        ), let source = CFMachPortCreateRunLoopSource(nil, eventTap, 0) else {
+            DiagnosticLog.write(
+                "WindowSwitcher",
+                "Tap creation failed: CGEvent.tapCreate/CFMachPortCreateRunLoopSource returned nil"
+            )
+            return
+        }
 
+        eventTapInstallCount += 1
         eventTapContext = context
         self.eventTap = eventTap
         eventTapSource = source
         context.setEventTap(eventTap)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
+        DiagnosticLog.write(
+            "WindowSwitcher",
+            "Tap created (install #\(eventTapInstallCount), enabled=\(CGEvent.tapIsEnabled(tap: eventTap))"
+        )
     }
 
     private func removeEventTap() {
@@ -2105,6 +2575,31 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         eventTapSource = nil
         eventTap = nil
         eventTapContext = nil
+    }
+}
+
+extension WindowSwitcherModel: WindowSwitcherTapHealthHost {
+    /// A tap can only exist while Accessibility is granted, so a feature
+    /// without it has nothing to repair (and the activation pass must not log
+    /// a failed rebuild on every app switch).
+    var tapHealthIsArmed: Bool { isRuntimeActive && settings.isEnabled && hasAccessibilityPermission }
+    var tapHealthHasEventTap: Bool { eventTap != nil }
+    var tapHealthInstallCount: Int { eventTapInstallCount }
+
+    func tapHealthIsTapEnabled() -> Bool {
+        guard let eventTap else { return false }
+        return CGEvent.tapIsEnabled(tap: eventTap)
+    }
+
+    func tapHealthReenableTap() -> Bool {
+        guard let eventTap else { return false }
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+        return CGEvent.tapIsEnabled(tap: eventTap)
+    }
+
+    func tapHealthRebuildTap() -> Bool {
+        refreshEventTap()
+        return eventTap != nil
     }
 }
 
