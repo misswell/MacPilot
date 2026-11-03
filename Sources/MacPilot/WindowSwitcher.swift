@@ -2695,7 +2695,7 @@ private final class WindowSwitcherPanelController {
     /// 切换器面板自身的窗口号，用于从窗口清单里排除，避免显示自己。
     var panelWindowID: CGWindowID? {
         guard let panel else { return nil }
-        return CGWindowID(panel.windowNumber)
+        return CGWindowID.identifiable(panel.windowNumber)
     }
 
     var panelIsBuilt: Bool { panel != nil }

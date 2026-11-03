@@ -91,6 +91,13 @@ final class QuickAccessPinWindow: NSPanel, QuickAccessPinMouseTracking {
     let didCrossIntoFrame = isGeometricallyInside && !lastPointerWasInsideFrame
     lastPointerWasInsideFrame = isGeometricallyInside
 
+    guard let ownWindowID = CGWindowID.identifiable(windowNumber) else {
+      // An unordered window has no identity to sweep against; leave hover off
+      // rather than trap on the conversion.
+      hoverIsCovered = false
+      return
+    }
+
     if QuickAccessPinHoverCoverage.sweepIsWorthRunning(
       pointerIsInsideFrame: isGeometricallyInside,
       didCrossIntoFrame: didCrossIntoFrame,
@@ -102,7 +109,7 @@ final class QuickAccessPinWindow: NSPanel, QuickAccessPinMouseTracking {
       lastHoverSweepAt = now
       hoverIsCovered = !QuickAccessPinHoverCoverage.isPinExposed(
         at: mouseLocation,
-        pinWindowNumber: CGWindowID(windowNumber),
+        pinWindowNumber: ownWindowID,
         surfaces: QuickAccessPinHoverCoverage.liveSurfaces()
       )
     }

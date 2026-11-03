@@ -276,7 +276,7 @@ enum WindowSwitcherInventory {
                 title: values[1] as? String ?? "",
                 isMinimized: (values[2] as? NSNumber)?.boolValue ?? false,
                 frame: position.flatMap { position in size.map { CGRect(origin: position, size: $0) } },
-                windowNumber: (values[5] as? NSNumber).map { CGWindowID($0.intValue) }
+                windowNumber: (values[5] as? NSNumber).flatMap { CGWindowID.identifiable($0.intValue) }
             )
         }
         return WindowSwitcherAXAttributes(
@@ -284,7 +284,7 @@ enum WindowSwitcherInventory {
             title: stringAttribute(kAXTitleAttribute, from: element) ?? "",
             isMinimized: boolAttribute(kAXMinimizedAttribute, from: element),
             frame: frame(of: element),
-            windowNumber: intAttribute("AXWindowNumber", from: element).map { CGWindowID($0) }
+            windowNumber: intAttribute("AXWindowNumber", from: element).flatMap { CGWindowID.identifiable($0) }
         )
     }
 

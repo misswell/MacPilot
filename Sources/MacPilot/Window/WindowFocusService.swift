@@ -264,7 +264,11 @@ enum WindowFocusExecutor {
         NSApp.activate(ignoringOtherApps: true)
         outcome.activatedApplication = true
         if let windowNumber = target.windowNumber,
-           let window = NSApp.windows.first(where: { CGWindowID($0.windowNumber) == windowNumber }) {
+           // NSWindow.windowNumber is -1 until the window is ordered on screen;
+           // narrowing it to CGWindowID traps.
+           let window = NSApp.windows.first(where: {
+               CGWindowID.identifiable($0.windowNumber) == windowNumber
+           }) {
             window.makeKeyAndOrderFront(nil)
             outcome.ownWindowOrderedFront = true
         }
