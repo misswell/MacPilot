@@ -35,6 +35,7 @@ struct SmoothScrollRecoveryTests {
                 self.taps.append(tap)
                 return tap
             },
+            requestTrustPrompt: { false },
             scheduleRecovery: { [unowned self] interval, action in
                 self.schedules += 1
                 self.scheduledIntervals.append(interval)

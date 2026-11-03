@@ -20,6 +20,11 @@ final class SmoothScrollController {
     private let scheduleRecovery: (TimeInterval, @escaping @MainActor () -> Void) -> (() -> Void)
     private var cancelRecovery: (() -> Void)?
     private let recoveryPolicy = EventTapRecoveryPolicy()
+    /// The system-level prompt is a repair attempt, not a nag: it re-registers
+    /// the app with tccd, which is the only programmatic nudge that can clear
+    /// a stale Accessibility decision. At most once per launch.
+    private let requestTrustPrompt: () -> Bool
+    private var didRequestTrustPrompt = false
     /// Consecutive installs that ended without a usable tap. Drives the retry
     /// cadence so a refused tap stops hammering WindowServer every three
     /// seconds while still healing the moment the system allows it.
@@ -48,6 +53,9 @@ final class SmoothScrollController {
         makeEventTap: @escaping (CGEventMask, CGEventTapCallBack, UnsafeMutableRawPointer) -> (any SmoothScrollEventTap)? = {
             SystemSmoothScrollEventTap(mask: $0, callback: $1, userInfo: $2)
         },
+        requestTrustPrompt: @escaping () -> Bool = {
+            AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        },
         scheduleRecovery: @escaping (TimeInterval, @escaping @MainActor () -> Void) -> (() -> Void) = { interval, action in
             // One-shot passes, re-armed by the controller: the wait grows after
             // each refusal, and only the next failure decides the next wait.
@@ -61,6 +69,7 @@ final class SmoothScrollController {
     ) {
         self.isTrusted = isTrusted
         self.makeEventTap = makeEventTap
+        self.requestTrustPrompt = requestTrustPrompt
         self.scheduleRecovery = scheduleRecovery
     }
 
@@ -212,6 +221,12 @@ final class SmoothScrollController {
                 level: .warning
             )
         case .systemDenied:
+            if !didRequestTrustPrompt {
+                didRequestTrustPrompt = true
+                // Best available repair from inside the app: make tccd look at
+                // the grant again. Harmless when the entry is already ticked.
+                _ = requestTrustPrompt()
+            }
             DiagnosticLog.write(
                 "SmoothScroll",
                 "Wheel event tap refused by WindowServer although Accessibility is granted "

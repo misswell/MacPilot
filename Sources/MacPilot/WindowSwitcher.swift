@@ -1350,8 +1350,11 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     }
 
     /// Re-evaluates the grant and rebuilds the tap so a re-grant or a system
-    /// change is picked up without relaunching MacPilot.
+    /// change is picked up without relaunching MacPilot. The prompt variant
+    /// re-registers the app with tccd, which is the only programmatic nudge
+    /// available when the entry is listed but the tap is still refused.
     func retryEventTap() {
+        _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
         refreshPermissionStatus()
     }
 
