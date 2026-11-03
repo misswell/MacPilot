@@ -1287,6 +1287,9 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         inventoryRefreshDebounceTask = nil
         cancelThumbnailRefresh()
         removeEventTap()
+        // The feature is off, so a leftover denial must not outlive it and
+        // greet the next enable with a stale banner.
+        recordDenial(nil, logInstall: false)
         removeWorkspaceObservers()
         removeFocusObservers()
         clearThumbnailCache()
