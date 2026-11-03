@@ -132,7 +132,14 @@ struct QuickSearchSettings: Codable, Equatable, Sendable {
         // 而不是悄悄把用户的配置改掉。
         hotkey = try container.decodeIfPresent(SmartCaptureShortcutBinding.self, forKey: .hotkey)
             ?? Self.defaultHotkey
-        fileScope = try container.decodeIfPresent(QuickSearchFileScope.self, forKey: .fileScope) ?? .home
+        // 与 matchScope 同一规则：认不出来的档位（降级场景）只影响这一个选择，
+        // 抛错会拖垮整节解码、连带清空收藏/面板位置/快捷键（v1.1.482-beta.5 家族）。
+        // `try?` 已经折掉抛错这一层，缺键时 `decodeIfPresent` 给 nil，同样落到默认值。
+        if let storedScope = try? container.decodeIfPresent(QuickSearchFileScope.self, forKey: .fileScope) {
+            fileScope = storedScope
+        } else {
+            fileScope = .home
+        }
         customDirectoryPaths = try container.decodeIfPresent([String].self, forKey: .customDirectoryPaths) ?? []
         // 与剪贴板同一做法：坐标只在写入那一步把关（`rememberPanelPosition`），
         // 落盘的必然是有限值，读侧逐键补齐即可。

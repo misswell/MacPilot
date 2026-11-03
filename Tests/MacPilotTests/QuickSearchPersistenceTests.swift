@@ -98,6 +98,31 @@ struct QuickSearchPersistenceTests {
         #expect(configuration.unreadableSections.isEmpty)
     }
 
+    /// 持久化枚举的未知值（装了更新的一版再降回来）只影响那一个选择，
+    /// 绝不能抛错拖垮整节——那正是 v1.1.482-beta.5 清空全部配置的事故家族。
+    /// matchScope 与 fileScope 都必须走「未知值 → 默认值、其余键保留」。
+    @Test func unknownPersistedEnumValuesFallBackToDefaultsAndKeepTheRestOfTheSection() throws {
+        var object = try Self.baseObject()
+        var section = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(Self.customized)
+        ) as! [String: Any]
+        section["fileScope"] = "someFutureScope"
+        section["matchScope"] = "someFutureMatchScope"
+        object["quickSearch"] = section
+
+        let configuration = try Self.decode(object)
+
+        #expect(configuration.quickSearch.fileScope == .home)
+        #expect(configuration.quickSearch.matchScope == .nameAndPurpose)
+        #expect(configuration.quickSearch.isEnabled)
+        #expect(configuration.quickSearch.hotkey == Self.customized.hotkey)
+        #expect(configuration.quickSearch.customDirectoryPaths == Self.customized.customDirectoryPaths)
+        #expect(configuration.quickSearch.panelSize == Self.customized.panelSize)
+        #expect(configuration.unreadableSections.isEmpty)
+        // 其它节不受牵连。
+        #expect(configuration.clipboard.storageLimit == 200)
+    }
+
     // MARK: 降级：旧版本写回之后再升上来
 
     /// 旧版本不认识 `quickSearch` 这一节：它解码后重新编码时会把这一节丢掉，
