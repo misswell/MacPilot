@@ -59,6 +59,10 @@ struct ScreenCaptureTests {
     @Test @MainActor func smartSelectionPresentsSnapzyOverlayBeforeInitialAXQueryCompletes() async throws {
         _ = NSApplication.shared
         guard !NSScreen.screens.isEmpty else { return }
+        // 这条走的是**真实**弹窗探针：桌面上有别的进程的弹出层（含 loginwindow
+        // 在 1999–2001 层的面板）时，快路径本就应该把覆盖层压到冻结帧之后——
+        // 那不是失败，是这个前提不成立。同族性质由下面注入探针的那条钉住。
+        guard !ScreenshotPopupWindowProbe.hasOpenPopup() else { return }
 
         let controller = SmartScreenshotController(
             language: { .simplifiedChinese },
@@ -81,6 +85,41 @@ struct ScreenCaptureTests {
 
         #expect(elapsed < 0.1)
         #expect(controller.testOverlayCount == 0)
+        #expect(SnapzyAreaSelectionController.shared.isPresenting)
+    }
+
+    /// 与上面同族，但把弹窗探针注入成「没有别的弹出层」，因此与环境无关、必定评估：
+    /// 冻结帧准备挂住 30 秒时覆盖层仍必须已经在屏。`bdb038d` 钉住的就是这一点——
+    /// 选区绝不能退化成等冻结帧/AX 查询回来再显示。
+    @Test @MainActor func smartElementFastPathPresentsOverlayWhileFrozenFramePreparationHangs() async throws {
+        _ = NSApplication.shared
+        guard !NSScreen.screens.isEmpty else { return }
+
+        let controller = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _ in },
+            onError: { _ in },
+            screenCaptureAccessProvider: { true },
+            initialTargetResolver: { _, _ in nil }
+        )
+        defer {
+            controller.cancelSelection()
+            controller.stop()
+        }
+
+        let startedAt = Date()
+        let sessionID = controller.startSnapzySelection(
+            mode: .smartElement,
+            popupIsOnScreen: { false },
+            preparation: {
+                try await Task.sleep(for: .seconds(30))
+                throw CancellationError()
+            }
+        )
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        #expect(sessionID != nil)
+        #expect(elapsed < 0.1)
         #expect(SnapzyAreaSelectionController.shared.isPresenting)
     }
 
