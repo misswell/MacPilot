@@ -67,7 +67,7 @@ struct WindowFocusServiceTests {
                 isMinimized: false,
                 ownProcessID: ownProcessID
             ),
-            performer: { _ in
+            externalAttempt: { _ in
                 probe.record()
                 return WindowFocusAttemptOutcome()
             },
@@ -98,7 +98,7 @@ struct WindowFocusServiceTests {
                 isMinimized: false,
                 ownProcessID: ownProcessID
             ),
-            performer: { _ in
+            ownProcessAttempt: { _ in
                 probe.record()
                 return WindowFocusAttemptOutcome()
             },
@@ -129,7 +129,7 @@ struct WindowFocusServiceTests {
 
         let verified = await WindowFocusService.focus(
             target,
-            performer: { _ in
+            externalAttempt: { _ in
                 probe.record()
                 var outcome = WindowFocusAttemptOutcome()
                 outcome.activatedApplication = true
@@ -163,7 +163,7 @@ struct WindowFocusServiceTests {
 
         let verified = await WindowFocusService.focus(
             target,
-            performer: { _ in
+            externalAttempt: { _ in
                 probe.record()
                 return WindowFocusAttemptOutcome()
             },
@@ -246,8 +246,8 @@ struct WindowFocusServiceTests {
         ))
     }
 
-    @Test func focusExecutorReportsAMissingApplicationWithoutSideEffects() {
-        let outcome = WindowFocusExecutor.perform(
+    @Test func focusExecutorReportsAMissingApplicationWithoutSideEffects() async {
+        let outcome = await WindowFocusExecutor.perform(
             WindowFocusTarget(
                 processID: -1,
                 axWindow: nil,

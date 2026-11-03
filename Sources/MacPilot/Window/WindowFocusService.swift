@@ -218,12 +218,40 @@ struct WindowFocusEnvironmentProbe: Sendable, Equatable {
 // MARK: - Executor
 
 enum WindowFocusExecutor {
-    /// One blocking attempt. The service guarantees own-process targets run on
-    /// the main actor (WindowFocusExecutionPolicy); external targets run on a
-    /// background task.
+    /// One blocking attempt, dispatched to the executor its target requires.
+    ///
+    /// MacPilot is an LSUIElement process: its own scene windows may only be
+    /// ordered front on the main actor, while AX aimed at another process must
+    /// stay off the run loop that also feeds the event tap.
+    ///
+    /// The split is static on purpose. The previous shape reached AppKit
+    /// through `MainActor.assumeIsolated` from inside a nonisolated helper,
+    /// which is a runtime bet: when the bet lost, the assumption trap killed
+    /// the app on the main thread (EXC_BREAKPOINT in
+    /// `activateOwnApplication`). Typed isolation cannot lose that bet.
     static func perform(
         _ target: WindowFocusTarget,
         actions: WindowFocusActivationActions = .live
+    ) async -> WindowFocusAttemptOutcome {
+        if WindowFocusExecutionPolicy.runsOnMainActor(
+            targetProcessID: target.processID,
+            ownProcessID: target.ownProcessID
+        ) {
+            return await MainActor.run {
+                performOwnProcess(target, actions: actions)
+            }
+        }
+        return await Task.detached(priority: .userInitiated) {
+            performExternal(target, actions: actions)
+        }.value
+    }
+
+    /// MacPilot's own windows: activation plus making the target NSWindow key,
+    /// which is also what transfers to that window's Space.
+    @MainActor
+    static func performOwnProcess(
+        _ target: WindowFocusTarget,
+        actions: WindowFocusActivationActions
     ) -> WindowFocusAttemptOutcome {
         var outcome = WindowFocusAttemptOutcome()
         guard let application = NSRunningApplication(processIdentifier: target.processID) else {
@@ -233,34 +261,57 @@ enum WindowFocusExecutor {
         if application.isHidden {
             outcome.unhidApplication = application.unhide()
         }
-        if target.processID == target.ownProcessID {
-            // Own-process targets always run on the main actor
-            // (WindowFocusExecutionPolicy); trap loudly if that ever changes,
-            // because the AppKit calls below require it.
-            let ownOutcome = MainActor.assumeIsolated {
-                Self.activateOwnApplication(target)
-            }
-            outcome.activatedApplication = ownOutcome.activatedApplication
-            outcome.ownWindowOrderedFront = ownOutcome.orderedWindowFront
-        } else {
-            // .activateAllWindows is what keeps multi-window applications
-            // (Chrome, Electron) from activating without any window coming
-            // forward.
-            outcome.activatedApplication = actions.activate(application)
-            // A cooperative denial is not a dead end: the raise below only
-            // means something once the owning application is frontmost.
-            for step in WindowFocusActivationPolicy.steps(
-                afterPrimaryActivationSucceeded: outcome.activatedApplication
-            ) {
-                guard actions.perform(step, application: application, processID: target.processID) else {
-                    continue
-                }
-                outcome.activatedApplication = true
-                outcome.activatedThroughAccessibility = step == .accessibilityFrontmost
-                break
-            }
+        NSApp.activate(ignoringOtherApps: true)
+        outcome.activatedApplication = true
+        if let windowNumber = target.windowNumber,
+           let window = NSApp.windows.first(where: { CGWindowID($0.windowNumber) == windowNumber }) {
+            window.makeKeyAndOrderFront(nil)
+            outcome.ownWindowOrderedFront = true
         }
-        guard let axWindow = target.axWindow else { return outcome }
+        applyWindowFocus(target, to: &outcome)
+        return outcome
+    }
+
+    /// Another application's window: cooperative activation, then the
+    /// escalation ladder, then the AX raise.
+    static func performExternal(
+        _ target: WindowFocusTarget,
+        actions: WindowFocusActivationActions
+    ) -> WindowFocusAttemptOutcome {
+        var outcome = WindowFocusAttemptOutcome()
+        guard let application = NSRunningApplication(processIdentifier: target.processID) else {
+            return outcome
+        }
+        outcome.foundApplication = true
+        if application.isHidden {
+            outcome.unhidApplication = application.unhide()
+        }
+        // .activateAllWindows is what keeps multi-window applications (Chrome,
+        // Electron) from activating without any window coming forward.
+        outcome.activatedApplication = actions.activate(application)
+        // A cooperative denial is not a dead end: the raise below only means
+        // something once the owning application is frontmost.
+        for step in WindowFocusActivationPolicy.steps(
+            afterPrimaryActivationSucceeded: outcome.activatedApplication
+        ) {
+            guard actions.perform(step, application: application, processID: target.processID) else {
+                continue
+            }
+            outcome.activatedApplication = true
+            outcome.activatedThroughAccessibility = step == .accessibilityFrontmost
+            break
+        }
+        applyWindowFocus(target, to: &outcome)
+        return outcome
+    }
+
+    /// The AX half, shared by both executors. AX calls are safe from either
+    /// executor as long as they target another process or a main-actor caller.
+    private static func applyWindowFocus(
+        _ target: WindowFocusTarget,
+        to outcome: inout WindowFocusAttemptOutcome
+    ) {
+        guard let axWindow = target.axWindow else { return }
         AXUIElementSetMessagingTimeout(axWindow, 0.1)
         if target.isMinimized {
             outcome.restoredWindow = AXUIElementSetAttributeValue(
@@ -280,28 +331,6 @@ enum WindowFocusExecutor {
             kAXFocusedAttribute as CFString,
             true as CFTypeRef
         ) == .success
-        return outcome
-    }
-
-    /// MacPilot is an LSUIElement process: activating itself through
-    /// NSRunningApplication does not order its SwiftUI scene windows front.
-    /// The AppKit path — self-activation plus making the target NSWindow key —
-    /// is also what transfers to that window's Space.
-    @MainActor
-    private static func activateOwnApplication(
-        _ target: WindowFocusTarget
-    ) -> (activatedApplication: Bool, orderedWindowFront: Bool) {
-        // The AppKit self-activation call has no result value; the
-        // verification pass decides whether it landed.
-        NSApp.activate(ignoringOtherApps: true)
-        guard let windowNumber = target.windowNumber,
-              let window = NSApp.windows.first(where: {
-                  CGWindowID($0.windowNumber) == windowNumber
-              }) else {
-            return (true, false)
-        }
-        window.makeKeyAndOrderFront(nil)
-        return (true, true)
     }
 }
 
@@ -322,9 +351,20 @@ enum WindowFocusService {
         )
     }
 
+    /// Two hooks, typed by the executor each runs on. A single `@Sendable`
+    /// async hook cannot express this: awaiting a nonisolated async closure
+    /// from the main actor hops off it, so MacPilot's own window would be
+    /// ordered front from a background thread — AppKit answers that with a
+    /// main-queue assertion trap (SIGTRAP), which is exactly how the swapper
+    /// crashed while focusing MacPilot itself.
     static func focus(
         _ target: WindowFocusTarget,
-        performer: @escaping @Sendable (WindowFocusTarget) -> WindowFocusAttemptOutcome = { WindowFocusExecutor.perform($0) },
+        ownProcessAttempt: @escaping @MainActor (WindowFocusTarget) -> WindowFocusAttemptOutcome = {
+            WindowFocusExecutor.performOwnProcess($0, actions: .live)
+        },
+        externalAttempt: @escaping @Sendable (WindowFocusTarget) -> WindowFocusAttemptOutcome = {
+            WindowFocusExecutor.performExternal($0, actions: .live)
+        },
         environment: @escaping @MainActor (WindowFocusTarget) -> WindowFocusEnvironmentProbe = WindowFocusEnvironmentProbe.read,
         verificationTimeout: Duration = WindowFocusService.verificationTimeout,
         pollInterval: Duration = WindowFocusService.verificationPollInterval,
@@ -335,15 +375,18 @@ enum WindowFocusService {
                 try? await Task.sleep(for: retryDelay(attempt))
                 guard !Task.isCancelled else { return false }
             }
+            // Nothing AX- or AppKit-facing may run on the run loop that also
+            // delivers the swapper's event tap when the target is another
+            // process; MacPilot's own windows must run on the main actor.
             let outcome: WindowFocusAttemptOutcome
             if WindowFocusExecutionPolicy.runsOnMainActor(
                 targetProcessID: target.processID,
                 ownProcessID: target.ownProcessID
             ) {
-                outcome = performer(target)
+                outcome = ownProcessAttempt(target)
             } else {
                 outcome = await Task.detached(priority: .userInitiated) {
-                    performer(target)
+                    externalAttempt(target)
                 }.value
             }
             logger.notice("""
