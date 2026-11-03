@@ -253,7 +253,32 @@ struct SmoothScrollSettingsView: View {
 
     private var permissionStatus: some View {
         Group {
-            if smoothScrolling.hasAccessibilityPermission {
+            if let denial = smoothScrolling.eventTapDenial {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(
+                        denial == .systemDenied
+                            ? model.t("eventTapDeniedSystemTitle")
+                            : model.t("eventTapDeniedMissingTitle"),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(.orange)
+                    Text(
+                        denial == .systemDenied
+                            ? model.t("eventTapDeniedSystemDetail")
+                            : model.t("eventTapDeniedMissingDetail")
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button(model.t("eventTapRetry")) { smoothScrolling.retryEventTap() }
+                        Button(model.t("smoothScrollingOpenAccessibility")) {
+                            smoothScrolling.openAccessibilitySettings()
+                        }
+                    }
+                }
+                .padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+            } else if smoothScrolling.hasAccessibilityPermission {
                 Label(model.t("smoothScrollingAccessibilityReady"), systemImage: "checkmark.shield.fill")
                     .foregroundStyle(.green)
             } else {

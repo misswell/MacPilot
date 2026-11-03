@@ -1068,6 +1068,10 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private(set) var selectedItemID: String?
     private(set) var isShowing = false
     @Published private(set) var hasAccessibilityPermission = false
+    /// Why the ⌥Tab tap is missing, when it is. Without the tap the shortcut
+    /// never fires, so the page must say that instead of showing a ready
+    /// permission badge next to a dead shortcut.
+    @Published private(set) var eventTapDenial: EventTapDenial?
 
     var language: AppLanguage = .system
     var persist: (() -> Void)?
@@ -1343,6 +1347,12 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
             restoreCachedPreviews(to: cachedWindows)
         }
         persist?()
+    }
+
+    /// Re-evaluates the grant and rebuilds the tap so a re-grant or a system
+    /// change is picked up without relaunching MacPilot.
+    func retryEventTap() {
+        refreshPermissionStatus()
     }
 
     func requestAccessibility() {
@@ -2521,12 +2531,12 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private func refreshEventTap() {
         hasAccessibilityPermission = AXIsProcessTrusted()
         removeEventTap()
-        guard isRuntimeActive, settings.isEnabled else { return }
+        guard isRuntimeActive, settings.isEnabled else {
+            recordDenial(nil, logInstall: false)
+            return
+        }
         guard hasAccessibilityPermission else {
-            DiagnosticLog.write(
-                "WindowSwitcher",
-                "Tap not created: Accessibility permission is not granted"
-            )
+            recordDenial(.accessibilityMissing)
             return
         }
 
@@ -2542,10 +2552,12 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
             callback: windowSwitcherEventTapCallback,
             userInfo: Unmanaged.passUnretained(context).toOpaque()
         ), let source = CFMachPortCreateRunLoopSource(nil, eventTap, 0) else {
-            DiagnosticLog.write(
-                "WindowSwitcher",
-                "Tap creation failed: CGEvent.tapCreate/CFMachPortCreateRunLoopSource returned nil"
-            )
+            // Accessibility is listed, yet WindowServer refuses the session
+            // tap ("Sender lacks privileges to install non-process event taps"
+            // in the unified log). Nothing in the app can grant that; the tap
+            // heals as soon as the system allows it again, so the retry ladder
+            // stays armed and the page names the real repair.
+            recordDenial(.systemDenied)
             return
         }
 
@@ -2556,10 +2568,41 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         context.setEventTap(eventTap)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
-        DiagnosticLog.write(
-            "WindowSwitcher",
-            "Tap created (install #\(eventTapInstallCount), enabled=\(CGEvent.tapIsEnabled(tap: eventTap))"
-        )
+        recordDenial(nil)
+    }
+
+    /// Logs the tap state once per transition. The activation pass runs on
+    /// every app switch, so repeating the same line buried the one fact that
+    /// matters.
+    private func recordDenial(_ denial: EventTapDenial?, logInstall: Bool = true) {
+        guard denial != eventTapDenial else { return }
+        let previous = eventTapDenial
+        eventTapDenial = denial
+        switch denial {
+        case .none:
+            // Log the first install of a launch and any recovery from a
+            // refusal; the activation pass reinstalls constantly, so logging
+            // every healthy rebuild is what buried the real failure.
+            guard logInstall, previous != nil || eventTapInstallCount <= 1 else { return }
+            DiagnosticLog.write(
+                "WindowSwitcher",
+                "Tap created (install #\(eventTapInstallCount), enabled=\(eventTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false))"
+            )
+        case .accessibilityMissing:
+            DiagnosticLog.write(
+                "WindowSwitcher",
+                "Tap not created: Accessibility permission is not granted",
+                level: .warning
+            )
+        case .systemDenied:
+            DiagnosticLog.write(
+                "WindowSwitcher",
+                "Tap refused by WindowServer although Accessibility is granted "
+                    + "(Sender lacks privileges to install non-process event taps); "
+                    + "⌥Tab stays off until the system allows the tap again",
+                level: .warning
+            )
+        }
     }
 
     private func removeEventTap() {
@@ -3029,16 +3072,32 @@ struct WindowSwitcherSettingsView: View {
                 }
 
                 SettingsCard {
-                    if !windowSwitcher.hasAccessibilityPermission {
+                    if let denial = windowSwitcher.eventTapDenial {
                         VStack(alignment: .leading, spacing: 8) {
-                            Label(model.t("windowSwitcherAccessibilityRequired"), systemImage: "lock.shield")
-                                .foregroundStyle(.orange)
+                            Label(
+                                denial == .systemDenied
+                                    ? model.t("eventTapDeniedSystemTitle")
+                                    : model.t("eventTapDeniedMissingTitle"),
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .foregroundStyle(.orange)
+                            Text(
+                                denial == .systemDenied
+                                    ? model.t("windowSwitcherEventTapDeniedSystemDetail")
+                                    : model.t("eventTapDeniedMissingDetail")
+                            )
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                             HStack {
-                                Button(model.t("windowSwitcherGrantAccessibility")) {
-                                    windowSwitcher.requestAccessibility()
-                                }
+                                Button(model.t("eventTapRetry")) { windowSwitcher.retryEventTap() }
                                 Button(model.t("openAccessibilitySettings")) {
                                     windowSwitcher.openAccessibilitySettings()
+                                }
+                                if !windowSwitcher.hasAccessibilityPermission {
+                                    Button(model.t("windowSwitcherGrantAccessibility")) {
+                                        windowSwitcher.requestAccessibility()
+                                    }
                                 }
                             }
                         }

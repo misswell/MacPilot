@@ -17,8 +17,17 @@ final class SmoothScrollController {
     private var eventTap: (any SmoothScrollEventTap)?
     private let isTrusted: () -> Bool
     private let makeEventTap: (CGEventMask, CGEventTapCallBack, UnsafeMutableRawPointer) -> (any SmoothScrollEventTap)?
-    private let scheduleRecovery: (@escaping @MainActor () -> Void) -> (() -> Void)
+    private let scheduleRecovery: (TimeInterval, @escaping @MainActor () -> Void) -> (() -> Void)
     private var cancelRecovery: (() -> Void)?
+    private let recoveryPolicy = EventTapRecoveryPolicy()
+    /// Consecutive installs that ended without a usable tap. Drives the retry
+    /// cadence so a refused tap stops hammering WindowServer every three
+    /// seconds while still healing the moment the system allows it.
+    private var consecutiveFailures = 0
+    /// Why the wheel tap is currently missing, for the settings page.
+    private(set) var denial: EventTapDenial?
+    /// Told once per state change — never on every retry.
+    var denialDidChange: ((EventTapDenial?) -> Void)?
     private var wantsInputTap = false
     private var lastPhysicalWheelTime: CFTimeInterval = 0
     private var commandHeld = false
@@ -39,11 +48,13 @@ final class SmoothScrollController {
         makeEventTap: @escaping (CGEventMask, CGEventTapCallBack, UnsafeMutableRawPointer) -> (any SmoothScrollEventTap)? = {
             SystemSmoothScrollEventTap(mask: $0, callback: $1, userInfo: $2)
         },
-        scheduleRecovery: @escaping (@escaping @MainActor () -> Void) -> (() -> Void) = { action in
-            let timer = Timer(timeInterval: 3, repeats: true) { _ in
+        scheduleRecovery: @escaping (TimeInterval, @escaping @MainActor () -> Void) -> (() -> Void) = { interval, action in
+            // One-shot passes, re-armed by the controller: the wait grows after
+            // each refusal, and only the next failure decides the next wait.
+            let timer = Timer(timeInterval: interval, repeats: false) { _ in
                 MainActor.assumeIsolated { action() }
             }
-            timer.tolerance = 0.5
+            timer.tolerance = min(0.5, interval / 4)
             RunLoop.main.add(timer, forMode: .common)
             return { timer.invalidate() }
         }
@@ -61,13 +72,15 @@ final class SmoothScrollController {
             return
         }
         wantsInputTap = true
-        if cancelRecovery == nil {
-            cancelRecovery = scheduleRecovery { [weak self] in
-                self?.recoverInputTapIfNeeded()
-            }
-        }
+        // Workspace observers stay installed while the feature wants a tap,
+        // even when the tap is missing: an app switch is the cheapest moment to
+        // retry, and it is exactly when a re-granted permission must land
+        // without waiting out the backoff.
+        installWorkspaceObservers()
         guard isTrusted() else {
+            record(.accessibilityMissing)
             tearDownInputTap()
+            scheduleNextPassIfNeeded()
             return
         }
         if let tap = eventTap, !tap.isValid {
@@ -84,16 +97,29 @@ final class SmoothScrollController {
 
         if !isActive {
             guard let tap = makeEventTap(eventMask, Self.eventTapCallback, Unmanaged.passUnretained(self).toOpaque()) else {
+                // The system refused a session-level tap. That is not a
+                // transient code problem on our side: WindowServer answers nil
+                // while the Accessibility grant is listed, and the only repair
+                // is the system allowing it again. Keep the intent, retry with
+                // backoff, and say so in the page instead of dying silently.
+                record(.systemDenied)
+                scheduleNextPassIfNeeded()
                 return
             }
             eventTap = tap
             tap.setEnabled(true)
             guard tap.isValid && tap.isEnabled else {
                 tearDownInputTap()
+                record(.systemDenied)
+                scheduleNextPassIfNeeded()
                 return
             }
             isActive = true
             installWorkspaceObservers()
+            // Record before clearing the counter so the log names how many
+            // refusals the install had to outlive.
+            record(nil)
+            consecutiveFailures = 0
         }
 
         // Never start the display link here. `SmoothScrollRuntime.update(event:)`
@@ -107,34 +133,104 @@ final class SmoothScrollController {
         if !activeSettings.isEnabled {
             runtime.stop()
         }
+        // One self-check stays armed even with a healthy tap: a session tap can
+        // be invalidated without the callback ever running, and the user must
+        // not be the one who notices.
+        scheduleNextPassIfNeeded()
     }
 
-    /// A failed first install is transient: keep the user's intent alive until
-    /// settings or the feature lifecycle explicitly deactivate it. Also cover
-    /// disabled taps whose system notification never reached the callback.
+    /// A failed install is not the user's intent changing: keep retrying, but
+    /// on a cadence that stops punishing WindowServer for a verdict only the
+    /// system can change. Also covers disabled taps whose system notification
+    /// never reached the callback.
     private func recoverInputTapIfNeeded() {
         guard wantsInputTap else { return }
+        // The timer that called this pass has already fired; clearing the slot
+        // (without cancelling) is what lets the next pass be armed below.
+        cancelRecovery = nil
         guard isTrusted() else {
+            record(.accessibilityMissing)
             tearDownInputTap()
+            consecutiveFailures += 1
+            scheduleNextPassIfNeeded()
             return
         }
         if let tap = eventTap, tap.isValid {
-            if tap.isEnabled { return }
+            if tap.isEnabled {
+                consecutiveFailures = 0
+                record(nil)
+                scheduleNextPassIfNeeded()
+                return
+            }
             runtime.stop()
             lastPhysicalWheelTime = 0
             commandHeld = false
             tap.setEnabled(true)
-            if tap.isValid && tap.isEnabled { return }
+            if tap.isValid && tap.isEnabled {
+                consecutiveFailures = 0
+                record(nil)
+                scheduleNextPassIfNeeded()
+                return
+            }
         }
         tearDownInputTap()
+        consecutiveFailures += 1
         activate(settings: activeSettings)
+    }
+
+    /// One pending pass at a time. `activate()` runs on every settings change,
+    /// so a pending pass is reused instead of stacked.
+    private func scheduleNextPassIfNeeded() {
+        guard wantsInputTap, cancelRecovery == nil else { return }
+        let interval = isActive
+            ? recoveryPolicy.maximumInterval
+            : recoveryPolicy.interval(afterFailures: consecutiveFailures)
+        cancelRecovery = scheduleRecovery(interval) { [weak self] in
+            self?.recoverInputTapIfNeeded()
+        }
+    }
+
+    /// Records the tap state once per transition. Logging every retry is what
+    /// buried the real cause (408 WindowServer denials in ten minutes) and
+    /// made the failure invisible in the app.
+    private func record(_ denial: EventTapDenial?, logInstall: Bool = true) {
+        guard denial != self.denial else { return }
+        let previous = self.denial
+        self.denial = denial
+        switch denial {
+        case .none:
+            if logInstall, previous != nil {
+                DiagnosticLog.write(
+                    "SmoothScroll",
+                    "Wheel event tap installed after \(consecutiveFailures) refused attempt(s)"
+                )
+            }
+        case .accessibilityMissing:
+            DiagnosticLog.write(
+                "SmoothScroll",
+                "Wheel event tap not created: Accessibility is not granted",
+                level: .warning
+            )
+        case .systemDenied:
+            DiagnosticLog.write(
+                "SmoothScroll",
+                "Wheel event tap refused by WindowServer although Accessibility is granted "
+                    + "(Sender lacks privileges to install non-process event taps); "
+                    + "smooth scrolling and mouse reversal stay off until the system allows it",
+                level: .warning
+            )
+        }
+        denialDidChange?(denial)
     }
 
     func deactivate() {
         wantsInputTap = false
         cancelRecovery?()
         cancelRecovery = nil
+        consecutiveFailures = 0
         tearDownInputTap()
+        removeWorkspaceObservers()
+        record(nil, logInstall: false)
     }
 
     private func tearDownInputTap() {
@@ -143,7 +239,6 @@ final class SmoothScrollController {
             tap.invalidate()
             eventTap = nil
         }
-        removeWorkspaceObservers()
         clearExcludedApplicationCache()
         commandHeld = false
         lastPhysicalWheelTime = 0
@@ -340,6 +435,14 @@ final class SmoothScrollController {
         _ application: NSRunningApplication,
         notificationName: NSNotification.Name
     ) {
+        // A refused tap is retried on the next app switch instead of waiting
+        // out the backoff: the Accessibility state can only change while the
+        // user is elsewhere, and this is the signal that they are back.
+        if denial != nil, notificationName == NSWorkspace.didActivateApplicationNotification {
+            consecutiveFailures = 0
+            activate(settings: activeSettings)
+            return
+        }
         if notificationName == NSWorkspace.didTerminateApplicationNotification {
             let processID = application.processIdentifier
             processBundleIdentifiers.removeValue(forKey: processID)

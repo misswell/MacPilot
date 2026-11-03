@@ -11,6 +11,11 @@ final class SmoothScrollModel: ObservableObject, ManagedFeature {
     func stop() { deactivateFromConfiguration() }
     @Published private(set) var settings = SmoothScrollSettings()
     @Published private(set) var hasAccessibilityPermission = false
+    /// Why the wheel tap is currently missing, when it is. A denied session
+    /// tap is not a settings problem, so the page has to name it: with the tap
+    /// refused, smooth scrolling and mouse reversal are simply absent while
+    /// every switch still reads "on".
+    @Published private(set) var eventTapDenial: EventTapDenial?
 
     let controller = SmoothScrollController()
     var persist: (() -> Void)?
@@ -19,6 +24,9 @@ final class SmoothScrollModel: ObservableObject, ManagedFeature {
 
     init() {
         hasAccessibilityPermission = AXIsProcessTrusted()
+        controller.denialDidChange = { [weak self] denial in
+            self?.eventTapDenial = denial
+        }
     }
 
     func applyLoadedSettings(_ loaded: SmoothScrollSettings) {
@@ -163,6 +171,15 @@ final class SmoothScrollModel: ObservableObject, ManagedFeature {
     func requestAccessibility() {
         AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
         refreshPermissionStatus()
+        retryEventTap()
+    }
+
+    /// Re-evaluates the grant and rebuilds the tap without restarting the app.
+    /// Everything the user can change (the Accessibility switch, a re-grant)
+    /// has to be picked up here, or the feature stays dead until relaunch.
+    func retryEventTap() {
+        hasAccessibilityPermission = AXIsProcessTrusted()
+        controller.activate(settings: settings)
     }
 
     func refreshPermissionStatus() {
