@@ -105,11 +105,76 @@ struct WindowFocusAttemptOutcome: Sendable, Equatable {
     var foundApplication = false
     var unhidApplication = false
     var activatedApplication = false
+    /// `NSRunningApplication.activate` refused the request and the app was
+    /// brought forward through its accessibility element instead.
+    var activatedThroughAccessibility = false
     var restoredWindow = false
     var raisedWindow = false
     var setWindowMain = false
     var setWindowFocused = false
     var ownWindowOrderedFront = false
+}
+
+/// The three public ways to bring another application forward, in the order
+/// the switcher tries them.
+///
+/// macOS 14 made activation cooperative: a background `LSUIElement` process
+/// calling `NSRunningApplication.activate` is answered `false`, and the target
+/// window then stays behind even though its AX raise succeeded. Measured on
+/// macOS 27: `activate=false` on every attempt while `raise=true` and
+/// `axFocus=true` — the "switcher does nothing" report. Setting the app's
+/// `AXFrontmost` attribute is the documented way to raise an application from a
+/// background process and does not consume the activation budget, so it is the
+/// fallback, not the first choice.
+enum WindowFocusActivationStep: Equatable, Sendable {
+    case activateFromCurrentApplication
+    case accessibilityFrontmost
+}
+
+/// Every step to try after the primary activation returned `false`.
+///
+/// Pure so the tripwire test can pin the ladder: collapsing it back to one
+/// `activate()` call is exactly the regression that leaves the switcher
+/// looking dead on macOS 14+.
+enum WindowFocusActivationPolicy {
+    static func steps(afterPrimaryActivationSucceeded succeeded: Bool) -> [WindowFocusActivationStep] {
+        succeeded ? [] : [.activateFromCurrentApplication, .accessibilityFrontmost]
+    }
+}
+
+struct WindowFocusActivationActions {
+    var activate: @Sendable (NSRunningApplication) -> Bool
+    var activateFromCurrentApplication: @Sendable (NSRunningApplication) -> Bool
+    var setFrontmost: @Sendable (pid_t) -> Bool
+
+    func perform(
+        _ step: WindowFocusActivationStep,
+        application: NSRunningApplication,
+        processID: pid_t
+    ) -> Bool {
+        switch step {
+        case .activateFromCurrentApplication:
+            return activateFromCurrentApplication(application)
+        case .accessibilityFrontmost:
+            return setFrontmost(processID)
+        }
+    }
+
+    static let live = WindowFocusActivationActions(
+        activate: { $0.activate(options: [.activateAllWindows]) },
+        activateFromCurrentApplication: { application in
+            application.activate(from: NSRunningApplication.current, options: [.activateAllWindows])
+        },
+        setFrontmost: { processID in
+            let element = AXUIElementCreateApplication(processID)
+            AXUIElementSetMessagingTimeout(element, 0.1)
+            return AXUIElementSetAttributeValue(
+                element,
+                kAXFrontmostAttribute as CFString,
+                true as CFTypeRef
+            ) == .success
+        }
+    )
 }
 
 /// Foreground state as observed while deciding whether an attempt succeeded.
@@ -156,7 +221,10 @@ enum WindowFocusExecutor {
     /// One blocking attempt. The service guarantees own-process targets run on
     /// the main actor (WindowFocusExecutionPolicy); external targets run on a
     /// background task.
-    static func perform(_ target: WindowFocusTarget) -> WindowFocusAttemptOutcome {
+    static func perform(
+        _ target: WindowFocusTarget,
+        actions: WindowFocusActivationActions = .live
+    ) -> WindowFocusAttemptOutcome {
         var outcome = WindowFocusAttemptOutcome()
         guard let application = NSRunningApplication(processIdentifier: target.processID) else {
             return outcome
@@ -178,7 +246,19 @@ enum WindowFocusExecutor {
             // .activateAllWindows is what keeps multi-window applications
             // (Chrome, Electron) from activating without any window coming
             // forward.
-            outcome.activatedApplication = application.activate(options: [.activateAllWindows])
+            outcome.activatedApplication = actions.activate(application)
+            // A cooperative denial is not a dead end: the raise below only
+            // means something once the owning application is frontmost.
+            for step in WindowFocusActivationPolicy.steps(
+                afterPrimaryActivationSucceeded: outcome.activatedApplication
+            ) {
+                guard actions.perform(step, application: application, processID: target.processID) else {
+                    continue
+                }
+                outcome.activatedApplication = true
+                outcome.activatedThroughAccessibility = step == .accessibilityFrontmost
+                break
+            }
         }
         guard let axWindow = target.axWindow else { return outcome }
         AXUIElementSetMessagingTimeout(axWindow, 0.1)
@@ -244,7 +324,7 @@ enum WindowFocusService {
 
     static func focus(
         _ target: WindowFocusTarget,
-        performer: @escaping @Sendable (WindowFocusTarget) -> WindowFocusAttemptOutcome = WindowFocusExecutor.perform,
+        performer: @escaping @Sendable (WindowFocusTarget) -> WindowFocusAttemptOutcome = { WindowFocusExecutor.perform($0) },
         environment: @escaping @MainActor (WindowFocusTarget) -> WindowFocusEnvironmentProbe = WindowFocusEnvironmentProbe.read,
         verificationTimeout: Duration = WindowFocusService.verificationTimeout,
         pollInterval: Duration = WindowFocusService.verificationPollInterval,
@@ -269,6 +349,7 @@ enum WindowFocusService {
             logger.notice("""
                 focus attempt \(attempt + 1, privacy: .public)/\(WindowFocusRetryPolicy.maximumAttempts, privacy: .public) \
                 pid \(target.processID, privacy: .public): activate=\(outcome.activatedApplication, privacy: .public) \
+                axFrontmost=\(outcome.activatedThroughAccessibility, privacy: .public) \
                 unhide=\(outcome.unhidApplication, privacy: .public) restore=\(outcome.restoredWindow, privacy: .public) \
                 raise=\(outcome.raisedWindow, privacy: .public) axFocus=\(outcome.setWindowFocused, privacy: .public) \
                 ownOrderFront=\(outcome.ownWindowOrderedFront, privacy: .public)

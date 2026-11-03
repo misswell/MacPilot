@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import MacPilot
@@ -33,6 +34,23 @@ private final class WindowFocusAttemptProbe: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return count
+    }
+}
+
+private final class WindowFocusActivationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [WindowFocusActivationStep] = []
+
+    func record(_ step: WindowFocusActivationStep) {
+        lock.lock()
+        recorded.append(step)
+        lock.unlock()
+    }
+
+    var steps: [WindowFocusActivationStep] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
     }
 }
 
@@ -242,5 +260,46 @@ struct WindowFocusServiceTests {
         #expect(!outcome.foundApplication)
         #expect(!outcome.activatedApplication)
         #expect(!outcome.raisedWindow)
+    }
+
+    /// macOS 14 answers a background `LSUIElement` process with
+    /// `activate == false`; measured on macOS 27 with `raise=true` and
+    /// `axFocus=true` in the same attempt. Without the escalated steps the
+    /// switcher closes its panel and leaves the target behind — "切换没有把
+    /// 窗口带到前台".
+    @Test func refusedCooperativeActivationEscalatesToAccessibilityFrontmost() {
+        #expect(WindowFocusActivationPolicy.steps(afterPrimaryActivationSucceeded: true).isEmpty)
+        #expect(WindowFocusActivationPolicy.steps(afterPrimaryActivationSucceeded: false) == [
+            .activateFromCurrentApplication,
+            .accessibilityFrontmost
+        ])
+    }
+
+    @Test func activationActionsDispatchEveryEscalationStep() {
+        let application = NSRunningApplication.current
+        let probe = WindowFocusActivationProbe()
+        let actions = WindowFocusActivationActions(
+            activate: { _ in false },
+            activateFromCurrentApplication: { _ in
+                probe.record(.activateFromCurrentApplication)
+                return false
+            },
+            setFrontmost: { _ in
+                probe.record(.accessibilityFrontmost)
+                return true
+            }
+        )
+
+        #expect(!actions.perform(
+            .activateFromCurrentApplication,
+            application: application,
+            processID: application.processIdentifier
+        ))
+        #expect(actions.perform(
+            .accessibilityFrontmost,
+            application: application,
+            processID: application.processIdentifier
+        ))
+        #expect(probe.steps == [.activateFromCurrentApplication, .accessibilityFrontmost])
     }
 }
