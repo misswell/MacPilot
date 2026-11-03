@@ -1,0 +1,100 @@
+name: Regression Gate
+
+# 防回归门禁：与本地 Scripts/run-regressions.sh 使用同一个
+# docs/engineering/REGRESSION_INDEX.json 数据源。
+#   PR → 只跑命中模块的历史回归（未命中任何规则的源码修改 → 全量安全套件）
+#   push main / 每周一 / 手动 → 强制全量安全套件
+# 索引校验失败、计划错误、测试失败都会使 CI 失败；没有静默跳过。
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # 每周一 19:00 UTC（北京时间周二 03:00）全量回归，捕捉长期未覆盖的问题
+    - cron: "0 19 * * 1"
+  workflow_dispatch:
+    inputs:
+      force_full:
+        description: Run the full safe suite instead of diff-selected tests
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  regression-gate:
+    name: Regression Gate (${{ matrix.runs-on }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15: 活跃支持，正式门禁。
+        # macos-26: 活跃支持，首次接入，标记 experimental；第一次全绿后把
+        # experimental 改为 false 提升为正式门禁（见 docs/engineering/acceptance/macos-compatibility.md）。
+        # macos-14: GitHub 活跃支持已于 2026-07 结束，无 Runner，人工验收。
+        include:
+          - runs-on: macos-15
+            experimental: false
+          - runs-on: macos-26
+            experimental: true
+    runs-on: ${{ matrix.runs-on }}
+    continue-on-error: ${{ matrix.experimental }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode 26.3
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.3"
+
+      - name: Resolve gate mode and base
+        id: gate
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="origin/${{ github.base_ref }}"
+            full=0
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.force_full }}" == "true" ]]; then
+            base="HEAD~1"
+            full=1
+          else
+            # push to main and scheduled runs always run the full safe suite
+            base="HEAD~1"
+            full=1
+          fi
+          git rev-parse --verify "$base" >/dev/null
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "mode: event=${{ github.event_name }} base=$base force_full=$full"
+
+      - name: Produce regression plan
+        run: |
+          mkdir -p .regression-logs
+          args=(--mode pr --base "${{ steps.gate.outputs.base }}" --head HEAD --out .regression-logs/plan.json)
+          if [[ "${{ steps.gate.outputs.full }}" == "1" ]]; then
+            args+=(--force-full)
+          fi
+          python3 Scripts/regression-plan.py "${args[@]}"
+
+      - name: Run regression gate
+        run: |
+          args=(--mode pr --base "${{ steps.gate.outputs.base }}" --head HEAD --plan .regression-logs/plan.json)
+          if [[ "${{ steps.gate.outputs.full }}" == "1" ]]; then
+            args+=(--force-full)
+          fi
+          bash Scripts/run-regressions.sh "${args[@]}"
+
+      - name: Upload plan and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-gate-${{ matrix.runs-on }}-${{ github.run_id }}
+          path: |
+            .regression-logs/plan.json
+            .regression-logs/*.log
+          retention-days: 14

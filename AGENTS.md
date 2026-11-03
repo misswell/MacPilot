@@ -2,6 +2,30 @@
 
 Contributor guide for **MacPilot**, a native macOS menu-bar app (Swift 6, SwiftPM, macOS 14+) with 19 independently switchable feature modules: app inactivity rules, scheduled launch, Awake keep-awake, BLE proximity lock/unlock, iPhone remote control, capture/screenshot tooling, dock groups, local ports, quick search (app launcher + Spotlight file-name search), and more.
 
+## 防回归强制流程（Regression Guard）— 改源码前必读
+
+本仓库的每一条历史事故都记录在 `docs/engineering/`。**修改任何源码之前**，必须完成 `docs/engineering/AGENT_CHANGE_PROTOCOL.md` 的检查流程，概要：
+
+1. 确认本次修改涉及的文件与模块；用 `python3 Scripts/regression-plan.py --mode local` 对照 `docs/engineering/REGRESSION_INDEX.json` 得到命中的历史规则 id。
+2. 阅读对应 `docs/engineering/regressions/<module>.md` 的不变量全文，并查该文件的历史提交与 Revert 记录。
+3. 阅读命中规则的回归测试，判断覆盖是否与本次触发条件同族。
+4. 回答协议里的 7 个问题（根因、历史、旧修复为何不彻底、受影响功能、必跑测试、是否新增测试、是否实机验收），写进 PR 描述。
+5. **不允许只因为用户报告一个现象就直接加 if**——历史上修错模块（`d080766`）与在错误坐标系里调锚点（`ced94af`）都是跳过此流程的代价。
+
+修改后：`bash Scripts/run-regressions.sh`（强制完整安全套件用 `--force-full`）；CI 的 `Regression Gate` 用同一索引选择测试。索引引用不存在的套件、计划错误、测试失败都会使 CI 失败；失败测试只有逐条列在索引 `known_flaky_tests` 且单独重跑通过时才打印 `WAIVED` 放行，其余一律红。历史问题目录册见 `docs/engineering/REGRESSION_CATALOG.md`；模拟测试不能覆盖的真机/系统版本验收清单见 `docs/engineering/acceptance/`。
+
+模块级不变量全文（从本文件迁出，仍然有效）：
+
+- 主窗口/AppKit 生命周期 → `docs/engineering/regressions/window-lifecycle.md`
+- 菜单栏、NSMenu、动作分发、入口存活 → `docs/engineering/regressions/menu-bar-lifecycle.md`
+- BLE 身份/地址轮换/在场检测/反向 presence → `docs/engineering/regressions/ble-presence.md`
+- 黑屏亮屏、显示器拓扑、DDC、恢复事务 → `docs/engineering/regressions/display-recovery.md`
+- FinderSync、Power/Dock Helper、按需进程生命周期 → `docs/engineering/regressions/helper-lifecycle.md`
+- 快捷搜索（NSMetadataQuery、generation、面板归属） → `docs/engineering/regressions/quick-search.md`
+- 配置升级/降级兼容（append-only 键集） → `docs/engineering/regressions/configuration-migration.md`
+- 软件更新、签名 DR、公证、发布 → `docs/engineering/regressions/updater-release.md`
+- CPU/内存/定时器资源、剪贴板、钉图 hover → `docs/engineering/regressions/resource-performance.md`
+
 ## Project Structure & Module Organization
 
 - `Sources/MacPilot/` — main executable target, one subdirectory per feature cluster (`Awake/`, `BLE/`, `DockGroups/`, `RemoteControl/` (remote server), `InputCore/` (remote input injection), `SnapzyCapture/`, `SmoothScrolling/`, `QuickSearch/` (non-activating panel, Carbon hot key, pinyin-ranked app index, `NSMetadataQuery` file search), …) plus `MacPilotApp.swift` (core), `BLEUnlock.swift` (proximity lock/unlock), and `SoftwareUpdate.swift` (release checks, validation, and update orchestration).
@@ -12,9 +36,9 @@ Contributor guide for **MacPilot**, a native macOS menu-bar app (Swift 6, SwiftP
 - Other packaged targets: `MacPilotDockGroupsCore` + `MacPilotDockHelper`, `MacPilotLocalPortsCore`, `MacPilotPowerIPC` + `MacPilotPowerHelper`, `MacPilotRightClickKit` + `MacPilotFinderSync`, `MacPilotOcclusionPatch` (dynamic library). See Architecture boundaries below.
 - `Tests/` — Swift Testing targets: `MacPilotTests` (main suites, e.g. `LaunchRuleCodingTests.swift`, `BLEUnlockPerformanceTests.swift`, `SoftwareUpdateTests.swift`), plus `MacPilotFinderSyncTests`, `MacPilotLocalPortsCoreTests`, `MacPilotRightClickKitTests`, `MacPilotUpdaterSupportTests`. `Tests/Performance/` holds resource-acceptance benchmarks (`resource-benchmark.sh`, thresholds in its README).
 - `Resources/` — `Info.plist`, `MacPilot.entitlements`, `AppIcon.icns`, icon sources.
-- `Scripts/` — `build-app.sh`, `build-findersync.sh`, `distribute-app.sh`, `version.sh`, `signing-requirement.sh` / `verify-signing-requirement.sh`, `measure-memory.sh`, `capture-permission-diagnostics.sh`, `verify-awdl.sh`.
-- `docs/` — `UI_DESIGN.md` (normative UI tokens), `REMOTE_CONTROL.md` (iPhone→Mac design, wire protocol, security model), `AWAKE_MANUAL_TESTS.md` (manual power-state acceptance), `PERMISSION_DIAGNOSTICS.md`, `UPDATE_DOWNLOADS.md`, `MEMORY_REVIEW.md`.
-- `.github/workflows/build.yml` — CI.
+- `Scripts/` — `build-app.sh`, `build-findersync.sh`, `distribute-app.sh`, `version.sh`, `signing-requirement.sh` / `verify-signing-requirement.sh`, `measure-memory.sh`, `capture-permission-diagnostics.sh`, `verify-awdl.sh`, plus the regression-guard pair `regression-plan.py` (diff → module → test selection; `--validate` checks the index) and `run-regressions.sh` (executes a plan, verifies tests actually ran).
+- `docs/` — `UI_DESIGN.md` (normative UI tokens), `REMOTE_CONTROL.md` (iPhone→Mac design, wire protocol, security model), `AWAKE_MANUAL_TESTS.md` (manual power-state acceptance), `PERMISSION_DIAGNOSTICS.md`, `UPDATE_DOWNLOADS.md`, `MEMORY_REVIEW.md`, and `engineering/` (the regression-guard knowledge base: index, catalog, protocol, per-module invariants, acceptance checklists).
+- `.github/workflows/build.yml` — CI; `regression-gate.yml` — the regression gate sharing `docs/engineering/REGRESSION_INDEX.json`.
 - Runtime config lives outside the bundle at `~/Library/Application Support/MacPilot/config.json`; bundle ID `com.misswell.macpilot`. The remote channel listens on TCP 43847.
 
 ## Architecture boundaries
@@ -66,14 +90,15 @@ Contributor guide for **MacPilot**, a native macOS menu-bar app (Swift 6, SwiftP
 
 ## Testing Guidelines
 
-- Before every release, run the applicable historical regression checks in `docs/RELEASE_REGRESSION_TESTS.md` and the global release-regression rule, including existing safe tests for previously broken features even when this change does not touch them. Report real-hardware and old-version upgrade gaps separately.
+- Before every release, run the applicable historical regression checks in `docs/RELEASE_REGRESSION_TESTS.md` and `docs/engineering/REGRESSION_CATALOG.md`, and the full safe suite (`bash Scripts/run-regressions.sh --force-full` locally; the gate does it automatically on main merges). Report real-hardware and old-version upgrade gaps separately — mock passes are not real acceptance (see `docs/engineering/acceptance/`).
 
 - Framework: **Swift Testing** (`import Testing`; `@Test`, `#expect`, `#require`). Suites are `struct`s of `@testable import MacPilot` functions.
 - Name tests as sentences describing the invariant. Use `UserDefaults(suiteName:)` with a UUID for stateful tests and clean up via `defer`.
 - Run `swift test` before pushing.
 - Tests must not lock, blank, or sleep the user's screen, or inject real login keystrokes. Use isolated/mocked screen-control operations for automated tests; never run hardware screen-control tests in the user's session. If the full suite invokes real screen control, stop it and verify the safe relevant suites instead, reporting the limitation. Real screen-state acceptance requires the user's explicit authorization and an isolated AgentSpace session when available.
 - Power/display-state behavior (Awake, closed-lid sleep) can't be fully automated: follow the scenarios in `docs/AWAKE_MANUAL_TESTS.md` when changing it. Memory/resource acceptance thresholds live in `Tests/Performance/README.md` and `docs/MEMORY_REVIEW.md`.
-- Known full-suite flakes (timing; pass with `--filter` in isolation — do not chase them): `CPUMonitorTests.samplerReportsAFullyBusyCoreAtItsRealShare`, `BLEWakeRecoveryTests.overdueSignalTimeoutClearsThePreSleepPresence`, `ScreenCaptureTests.startupShortcutRegistrationRetriesTransientFailure`, `ScreenCaptureTests.quickCopyAutoSaveWritesFileAndRecordsStats`, `SnapzySingleFrameCaptureTests.timeoutEndsAStalledCapture`, `RemoteVideoTransportTests.independentVideoSocketAuthenticatesAndRejectsAQueuedFrameBacklog`, `PictureInPictureTests.stalledCaptureStateAppearsAfterMotionStopsAndClearsOnChange`, `MenuBarDisplayControllerTests.topologyChangeWhileAMenuTracksDuringTheRemovedWindowRestoresTheItem`. All of these are the same shared-main-actor starvation class — they assert on wall-clock elapsed time, and a suite ahead of them can hold the main actor for tens of seconds (observed: 0.060s in isolation vs 3.982s in a full run). New failures outside this list are real.
+- Known full-suite flakes (timing; pass with `--filter` in isolation — do not chase them): `CPUMonitorTests.samplerReportsAFullyBusyCoreAtItsRealShare`, `BLEWakeRecoveryTests.overdueSignalTimeoutClearsThePreSleepPresence`, `ScreenCaptureTests.startupShortcutRegistrationRetriesTransientFailure`, `ScreenCaptureTests.quickCopyAutoSaveWritesFileAndRecordsStats`, `SnapzySingleFrameCaptureTests.timeoutEndsAStalledCapture`, `RemoteVideoTransportTests.independentVideoSocketAuthenticatesAndRejectsAQueuedFrameBacklog`, `PictureInPictureTests.stalledCaptureStateAppearsAfterMotionStopsAndClearsOnChange`, `MenuBarDisplayControllerTests.topologyChangeWhileAMenuTracksDuringTheRemovedWindowRestoresTheItem`, `QuickSearchIconLoaderTests.aFailedIconIsRetriedOnceThePanelReopens`. All of these are the same shared-main-actor starvation class — they assert on wall-clock elapsed time, and a suite ahead of them can hold the main actor for tens of seconds (observed: 0.060s in isolation vs 3.982s in a full run; `QuickSearchIconLoaderTests` measured 101.8s in-suite vs 0.186s isolated). New failures outside this list are real.
+- **Live window-server state is a test precondition, not a permission problem.** Selection-overlay tests read the real on-screen window list (`ScreenshotPopupWindowProbe.hasOpenPopup`): any other process at popup layer (loginwindow panels, another app's menu) legitimately holds the overlay back, and no Screen Recording grant changes that. Such a test must either state that precondition and return early when it is violated, or inject the probe (`startSnapzySelection(popupIsOnScreen:)`) and stay environment-independent — `ScreenCaptureTests.smartElementFastPathPresentsOverlayWhileFrozenFramePreparationHangs` is the injected-probe version that always evaluates the fast path.
 - Before tagging a release, also run a fresh release build with `-Xswiftc -warnings-as-errors`. GitHub's macOS runner may promote Swift concurrency diagnostics that are only warnings in a cached local build.
 
 ## Commit & Pull Request Guidelines
@@ -100,101 +125,59 @@ Contributor guide for **MacPilot**, a native macOS menu-bar app (Swift 6, SwiftP
 - `APPLE_ID` is the Apple Developer login email; `APPLE_APP_SPECIFIC_PASSWORD` is generated at account.apple.com. Never paste an app-specific password into chat or a command argument; revoke it immediately if exposed.
 - A local `MACPILOT_NOTARY_PROFILE` is optional and must be verified before use. Do not assume a profile named `MacPilot` exists merely because a previous release succeeded.
 
-## Signing identity & designated requirement (invariant)
+## Signing identity & designated requirement (invariant) — 摘要
 
-Every build embeds one **designated requirement** (DR) in the app bundle, and macOS uses it to decide whether an update package is "the same app" as the installed one. It must stay byte-identical across signing identities, machines and agents — a mismatch makes in-app updates impossible to install (this stranded every install below v1.1.355). Nested code (updater, FinderSync appex, helpers, dylib) keeps its own identifier and stays independently signed; only the app bundle's requirement is the shared identity.
+DR 决定更新包是否「同一个 app」，必须跨签名身份/机器/Agent 字节一致（v1.1.355 以下曾因此全部搁浅）。完整规则与证据见 `docs/engineering/regressions/updater-release.md`，要点：
 
-- **Single definition:** `Scripts/signing-requirement.sh`. It pins the bundle identifier, Apple's code-signing anchor, and the team OU (`U8U443D7ZL`) — nothing else.
-- **Never let codesign derive the requirement**, and never add Developer-ID-only OID clauses or `subject.CN` clauses. Each of those is satisfied by exactly one kind of certificate, so an Apple Development build would stop being "the same app" as a release: updates and privacy grants would stop carrying over in both directions.
-- **All four signing paths** (Developer ID, Apple Distribution, Apple Development, ad-hoc) must embed the same bytes. Do not branch the requirement by signing identity.
-- **Three gates enforce it:** `Scripts/build-app.sh` (after signing), `Scripts/distribute-app.sh` (after re-packaging), and the `dist` job before `gh release create`. `Tests/MacPilotTests/SigningRequirementTests.swift` is the tripwire test that keeps those gates wired.
-- **Never weaken the requirement to make a build pass.** Fix the signing path instead; an already-installed app cannot be talked into accepting a package it does not recognise.
-- Formal releases still have to be Developer ID signed and notarized via `Scripts/distribute-app.sh`. Local Apple Development builds share the same identity for TCC/updates but are not distributable (Gatekeeper rejects them).
+- DR 只在 `Scripts/signing-requirement.sh` 定义一次（bundle id + Apple 锚 + team OU）；绝不让 codesign 自推，绝不加 Developer-ID-only OID 或 `subject.CN` 子句；四条签名路径嵌同一字节。
+- 三道门（build-app.sh、distribute-app.sh、dist job）+ `SigningRequirementTests` 钉住；绝不为过门弱化 requirement。
+- 正式发布走 Developer ID + notarize（`Scripts/distribute-app.sh`）；本地 Apple Development 构建不可分发。
 
-## FinderSync lifecycle recovery (invariant)
+## FinderSync lifecycle recovery (invariant) — 摘要
 
-- Never temporarily elect the Finder extension `ignore` without first recording a valid, target-bound `FinderSyncRecoveryJournal` intent under its cross-process lock. Use `FinderSyncRegistration` rather than open-coding election changes.
-- Clear a recovery intent only after a fresh PlugInKit query confirms `+` at the current app's exact `Contents/PlugIns/FinderSync.appex` path. Command success or an enabled stale copy is not confirmation.
-- Recover an ignored election automatically only when a valid matching intent proves MacPilot's own unfinished transaction; preserve unmarked user-disabled extensions and refuse invalid/mismatched intents.
-- Successful update/rollback transactions must restore and verify before app launch. Failure retains its journal; relaunching an intact app for recovery happens only after the registration transaction/lock ends, and must not be reported as successful restoration.
-- The resident extension must resume heartbeat and request current configuration on every authenticated main-app `running` notification. Repeated notifications must not create duplicate timers, and delayed initialization must not undo `quit`.
-- Run the mocked `FinderSyncRegistrationTests`, `FinderSyncRecoveryJournalTests`, and `FinderSyncHeartbeatLifecycleTests` after lifecycle changes. Use `zsh Scripts/verify-findersync.sh` for a read-only installed-state check; it is not visual menu acceptance. Never restart Finder or reset permissions automatically.
+选举变更必经 `FinderSyncRegistration` 并先记 `FinderSyncRecoveryJournal`；确认必须来自新鲜 PlugInKit 查询的 `+` 且路径精确匹配；用户手动禁用不得自动恢复；事务先恢复验证再启动 app。完整规则见 `docs/engineering/regressions/helper-lifecycle.md`。改动后跑 `FinderSyncRegistrationTests`、`FinderSyncRecoveryJournalTests`、`FinderSyncHeartbeatLifecycleTests`；`zsh Scripts/verify-findersync.sh` 只是只读安装态检查，绝不自动重启 Finder 或重置权限。
 
-## Configuration compatibility (invariant)
+## Configuration compatibility (invariant) — 摘要
 
-Everything persisted under `StoredConfiguration` (`config.json` + sidecar files) must survive upgrades **and downgrades**. In v1.1.482-beta.5, removing one struct field made older releases unable to decode the file, and the fallback-to-defaults path wiped every feature's configuration on downgrade. The rules below are hard invariants:
+`StoredConfiguration` 之下的一切必须升级**和降级**都存活（v1.1.482-beta.5 曾因删字段在降级时清空全部配置）。要点：键只增不删不改名；新字段 `decodeIfPresent` + 默认值；每节经 `section(...)` 隔离解码；**持久化枚举未知值落默认而不是 throw**；`ConfigurationSchemaContractTests` 是 append-only 键集的 tripwire——契约失败时不许删断言。完整规则见 `docs/engineering/regressions/configuration-migration.md`。
 
-- **Never remove or rename an encoded Codable key.** Deprecate in place: stop using it in the UI/logic but keep the stored property and always encode it (`AwakeSessionProfileConfiguration.endCalculation` is the reference case).
-- **New fields must decode tolerantly** — `decodeIfPresent` + default, never a required key; keep the required-key set identical to what the oldest supported release writes.
-- **Section isolation:** `StoredConfiguration.init(from:)` decodes every section through its `section(...)` helper; one unreadable section falls back to that section's defaults and is recorded in `unreadableSections` so `load()` quarantines the raw file before any save. Do not bypass this helper for persisted sections.
-- **The tripwire test** `Tests/MacPilotTests/ConfigurationSchemaContractTests.swift` asserts every persisted type still encodes its historical key set (append-only). A failing contract means your change would strand downgrades — keep the key, don't delete the assertion.
+## Dock and menu-bar icons (invariant) — 摘要
 
-## Dock and menu-bar icons (invariant)
+两个入口（Dock 图标、菜单栏图标）新装后都显示、可隐藏其一、**绝不双藏**；`willClose` 是唯一关闭信号（`orderOut` 不算）；status item 的每个 reattach 出口（含取消睡眠）都必须恢复 item，`selfHeal()` 兜底；状态图标能显示的每条警告必须在首页点名（`HomeAttentionTests` 钉住）。完整规则见 `docs/engineering/regressions/menu-bar-lifecycle.md`。
 
-Both entry points are shown after a fresh install, and the user may hide either one in Settings — but never both. The rules live in `Sources/MacPilot/AppPresence.swift`; the model only persists intent, `AppPresenceController` applies it.
+性能与菜单分发同样是硬约束（完整版见同上文档）：
 
-- **At least one entry point always survives.** `AppPresenceSettings.normalized()` restores the menu-bar icon when a stored pair asks for neither, and `allowingDockIconChange` / `allowingMenuBarIconChange` refuse the change that would remove the last one. The Settings switches are disabled in that state rather than silently rejecting the toggle. A configuration that hides both (hand-edited, or written by a future build) must never strand a running app with no way back in.
-- **The Dock icon follows the main window only while the menu bar still offers a way in.** `AppPresencePolicy.showsDockIcon` returns the window state when both are enabled, and always `true` in the Dock-only configuration — there the icon is the only way back, so it must outlive the window. Closing the window switches the app to `.accessory`; reopening (menu bar, Dock click, deep link) switches it back to `.regular`. `LSUIElement` stays `true` in `Info.plist`; the policy is applied at runtime.
-- **`willClose` is the only close signal.** `orderOut` (the login-launch path in `hideRegularWindows`) must not hide the Dock icon: a hidden window is not a closed one.
-- **The status item must always leave an item behind.** `MenuBarDisplayController.scheduleReinsert` removes the item, waits, and reinstalls; every exit from that removed window — including a cancelled sleep — has to restore it, or `reinserting` stays set with no item and no task and the icon is gone until relaunch (observed after the v1.2.2-beta.59 native-menu change). `scheduleReinsert` restores synchronously before its next pass, and `selfHeal()` (driven by `startWatchdog`) covers the rest.
-- **Every warning the status item can show must be named on the Home page.** The triangle is `AwakeSessionManager.hasAttentionIssue`; `HomeView` renders the same `attentionIssues` list, so the icon can never point at a failure the app cannot explain — including after the Awake feature is switched off and its page is unreachable. A closed-lid failure raised while retiring an unused power service keeps `ClosedLidSleepFailure.stage == .retirement` and must never be described as lost sleep protection. `HomeAttentionTests` pins both the icon/list agreement and the zh-en copy.
-- **The status item is icon-only.** Never draw a number or text badge beside the status icon: a text-bearing SwiftUI label rebuilt the whole menu command tree on every model tick (measured 60 ms empty vs 909 ms/1704 ms at 30/90 rows), and the user explicitly removed the CPU-percentage badge. The popup reads a fixed `MenuBarMenuSession` snapshot taken when it opens; the button owns only the image. CPU numbers stay inside the CPU Monitor page and its menu section.
-- **The status item owns a real `NSMenu`; never position the popup yourself.** `MenuBarDisplayController` attaches a menu and fills it in `menuNeedsUpdate(_:)`, so AppKit places, highlights and tracks the popup exactly like a system status menu. `NSMenu.popUp(positioning:at:in:)` cannot reproduce that — its anchor is offset from the *button*, not from the bar, so every hand-computed point lands too high. Measured on macOS 27 (30 pt menu bar, 29 pt button whose bottom sits 1 pt above the bar) against the AppKit-owned placement, whose menu top is 1 pt below the bar: `bounds.minY` (flipped view → button top) was 24 pt too high, and `bounds.maxY` (button bottom) was still 6 pt too high. That 6 pt was the "right-click menu sits up in the menu bar" bug that survived repeated anchor tweaks. Do not reintroduce a click action + `performClick`, an anchor helper, or any other `popUp` call; `MenuBarOwnedMenuTests` fails if the item stops owning the menu AppKit positions. The snapshot stays fixed per open — `menuNeedsUpdate` fills the attached menu before display. `menuDidClose` must NOT release the session synchronously: macOS 27 dispatches the chosen item's action *after* `menuDidClose` (same run-loop turn, measured), and `NSMenuItem` holds its target weakly, so an immediate release zeroed every `ActionRelay` target before AppKit dispatched — every menu action (设置, monitors, quick search, quit) silently did nothing while the click still closed the popup. The controller stops owning the session at `menuDidClose` and the captured reference is released one main-queue turn later; `MenuBarOwnedMenuTests.relayTargetsSurviveThePostCloseActionDispatchAndDropOneTurnLater` pins both halves.
-- **Opening the main window must escape the menu tracking loop and always leave a way to create the window.** `MainWindowOpener` loads content immediately (so the window cannot flash empty) but reveals it on the next run-loop turn: ordering a window front inside a status menu's tracking loop can be undone when the loop ends. It raises the retained `NSWindow`, then calls `orderFrontRegardless()` before activating — activation is cooperative on macOS 14+, so a refused activation must still leave a visible window instead of a dead menu item. A request that finds no usable window goes through the scene's `openWindow(id: "main")`, never into a `pendingRequest` flag with nothing left to drain it (that silent dead end is why "menu › Settings does nothing" kept coming back). Closed-window content stays unloaded until the next open, and every outcome is written to `DiagnosticLog` under `MainWindow` so the next failure has evidence. Do not swap `makeKeyAndOrderFront` + `orderFrontRegardless` for `NSRunningApplication.activate` (an LSUIElement process does not order its scene windows front that way) and do not raise the window synchronously from the menu action.
-- Validate with `AppPresenceTests`, `MenuBarDisplayControllerTests`, `MenuBarMenuSessionTests`, `MainWindowOpenerTests` and `ConfigurationSchemaContractTests` after touching this path.
+- **status item 只允许图标**，禁止文本/数字 badge（实测 909ms/1704ms 整树重建）；弹窗读打开瞬间的 `MenuBarMenuSession` 快照。
+- **status item 必须挂真实 `NSMenu`，绝不自己定位弹窗**——`popUp(positioning:at:in:)` 的锚点相对 button 而非菜单栏，任何手算点都偏高（macOS 27 实测 minY 高 24pt、maxY 仍高 6pt）。`MenuBarOwnedMenuTests` 钉住。
+- **`menuDidClose` 不得同步释放 session**：macOS 27 在 `menuDidClose` 之后同一 run-loop turn 才派发所选动作，`NSMenuItem` 弱引用 target，同步释放即所有菜单动作静默失效；延后一个 main-queue turn 释放。
+- **打开主窗口必须逃离菜单跟踪循环**：内容立即加载、下一 turn 抬窗、激活被拒仍 `orderFrontRegardless`、无可用窗口走 `openWindow(id: "main")`，禁止无人 drain 的 `pendingRequest` 标志（见 `docs/engineering/regressions/window-lifecycle.md`）。
+- Validate with `AppPresenceTests`, `MenuBarDisplayControllerTests`, `MenuBarMenuSessionTests`, `MenuBarOwnedMenuTests`, `MainWindowOpenerTests` and `ConfigurationSchemaContractTests` after touching this path.
 
-## Dock Groups helper editing (invariant)
+## Dock Groups helper editing (invariant) — 摘要
 
-The helper panel can add, remove and reorder a group's apps, so the old "main app writes, helper reads" split no longer holds. Both processes edit the same `groups.json`; correctness depends on these rules:
+helper 与主 app 都写 `groups.json`：**每次写必经 `DockGroupStore.update` 的独占 `flock`**（读→改→save 会静默丢 helper 的并发编辑）；只有主 app 再生 helper bundle；拖拽 payload 必须带 `dockgroup-app:` 前缀；`NSOpenPanel` 期间不得让面板关闭。完整规则见 `docs/engineering/regressions/helper-lifecycle.md`；改动后跑 `DockGroupsCoreTests`（40 队列并发写不得丢改动）与 `DockHelperPanelPlacementTests`。
 
-- **Every write goes through `DockGroupStore.update`.** It takes an exclusive `flock` on `<root>/.groups.lock`, re-reads the document, applies the mutation, and writes atomically. Never open-code a read → mutate → `save` in either process: a helper edit made between the read and the save is silently lost. `DockGroupsModel.commit` and `refreshDockTileAnchors` merge into the latest disk document for the same reason.
-- **Only the main app regenerates helper bundles.** After a helper edit, `DockGroupChangeNotifier.post(groupID:)` sends a distributed notification; the main app reloads and regenerates that group's helper so the composite Dock icon follows the members. The helper must never rebuild its own bundle.
-- **Drag payload safety:** reorder drags carry `dockgroup-app:<uuid>` (`DockHelperView.dragPrefix`). Anything that does not match the prefix is not a reorder. The drop index is the final index after the move.
-- **The app picker must not dismiss the panel.** `NSOpenPanel.runModal()` takes key status; `DockHelperPanel.isPresentingModal` suppresses both key-loss and outside-click dismissal until the picker closes, then re-keys the visible panel and resets `DockGroupPanelDismissalPolicy`.
-- Adding/removing members resizes the panel through `DockHelperLayout.size(for:)` + `DockHelperPanelPlacement.resizedOrigin`: a bottom Dock keeps the bottom edge and horizontal center, side Docks keep the vertical center and their Dock-adjacent edge.
-- Validate `DockGroupsCoreTests` and `DockHelperPanelPlacementTests` after touching this path; the concurrency test writes through separate store instances on 40 queues and must lose no changes.
+## Quick Search (invariant) — 摘要
 
-## Quick Search (invariant)
+完整规则全文见 `docs/engineering/regressions/quick-search.md`（约 20 条，含面板位置/尺寸归用户、收藏身份键、hover gate、排序层级、用途标签推导、双名索引、图标缓存）。不可妥协的骨架：
 
-- File search goes through `NSMetadataQuery` only. Never substitute `FileManager` recursive traversal of the home directory or disk, and never build a self-maintained full-disk index — Spotlight is the index this feature is designed to ride.
-- "No results" and "cannot search" are different states. When the index is off, the selected scope is not indexed, no scope is available, or the query refused to start, the panel shows that reason (`QuickSearchIndexIssue`); it must never be presented as "no matching files". Do not add a code path that reports an empty result list without first having a positive verdict that the scope is searchable.
-- One in-flight query at a time: every keystroke is 150ms-debounced and tagged with an increasing generation, a new query terminates the previous one and its notification observers, and closing the panel stops the query. Results from a stale generation must be dropped.
-- Empty-scope decisions belong to the model: `startFileSearch` reports `.noScopeSelected` instead of dispatching a query with an empty scope array, because Spotlight would silently widen the search on its own.
-- The panel opens without the main settings window: never initialise the whole settings UI on summon; the pinyin and initials of an app are normalised when the index is built, not per keystroke; disk enumeration and `Info.plist` reads stay off the main actor; no timer scans the disk while the panel is closed.
-- Carbon registration status is reported honestly (`isHotKeyRegistered`, `lastRegistrationStatus`). A failed `RegisterEventHotKey` must show its reason in the settings page and must not mark the shortcut as enabled; rejecting or conflicting with another feature keeps the previously valid binding and writes no config.
-- Panel position is user-owned: the grip at the leading edge of the search row drags the panel (`dragFromHeader` → `performDrag`, mouse-up detected by polling `NSEvent.pressedMouseButtons` because WindowServer owns the drag and `mouseUp` never reaches the view), the frame is stored as the **top-left** corner in `quickSearch.panelPosition`, and the same key set as the clipboard keeps validating it. Never re-centre on summon and never let the anchor be the bottom-left — the panel grows with the row count and must grow downward. Validating the coordinate belongs to `rememberPanelPosition` (a NaN written to disk would fail the whole config save), not to the decoder. `resetPanelPosition()` clears the key and calls `applyPlacement()` so the user sees the move immediately.
-- Panel size is user-owned too: a 6pt border band (corners included) drags with `QuickSearchPanelLayout.frameResized`, which keeps the opposite edge pinned, clamps to 400×180 and the current screen, and stores `quickSearch.panelSize` together with the (possibly moved) top-left through `rememberPanelFrame` in one write. A saved size replaces the row-count-driven height; `resetPanelSize()` clears only the size. Never re-center or re-fit a user-set size on summon.
-- Favorites and usage counts share one identity key (`QuickSearchUsageStore.identity`: Bundle ID, else path). A favorite row renders from its stored snapshot when the live index has not built yet — "index is building" must never look like "favorites are empty" — and resolves through the inventory when it has, so a renamed or moved app follows the live name. Row actions, context-menu actions included, must carry the row they belong to; never act on the selection index alone.
-- A hover may change the selection only after the pointer has actually moved since summon. When the panel appears under a stationary pointer, AppKit delivers an initial hover for the row underneath; it must not displace the first row. `openPanel()` arms `QuickSearchHoverGate` with the summon location, `selectRowByHover(at:)` refuses until that location changes, and rows use `onContinuousHover` so movement inside the same row also counts. Every open re-arms the gate.
-- Match tier is the primary sort key for results (`QuickSearchRanking.orderedByRelevance`): every name hit (including fuzzy) outranks tag and description hits, and usage frequency only breaks ties inside the same tier. File rows keep Spotlight order among equal counts (`QuickSearchFrequencyOrder`). Record a use only after the open actually succeeded.
-- Purpose tags and searchable descriptions are derived, never guessed: only what the vendor already wrote inside the app bundle may produce them — `Info.plist` (`LSApplicationCategoryType`, `CFBundleURLTypes` schemes, `CFBundleDocumentTypes` UTIs, `NSServices` menu titles, `CFBundleGetInfoString`), `InternetAccessPolicy.plist`/`.strings`, an Electron app's `package.json` (inside `app.asar` or plain) and localized `InfoPlist.strings` names/descriptions, computed on the background scanner at index build — no network and no App Store lookup. `utilities`/`productivity` and `developer-tools` categories, `public.folder`-style boilerplate, and a plain-text-only document list are deliberately not purposes: `developer-tools` is a packaging-toolchain default (52 apps on this machine claim it, including 有道云笔记, 字由 and QQ), so code tools are recognised from declared source/script UTIs instead. An app that registers `http`/`https` is a general handler, so its document types must not make it an "image tool". Tag hits rank below every name hit and are only consulted when `quickSearch.matchScope` is `.nameAndPurpose`.
-- Description words are matched through `QuickSearchKeywordLexicon`, a built-in offline Chinese↔English concept list (AI/Agent, 下载/download, 清理/cleanup, 截图/screenshot …) expanded at index build; never add a translation API or embed a full `package.json`/UI copy in the index. A bounded fallback may read en/zh `.lproj` UI strings only when the app has neither tags nor descriptions, and only accepts the dominant concept(s) — at least three matching UI strings, ranked by hit count, with a second concept needing half the top concept's evidence. Description matches carry tier `.keyword`, below fuzzy name matches — a name hit always beats a description hit regardless of usage frequency, and description hits are gated by the same `.nameAndPurpose` scope.
-- One app can have two names: index the displayed (localized) name **and** the raw `CFBundleName`/`CFBundleDisplayName` and the bundle folder name — Finder shows 迅雷 while the plist says Thunder — and every variant carries its own pinyin and initials. A localized `InfoPlist.strings` can also override the name with an **empty string** (三局通 does, with development region `en`), so resolution must treat empty as missing and fall through to the bundle folder name: a plain `??` chain stops at the empty value and leaves an unnamed row in the panel. An unknown value of a persisted enum must fall back to the default instead of throwing: throwing wipes the whole `quickSearch` section, which is precisely the accident `ConfigurationSchemaContractTests` exists to prevent.
-- Row icons live behind `QuickSearchIconLoader` and a disk cache at `~/Library/Caches/MacPilot/QuickSearch/Icons/` (`QuickSearchIconDiskCache`), never a live icon-service call per open. The cache key is standardized path + bundle modification date + point size, so an app update invalidates its entry immediately; entries refresh after 7 days (stale entries still render while a background rebuild runs) and are pruned after 30 days. Reads on a panel open are synchronous so icons and text paint in the same frame; successful loads are written through. A failed background render falls back to the main-thread `NSWorkspace` path only when the system loader is in use, and injected test loaders must never read or write the user cache (tests pass their own temp `diskCache`; the default loader skips `.shared` under the test host).
-- Validate the QuickSearch suites plus `ConfigurationSchemaContractTests`, `ConfigStoreTests` and `QuickSearchPersistenceTests` after touching this module. `QuickSearchHotKeyTests` is `.serialized` because Carbon registration is process-global; other suites use `Harness.quietHotkey` (an intentionally invalid binding) so they never grab a real key combination.
+- 文件搜索**只走 `NSMetadataQuery`**，绝不递归遍历磁盘、绝不自建索引；「无结果」与「不能搜索」是不同状态，空结果必须先有「scope 可搜索」的正面判定。
+- 一次一个在飞查询：150ms 防抖 + 递增 generation，旧代结果必须丢弃；IME 组装期间快捷键仍要分发。
+- 面板位置与尺寸归用户所有（左上角坐标、`quickSearch.panelPosition/panelSize`），绝不召唤时重新居中；收藏与用量共享 identity 键；行动作必须携带自己的行。
+- 用途标签是**推导的**（仅 bundle 内 vendor 证据），绝不猜、绝不联网；持久化枚举未知值落默认而非 throw。
+- 改动后跑 QuickSearch 全套 + `ConfigurationSchemaContractTests`、`ConfigStoreTests`、`QuickSearchPersistenceTests`；`QuickSearchHotKeyTests` `.serialized`（Carbon 注册进程级），其他套件用 `Harness.quietHotkey` 不抢真实组合键。
 
-## BLE reverse presence (invariant)
+## BLE reverse presence (invariant) — 摘要
 
-- The challenge cadence's lifetime belongs to production: only `startProduction`/`stopProduction` may arm or end it. `issuePresenceChallengesIfNeeded` and `didUnsubscribeFrom` must treat a missing manager, an unpowered radio, an empty subscriber list or an unpublished service as transient — cancelling the task on any of them used to leave a still-subscribed phone unchallenged until the app restarted, because re-arming depended on a subscribe callback that would never arrive again.
-- Reverse-link transitions must be durable, not just in-memory: production start/stop, subscribe/unsubscribe, cadence wait/resume, and a verified sample resuming after ≥30 s go to `DiagnosticLog` under `BLEReverse`. Per-sample rejections are throttled to one per 10 s. `log()` alone writes only to a ring buffer an installed build cannot show, so link loss was undiagnosable.
-- A first sample on a freshly learned alias can still hit `unlock skipped reason=noFreshSignal` because presence is recomputed before `lastRSSI` is recorded; the per-sample retry at the tail of `updateMonitoredPeripheral` is what unlocks it. Do not remove that retry as redundant. Validate with `ProximityGATTProductionRestartTests`, `BLEReversePresenceTests` and `BLEWakeRecoveryTests`.
+挑战 cadence 的生命周期只属于 `startProduction`/`stopProduction`；无 manager/未上电/空订阅/未发布服务是**瞬态**，据此 cancel 任务会让已订阅手机永久失联（重新武装依赖不会再来的回调）。反向链路转换必须写 `DiagnosticLog` 的 `BLEReverse` 通道；新 alias 首样本的 `noFreshSignal` retry 必须保留。完整规则见 `docs/engineering/regressions/ble-presence.md`；验证跑 `ProximityGATTProductionRestartTests`、`BLEReversePresenceTests`、`BLEWakeRecoveryTests`。
 
-## Clipboard history and preview (invariant)
+## Clipboard history and preview (invariant) — 摘要
 
-- Pass the configured `storageLimit` into `ClipboardHistory` before it loads/trims persisted records. Applying a limit after initialization can permanently discard history and its content files using the default limit.
-- History does not expire solely because of age. Keep count/2 GiB content limits and duplicate merging; disclose those behaviors in both UI languages. Do not remove persisted settings keys.
-- Preview visibility changes resize only the panel's right edge without AppKit or SwiftUI animation. Keep the one-second hover delay and the short row-to-preview grace period; do not retain a second delayed collapse layout.
-- Validate with the isolated `Clipboard` suites, including Model settings → first history load → flush/reload. Never modify the user's live history or general pasteboard during tests.
-- Multi-display selection tests must reach `SnapzyAreaSelectionController` and `FrozenAreaCaptureSession`, not only legacy crop helpers. Inject presentation/cursor effects so test windows stay hidden. A passing direct-handler test does not establish that WindowServer's real pointer-event routing is correct.
-- Smart-element resolvers return screen coordinates; overlay selection delegates accept view-local coordinates. Convert exactly once at each boundary, including content-view insets. Cover recognized-element single clicks as well as manual/smart drags on a nonzero-origin display.
+`storageLimit` 必须在 `ClipboardHistory` 加载/裁剪**之前**传入（初始化后再应用会按默认上限永久丢历史）；历史不因年龄过期，计数/2 GiB 上限与重复合并保持不变并双语披露；预览显隐只动右缘无动画。多屏选择测试必须到达 `SnapzyAreaSelectionController`/`FrozenAreaCaptureSession`，屏幕/view 坐标每个边界只换算一次。**绝不修改用户实时历史或通用 pasteboard。** 完整规则见 `docs/engineering/regressions/resource-performance.md`。
 
-## Pinned screenshot hover (invariant)
+## Pinned screenshot hover (invariant) — 摘要
 
-- A pin may only react to the pointer when it owns the pixel the pointer is on. Menus, combobox dropdowns and tooltips draw above the pin's `floating + 2` level; reacting to a geometric frame hit instead made the pin take key window status and closed another app's popup, so an item overlapping a pin could never be clicked. Use `QuickAccessPinHoverCoverage`; a short or empty window-server sweep answers "exposed", never "covered".
-- The Dock's own window spans a whole display (level 20) while the Dock only draws the strip, so it must never count as a covering surface: `isDockSurface` drops `com.apple.dock` windows at or below the Dock level. Counting it made pins on the main display never hover while pins on a display without a Dock worked. Dock menus ride at popup levels, so they still count.
-- The coverage verdict costs a `CGWindowListCopyWindowInfo` walk, so it stays edge-triggered plus interval-throttled through `sweepIsWorthRunning` — an exposed, already-key pin must run zero sweeps. Do not move that call into every pointer event, and keep coordinate conversion hoisted (one main-display height, one subtraction): per-window `DisplayMapping` rebuilds are far too expensive on this path.
-- A locked pin keeps geometric mouse passthrough: it never takes key status and shows no hover chrome, so a cover must not change whether clicks reach it.
-- Pins share one local/global mouse-monitor pair. Publish hover state only on transitions; repeated pointer positions must not invalidate every pin's SwiftUI view. Closing/suspending the last pin removes both monitors. Keep zoom easing time-based across refresh rates and reuse the HUD hide timer through each gesture. `QuickAccessPinPerformanceTests` covers publication counts, shared-monitor lifetime, and zoom behavior without displaying windows.
+pin 只有拥有指针所在像素才可响应（`QuickAccessPinHoverCoverage`；短/空扫描答案是 exposed）；Dock 整屏窗口绝不算覆盖面；覆盖判定边沿触发 + 节流（exposed 且已 key 的 pin 零扫描）；锁定 pin 保持几何穿透；pin 共享一对鼠标 monitor、hover 只在转换时发布。完整规则见 `docs/engineering/regressions/resource-performance.md`；`QuickAccessPinPerformanceTests` 钉住发布次数与 monitor 生命周期。
 
 ## Project Summary
 
@@ -207,14 +190,15 @@ The repo-root `SUMMARY.md` is the project's Chinese development summary (feature
 - The legacy tag workflow needs exactly these six Secrets: `APPLE_CERTIFICATE_P12`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_DEVELOPER_ID`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`. The App-specific password is an Apple ID notarization credential, not a signing certificate.
 - GitHub Actions runners cannot read the local Keychain. If importing a `.p12` still produces “No signing certificate ... with a private key was found”, create and unlock a temporary keychain, import the certificate, set the key partition list, and verify with `security find-identity -v -p codesigning`.
 
-## MacPilot release preference
+## MacPilot release preference（2026-11-01 起改为 PR 门禁流程）
 
-- After every completed and verified MacPilot change, automatically commit and push `main`, then publish a new Beta prerelease tagged `v<major>.<minor>.<patch>-beta.<n>` through `release-beta.yml`. This includes docs-only and dead-code-only changes; do not wait for another reminder.
-- For subsequent Beta releases, keep the current major/minor/patch version unchanged and increment only `beta.<n>` (for example, `v1.1.522-beta.1` → `v1.1.522-beta.2`). Do not increment the patch version for a Beta update; only change the base version when the user explicitly requests it or a formal Stable release requires it.
-- Before creating the Beta tag, `git fetch` and confirm `origin/main` has not moved. If it has, rebase, rerun the required gates on the merged tree, and derive a fresh Beta version.
-- Verify the Beta GitHub Actions run and its Release assets. Beta tags must produce GitHub prereleases (`prerelease=true`); never move or overwrite an existing tag.
-- Do not create a stable version tag (`v<major>.<minor>.<patch>`) or publish a formal Stable Release unless the user explicitly asks for a formal/stable release. When explicitly requested, use a new patch version, never overwrite a tag, and follow the authenticated Developer ID signing and Apple notarization flow above; verify the Actions run and release assets.
-- After a successful release, leave the local `/Applications/MacPilot.app` install alone — the user upgrades it manually. Never quit, replace, or relaunch the local app as part of the release flow. Only when the user explicitly asks for a local upgrade, validate the ZIP's signature and notarization ticket with `codesign --verify --deep --strict` and `xcrun stapler validate` before installing.
+- **常规改动一律走 PR**：开发分支 → 本地验证（`bash Scripts/run-regressions.sh` + 相关套件）→ 推送开发分支 → PR（用 `.github/PULL_REQUEST_TEMPLATE.md` 填写影响分析）→ CI（`build` + `Regression Gate`）→ 合并 `main`。**禁止未经用户授权绕过 PR 和 CI 直接推送 `main`。**
+- Beta 发布需要**用户明确授权**：不得因为一次文档修改、测试通过或例行改动就自动打 Beta tag。收到明确发布指令后，从最新 `main` 打 `v<major>.<minor>.<patch>-beta.<n>`（同一 base 只递增 `beta.<n>`），发布前先 `git fetch` 确认 `origin/main` 未移动，移动则先 rebase 重跑门禁。
+- 合并 `main` 与正式发布前执行完整安全测试（regression-gate 的 push/schedule 路径自动强制全量；本地等价命令 `bash Scripts/run-regressions.sh --force-full`）。
+- Beta tags 产生 GitHub prereleases（`prerelease=true`）；绝不移动或覆盖已存在的 tag；修复发布问题用新 beta 号或新 patch。
+- Stable tag（`v<major>.<minor>.<patch>`）只在用户明确要求正式发布时创建，走 Developer ID 签名 + 公证流程并核验 Actions 与 Release 资产。
+- 发布成功后不动本地 `/Applications/MacPilot.app`——用户手动升级。只有用户明确要求本地升级时，先 `codesign --verify --deep --strict` 与 `xcrun stapler validate` 校验 ZIP 再安装。
+- 例外：纯文档/营销目录（`docs/`、`marketing/`、`website/`、`.github/*.md`）改动在门禁上等价于无代码改动，但**发布授权规则不变**——同样需要用户点头才能发 Beta。
 
 ## App Store & TestFlight (asc CLI)
 
@@ -235,11 +219,6 @@ The repo-root `SUMMARY.md` is the project's Chinese development summary (feature
 
 - PilotNest remote desktop uses one continuous relative mouse trackpad across the video and lower content area, both with the keyboard shown and hidden. Never map video touches to absolute screen coordinates. A two-finger pinch on the preview only changes local video zoom; other gestures keep relative mouse semantics. Keep buttons and the system keyboard interactive above the touch surface.
 
-## 按需资源与辅助进程生命周期（2026-10-28）
+## 按需资源与辅助进程生命周期（2026-10-28）— 摘要
 
-- 用户要求：功能仅在实际使用时占用对应资源。关闭功能必须停止该功能的任务、定时器、监听、事件 tap、采集、编码和连接，并释放可重建的缓存；隐藏窗口不能被误当成功能关闭。
-- 专属辅助进程须按需启动，关闭所属功能后正常退出；不能仅把 CPU 降为接近零却永久驻留。共享辅助进程按实际使用者/租约计数，最后一个使用者结束后退出。注册安装状态与进程运行状态应分离，避免每次使用反复索要管理员授权。
-- 显示控制与电源辅助进程须先完成屏幕拓扑/原始电源状态恢复并确认，再退出；恢复未完成时只保留必要恢复工作，并明确失败，不能通过 kill 绕过安全事务。快速关闭再开启、崩溃恢复和延迟回调不得误停新会话。
-- launchd 的 RunAtLoad/KeepAlive 必须有实际必要性；无活动租约的辅助服务应支持按需启动及安全空闲退出，防止退出后又被无条件拉起。
-- FinderSync、系统自动填充等由 macOS 托管的扩展，必须在关闭功能时停止自身工作并释放资源；不得为移除进程而重启系统宿主、强杀系统进程或重置用户权限。不可保证进程消失时，应说明系统控制边界。
-- 生命周期验证必须覆盖：关闭后后台工作计数归零、缓存释放、专属进程正常退出/不重启、快速重开、恢复失败、旧回调隔离。测试应使用 mock，不在用户会话中真实锁屏、黑屏、休眠或改变电源策略。
+功能仅在实际使用时占用资源：**关闭功能必须停止任务、定时器、监听、事件 tap、采集、编码、连接并释放可重建缓存**；隐藏窗口不等于关闭功能。专属 helper 按需启动、随功能关闭正常退出；共享 helper 按租约计数；注册安装状态与进程运行状态分离；显示/电源 helper 先完成恢复并确认再退出，不得 kill 绕过；快速开关、崩溃恢复、延迟回调不得误停新会话；launchd RunAtLoad/KeepAlive 必须有实际必要性。完整要求与验证覆盖清单见 `docs/engineering/regressions/helper-lifecycle.md`（help-002-on-demand-processes）。

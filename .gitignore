@@ -18,6 +18,10 @@ MacPilot-*.dmg
 site/
 .zcodeignore
 
+# 防回归门禁的本地运行产物（计划 JSON 与测试日志）
+.regression-logs/
+__pycache__/
+
 # Xcode / SwiftPM
 .swiftpm/
 DerivedData/

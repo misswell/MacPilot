@@ -1,0 +1,842 @@
+{
+  "schema_version": 1,
+  "description": "MacPilot 防回归统一索引：AI 修改前检查、本地回归选择器与 CI 门禁共用这一份数据。改这里即同时改三处行为，不允许在 CI 或文档里另维护一份测试清单。",
+  "scope_note": "status 取值：confirmed-recurring（有 >=2 个修复提交指向同一根因，已实际复发）、confirmed-potential（根因已确认存在但尚未二次触发的高危隐患）、unverified（线索存在但提交证据不足，只记录不作为门禁依据）。",
+  "full_suite": {
+    "description": "源码修改未命中任何规则时的回退集合 = 所有规则的 test_filters 并集 + 此处列出的安全基础套件。完整含义见 docs/engineering/README.md。",
+    "baseline_extra_filters": [
+      "Awake", "AwakeAssertionControllerTests", "AwakePolicyEngineTests",
+      "Clipboard", "SecondarySelectionRegressionTests",
+      "ScreenRecordingTests", "ScreenRecordingPermissionWatcherTests", "CaptureEnhancementsTests",
+      "RemoteControlAppStoreInfoTests", "RemoteNavigationControlTests", "MouseInjectorEventTests", "RemoteInputCoordinatorTests",
+      "RemoteTextInputTests", "RemoteMediaControlTests", "RemoteVideoEncoderTests",
+      "RemoteVideoTransportTests", "RemoteBonjourPublisherTests", "LocalNetworkSessionDiagnosisTests",
+      "ScreenCaptureTests", "ScreenCaptureClipboardRegressionTests", "SnapzyCaptureTests",
+      "SmoothScrolling", "SmoothScrollRecoveryTests", "SmoothScrollRuntimeTests",
+      "LocalPortsModelTests", "LocalPortCloseServiceTests", "LocalPortsIconTests", "LocalPortsLocalizationTests",
+      "InputSourceTests", "PictureInPictureTests", "QuickAccessTests", "GracefulQuitTests",
+      "LaunchRuleCodingTests", "LoginItemPolicyTests", "ScreenLockHistoryTests",
+      "ThumbnailCacheTests", "ProcessIconStoreTests", "ImageHostingTests",
+      "FileCompressionTests", "FileCompressionMonitoringTests", "DiagnosticLogTests",
+      "HomeSwitchAlignmentTests", "FeatureSelectionTests", "KeychainSnapshotTests",
+      "PreferenceSnapshotTests", "ConfigurationSnapshotTests"
+    ],
+    "package_suites": [
+      {
+        "package_path": "Packages/MacPilotRemoteProtocol",
+        "filter": "ProximityGATT|ReversePresence"
+      }
+    ],
+    "extra_commands": [
+      "python3 Tests/Release/stapler-retry-tests.py"
+    ]
+  },
+  "flaky_waiver_policy": "只有列在此处、且**单独重跑通过**的测试才允许被豁免；豁免会打印为 WAIVED 并计入报告。未列入此清单的失败一律是门禁失败，绝不因为「以前也这样」放行。豁免依据是 AGENTS.md 记录的同族问题：断言依赖真实墙钟时间，全套运行时前一个套件会占住 main actor 数十秒（隔离 0.060s vs 全套 3.982s）。这不是降低测试标准——断言与阈值都不改，只要求在隔离环境下复核。",
+  "known_flaky_tests": [
+    "CPUMonitorTests.samplerReportsAFullyBusyCoreAtItsRealShare",
+    "BLEWakeRecoveryTests.overdueSignalTimeoutClearsThePreSleepPresence",
+    "ScreenCaptureTests.startupShortcutRegistrationRetriesTransientFailure",
+    "ScreenCaptureTests.quickCopyAutoSaveWritesFileAndRecordsStats",
+    "SnapzySingleFrameCaptureTests.timeoutEndsAStalledCapture",
+    "RemoteVideoTransportTests.independentVideoSocketAuthenticatesAndRejectsAQueuedFrameBacklog",
+    "PictureInPictureTests.stalledCaptureStateAppearsAfterMotionStopsAndClearsOnChange",
+    "MenuBarDisplayControllerTests.topologyChangeWhileAMenuTracksDuringTheRemovedWindowRestoresTheItem",
+    "QuickSearchIconLoaderTests.aFailedIconIsRetriedOnceThePanelReopens"
+  ],
+  "modules": [
+    {
+      "id": "window-lifecycle",
+      "name": "主窗口与 AppKit 生命周期",
+      "doc": "docs/engineering/regressions/window-lifecycle.md",
+      "rules": [
+        {
+          "id": "win-001-main-window-opener",
+          "module": "window-lifecycle",
+          "title": "菜单/Dock 打不开主窗口：opener 生命周期与 pendingRequest 死路",
+          "status": "confirmed-recurring",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilot/MainWindowScene.swift",
+            "Sources/MacPilot/MacPilotApp.swift",
+            "Sources/MacPilot/Core/**"
+          ],
+          "invariants": [
+            "窗口内容立即加载、下一 run-loop turn 才抬窗；菜单跟踪循环内不得同步 orderFront。",
+            "激活被拒绝时仍必须 orderFrontRegardless 留下可见窗口；LSUIElement 进程禁止用 NSRunningApplication.activate 抬窗。",
+            "找不到可用窗口的请求必须走 openWindow(id: \"main\")，禁止无人 drain 的 pendingRequest 标志。",
+            "每次打开结果写入 DiagnosticLog 的 MainWindow 通道。"
+          ],
+          "test_filters": [
+            "MainWindowOpenerTests",
+            "MainWindowContentStateTests",
+            "WindowFocusServiceTests",
+            "WindowSwitcherTests",
+            "AppLifecycleTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "关闭主窗口后分别从菜单「设置」、Dock 图标、Finder 深链重新打开，连续关闭重开多次。",
+            "macOS 拒绝前台激活时窗口仍可见（orderFrontRegardless 路径）。"
+          ],
+          "evidence_commits": [
+            { "sha": "5ecdb66", "date": "2026-09-28", "subject": "load main window content when raised outside the app" },
+            { "sha": "8d8daa6", "date": "2026-10-29", "subject": "retain main window opener after closing（同日被 revert）" },
+            { "sha": "9d71f61", "date": "2026-10-29", "subject": "Revert \"retain main window opener after closing\"" },
+            { "sha": "42453ac", "date": "2026-10-29", "subject": "retain the main window opener for the application lifetime" },
+            { "sha": "d080766", "date": "2026-10-30", "subject": "keep the settings menu able to open the main window（当时误判根因在 opener 侧）" },
+            { "sha": "dc224ff", "date": "2026-10-31", "subject": "release the menu snapshot after AppKit dispatches the action（真正根因在菜单侧，见 menu-002）" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "menu-bar-lifecycle",
+      "name": "菜单栏、NSMenu 与动作分发",
+      "doc": "docs/engineering/regressions/menu-bar-lifecycle.md",
+      "rules": [
+        {
+          "id": "menu-001-status-item-popup-placement",
+          "module": "menu-bar-lifecycle",
+          "title": "状态栏右键菜单偏上：手算 popUp 锚点永远差几像素",
+          "status": "confirmed-recurring",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilot/MenuBarDisplayController.swift",
+            "Sources/MacPilot/MenuBarMenuSession.swift"
+          ],
+          "invariants": [
+            "status item 必须挂真实 NSMenu、在 menuNeedsUpdate(_:) 填充，由 AppKit 定位。",
+            "禁止 NSMenu.popUp(positioning:at:in:)、performClick、锚点辅助函数等一切手算定位。"
+          ],
+          "test_filters": [
+            "MenuBarOwnedMenuTests",
+            "MenuBarDisplayControllerTests",
+            "MenuBarMenuSessionTests",
+            "MenuBarStatusItemVisibilityTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "macOS 26 与最新系统上右键/左键状态图标，菜单顶边必须在菜单栏底边下方，与系统状态菜单一致。"
+          ],
+          "evidence_commits": [
+            { "sha": "6f6c9e5", "date": "2026-10-28", "subject": "open status menu from a snapshot instead of a live command tree（引入 popUp 路径）" },
+            { "sha": "ced94af", "date": "2026-10-29", "subject": "anchor menu popup to button edge（调锚点，残留 6pt）" },
+            { "sha": "591ecd0", "date": "2026-10-30", "subject": "let AppKit place the status item menu（根治：改真 NSMenu）" },
+            { "sha": "e8d5316", "date": "2026-10-30", "subject": "docs: record the status-menu placement fix" }
+          ]
+        },
+        {
+          "id": "menu-002-session-release-vs-action-dispatch",
+          "module": "menu-bar-lifecycle",
+          "title": "menuDidClose 同步释放 session 导致所有菜单动作静默失效（修复A引发B）",
+          "status": "confirmed-recurring",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilot/MenuBarDisplayController.swift",
+            "Sources/MacPilot/MenuBarMenuSession.swift"
+          ],
+          "invariants": [
+            "menuDidClose 不得同步释放菜单 session：macOS 27 在 menuDidClose 之后同一 run-loop turn 才派发所选动作，NSMenuItem 持弱引用 target。",
+            "controller 在 menuDidClose 停止持有 session，捕获的引用延后一个 main-queue turn 再释放。"
+          ],
+          "test_filters": [
+            "MenuBarOwnedMenuTests",
+            "MenuBarDisplayControllerTests",
+            "MenuBarMenuSessionTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "真实 AppKit 菜单：打开菜单点「设置 / 显示器 / 快速搜索 / 退出」各项都必须执行；这是模拟测试无法完全替代的分发链路。"
+          ],
+          "evidence_commits": [
+            { "sha": "591ecd0", "date": "2026-10-30", "subject": "let AppKit place the status item menu（引入 menuDidClose 立即 drop session）" },
+            { "sha": "dc224ff", "date": "2026-10-31", "subject": "release the menu snapshot after AppKit dispatches the action（承认 d080766 误判）" }
+          ]
+        },
+        {
+          "id": "menu-003-status-item-reattachment",
+          "module": "menu-bar-lifecycle",
+          "title": "菜单栏图标消失：reattachment 的每个出口都必须恢复 status item",
+          "status": "confirmed-recurring",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilot/MenuBarDisplayController.swift",
+            "Sources/MacPilot/AppPresence.swift"
+          ],
+          "invariants": [
+            "scheduleReinsert 移除-等待-重装期间每个出口（含取消睡眠）都必须恢复 item；reinserting 卡死即图标消失。",
+            "selfHeal()/startWatchdog 兜底；willClose 是唯一关闭信号，orderOut 不得隐藏 Dock 图标。",
+            "至少一个入口永远存活（normalized() 恢复、allowing*Change 拒绝去掉最后一个）。"
+          ],
+          "test_filters": [
+            "MenuBarDisplayControllerTests",
+            "MenuBarStatusItemVisibilityTests",
+            "AppPresenceTests",
+            "HomeAttentionTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "开关菜单栏图标、开关 Dock 图标、试图同时关闭两个入口；睡眠再取消睡眠后图标仍在。"
+          ],
+          "evidence_commits": [
+            { "sha": "838e7a8", "date": "2026-10-26", "subject": "restore the menu-bar icon when reattachment is interrupted" },
+            { "sha": "fd5d355", "date": "2026-10-26", "subject": "always reinstall the status item after an interrupted reattachment（补 cancel-sleep 出口）" },
+            { "sha": "2cb11b0", "date": "2026-10-26", "subject": "restore menu bar item visibility when reenabled" }
+          ]
+        },
+        {
+          "id": "menu-004-menu-rebuild-cost",
+          "module": "menu-bar-lifecycle",
+          "title": "菜单命令树随模型 tick 重建：文本 badge 曾把空菜单拖到 909ms",
+          "status": "confirmed-recurring",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/MenuBarMenuSession.swift",
+            "Sources/MacPilot/MenuBarDisplayController.swift",
+            "Sources/MacPilot/CPUMonitor/**",
+            "Sources/MacPilot/HomeView.swift",
+            "Sources/MacPilot/HomeAttention.swift"
+          ],
+          "invariants": [
+            "status item 只允许图标：禁止数字/文本 badge（实测空 60ms、30 行 909ms、90 行 1704ms）。",
+            "弹出内容固定为打开瞬间的 MenuBarMenuSession 快照；button 只持有 image。",
+            "CPU 数字只存在于 CPU Monitor 页面与其菜单 section。"
+          ],
+          "test_filters": [
+            "MonitorMenu",
+            "MenuBarMenuSessionTests",
+            "MenuBarDisplayControllerTests",
+            "CPUMonitorTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "开着的菜单在后台数据刷新时不得整树闪烁/重排；90 行规模下打开延迟可感知即退化。"
+          ],
+          "evidence_commits": [
+            { "sha": "dba5c85", "date": "2026-10-26", "subject": "keep menu bar submenus stable during data refresh" },
+            { "sha": "6f6c9e5", "date": "2026-10-28", "subject": "open status menu from a snapshot instead of a live command tree" },
+            { "sha": "7de504f", "date": "2026-10-28", "subject": "去除状态栏 CPU% badge（同族防复发簇）" },
+            { "sha": "61381d4", "date": "2026-10-28", "subject": "badge 默认关闭（同族防复发簇）" },
+            { "sha": "f745b3f", "date": "2026-10-28", "subject": "降低后台菜单 CPU（同族防复发簇）" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ble-presence",
+      "name": "BLE 身份识别、地址轮换与在场检测",
+      "doc": "docs/engineering/regressions/ble-presence.md",
+      "rules": [
+        {
+          "id": "ble-001-unlock-state-rearm",
+          "module": "ble-presence",
+          "title": "解锁状态机未在系统事件后重新武装（10+ 次修复的最大热点）",
+          "status": "confirmed-recurring",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilot/BLE/**",
+            "Sources/MacPilot/BLEUnlock.swift",
+            "Packages/MacPilotRemoteProtocol/**",
+            "iOS/MacPilotRemote/**"
+          ],
+          "invariants": [
+            "system wake、display wake、监控停滞、重连后必须重新武装挑战/解锁；任何事件路径不得让状态机停在已取消态。",
+            "每个出口都要回答：这个状态还能被什么事件重新触发？只依赖单一回调的恢复路径视为死路。",
+            "后台广播暂停与真实离开必须区分；手动锁屏不得被自动解锁覆盖。"
+          ],
+          "test_filters": [
+            "BLEWakeRecoveryTests",
+            "BLEMonitoringRestorationTests",
+            "BLERediscoveryTests",
+            "BLEManualLockSuppressionTests",
+            "BLEUnlockAttributionTests",
+            "BLEPresenceAuthenticationTests",
+            "BLEAdvertisementLivenessTests",
+            "RemoteBLEBackoffTests",
+            "ProximityGATTProductionRestartTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "真实睡眠/唤醒、合盖再开盖、手机走出再走回范围、手动锁屏不被自动解锁（须用户授权与安全环境）。"
+          ],
+          "evidence_commits": [
+            { "sha": "b0b73dc", "date": "2026-08-04", "subject": "system wake 后解锁失效" },
+            { "sha": "a60d7c7", "date": "2026-08-21", "subject": "display wake 后失效" },
+            { "sha": "d267712", "date": "2026-09-16", "subject": "stalled monitoring" },
+            { "sha": "295c621", "date": "2026-09-17", "subject": "display wake 后 retry 掉臂" },
+            { "sha": "121be7a", "date": "2026-09-30", "subject": "同族修复" },
+            { "sha": "cebe1b6", "date": "2026-10-09", "subject": "同族修复" },
+            { "sha": "47a1467", "date": "2026-10-12", "subject": "同族修复" },
+            { "sha": "98553a0", "date": "2026-10-12", "subject": "同族修复" },
+            { "sha": "6c69d24", "date": "2026-10-15", "subject": "同族修复" },
+            { "sha": "43a646d", "date": "2026-10-15", "subject": "同族修复" },
+            { "sha": "5a4aab0", "date": "2026-10-15", "subject": "同族修复" }
+          ]
+        },
+        {
+          "id": "ble-002-address-rotation",
+          "module": "ble-presence",
+          "title": "地址轮换误判离开 / 历史地址泄漏定时器（连续 4 修）",
+          "status": "confirmed-recurring",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilot/BLE/**",
+            "Sources/MacPilot/BLEUnlock.swift",
+            "Packages/MacPilotRemoteProtocol/**",
+            "iOS/MacPilotRemote/**"
+          ],
+          "invariants": [
+            "iOS 地址轮换不得判定设备离开；历史地址不得产生多余定时器；旧连接回调不得修改新连接状态。"
+          ],
+          "test_filters": [
+            "BLEIdentity",
+            "BLERediscoveryTests",
+            "BLEUnlockAttributionTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "手机蓝牙地址轮换（重启蓝牙/隔段时间）后监控不中断、无多余定时器。"
+          ],
+          "evidence_commits": [
+            { "sha": "f85d169", "date": "2026-10-20", "subject": "地址轮换误判离开（首修）" },
+            { "sha": "8fa6374", "date": "2026-10-21", "subject": "同族修复" },
+            { "sha": "c45bb5c", "date": "2026-10-21", "subject": "同族修复" },
+            { "sha": "0948e7b", "date": "2026-10-26", "subject": "同族修复（第 4 修）" }
+          ]
+        },
+        {
+          "id": "ble-003-background-session-misjudge",
+          "module": "ble-presence",
+          "title": "后台会话静默挂起被误判为设备离开（3 修）",
+          "status": "confirmed-recurring",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/BLE/**",
+            "Sources/MacPilot/BLEUnlock.swift",
+            "iOS/MacPilotRemote/**"
+          ],
+          "invariants": [
+            "iOS 后台挂起导致 RSSI/广播静默 ≠ 设备离开；判定离开必须有独立的超时证据。"
+          ],
+          "test_filters": [
+            "BLEBackgroundSessionTests",
+            "BLEAdvertisementLivenessTests",
+            "BLEReversePresenceTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "手机息屏放兜里半小时后走离 Mac，观察是否到超时才锁定而不是立刻锁。"
+          ],
+          "evidence_commits": [
+            { "sha": "adba110", "date": "2026-09-26", "subject": "后台会话误判（首修）" },
+            { "sha": "db243ce", "date": "2026-10-25", "subject": "同族修复" },
+            { "sha": "3742e53", "date": "2026-10-26", "subject": "同族修复" },
+            { "sha": "b011e5e", "date": "2026-10-26", "subject": "同族修复" }
+          ]
+        },
+        {
+          "id": "ble-004-reverse-presence-cadence",
+          "module": "ble-presence",
+          "title": "反向 presence 挑战任务被取消后永久失联（恢复路径依赖永不重来的回调）",
+          "status": "confirmed-recurring",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilot/BLE/**",
+            "Packages/MacPilotRemoteProtocol/**",
+            "iOS/MacPilotRemote/**"
+          ],
+          "invariants": [
+            "挑战 cadence 的生命周期只属于 startProduction/stopProduction；no-manager/未上电/空订阅/未发布服务是瞬态，不得据此 cancel 任务。",
+            "反向链路转换必须写入 DiagnosticLog 的 BLEReverse 通道（ring buffer 在安装版里看不到）。",
+            "首个样本的 unlock skipped retry 必须保留（presence 先于 lastRSSI 记录导致的固有竞争）。"
+          ],
+          "test_filters": [
+            "BLEReversePresenceTests",
+            "ProximityGATTProductionRestartTests",
+            "BLEWakeRecoveryTests"
+          ],
+          "extra_test_commands": [
+            "swift test --package-path Packages/MacPilotRemoteProtocol --filter 'ProximityGATT|ReversePresence'"
+          ],
+          "manual_checks": [
+            "手机订阅反向 presence 后重启 MacPilot，挑战仍按节奏到达；断开重连后链路恢复。"
+          ],
+          "evidence_commits": [
+            { "sha": "b0e1454", "date": "2026-10-23", "subject": "close reverse presence recovery and sample races（production restart 后 cadence 只发一次）" },
+            { "sha": "270d991", "date": "2026-10-23", "subject": "issuePresenceChallengesIfNeeded 把瞬态当终止条件 cancel task（藏在 docs 提交里）" },
+            { "sha": "fbcff94", "date": "2026-10-23", "subject": "submit reverse presence reconnects from the Bluetooth callback（Task.sleep 恢复路径后台永不执行）" },
+            { "sha": "5f95fb3", "date": "2026-10-29", "subject": "expire reverse BLE challenges with a local continuous clock" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "display-recovery",
+      "name": "黑屏/亮屏、显示器拓扑与 DDC 恢复",
+      "doc": "docs/engineering/regressions/display-recovery.md",
+      "rules": [
+        {
+          "id": "disp-001-recovery-not-durable",
+          "module": "display-recovery",
+          "title": "显示恢复是内存态一次性调用：崩溃/重启/拓扑变化后丢失（5 天 7 修）",
+          "status": "confirmed-recurring",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilot/DisplayControl/**",
+            "Sources/MacPilot/DisplayPower.swift",
+            "Sources/MacPilot/DisplayBlankRecovery.swift",
+            "Sources/MacPilotDisplayControlCore/**",
+            "Sources/MacPilotDisplayRecovery/**",
+            "Sources/MacPilotDisplayBridge/**"
+          ],
+          "invariants": [
+            "恢复意图必须先落 journal 再动硬件；durable 请求跨 helper 重启仍可识别。",
+            "恢复未完成时 helper 只保留必要恢复工作并明确失败，不得 kill 绕过安全事务；失败不得上报为成功。",
+            "新旧显示器拓扑切换不得覆盖未完成事务；不得关掉最后一块可用实体显示器。",
+            "快速关-开、崩溃恢复、延迟回调不得误停新会话。"
+          ],
+          "test_filters": [
+            "DisplayBlankRecoveryTests",
+            "DisplayPowerTests",
+            "KeyboardBacklightTests",
+            "DisplayRecoveryClientTests",
+            "DisplayRecoveryPreparationTests",
+            "DisplayRecoveryEventHandlerTests",
+            "DisplayRecoveryJournal",
+            "DisplayOperationStoreTests",
+            "DisplayControl",
+            "DisplayTopology",
+            "DisplayRemoteLease",
+            "DDCPacketTests",
+            "ScreenControlSafetyTests",
+            "ClosedLid",
+            "SleepDisabledPlannerTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "实机外接屏 DDC 黑屏→断电→重连→恢复；长时间黑屏；键盘唤醒；内屏与外屏分别验证（须授权与安全环境，见 docs/engineering/acceptance/hardware-acceptance.md）。"
+          ],
+          "evidence_commits": [
+            { "sha": "7a225d3", "date": "2026-10-26", "subject": "control lease 后拓扑丢失" },
+            { "sha": "8b2cbd2", "date": "2026-10-26", "subject": "stale recovery service 注册" },
+            { "sha": "af8f9a6", "date": "2026-10-29", "subject": "retry 修复（同族）" },
+            { "sha": "90c5222", "date": "2026-10-29", "subject": "durable + session safe（同族）" },
+            { "sha": "414c759", "date": "2026-10-29", "subject": "durable async requests（同族）" },
+            { "sha": "bc0d4ef", "date": "2026-10-29", "subject": "journal before hardware（同族）" },
+            { "sha": "2be9bc4", "date": "2026-10-29", "subject": "virtual creation intent 跨重启（同族）" },
+            { "sha": "133e466", "date": "2026-10-30", "subject": "phone blanking identity（同族）" }
+          ]
+        },
+        {
+          "id": "disp-002-closed-lid-registration",
+          "module": "display-recovery",
+          "title": "合盖电源服务注册状态过期：缓存与系统真实状态脱节（4 修）",
+          "status": "confirmed-recurring",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/Awake/**",
+            "Sources/MacPilot/DisplayControl/**",
+            "Sources/MacPilotPowerHelper/**",
+            "Sources/MacPilotPowerIPC/**"
+          ],
+          "invariants": [
+            "注册状态必须 re-read 系统而非缓存；registration loss 后能自动恢复；旧版 helper 兼容。"
+          ],
+          "test_filters": [
+            "ClosedLid",
+            "SleepDisabledPlannerTests",
+            "PowerHelperIdleStateTests",
+            "PowerHelperRetirementTests",
+            "Awake"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "合盖睡眠/唤醒、注册丢失后重装 helper，按 docs/AWAKE_MANUAL_TESTS.md 场景执行（须授权与安全环境）。"
+          ],
+          "evidence_commits": [
+            { "sha": "b903366", "date": "2026-09-16", "subject": "re-read 而非缓存（首修）" },
+            { "sha": "edaff85", "date": "2026-09-25", "subject": "registration loss 后恢复" },
+            { "sha": "ba3a62f", "date": "2026-10-07", "subject": "verify and repair" },
+            { "sha": "9503072", "date": "2026-10-07", "subject": "旧版 helper 兼容" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "helper-lifecycle",
+      "name": "FinderSync、Power/Dock Helper 等辅助进程生命周期",
+      "doc": "docs/engineering/regressions/helper-lifecycle.md",
+      "rules": [
+        {
+          "id": "help-001-findersync-registration",
+          "module": "helper-lifecycle",
+          "title": "FinderSync 注册状态与系统真实状态脱节，跨更新丢失（9 修）",
+          "status": "confirmed-recurring",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilotFinderSync/**",
+            "Sources/MacPilotUpdaterSupport/**",
+            "Scripts/verify-findersync.sh",
+            "Scripts/build-findersync.sh"
+          ],
+          "invariants": [
+            "暂不 ignore 扩展前必须先在跨进程锁下记录目标绑定的 FinderSyncRecoveryJournal 意图；用 FinderSyncRegistration，不开放手写。",
+            "清除恢复意图前必须有新鲜 PlugInKit 查询确认 + 在当前 app 的精确 appex 路径；命令成功不等于确认。",
+            "更新/回滚事务必须先恢复并验证再启动 app；失败保留 journal。",
+            "驻留扩展在每个认证 running 通知上恢复心跳并请求配置；重复通知不产生重复定时器。"
+          ],
+          "test_filters": [
+            "FinderSyncRegistrationTests",
+            "FinderSyncRecoveryJournalTests",
+            "FinderSyncHeartbeatLifecycleTests",
+            "MenuSectionLayoutTests",
+            "MenuTagTests"
+          ],
+          "manual_checks": [
+            "安装更新后扩展保持启用、Finder 右键菜单出现；用户手动禁用后 app 不得自动重新启用；zsh Scripts/verify-findersync.sh 只读核对安装态（CI 无安装版，只在实机执行）。"
+          ],
+          "evidence_commits": [
+            { "sha": "d5bb97f", "date": "2026-09-03", "subject": "FinderSync 注册丢失（首修）" },
+            { "sha": "fc5afe5", "date": "2026-09-07", "subject": "同族修复" },
+            { "sha": "0576285", "date": "2026-09-08", "subject": "同族修复" },
+            { "sha": "d3d227a", "date": "2026-09-30", "subject": "同族修复" },
+            { "sha": "3beb514", "date": "2026-10-10", "subject": "install 隔离" },
+            { "sha": "24b55f2", "date": "2026-10-10", "subject": "注册消失时解除更新阻塞" },
+            { "sha": "0c788bc", "date": "2026-10-12", "subject": "verified system state" },
+            { "sha": "fc49e0f", "date": "2026-10-12", "subject": "同族修复" },
+            { "sha": "35dfe94", "date": "2026-10-12", "subject": "同族修复" }
+          ]
+        },
+        {
+          "id": "help-002-on-demand-processes",
+          "module": "helper-lifecycle",
+          "title": "按需资源与辅助进程生命周期（2026-10-28 用户要求）",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilotPowerHelper/**",
+            "Sources/MacPilotPowerIPC/**",
+            "Sources/MacPilotDockHelper/**",
+            "Sources/MacPilotDockGroupsCore/**",
+            "Sources/MacPilot/DockGroups/**",
+            "Sources/MacPilotFinderSync/**"
+          ],
+          "invariants": [
+            "关闭功能必须停止其任务、定时器、监听、事件 tap、采集、编码、连接并释放可重建缓存；隐藏窗口不等于关闭功能。",
+            "专属辅助进程按需启动、随功能关闭正常退出；共享辅助进程按租约计数，最后租约结束退出。",
+            "注册安装状态与进程运行状态分离；launchd RunAtLoad/KeepAlive 必须有实际必要性。",
+            "快速关闭再开启、崩溃恢复、延迟回调不得误杀新会话；恢复未完成不得 kill 绕过。"
+          ],
+          "test_filters": [
+            "FeatureResourceLifecycleTests",
+            "ResourceLifecycleTests",
+            "PowerHelperIdleStateTests",
+            "PowerHelperRetirementTests",
+            "DockHelperLifecycleTests",
+            "DockGroupsCoreTests",
+            "ThirdPartyAppIntegrityTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "活动监视器核对：关闭各功能后专属 helper 进程退出且不被拉起；开合 BLE/显示控制后无重复进程。"
+          ],
+          "evidence_commits": [
+            { "sha": "用户要求 2026-10-28", "date": "2026-10-28", "subject": "按需资源与辅助进程生命周期约束（AGENTS.md 固化，尚未出现复发提交）" }
+          ]
+        },
+        {
+          "id": "help-003-dock-groups-cross-process",
+          "module": "helper-lifecycle",
+          "title": "Dock 分组跨进程编辑：读-改-写竞争丢更新",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilotDockGroupsCore/**",
+            "Sources/MacPilotDockHelper/**",
+            "Sources/MacPilot/DockGroups/**"
+          ],
+          "invariants": [
+            "所有写都经 DockGroupStore.update 的独占 flock；禁止任何一侧开写读-改-写。",
+            "只有主 app 再生 helper bundle；拖拽 payload 必须带 dockgroup-app: 前缀；picker 不得致面板关闭。"
+          ],
+          "test_filters": [
+            "DockGroupsCoreTests",
+            "DockHelperLifecycleTests",
+            "DockGroupPanelDismissalTests",
+            "DockHelperPanelPlacementTests",
+            "DockGroupsPerformanceTests",
+            "DockTile",
+            "DockGroupsIconCacheTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "helper 面板与主 app 同时改同一分组，双方改动都保留；拖拽重排后 Dock 顺序正确。"
+          ],
+          "evidence_commits": [
+            { "sha": "（并发写丢失为设计期即防的事故，DockGroupsCoreTests 40 队列并发写测试钉住）", "date": "", "subject": "架构不变量，未见复发提交" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quick-search",
+      "name": "快捷搜索：按键路由、异步查询取消与索引",
+      "doc": "docs/engineering/regressions/quick-search.md",
+      "rules": [
+        {
+          "id": "qs-001-key-routing-ime",
+          "module": "quick-search",
+          "title": "快捷键/输入路由被 IME 组装态或功能处理器抢走（3 修）",
+          "status": "confirmed-recurring",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/QuickSearch/**"
+          ],
+          "invariants": [
+            "IME 文字组装期间快捷键仍要分发；功能间快捷键冲突保留先前有效绑定且不写配置。"
+          ],
+          "test_filters": [
+            "CarbonHotKeyRoutingTests",
+            "QuickSearchHiddenFieldEditorTests",
+            "QuickSearch"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "中文输入法组装拼音时按 Option+Space 仍能唤起/关闭面板。"
+          ],
+          "evidence_commits": [
+            { "sha": "8722d08", "date": "2026-10-12", "subject": "route quick search keys and preserve hotkey bindings" },
+            { "sha": "1415f7a", "date": "2026-10-13", "subject": "honor quick search keys after text composition（IME 复发）" },
+            { "sha": "1e69dcd", "date": "2026-10-13", "subject": "preserve shortcut dispatch across feature handlers" }
+          ]
+        },
+        {
+          "id": "qs-002-stale-results-generation",
+          "module": "quick-search",
+          "title": "过期查询/过期回调污染新结果（含 hover、身份键、排序层级）",
+          "status": "confirmed-recurring",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/QuickSearch/**"
+          ],
+          "invariants": [
+            "一次一个在飞查询：150ms 防抖 + 递增 generation，旧代结果必须丢弃；关面板停查询。",
+            "悬停只有指针真正移动后才可改变选中；行动作必须携带自己的行。",
+            "收藏与用量共享 identity 键；记录使用只在打开成功后。"
+          ],
+          "test_filters": [
+            "QuickSearchCancellationTests",
+            "QuickSearchPersistenceTests",
+            "QuickSearch",
+            "ConfigStoreTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "快速连续输入后结果只属于最后一次查询；面板出现在静止指针下时首行不被顶掉。"
+          ],
+          "evidence_commits": [
+            { "sha": "ee9a2c1", "date": "2026-10-1x", "subject": "hover 跳行修复" },
+            { "sha": "980cdab", "date": "2026-10-20", "subject": "排序层级修复（名称命中永远高于标签/描述命中）" },
+            { "sha": "8f39f94", "date": "2026-10-29", "subject": "stale 结果 + 进程身份修复" },
+            { "sha": "61f36c9", "date": "2026-10-15", "subject": "空字符串 InfoPlist.strings（三局通）：empty 视为 missing 回退 bundle folder 名" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "configuration-migration",
+      "name": "配置持久化、升级降级兼容",
+      "doc": "docs/engineering/regressions/configuration-migration.md",
+      "rules": [
+        {
+          "id": "cfg-001-downgrade-wipe",
+          "module": "configuration-migration",
+          "title": "删除/收紧 Codable 键使旧版整文件解码失败，回退默认清空全部配置（v1.1.482-beta.5）",
+          "status": "confirmed-recurring",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilot/Core/Resource/**",
+            "Sources/MacPilot/QuickSearch/QuickSearchSettings.swift"
+          ],
+          "invariants": [
+            "绝不删除或改名已编码的 Codable 键；弃用字段保留属性并始终编码。",
+            "新字段 decodeIfPresent + 默认值，禁止必填键。",
+            "每个持久化 section 经 section(...) 解码：一节失败只重置该节并记入 unreadableSections，load() 隔离原始文件后才允许保存。",
+            "持久化枚举的未知 rawValue 必须落默认值而不是 throw（throw 即清空整节——matchScope 已容错，其余枚举逐个补齐时必须带测试）。"
+          ],
+          "test_filters": [
+            "ConfigurationSchemaContractTests",
+            "ConfigStoreTests",
+            "ConfigurationSnapshotTests",
+            "QuickSearchPersistenceTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "真实用户 config.json 在新↔旧两个版本间来回切换各一次，配置逐节保留。"
+          ],
+          "evidence_commits": [
+            { "sha": "555dad3", "date": "2026-09-29", "subject": "keep configuration readable across downgrades and shape drift（v1.1.482-beta.5 事故根治）" },
+            { "sha": "（隐患仍在）", "date": "2026-10-31", "subject": "审计发现 fileScope 等枚举仍是裸 decodeIfPresent：未知值会清空 quickSearch 整节（本次修复并补测试）" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "updater-release",
+      "name": "软件更新、下载、签名与发布",
+      "doc": "docs/engineering/regressions/updater-release.md",
+      "rules": [
+        {
+          "id": "upd-001-designated-requirement",
+          "module": "updater-release",
+          "title": "Designated requirement 各签名路径字节不一致：v1.1.355 以下全部搁浅（同日两修）",
+          "status": "confirmed-recurring",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Scripts/signing-requirement.sh",
+            "Scripts/verify-signing-requirement.sh",
+            "Scripts/build-app.sh",
+            "Scripts/distribute-app.sh",
+            ".github/workflows/release-common.yml",
+            ".github/workflows/release.yml",
+            ".github/workflows/release-beta.yml",
+            "Sources/MacPilotUpdater/**",
+            "Sources/MacPilotUpdaterSupport/**",
+            "Resources/MacPilot.entitlements"
+          ],
+          "invariants": [
+            "DR 只在 Scripts/signing-requirement.sh 定义一次；禁止让 codesign 自推、禁止 Developer-ID-only OID 或 subject.CN 子句。",
+            "四条签名路径（Developer ID / Apple Distribution / Apple Development / ad-hoc）嵌入同一字节；三道门 + SigningRequirementTests 钉住。",
+            "不得为过门而弱化 requirement。"
+          ],
+          "test_filters": [
+            "SigningRequirementTests"
+          ],
+          "extra_test_commands": [
+            "python3 Tests/Release/stapler-retry-tests.py"
+          ],
+          "manual_checks": [
+            "对最终下载包执行 codesign --verify --deep --strict、verify-signing-requirement.sh、stapler validate。"
+          ],
+          "evidence_commits": [
+            { "sha": "7cf637c", "date": "2026-09-16", "subject": "keep one signing identity across every build and host" },
+            { "sha": "c262185", "date": "2026-09-16", "subject": "keep the release requirement canonical（build-app.sh 覆盖成弱化形式）" }
+          ]
+        },
+        {
+          "id": "upd-002-update-source-availability",
+          "module": "updater-release",
+          "title": "更新源可用性：匿名 API 限额 / beta 无 latest 回退被报成 invalid release（3 轮）",
+          "status": "confirmed-recurring",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/SoftwareUpdate.swift"
+          ],
+          "invariants": [
+            "403/限额是源不可达，不是「无效版本」；beta 通道经公开 releases 页取数；镜像/Xget 直连回退链保持可用。"
+          ],
+          "test_filters": [
+            "SoftwareUpdateTests",
+            "SoftwareUpdateInstallerTests",
+            "UpdateChannelTests",
+            "UpdateArchiveDownloaderTests",
+            "ReleaseCatalogServiceTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "限流时段（或模拟 403）检查更新：应提示稍后重试而非损坏提示。"
+          ],
+          "evidence_commits": [
+            { "sha": "9460230", "date": "2026-09-08", "subject": "rate limited 回退（首修）" },
+            { "sha": "34ccc93", "date": "2026-09-17", "subject": "镜像 + Xget 直连" },
+            { "sha": "fe1ef24", "date": "2026-09-17", "subject": "同族修复" },
+            { "sha": "19b99f0", "date": "2026-10-31", "subject": "let beta updates check releases through the public page（beta 无 /releases/latest 可回退）" }
+          ]
+        },
+        {
+          "id": "upd-003-relaunch-and-version-switch",
+          "module": "updater-release",
+          "title": "更新后 relaunch / FinderSync 更新失败 / 版本切换卡 awaitingRelaunch",
+          "status": "confirmed-recurring",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilotUpdater/**",
+            "Sources/MacPilotUpdaterSupport/**",
+            "Sources/MacPilot/SoftwareUpdate.swift"
+          ],
+          "invariants": [
+            "relaunch 必须等主进程退出后再替换 bundle；NSApp.terminate 被 sheet 吞掉不算退出；isCancelled 极性不得反转。"
+          ],
+          "test_filters": [
+            "SoftwareUpdateInstallerTests",
+            "VersionSwitchCoordinatorTests",
+            "VersionSwitchRecoveryTests",
+            "VersionRelationTests",
+            "VersionCompatibilityTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "安装版内点「检查更新→安装→自动重启」全流程一次；FinderSync 启用的机器上更新后扩展仍可用。"
+          ],
+          "evidence_commits": [
+            { "sha": "95f1b1c", "date": "2026-09-16", "subject": "relaunch 修复（同日两修之一）" },
+            { "sha": "ac103ed", "date": "2026-09-16", "subject": "relaunch 修复（同日两修之二）" },
+            { "sha": "24b55f2", "date": "2026-10-10", "subject": "FinderSync 更新失败后 relaunch" },
+            { "sha": "822969a", "date": "2026-09-29", "subject": "版本切换器 4 连修之一" },
+            { "sha": "879525e", "date": "2026-09-29", "subject": "isCancelled 极性反转使下载秒抛 CancellationError" },
+            { "sha": "c571bcb", "date": "2026-09-29", "subject": "版本切换器 4 连修之一" },
+            { "sha": "40cf661", "date": "2026-09-29", "subject": "NSApp.terminate 被 sheet 吞掉卡 awaitingRelaunch" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "resource-performance",
+      "name": "CPU、内存、定时器与后台资源",
+      "doc": "docs/engineering/regressions/resource-performance.md",
+      "rules": [
+        {
+          "id": "perf-001-unbounded-accumulation",
+          "module": "resource-performance",
+          "title": "重复 scan 事件 / 定时器无界累积导致内存增长（同日两修）",
+          "status": "confirmed-recurring",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/BLE/**",
+            "Sources/MacPilot/CPUMonitor/**",
+            "Sources/MacPilot/MemoryMonitor/**",
+            "Sources/MacPilot/Cache/**",
+            "Scripts/measure-memory.sh"
+          ],
+          "invariants": [
+            "重复事件必须节流去重；定时器/监听器/任务随对象释放注销；禁止随时间累积的任务列表。",
+            "性能测试锁状态机与数量（任务数、注册数、发布次数），不锁墙钟时间（见 tests-main-actor-starvation 经验）。"
+          ],
+          "test_filters": [
+            "ResourceLifecycleTests",
+            "FeatureResourceLifecycleTests",
+            "MemoryMonitorTests",
+            "WindowSwitcherPanelLifetimeTests",
+            "SmartScrollingCaptureBudgetTests",
+            "ProcessCacheTests",
+            "CPUMonitorTests",
+            "BLEUnlockPerformanceTests",
+            "QuickAccessPinPerformanceTests",
+            "DockGroupsPerformanceTests",
+            "MonitorMenuSnapshotCacheTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "Scripts/measure-memory.sh 长时间运行对比基线（docs/MEMORY_REVIEW.md 阈值）。"
+          ],
+          "evidence_commits": [
+            { "sha": "5db8420", "date": "2026-08-24", "subject": "BLE 扫描 throttle（同根因同日两修之一）" },
+            { "sha": "8cea76b", "date": "2026-08-24", "subject": "去重复扫描（同根因同日两修之二）" },
+            { "sha": "a9f55ee", "date": "2026-09-21", "subject": "空闲内存驻留优化" },
+            { "sha": "6f6c9e5", "date": "2026-10-28", "subject": "菜单 909ms 重建（性能根因，另见 menu-004）" }
+          ]
+        }
+      ]
+    }
+  ]
+}
