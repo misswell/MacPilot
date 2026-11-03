@@ -7,6 +7,7 @@
 
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
 import OSLog
@@ -1072,6 +1073,12 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     /// never fires, so the page must say that instead of showing a ready
     /// permission badge next to a dead shortcut.
     @Published private(set) var eventTapDenial: EventTapDenial?
+    /// macOS withholds every keyboard event from session taps while Secure
+    /// Event Input is on (password fields, some terminals, some IMEs). The tap
+    /// stays "healthy" and ⌥Tab simply never arrives — the "switcher stopped
+    /// working after switching apps" report. Naming it is the only repair the
+    /// app can offer, because no API lets it override that switch.
+    @Published private(set) var isSecureInputActive = false
 
     var language: AppLanguage = .system
     var persist: (() -> Void)?
@@ -1803,6 +1810,10 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                         // once it has actually stayed in the foreground, so they don't get
                         // inserted into the middle of an Alt+Tab cycle.
                         self.scheduleActivationConfirmation(application)
+                        // Another app can hold Secure Event Input while it is
+                        // frontmost; that is the common way ⌥Tab "stops
+                        // working after switching apps".
+                        self.refreshSecureInputState()
                         // A tap can die while another app owns the session. Every
                         // activation is a cheap health check; it logs nothing while
                         // the tap is healthy.
@@ -2536,6 +2547,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
 
     private func refreshEventTap() {
         hasAccessibilityPermission = AXIsProcessTrusted()
+        refreshSecureInputState()
         removeEventTap()
         guard isRuntimeActive, settings.isEnabled else {
             recordDenial(nil, logInstall: false)
@@ -2575,6 +2587,21 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
         recordDenial(nil)
+    }
+
+    /// Secure Event Input is session-global and set by whichever app owns it;
+    /// record transitions so a "shortcut does nothing" report has evidence.
+    func refreshSecureInputState() {
+        let active = IsSecureEventInputEnabled()
+        guard active != isSecureInputActive else { return }
+        isSecureInputActive = active
+        DiagnosticLog.write(
+            "WindowSwitcher",
+            active
+                ? "Secure event input enabled: macOS withholds keyboard events from session taps, ⌥Tab cannot fire"
+                : "Secure event input disabled: session taps receive keyboard events again",
+            level: active ? .warning : .info
+        )
     }
 
     /// Logs the tap state once per transition. The activation pass runs on
@@ -3110,6 +3137,18 @@ struct WindowSwitcherSettingsView: View {
                     } else {
                         Label(model.t("windowSwitcherAccessibilityReady"), systemImage: "checkmark.shield.fill")
                             .foregroundStyle(.green)
+                    }
+
+                    if windowSwitcher.isSecureInputActive {
+                        Divider()
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "keyboard.badge.exclamationmark")
+                                .foregroundStyle(.orange)
+                            Text(model.t("windowSwitcherSecureInputHint"))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
 
                     Divider()
