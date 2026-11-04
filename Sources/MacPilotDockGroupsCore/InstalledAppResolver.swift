@@ -141,6 +141,12 @@ public enum InstalledAppResolver {
             URL(fileURLWithPath: "/Applications/Utilities", isDirectory: true),
             URL(fileURLWithPath: "/System/Applications", isDirectory: true),
             URL(fileURLWithPath: "/System/Applications/Utilities", isDirectory: true),
+            // Safari ships inside the sealed Cryptex volume. `/Applications` usually
+            // carries a `restricted,hidden` symlink to it, but nothing guarantees that
+            // link exists on every macOS build — scanning the real root keeps the app
+            // discoverable either way. Duplicates are dropped by resolved path, so the
+            // symlinked copy stays the one row when both are present.
+            URL(fileURLWithPath: "/System/Cryptexes/App/System/Applications", isDirectory: true),
             home.appendingPathComponent("Applications", isDirectory: true)
         ]
     }
