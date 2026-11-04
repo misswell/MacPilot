@@ -586,6 +586,10 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                 self.errorMessage = AppText.value(shortcutError.messageKey, language: self.language)
             } else {
                 self.errorMessage = error.localizedDescription
+                // The capture was started from elsewhere on the desktop; a
+                // failure that only lands in this page's banner reads as
+                // "nothing happened".
+                SmartCaptureToast.shared.showCaptureFailure(error: error, language: self.language)
             }
         },
         onSelectionRect: { [weak self] rect in self?.storeLastSmartCaptureArea(rect) },

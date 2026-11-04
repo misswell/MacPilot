@@ -1375,6 +1375,20 @@ final class SmartCaptureToast {
         )
     }
 
+    /// A shortcut-driven capture fails outside the settings page, so the
+    /// reason has to be shown where the user is looking. `ScreenCapture`'s
+    /// `errorMessage` only reaches the capture page.
+    func showCaptureFailure(error: Error, language: AppLanguage) {
+        show(
+            symbol: "xmark.octagon.fill",
+            tint: .red,
+            title: AppText.value("scCaptureFailedTitle", language: language),
+            detail: error.localizedDescription,
+            truncation: .tail,
+            autoDismissAfter: 6
+        )
+    }
+
     /// OCR 文字已写入剪贴板；副标题用识别结果的一行摘要。
     func showOCRCopied(text: String, language: AppLanguage) {
         show(
@@ -1652,6 +1666,14 @@ final class SmartScreenshotController {
     private var snapzyPreparationTask: Task<Void, Never>?
     private var snapzySessionID: UUID?
     private var snapzyFrozenSession: FrozenAreaCaptureSession?
+    /// A frozen frame normally arrives in well under a second, but
+    /// `ScreenCaptureKit` can stall indefinitely (display asleep or mid
+    /// topology change, another capture in flight). There is no timeout inside
+    /// `FrozenAreaCaptureSession.prepare`, and without this deadline the overlay
+    /// stays on screen while every terminal action — double-click, 复制, 保存 —
+    /// is queued in `pendingSnapzyAction` behind a frame that never arrives.
+    private let snapzyBackdropDeadline: Duration
+    private var snapzyDeadlineTask: Task<Void, Never>?
     private var pendingSnapzyResult: (
         result: AreaSelectionResult,
         requestedMode: SmartCaptureSelectionMode,
@@ -1697,7 +1719,8 @@ final class SmartScreenshotController {
         },
         shortcutRegistrationAttempt: (() -> SmartCaptureShortcutError?)? = nil,
         pinClipboardShortcutOverride: (() -> Void)? = nil,
-        onQuickCopySave: ((CGImage) -> Void)? = nil
+        onQuickCopySave: ((CGImage) -> Void)? = nil,
+        snapzyBackdropDeadline: Duration = .seconds(8)
     ) {
         self.language = language
         self.onCapture = onCapture
@@ -1721,6 +1744,7 @@ final class SmartScreenshotController {
         self.initialTargetResolver = initialTargetResolver
         self.pinClipboardShortcutOverride = pinClipboardShortcutOverride
         self.shortcutRegistrationAttemptOverride = shortcutRegistrationAttempt
+        self.snapzyBackdropDeadline = snapzyBackdropDeadline
     }
 
     #if DEBUG
@@ -1742,6 +1766,9 @@ final class SmartScreenshotController {
     /// await it instead of sleeping on a clock, and hold the reference after the
     /// controller clears its own on completion.
     var testSnapzyPreparationTask: Task<Void, Never>? { snapzyPreparationTask }
+    /// Test seam: the frozen-frame deadline. A stalled preparation never
+    /// completes, so the deadline is the only observable that settles.
+    var testSnapzyDeadlineTask: Task<Void, Never>? { snapzyDeadlineTask }
     #endif
 
     func start() {
@@ -2775,7 +2802,37 @@ final class SmartScreenshotController {
             preparation: preparation,
             presentOverlay: presentOverlay
         )
+        armSnapzyBackdropDeadline(sessionID: sessionID)
         return sessionID
+    }
+
+    /// Fails the session visibly when the frozen frame never arrives. Without
+    /// it a stalled `ScreenCaptureKit` call leaves the overlay alive but inert:
+    /// the selection can be drawn, yet double-click and the HUD buttons only
+    /// fill `pendingSnapzyAction`, which nothing ever drains.
+    private func armSnapzyBackdropDeadline(sessionID: UUID) {
+        snapzyDeadlineTask?.cancel()
+        let deadline = snapzyBackdropDeadline
+        snapzyDeadlineTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: deadline)
+            guard !Task.isCancelled, let self,
+                  self.snapzySessionID == sessionID,
+                  self.snapzyFrozenSession == nil else { return }
+            let wasPresented = SnapzyAreaSelectionController.shared.isPresenting(sessionID: sessionID)
+            self.resetSnapzyPreparationState()
+            if wasPresented {
+                SnapzyAreaSelectionController.shared.cancelSelection()
+            }
+            QuickAccessManager.shared.resumeAfterCapture()
+            self.onError(ScreenCaptureError.captureFailed(
+                AppText.value("scCapturePreparationTimedOut", language: self.language())
+            ))
+        }
+    }
+
+    private func clearSnapzyBackdropDeadline() {
+        snapzyDeadlineTask?.cancel()
+        snapzyDeadlineTask = nil
     }
 
     /// Runs the frozen-display preparation and settles the session state once the
@@ -2804,6 +2861,7 @@ final class SmartScreenshotController {
 
                 self.snapzyFrozenSession = frozenSession
                 self.snapzyPreparationTask = nil
+                self.clearSnapzyBackdropDeadline()
                 if presentsAfterCapture {
                     presentOverlay(frozenSession.backdrops)
                 } else {
@@ -2968,6 +3026,7 @@ final class SmartScreenshotController {
     private func resetSnapzyPreparationState(invalidateFrozenSession: Bool = true) {
         snapzyPreparationTask?.cancel()
         snapzyPreparationTask = nil
+        clearSnapzyBackdropDeadline()
         snapzySessionID = nil
         if invalidateFrozenSession {
             snapzyFrozenSession?.invalidate()
