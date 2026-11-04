@@ -72,6 +72,14 @@ struct InstalledAppScanTests {
         #expect(scanned.first?.bundleIdentifier == "com.example.vpn")
     }
 
+    /// Safari lives in the sealed Cryptex volume. The `/Applications` symlink is
+    /// how it normally stays visible, but the scanner must not depend on that
+    /// link existing: the real root is a search directory in its own right.
+    @Test func defaultSearchDirectoriesIncludeTheCryptexApplicationsRoot() {
+        let paths = Set(InstalledAppResolver.defaultSearchDirectories().map(\.path))
+        #expect(paths.contains("/System/Cryptexes/App/System/Applications"))
+    }
+
     // MARK: - 辅助
 
     private func makeBundle(named name: String, identifier: String, in directory: URL) throws -> URL {
