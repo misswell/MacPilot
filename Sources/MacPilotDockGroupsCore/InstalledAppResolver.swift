@@ -154,8 +154,28 @@ public enum InstalledAppResolver {
         var results: [DockGroupApp] = []
         var seenPaths = Set<String>()
 
+        // 去重键用**真实**路径：同一份安装在扫描目录里可能同时以真实路径和
+        // 符号链接出现（`/Applications/OpenVPN Connect.app` 与它指向的包内副本
+        // 就是一对），它们是同一个 App，不能变成两行。
+        func include(_ url: URL) {
+            let standardized = url.standardizedFileURL
+            let identity = standardized.resolvingSymlinksInPath().path
+            guard seenPaths.insert(identity).inserted else { return }
+            if let reference = makeReference(from: standardized) {
+                results.append(reference)
+            }
+        }
+
         for directory in directories {
             if Task.isCancelled { return [] }
+            // `FileManager.enumerator` 一条指向目录的符号链接都不会返回，而且它
+            // 按隐藏位过滤：macOS 把 Safari 放在 Cryptex，只在 /Applications 留一条
+            // `restricted,hidden` 的同名链接，两条路都会把它丢掉。只走 enumerator，
+            // 这些 App 就整个不在索引里——快速搜索里输入 `saf` 一个应用都没有。
+            for url in topLevelApplications(in: directory, fileManager: fileManager) {
+                if Task.isCancelled { return [] }
+                include(url)
+            }
             guard let enumerator = fileManager.enumerator(
                 at: directory,
                 includingPropertiesForKeys: [.isDirectoryKey],
@@ -172,16 +192,29 @@ public enum InstalledAppResolver {
                 }
                 guard url.pathExtension.lowercased() == "app" else { continue }
                 enumerator.skipDescendants()
-                let standardized = url.standardizedFileURL.path
-                guard seenPaths.insert(standardized).inserted else { continue }
-                if let reference = makeReference(from: url) {
-                    results.append(reference)
-                }
+                include(url)
             }
         }
 
         return results.sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    /// 目录顶层的 App（含符号链接）。只做一层，不跟随链接进别人的目录树。
+    ///
+    /// 这里**不能**加 `.skipsHiddenFiles`：`/Applications/Safari.app` 带着
+    /// `restricted,hidden` 标记（系统故意让它在 Finder 里看不见），而
+    /// `FileManager.enumerator` 与这个选项都会因此把它整个丢掉。只排除以 `.`
+    /// 开头的文件，那才是真正的隐藏/临时条目（备份包、`.DS_Store`）。
+    private static func topLevelApplications(in directory: URL, fileManager: FileManager) -> [URL] {
+        let contents = (try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: []
+        )) ?? []
+        return contents.filter { url in
+            !url.lastPathComponent.hasPrefix(".") && url.pathExtension.lowercased() == "app"
         }
     }
 
