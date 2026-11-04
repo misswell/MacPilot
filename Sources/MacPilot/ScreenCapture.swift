@@ -269,7 +269,9 @@ enum ScreenCaptureError: LocalizedError {
         case .outputFolderUnavailable: return "The output folder is unavailable."
         case .noDisplayFound: return "No display was found to capture."
         case .permissionRequired: return "Screen Recording permission is required to capture the screen."
-        case .captureFailed(let detail): return "Screen capture failed: \(detail)"
+        // Every throw site already passes a localized detail (AppText); wrapping
+        // it again showed "Screen capture failed: <Chinese>" in the Chinese UI.
+        case .captureFailed(let detail): return detail
         case .encodingFailed: return "Failed to encode the screenshot image."
         }
     }
@@ -586,6 +588,10 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                 self.errorMessage = AppText.value(shortcutError.messageKey, language: self.language)
             } else {
                 self.errorMessage = error.localizedDescription
+                // The capture was started from elsewhere on the desktop; a
+                // failure that only lands in this page's banner reads as
+                // "nothing happened".
+                SmartCaptureToast.shared.showCaptureFailure(error: error, language: self.language)
             }
         },
         onSelectionRect: { [weak self] rect in self?.storeLastSmartCaptureArea(rect) },

@@ -252,4 +252,80 @@ struct SnapzyPopupCaptureOrderingTests {
 
         #expect(presentedDisplayIDs == [displayID])
     }
+
+    /// ScreenCaptureKit can stall with no error at all. The overlay is already
+    /// on screen in the fast path, so a missing frozen frame used to leave a
+    /// selection that drew fine but ignored double-click and every HUD button —
+    /// the actions queued in `pendingSnapzyAction` behind a frame that never
+    /// arrived. The deadline has to fail visibly instead.
+    @Test @MainActor func aStalledFrozenBackdropFailsInsteadOfLeavingADeadOverlay() async throws {
+        _ = NSApplication.shared
+        var presented = false
+        var reportedErrors: [Error] = []
+        let controller = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _ in },
+            onError: { reportedErrors.append($0) },
+            screenCaptureAccessProvider: { true },
+            snapzyBackdropDeadline: .milliseconds(60)
+        )
+        defer {
+            controller.cancelSelection()
+            controller.stop()
+        }
+
+        let sessionID = controller.startSnapzySelection(
+            mode: .manualArea,
+            popupIsOnScreen: { false },
+            presentSelection: { _ in presented = true },
+            preparation: {
+                // Stands in for a capture call that never returns.
+                try await Task.sleep(for: .seconds(30))
+                throw ScreenCaptureError.captureFailed("unreachable")
+            }
+        )
+        #expect(sessionID != nil)
+        #expect(presented)
+
+        await controller.testSnapzyDeadlineTask?.value
+
+        #expect(reportedErrors.count == 1)
+        #expect(controller.testSnapzyPreparationTask == nil)
+    }
+
+    /// The opposite side of the same deadline: a capture that arrives in time
+    /// must disarm it, so a slow-but-successful preparation never reports a
+    /// timeout after the user is already working on the frozen frame.
+    @Test @MainActor func aCompletedFrozenBackdropDisarmsTheDeadline() async throws {
+        _ = NSApplication.shared
+        var reportedErrors: [Error] = []
+        let session = try frozenSession()
+        let controller = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _ in },
+            onError: { reportedErrors.append($0) },
+            screenCaptureAccessProvider: { true },
+            snapzyBackdropDeadline: .milliseconds(120)
+        )
+        defer {
+            controller.cancelSelection()
+            controller.stop()
+        }
+
+        _ = controller.startSnapzySelection(
+            mode: .manualArea,
+            popupIsOnScreen: { false },
+            presentSelection: { _ in },
+            preparation: {
+                try await Task.yield()
+                return session
+            }
+        )
+        let deadline = try #require(controller.testSnapzyDeadlineTask)
+
+        await controller.testSnapzyPreparationTask?.value
+        await deadline.value
+
+        #expect(reportedErrors.isEmpty)
+    }
 }
