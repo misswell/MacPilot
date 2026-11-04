@@ -269,7 +269,9 @@ enum ScreenCaptureError: LocalizedError {
         case .outputFolderUnavailable: return "The output folder is unavailable."
         case .noDisplayFound: return "No display was found to capture."
         case .permissionRequired: return "Screen Recording permission is required to capture the screen."
-        case .captureFailed(let detail): return "Screen capture failed: \(detail)"
+        // Every throw site already passes a localized detail (AppText); wrapping
+        // it again showed "Screen capture failed: <Chinese>" in the Chinese UI.
+        case .captureFailed(let detail): return detail
         case .encodingFailed: return "Failed to encode the screenshot image."
         }
     }
