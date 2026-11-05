@@ -515,6 +515,22 @@ struct RemotePairingManagerTests {
         #expect(manager.displayedCode == nil)
     }
 
+    @Test("an expired pairing window refuses a request")
+    func expiredPairingWindowRefusesRequest() {
+        let manager = RemotePairingManager(log: { _ in })
+        manager.openWindow(duration: -1)
+        let (client, server, _, _) = makeExchange()
+        let code = manager.begin(
+            connectionID: UUID(),
+            clientName: "iPhone",
+            clientPublicKey: client.publicKeyData,
+            exchange: server
+        )
+        #expect(!manager.isWindowOpen)
+        #expect(code == nil)
+        #expect(manager.displayedCode == nil)
+    }
+
     @Test("the displayed code matches what the iPhone derives")
     func displayedCodeMatchesClient() throws {
         let manager = RemotePairingManager(log: { _ in })
@@ -979,7 +995,7 @@ struct RemoteConnectionIdleWatchdogTests {
         let clientID = UUID()
         let oldKey = RemoteCrypto.randomData(count: RemoteCrypto.pairingKeyLength)
         #expect(harness.host.deviceStore.storePairingKey(oldKey, for: clientID.uuidString))
-        harness.host.pairingManager.openWindow(duration: 10)
+        harness.host.pairingManager.openWindow()
         var codeWasPresented = false
         harness.host.pairingManager.onCodePresented = { _, _ in codeWasPresented = true }
         let client = try await connectClient(to: harness.port)

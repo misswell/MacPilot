@@ -135,6 +135,9 @@ for entry in "${COMMANDS[@]}"; do
   CMD="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["command"])' "$entry")"
   KIND="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("kind","raw"))' "$entry")"
   VERIFY_FILTER="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("verify_filter",""))' "$entry")"
+  if [[ "$KIND" == "swift-test" && "$CMD" != *"--no-parallel"* ]]; then
+    CMD="$CMD --no-parallel"
+  fi
   LOG="$LOG_DIR/$(printf '%02d' $IDX)-$(echo "$CMD" | tr '/ |' '_--' | cut -c1-80).log"
 
   echo "----------------------------------------------------------------"
@@ -209,7 +212,7 @@ PY
         continue
       fi
       RETRY_LOG="$LOG_DIR/waiver-retry-$(echo "$MATCHING_ID" | tr './' '__').log"
-      if swift test --filter "$MATCHING_ID" >"$RETRY_LOG" 2>&1; then
+      if swift test --no-parallel --filter "$MATCHING_ID" >"$RETRY_LOG" 2>&1; then
         echo "   WAIVED: $MATCHING_ID (documented timing-class flake; passes in isolation — $RETRY_LOG)"
         WAIVED_TOTAL=$((WAIVED_TOTAL + 1))
       else

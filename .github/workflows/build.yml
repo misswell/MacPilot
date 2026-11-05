@@ -51,14 +51,14 @@ jobs:
           echo "Building MacPilot $version ($build_number)"
 
       - name: Run tests
-        run: swift test --filter 'AppLifecycleTests|MonitorMenu|UpdateChannelTests|SoftwareUpdateTests|UpdateArchiveDownloaderTests|ReleaseCatalogServiceTests|CarbonHotKeyRoutingTests|SigningRequirementTests|ScreenRecordingTests|Awake|ClosedLid|SleepDisabledPlannerTests|BLEIdentity|ConfigurationSchemaContractTests|BLEUnlockPerformanceTests|BLEManualLockSuppressionTests|BLEAdvertisementLivenessTests|BLERediscoveryTests|BLEMonitoringRestorationTests|RemoteBLEBackoffTests|LocalNetworkSessionDiagnosisTests|RemoteBonjourPublisherTests|ScreenControlSafetyTests|RemoteNavigationControlTests|Clipboard|SecondarySelectionRegressionTests|RemoteControlAppStoreInfoTests|ProximityGATTLocalizationTests|UUControllerRowParserTests|UUSessionUncertaintyTests|DisplayControl|DisplayTopology|DisplayRemoteLease|DisplayRecoveryJournal|DisplayRecoveryClientTests|DisplayRecoveryPreparationTests|DisplayRecoveryEventHandlerTests|DisplayPowerTests|DisplayBlankRecoveryTests|MenuBarDisplayControllerTests|MenuBarStatusItemVisibilityTests|MenuBarMenuSessionTests|MenuBarOwnedMenuTests|DisplayControlMenuTests|DisplayOperationStoreTests|KeyboardBacklightTests|BLEReversePresenceTests|LocalPortCloseServiceTests|LocalPortsModelTests|MainWindowOpenerTests|MainWindowContentStateTests|AppPresenceTests'
+        run: swift test --no-parallel --filter 'AppLifecycleTests|MonitorMenu|UpdateChannelTests|SoftwareUpdateTests|UpdateArchiveDownloaderTests|ReleaseCatalogServiceTests|CarbonHotKeyRoutingTests|SigningRequirementTests|ScreenRecordingTests|Awake|ClosedLid|SleepDisabledPlannerTests|BLEIdentity|ConfigurationSchemaContractTests|BLEUnlockPerformanceTests|BLEManualLockSuppressionTests|BLEAdvertisementLivenessTests|BLERediscoveryTests|BLEMonitoringRestorationTests|RemoteBLEBackoffTests|LocalNetworkSessionDiagnosisTests|RemoteBonjourPublisherTests|ScreenControlSafetyTests|RemoteNavigationControlTests|Clipboard|SecondarySelectionRegressionTests|RemoteControlAppStoreInfoTests|ProximityGATTLocalizationTests|UUControllerRowParserTests|UUSessionUncertaintyTests|DisplayControl|DisplayTopology|DisplayRemoteLease|DisplayRecoveryJournal|DisplayRecoveryClientTests|DisplayRecoveryPreparationTests|DisplayRecoveryEventHandlerTests|DisplayPowerTests|DisplayBlankRecoveryTests|MenuBarDisplayControllerTests|MenuBarStatusItemVisibilityTests|MenuBarMenuSessionTests|MenuBarOwnedMenuTests|DisplayControlMenuTests|DisplayOperationStoreTests|KeyboardBacklightTests|BLEReversePresenceTests|LocalPortCloseServiceTests|LocalPortsModelTests|MainWindowOpenerTests|MainWindowContentStateTests|AppPresenceTests'
 
       - name: Run reversed-role GATT protocol regression tests
-        run: swift test --package-path Packages/MacPilotRemoteProtocol --filter 'ProximityGATT|ReversePresence'
+        run: swift test --no-parallel --package-path Packages/MacPilotRemoteProtocol --filter 'ProximityGATT|ReversePresence'
 
       # Keep synchronous MainActor performance loops out of the heartbeat tests' deadlines.
       - name: Run Quick Search regression tests
-        run: swift test --filter 'QuickSearch|ConfigStoreTests'
+        run: swift test --no-parallel --filter 'QuickSearch|ConfigStoreTests'
 
       - name: Verify notarization ticket retry behavior
         run: python3 Tests/Release/stapler-retry-tests.py

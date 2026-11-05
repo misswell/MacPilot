@@ -97,12 +97,25 @@ struct DisplayRecoveryClientTests {
     }
 
     @Test func timedOutAcceptanceQueriesOperationWithoutRepeatingMutation() async throws {
-        let server = AnonymousDisplayRecoveryServer(mode: .operation(dropAcceptance: true))
-        defer { server.stop() }
-        let response = try await clientConnected(to: server, timeout: .milliseconds(50)).send(.init(command: .prepareVirtual))
+        var requests: [DisplayControlRequest] = []
+        let client = DisplayRecoveryClient(testExchange: { request in
+            requests.append(request)
+            if request.isMutation { throw DisplayRecoveryClientError.timeout }
+            return DisplayControlResponse(
+                displays: [],
+                state: .active,
+                helperReady: true,
+                operationID: request.operationID,
+                operationStatus: .completed
+            )
+        })
+
+        let response = try await client.send(.init(command: .prepareVirtual))
+
         #expect(response.operationStatus == .completed)
-        #expect(server.mutationCount == 1)
-        #expect(Set(server.operationIDs).count == 1)
+        #expect(requests.map(\.command) == [.prepareVirtual, .status])
+        #expect(requests.filter(\.isMutation).count == 1)
+        #expect(Set(requests.compactMap(\.operationID)).count == 1)
     }
 
     @Test func commandTimeoutsMatchTheOperationCost() {

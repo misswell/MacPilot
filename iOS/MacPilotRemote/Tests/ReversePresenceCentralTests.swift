@@ -184,6 +184,8 @@ struct ReversePresenceCentralTests {
         let staleConsumed = gate.consume(measured)
         #expect(!staleConsumed, "A stale measurement must not consume the new challenge")
         #expect(gate.pendingChallengeNonce == newer)
+        #expect(gate.hasNewerPendingNonce(after: measured), "The completed stale read must trigger a read for the latest nonce")
+        #expect(!gate.hasNewerPendingNonce(after: newer))
         let currentConsumed = gate.consume(newer)
         #expect(currentConsumed)
         #expect(!gate.hasPendingNonce)

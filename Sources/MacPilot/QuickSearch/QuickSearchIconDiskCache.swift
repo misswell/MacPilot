@@ -32,14 +32,21 @@ final class QuickSearchIconDiskCache: @unchecked Sendable {
 
     let directory: URL
     private let fileManager: FileManager
+    private let readData: (URL, Int) throws -> Data
     private let lock = NSLock()
     private var hasScheduledPrune = false
 
     init(
         directory: URL? = nil,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        readData: @escaping (URL, Int) throws -> Data = { url, limit in
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            return try handle.read(upToCount: limit) ?? Data()
+        }
     ) {
         self.fileManager = fileManager
+        self.readData = readData
         if let directory {
             self.directory = directory
         } else {
@@ -57,8 +64,15 @@ final class QuickSearchIconDiskCache: @unchecked Sendable {
         let file = fileURL(for: url, pointSize: pointSize)
         guard let attributes = try? fileManager.attributesOfItem(atPath: file.path),
               let modified = attributes[.modificationDate] as? Date,
-              let png = try? Data(contentsOf: file)
+              let size = attributes[.size] as? NSNumber
         else { return nil }
+        guard size.int64Value <= Self.maximumEntryBytes else {
+            try? fileManager.removeItem(at: file)
+            return nil
+        }
+        // The file can grow after stat; bound the read itself as well. One
+        // extra byte distinguishes an oversized entry from one at the limit.
+        guard let png = try? readData(file, Self.maximumEntryBytes + 1) else { return nil }
         guard png.count <= Self.maximumEntryBytes else {
             try? fileManager.removeItem(at: file)
             return nil

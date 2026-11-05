@@ -40,14 +40,95 @@ extension DisplayPowerTests {
         #expect(!invalid.writeAndReadBack(0, to: 1).confirms(0))
     }
 
-    /// The rule that brings the backlight back after MacPilot blanks the screen.
-    /// A counter change survives the polling interval: the idle clock can be
-    /// larger than its value at blank time after a mouse event, but the counter
-    /// still records that event.
-    @Test func inputIsDetectedWhenTheWindowServerCounterChanges() {
-        #expect(DisplayPower.didUserInputOccur(inputCounterNow: 101, inputCounterAtBlank: 100))
-        #expect(DisplayPower.didUserInputOccur(inputCounterNow: 100, inputCounterAtBlank: 100) == false)
-        #expect(DisplayPower.didUserInputOccur(inputCounterNow: 102, inputCounterAtBlank: 100))
+    @Test func unchangedAnyEventCounterDoesNotReadDetailedInputCounters() {
+        var poller = DisplayInputPoller(anyEventCounter: 100, snapshot: inputSnapshot())
+        var reads = 0
+        let result = poller.poll(anyEventCounter: 100) {
+            reads += 1
+            return inputSnapshot()
+        }
+        #expect(result == nil)
+        #expect(reads == 0)
+    }
+
+    @Test func unrelatedAnyEventChangesAreIgnoredAndRebased() {
+        var poller = DisplayInputPoller(anyEventCounter: 100, snapshot: inputSnapshot())
+        var next = inputSnapshot()
+        #expect(poller.poll(anyEventCounter: 101) { next } == nil)
+        #expect(poller.anyEventCounter == 101)
+        #expect(poller.poll(anyEventCounter: 101) { Issue.record("unchanged sentinel must not read details"); return next } == nil)
+        next.counters = DisplayInputCounters(keyDown: 3)
+        #expect(poller.poll(anyEventCounter: 102) { next } == .keyboard)
+    }
+
+    @Test func keyboardModifierMouseButtonAndScrollCountersQualifyInput() {
+        var poller = DisplayInputPoller(anyEventCounter: 10, snapshot: inputSnapshot())
+        var next = inputSnapshot()
+        next.counters.keyDown = 1
+        #expect(poller.poll(anyEventCounter: 11) { next } == .keyboard)
+
+        next.counters.flagsChanged = 1
+        next.modifierFlags = 1 << 16 // CGEventFlags.maskAlphaShift
+        #expect(poller.poll(anyEventCounter: 12) { next } == .modifier)
+
+        next.counters.flagsChanged = 2
+        #expect(poller.poll(anyEventCounter: 13) { next } == nil)
+
+        next.counters.leftMouseDown = 1
+        #expect(poller.poll(anyEventCounter: 14) { next } == .mouseButton)
+
+        next.counters.scrollWheel = 1
+        #expect(poller.poll(anyEventCounter: 15) { next } == .scroll)
+    }
+
+    @Test func pointerMovementRequiresBothCounterProgressAndChangedCursorPosition() {
+        var poller = DisplayInputPoller(anyEventCounter: 10, snapshot: inputSnapshot())
+        var next = inputSnapshot()
+        next.counters.mouseMoved = 1
+        #expect(poller.poll(anyEventCounter: 11) { next } == nil)
+        next.counters.mouseMoved = 2
+        next.cursor = DisplayInputCursorPosition(x: 20, y: 10)
+        #expect(poller.poll(anyEventCounter: 12) { next } == .pointerMovement)
+    }
+
+    @Test func counterResetRebasesWithoutQualifyingAsInput() {
+        var counters = DisplayInputCounters(keyDown: 500, scrollWheel: 500)
+        var poller = DisplayInputPoller(anyEventCounter: 200, snapshot: inputSnapshot(counters: counters))
+        counters.keyDown = 3
+        counters.scrollWheel = 3
+        let reset = inputSnapshot(counters: counters)
+        #expect(poller.poll(anyEventCounter: 0) { reset } == nil)
+        counters.keyDown = 4
+        let subsequentKey = inputSnapshot(counters: counters)
+        #expect(poller.poll(anyEventCounter: 1) { subsequentKey } == .keyboard)
+    }
+
+    @Test func counterWrapAtUInt32BoundaryQualifiesAsProgress() {
+        let counters = DisplayInputCounters(keyDown: UInt32.max - 1)
+        var poller = DisplayInputPoller(anyEventCounter: UInt32.max - 1, snapshot: inputSnapshot(counters: counters))
+        let wrapped = inputSnapshot(counters: DisplayInputCounters(keyDown: 1))
+        #expect(poller.poll(anyEventCounter: 1) { wrapped } == .keyboard)
+    }
+
+    @Test func aMissingCursorBaselineRebasesBeforeDetectingLaterMovement() {
+        var poller = DisplayInputPoller(
+            anyEventCounter: 20,
+            snapshot: inputSnapshot(cursor: nil)
+        )
+        var next = inputSnapshot(cursor: DisplayInputCursorPosition(x: 10, y: 10))
+        next.counters.mouseMoved = 1
+        #expect(poller.poll(anyEventCounter: 21) { next } == nil)
+        next.cursor = DisplayInputCursorPosition(x: 15, y: 10)
+        next.counters.mouseMoved = 2
+        #expect(poller.poll(anyEventCounter: 22) { next } == .pointerMovement)
+    }
+
+    private func inputSnapshot(
+        counters: DisplayInputCounters = DisplayInputCounters(),
+        modifierFlags: UInt64 = 0,
+        cursor: DisplayInputCursorPosition? = DisplayInputCursorPosition(x: 10, y: 10)
+    ) -> DisplayInputSnapshot {
+        DisplayInputSnapshot(counters: counters, modifierFlags: modifierFlags, cursor: cursor)
     }
 }
 

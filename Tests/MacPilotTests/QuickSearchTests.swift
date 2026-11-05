@@ -701,6 +701,52 @@ struct QuickSearchIconDiskCacheTests {
         #expect(!FileManager.default.fileExists(atPath: file.path))
     }
 
+    @Test func anOversizedCacheEntryIsRejectedBeforeReadingItsContents() throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        var readCount = 0
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory, readData: { _, _ in
+            readCount += 1
+            return Data()
+        })
+        let file = cache.cacheFileURL(for: sandbox.appURL, pointSize: 24)
+        try FileManager.default.createDirectory(at: sandbox.cacheDirectory, withIntermediateDirectories: true)
+        try Data(count: QuickSearchIconDiskCache.maximumEntryBytes + 1).write(to: file)
+
+        #expect(cache.entry(for: sandbox.appURL, pointSize: 24) == nil)
+        #expect(readCount == 0)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test func aCacheEntryThatGrowsAfterStatStillHasABoundedRead() throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        var requestedLimits: [Int] = []
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory, readData: { _, limit in
+            requestedLimits.append(limit)
+            return Data(count: limit)
+        })
+        let file = cache.cacheFileURL(for: sandbox.appURL, pointSize: 24)
+        try FileManager.default.createDirectory(at: sandbox.cacheDirectory, withIntermediateDirectories: true)
+        try Data([1]).write(to: file)
+
+        #expect(cache.entry(for: sandbox.appURL, pointSize: 24) == nil)
+        #expect(requestedLimits == [QuickSearchIconDiskCache.maximumEntryBytes + 1])
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test func aCacheEntryAtTheSizeLimitIsStillReadable() throws {
+        let sandbox = try Self.makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        let cache = QuickSearchIconDiskCache(directory: sandbox.cacheDirectory)
+        let file = cache.cacheFileURL(for: sandbox.appURL, pointSize: 24)
+        try FileManager.default.createDirectory(at: sandbox.cacheDirectory, withIntermediateDirectories: true)
+        let png = Data(count: QuickSearchIconDiskCache.maximumEntryBytes)
+        try png.write(to: file)
+
+        #expect(cache.entry(for: sandbox.appURL, pointSize: 24)?.png == png)
+    }
+
     @Test func pruneRemovesOnlyEntriesPastRetention() throws {
         let sandbox = try Self.makeSandbox()
         defer { try? FileManager.default.removeItem(at: sandbox.root) }

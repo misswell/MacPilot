@@ -10,17 +10,29 @@ enum DisplayRecoveryClientError: Error, Equatable { case unavailable, invalidRes
 
 @MainActor
 final class DisplayRecoveryClient: DisplayRecoverySending {
+    typealias Exchange = @MainActor (DisplayControlRequest) async throws -> DisplayControlResponse
+
     private let connectionFactory: @MainActor () -> NSXPCConnection
     private let timeout: Duration?
+    private let exchangeOverride: Exchange?
 
     init(machServiceName: String = DisplayRecoveryService.serviceName, timeout: Duration? = nil) {
         connectionFactory = { NSXPCConnection(machServiceName: machServiceName, options: []) }
         self.timeout = timeout
+        exchangeOverride = nil
     }
 
     init(connectionFactory: @escaping @MainActor () -> NSXPCConnection, timeout: Duration? = nil) {
         self.connectionFactory = connectionFactory
         self.timeout = timeout
+        exchangeOverride = nil
+    }
+
+    // Exercises request recovery without starting the privileged helper.
+    init(testExchange: @escaping Exchange) {
+        connectionFactory = { NSXPCConnection(machServiceName: DisplayRecoveryService.serviceName, options: []) }
+        timeout = nil
+        exchangeOverride = testExchange
     }
 
     func send(_ request: DisplayControlRequest) async throws -> DisplayControlResponse {
@@ -68,6 +80,8 @@ final class DisplayRecoveryClient: DisplayRecoverySending {
     }
 
     private func exchange(_ request: DisplayControlRequest) async throws -> DisplayControlResponse {
+        if let exchangeOverride { return try await exchangeOverride(request) }
+
         let data = try JSONEncoder().encode(request)
         let timeout = timeout ?? Self.timeout(for: request.command)
         return try await withCheckedThrowingContinuation { continuation in

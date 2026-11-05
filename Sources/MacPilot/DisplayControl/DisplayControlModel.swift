@@ -32,18 +32,25 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
     private var sessionID: String?
     private var appliedSessionID: String?
     private var inhibitedSessionID: String?
+    private var automaticApplyRetryDate: Date?
+    private var automaticApplyFailureCount = 0
+    private var automaticApplyRetrySessionID: String?
     private var operationEpoch = UUID()
     private var consecutiveIdleFailures = 0
     private let showsConfirmation: Bool
     private let prepareVisibleOutputs: () -> Bool
     private let controlStateChanged: (Bool) -> Void
+    private let clockNow: () -> Date
+    private let registerTerminationOwner: @MainActor (DisplayControlModel) -> Void
     private var confirmationPanel: NSPanel?
     private var guidancePanel: NSPanel?
 
     init(client: (any DisplayRecoverySending)? = nil, monitor: UUSessionMonitor? = nil,
          showsConfirmation: Bool = true, prepareVisibleOutputs: (() -> Bool)? = nil,
          controlStateChanged: ((Bool) -> Void)? = nil,
-         recoveryService: (any DisplayRecoveryRegistering)? = nil) {
+         recoveryService: (any DisplayRecoveryRegistering)? = nil,
+         clockNow: @escaping () -> Date = Date.init,
+         terminationOwnerRegistration: (@MainActor (DisplayControlModel) -> Void)? = nil) {
         self.client = client ?? DisplayRecoveryClient()
         self.hasInjectedClient = client != nil
         // Injected clients never acquire or remove the user's real service.
@@ -58,9 +65,16 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
             return !DisplayPower.isBlanked
         }
         self.controlStateChanged = controlStateChanged ?? { DisplayPower.topologyControlIsActive = $0 }
+        self.clockNow = clockNow
+        self.registerTerminationOwner = terminationOwnerRegistration ?? { DisplayControlTermination.owner = $0 }
         self.monitor.onChange = { [weak self] observation, id in
             guard let self else { return }
             let changed = self.uuObservation != observation || self.sessionID != id
+            if self.sessionID != id {
+                self.automaticApplyRetryDate = nil
+                self.automaticApplyFailureCount = 0
+                self.automaticApplyRetrySessionID = nil
+            }
             if self.uuObservation != observation { self.uuObservation = observation }
             self.sessionID = id
             if id == nil, observation.status == .disconnected {
@@ -168,9 +182,17 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
 
     private func beginRunning() {
         isBusy = false
-        if showsConfirmation { DisplayControlTermination.owner = self }
-        syncMonitor()
+        startRunningResources()
         restartPolling()
+    }
+
+    /// Completes the in-memory half of startup after the helper becomes usable.
+    /// Approval can happen while this model is already marked running, so that
+    /// transition must also install the UU monitor and termination owner.
+    private func startRunningResources() {
+        guard isRunning else { return }
+        if showsConfirmation { registerTerminationOwner(self) }
+        syncMonitor()
     }
 
     private func restartPolling(immediately: Bool = true) {
@@ -308,6 +330,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
                     // removed by an update. Only a live reply proves it works.
                     let response = try await client.send(.init(command: .status))
                     apply(response)
+                    startRunningResources()
                     return
                 } catch {
                     // An in-flight poll can reveal that this helper owns pending
@@ -323,6 +346,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
                 errorKey = "displayHelperApproval"
                 return
             }
+            startRunningResources()
             await refresh()
         } catch { errorKey = "displayHelperInstallFailed" }
     }
@@ -395,11 +419,18 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
             errorKey = settings.uuPolicy == .keepPhysical ? "displaySelectTarget" : "displayInvalidSize"
             return
         }
-        appliedSessionID = sessionID
-        inhibitedSessionID = nil
+        if userInitiated {
+            inhibitedSessionID = nil
+            automaticApplyRetryDate = nil
+            automaticApplyFailureCount = 0
+            automaticApplyRetrySessionID = nil
+        } else if automaticApplyRetrySessionID == sessionID,
+                  let automaticApplyRetryDate, clockNow() < automaticApplyRetryDate {
+            return
+        }
         DiagnosticLog.write("DisplayControl",
             "remote policy apply policy=\(settings.uuPolicy.rawValue) userInitiated=\(userInitiated) session=\(sessionID.prefix(8))")
-        perform(request)
+        _ = perform(request, automaticRemoteSessionID: userInitiated ? nil : sessionID)
     }
 
     /// Builds the helper request for the UU rule.
@@ -445,7 +476,7 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         }
     }
 
-    private func poll() async {
+    func poll() async {
         if snapshot?.confirmationDeadline != nil { now = Date() }
         guard !isBusy, !isPreparingHelper else { return }
         let epoch = operationEpoch
@@ -488,9 +519,15 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         if errorKey != "displayHelperUnavailable" { errorKey = "displayHelperUnavailable" }
     }
 
-    private func perform(_ request: DisplayControlRequest, restoring: Bool = false) {
-        guard restoring || !isBusy else { return }
-        guard restoring || prepareVisibleOutputs() else { errorKey = "displayError_recoveryIncomplete"; return }
+    @discardableResult
+    private func perform(_ request: DisplayControlRequest, restoring: Bool = false,
+                         automaticRemoteSessionID: String? = nil) -> Bool {
+        guard restoring || !isBusy else { return false }
+        guard restoring || prepareVisibleOutputs() else {
+            errorKey = "displayError_recoveryIncomplete"
+            if let automaticRemoteSessionID { deferAutomaticRetry(for: automaticRemoteSessionID) }
+            return false
+        }
         isBusy = true
         errorKey = nil
         operationEpoch = UUID()
@@ -498,23 +535,59 @@ final class DisplayControlModel: ObservableObject, ManagedFeature {
         if !restoring { controlStateChanged(true) }
         operationTask = Task { [weak self] in
             guard let self else { return }
+            var response: DisplayControlResponse?
             do {
-                let response = try await self.client.send(request)
+                let received = try await self.client.send(request)
+                response = received
                 guard token == self.operationEpoch, !Task.isCancelled else { return }
-                self.apply(response)
+                self.apply(received)
             } catch {
                 guard token == self.operationEpoch, !Task.isCancelled else { return }
                 if (error as? DisplayRecoveryClientError) == .timeout {
                     // A timed-out caller does not own cancellation of a helper
                     // transaction. Preserve our obligation until status resolves it.
-                    if let response = try? await self.client.send(.init(command: .status)),
-                       token == self.operationEpoch, !Task.isCancelled { self.apply(response) }
+                    if let status = try? await self.client.send(.init(command: .status)),
+                       token == self.operationEpoch, !Task.isCancelled {
+                        response = status
+                        self.apply(status)
+                    }
                 } else { self.recordUnavailable() }
+            }
+            // A newer operation may have superseded this request while the
+            // timeout status check was in flight. The stale callback must not
+            // release its busy flag or alter the new session's retry state.
+            guard token == self.operationEpoch, !Task.isCancelled else { return }
+            if let automaticRemoteSessionID {
+                if let response, self.responseConfirmsAutomaticPolicy(response, sessionID: automaticRemoteSessionID) {
+                    self.appliedSessionID = automaticRemoteSessionID
+                    self.automaticApplyFailureCount = 0
+                    self.automaticApplyRetryDate = nil
+                    self.automaticApplyRetrySessionID = nil
+                } else {
+                    self.deferAutomaticRetry(for: automaticRemoteSessionID)
+                }
             }
             self.isBusy = false
             // A command may acquire a lease while the idle loop is asleep.
             if self.isRunning { self.restartPolling() }
         }
+        return true
+    }
+
+    private func responseConfirmsAutomaticPolicy(_ response: DisplayControlResponse, sessionID: String) -> Bool {
+        guard self.sessionID == sessionID, response.remoteSessionID == sessionID else { return false }
+        return [.active, .awaitingVirtualConfirmation, .awaitingKeepConfirmation].contains(response.state)
+    }
+
+    private func deferAutomaticRetry(for sessionID: String) {
+        guard self.sessionID == sessionID else { return }
+        if automaticApplyRetrySessionID != sessionID {
+            automaticApplyRetrySessionID = sessionID
+            automaticApplyFailureCount = 0
+        }
+        automaticApplyFailureCount = min(automaticApplyFailureCount + 1, 5)
+        let delay = min(30, 1 << automaticApplyFailureCount)
+        automaticApplyRetryDate = clockNow().addingTimeInterval(TimeInterval(delay))
     }
 
     private func apply(_ response: DisplayControlResponse) {

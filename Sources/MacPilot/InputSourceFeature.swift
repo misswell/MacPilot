@@ -1492,7 +1492,7 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
         lastBrowserPollingSignature = nil
     }
 
-    private func handleApplicationNotification(_ application: NSRunningApplication?) {
+    func handleApplicationNotification(_ application: NSRunningApplication?) {
         guard let application else {
             evaluateCurrentApplication()
             return
@@ -1509,6 +1509,10 @@ final class InputSourceModel: ObservableObject, ManagedFeature {
         knownBrowserURL: URL? = nil,
         browserURLWasResolved: Bool = false
     ) {
+        // A context activation owns the switch decision even when its desired
+        // source already matches the live catalog. Otherwise an older app's
+        // settle pass can reapply its source after macOS restores this app's.
+        switchScheduler.cancel()
         currentSource = catalogSeams.current() ?? currentSource
         activeApplicationName = application?.localizedName
         let bundleIdentifier = application?.bundleIdentifier

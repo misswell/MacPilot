@@ -499,9 +499,13 @@ struct ClosedLidSleepControllerTests {
         defer { controller.shutdown() }
 
         controller.setEnabled(true)
-        await waitUntil { controller.isActive }
+        await waitForControllerStateChange(controller) { controller.isActive }
         helper.systemSleepDisabled = false
-        await waitUntil { helper.setSleepDisabledCalls.count >= 2 }
+        await waitForControllerStateChange(controller) {
+            helper.setSleepDisabledCalls == [true, false, true]
+                && controller.isActive
+                && controller.systemSleepDisabled == true
+        }
         #expect(helper.systemSleepDisabled)
         #expect(controller.isActive)
         #expect(controller.systemSleepDisabled == true)
@@ -527,9 +531,14 @@ struct ClosedLidSleepControllerTests {
         defer { controller.shutdown() }
 
         controller.setEnabled(true)
-        await waitUntil { controller.isActive }
+        await waitForControllerStateChange(controller) { controller.isActive }
         helper.heartbeatResult = .failure(.requestFailed("connection invalid"))
-        await waitUntil { controller.lastFailure != nil }
+        await waitForControllerStateChange(controller) {
+            helper.heartbeatCallCount > 0
+                && controller.lastFailure != nil
+                && !controller.isActive
+                && controller.systemSleepDisabled == nil
+        }
         #expect(!controller.isActive)
         #expect(controller.systemSleepDisabled == nil)
     }
@@ -688,13 +697,17 @@ struct ClosedLidSleepControllerTests {
         defer { controller.shutdown() }
 
         controller.setEnabled(true)
-        await waitUntil { controller.isActive }
+        await waitForControllerStateChange(controller) { controller.isActive }
 
         helper.heartbeatResult = .failure(.requestFailed("connection invalid"))
-        await waitUntil { helper.setSleepDisabledCalls.count >= 2 }
+        await waitForControllerStateChange(controller) {
+            helper.heartbeatCallCount > 0
+                && helper.setSleepDisabledCalls == [true, true]
+                && controller.serviceState == .enabled
+                && controller.isActive
+        }
 
         #expect(helper.setSleepDisabledCalls == [true, true])
-        await waitUntil { controller.serviceState == .enabled }
     }
 
     @Test func shutdownReleasesSynchronously() async {
@@ -830,6 +843,21 @@ private func waitUntil(
     while Date() < deadline {
         if condition() { return }
         try? await Task.sleep(for: .milliseconds(5))
+    }
+}
+
+@MainActor
+private func waitForControllerStateChange(
+    _ controller: ClosedLidSleepController,
+    matching condition: @escaping @MainActor () -> Bool
+) async {
+    guard !condition() else { return }
+    await withCheckedContinuation { continuation in
+        controller.onStateChange = {
+            guard condition() else { return }
+            controller.onStateChange = nil
+            continuation.resume()
+        }
     }
 }
 

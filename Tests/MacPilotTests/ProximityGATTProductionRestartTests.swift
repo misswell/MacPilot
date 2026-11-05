@@ -11,6 +11,13 @@ import Testing
 /// cadence invariant is asserted on the task handle.
 @MainActor
 struct ProximityGATTProductionRestartTests {
+    @Test func deliveredChallengeIsRetainedUntilItsMacLocalTTLExpires() {
+        #expect(ProximityBLEPeripheral.pendingChallengeAction(delivered: true, age: 2.5, ttl: 15) == .waitForResponse)
+        #expect(ProximityBLEPeripheral.pendingChallengeAction(delivered: true, age: 14.9, ttl: 15) == .waitForResponse)
+        #expect(ProximityBLEPeripheral.pendingChallengeAction(delivered: true, age: 15.1, ttl: 15) == .replaceExpired)
+        #expect(ProximityBLEPeripheral.pendingChallengeAction(delivered: false, age: 2.5, ttl: 15) == .retryDelivery)
+    }
+
     @Test func stoppingProductionDisarmsTheCadence() {
         let peripheral = ProximityBLEPeripheral()
         peripheral.startProduction(macDeviceID: UUID())

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import MacPilot
@@ -202,6 +203,32 @@ struct InputSourceSwitchTests {
         #expect(secondReport.request.desiredIdentifier == wechatIdentifier)
         #expect(reports.map(\.request.desiredIdentifier) == [wechatIdentifier])
         #expect(mock.liveIdentifier == wechatIdentifier)
+    }
+
+    @Test func activationAlreadyOnDesiredSourceCancelsOlderUnconfirmedChain() async {
+        let mock = InputSourceCatalogMock(identifiers: [abcIdentifier, wechatIdentifier], live: abcIdentifier)
+        let model = InputSourceModel(catalogSeams: mock.seams)
+        let older = model.applyInputSourceSelection(
+            wechatIdentifier,
+            origin: .automatic,
+            applicationBundleIdentifier: "app.A"
+        )
+
+        // The old chain has selected WeChat and is waiting for verification.
+        for _ in 0..<100 where mock.selectCalls == 0 { await Task.yield() }
+        #expect(mock.selectCalls == 1)
+
+        // macOS restores ABC as app B becomes active. B needs no selection,
+        // so its activation starts no new selection chain but must still
+        // invalidate A's pending confirmation.
+        mock.liveIdentifier = abcIdentifier
+        model.handleApplicationNotification(NSRunningApplication.current)
+        let report = await older.value
+
+        #expect(report.outcome == .superseded)
+        #expect(report.attempts == 1)
+        #expect(mock.selectCalls == 1)
+        #expect(mock.liveIdentifier == abcIdentifier)
     }
 
     @Test func cancelledSchedulerDropsThePendingChain() async {

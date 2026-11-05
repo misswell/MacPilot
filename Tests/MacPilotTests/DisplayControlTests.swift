@@ -401,6 +401,163 @@ struct DisplayControlIntegrationTests {
         for _ in 0..<200 where model.isServiceCleanupPending { await Task.yield() }
     }
 
+    @Test func approvedHelperResumesMonitorAndTerminationOwnerRegistrationWithoutRestartingFeature() async {
+        let client = MockDisplayClient(ready: true)
+        let service = MockRecoveryService()
+        service.status = .requiresApproval
+        let monitor = UUSessionMonitor(read: { .init(status: .connected, controllers: ["UU tablet"]) })
+        var registeredOwner: ObjectIdentifier?
+        let model = DisplayControlModel(client: client, monitor: monitor,
+            prepareVisibleOutputs: { true }, controlStateChanged: { _ in }, recoveryService: service,
+            terminationOwnerRegistration: { registeredOwner = ObjectIdentifier($0) })
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        settings.uuPolicy = .virtualOnly
+        model.applyLoadedSettings(settings)
+        model.start()
+        #expect(model.isRunning)
+        #expect(client.requests.isEmpty)
+
+        // Simulate the user approving the already-registered helper in System Settings.
+        service.status = .enabled
+        await model.prepareHelperAndRefresh()
+        for _ in 0..<200 where model.uuObservation.status != .connected { await Task.yield() }
+
+        #expect(model.uuObservation.status == .connected)
+        #expect(client.requests.contains { $0.command == .status })
+        #expect(registeredOwner == ObjectIdentifier(model))
+        model.stop()
+        for _ in 0..<200 where model.isServiceCleanupPending { await Task.yield() }
+    }
+
+    @Test func failedAutomaticUUApplyIsRetriedAfterBackoffAndOnlyThenMarkedApplied() async {
+        let client = MockDisplayClient(ready: true)
+        client.rejectRemotePolicy = true
+        let service = MockRecoveryService()
+        var now = Date(timeIntervalSince1970: 10_000)
+        let monitor = UUSessionMonitor(read: { .init(status: .connected, controllers: ["UU tablet"]) })
+        let model = DisplayControlModel(client: client, monitor: monitor,
+            showsConfirmation: false, prepareVisibleOutputs: { true }, controlStateChanged: { _ in },
+            recoveryService: service, clockNow: { now })
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        settings.uuPolicy = .virtualOnly
+        model.applyLoadedSettings(settings)
+        model.start()
+        for _ in 0..<200 where model.uuObservation.status != .connected { await Task.yield() }
+        #expect(model.uuObservation.status == .connected)
+
+        await model.poll()
+        for _ in 0..<200 where model.isBusy { await Task.yield() }
+        #expect(client.requests.filter { $0.command == .prepareVirtual }.count == 1)
+
+        // Status polls may continue during the backoff, but must not reissue the failed mutation.
+        await model.poll()
+        #expect(client.requests.filter { $0.command == .prepareVirtual }.count == 1)
+
+        client.rejectRemotePolicy = false
+        now = now.addingTimeInterval(3)
+        await model.poll()
+        for _ in 0..<200 where model.isBusy { await Task.yield() }
+        #expect(client.requests.filter { $0.command == .prepareVirtual }.count == 2)
+        #expect(model.holdsControl)
+        await model.poll()
+        #expect(client.requests.filter { $0.command == .prepareVirtual }.count == 2)
+        model.stop()
+        for _ in 0..<200 where model.isServiceCleanupPending { await Task.yield() }
+        #expect(client.state == .idle)
+    }
+
+    @Test func unreadyVisibleOutputsRetryInsteadOfMarkingTheSessionApplied() async {
+        let client = MockDisplayClient(ready: true)
+        let service = MockRecoveryService()
+        var now = Date(timeIntervalSince1970: 20_000)
+        var outputsReady = false
+        let monitor = UUSessionMonitor(read: { .init(status: .connected, controllers: ["UU tablet"]) })
+        let model = DisplayControlModel(client: client, monitor: monitor,
+            showsConfirmation: false, prepareVisibleOutputs: { outputsReady }, controlStateChanged: { _ in },
+            recoveryService: service, clockNow: { now })
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        settings.uuPolicy = .virtualOnly
+        model.applyLoadedSettings(settings)
+        model.start()
+        for _ in 0..<200 where model.uuObservation.status != .connected { await Task.yield() }
+        #expect(model.uuObservation.status == .connected)
+
+        await model.poll()
+        #expect(client.requests.filter { $0.command == .prepareVirtual }.isEmpty)
+        outputsReady = true
+        now = now.addingTimeInterval(3)
+        await model.poll()
+        for _ in 0..<200 where model.isBusy { await Task.yield() }
+        #expect(client.requests.filter { $0.command == .prepareVirtual }.count == 1)
+        #expect(model.holdsControl)
+        model.stop()
+        for _ in 0..<200 where model.isBusy { await Task.yield() }
+    }
+
+    @Test func idleHelperRejectionRetriesAfterBackoff() async {
+        let client = MockDisplayClient(ready: true)
+        client.rejectRemotePolicyWithIdle = true
+        let service = MockRecoveryService()
+        var now = Date(timeIntervalSince1970: 30_000)
+        let monitor = UUSessionMonitor(read: { .init(status: .connected, controllers: ["UU tablet"]) })
+        let model = DisplayControlModel(client: client, monitor: monitor,
+            showsConfirmation: false, prepareVisibleOutputs: { true }, controlStateChanged: { _ in },
+            recoveryService: service, clockNow: { now })
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        settings.uuPolicy = .virtualOnly
+        model.applyLoadedSettings(settings)
+        model.start()
+        for _ in 0..<200 where model.uuObservation.status != .connected { await Task.yield() }
+
+        await model.poll()
+        for _ in 0..<200 where model.isBusy { await Task.yield() }
+        #expect(client.requests.filter { $0.command == .prepareVirtual }.count == 1)
+        #expect(!model.holdsControl)
+        await model.poll()
+        #expect(client.requests.filter { $0.command == .prepareVirtual }.count == 1)
+
+        client.rejectRemotePolicyWithIdle = false
+        now = now.addingTimeInterval(3)
+        await model.poll()
+        for _ in 0..<200 where model.isBusy { await Task.yield() }
+        #expect(client.requests.filter { $0.command == .prepareVirtual }.count == 2)
+        #expect(model.holdsControl)
+        model.stop()
+        for _ in 0..<200 where model.isBusy { await Task.yield() }
+    }
+
+    @Test func automaticPollingDoesNotReapplyAfterManualRestore() async {
+        let client = MockDisplayClient(ready: true)
+        let service = MockRecoveryService()
+        let monitor = UUSessionMonitor(read: { .init(status: .connected, controllers: ["UU tablet"]) })
+        let model = DisplayControlModel(client: client, monitor: monitor,
+            showsConfirmation: false, prepareVisibleOutputs: { true }, controlStateChanged: { _ in },
+            recoveryService: service)
+        var settings = DisplayControlSettings()
+        settings.isEnabled = true
+        settings.uuPolicy = .virtualOnly
+        model.applyLoadedSettings(settings)
+        model.start()
+        for _ in 0..<200 where model.uuObservation.status != .connected { await Task.yield() }
+        await model.poll()
+        for _ in 0..<200 where model.isBusy { await Task.yield() }
+        #expect(model.holdsControl)
+        #expect(client.requests.filter { $0.command == .prepareVirtual }.count == 1)
+
+        model.restore()
+        for _ in 0..<200 where model.isBusy { await Task.yield() }
+        #expect(client.state == .idle)
+        await model.poll()
+        #expect(client.requests.filter { $0.command == .prepareVirtual }.count == 1)
+        #expect(!model.holdsControl)
+        model.stop()
+        for _ in 0..<200 where model.isBusy { await Task.yield() }
+    }
+
     /// Only the settings-page button may ask the helper to clear the override
     /// a confirmation timeout left for this UU session; the automatic rule is
     /// indistinguishable from it except for this one field.
@@ -463,6 +620,9 @@ struct DisplayControlIntegrationTests {
         var state: DisplayControlState = .idle
         let ready: Bool
         var fails = false
+        var rejectRemotePolicy = false
+        var rejectRemotePolicyWithIdle = false
+        var activeRemoteSessionID: String?
         let display = DisplayControlDisplay(uuid: "test-physical", displayID: 1, name: "Test display",
             isBuiltIn: true, isVirtual: false, isOnline: true, isActive: true,
             isMain: true, width: 1920, height: 1080)
@@ -472,7 +632,24 @@ struct DisplayControlIntegrationTests {
         func send(_ request: DisplayControlRequest) async throws -> DisplayControlResponse {
             requests.append(request)
             if fails { throw NSError(domain: "test", code: 1) }
-            return .init(displays: [display], state: state, helperReady: ready)
+            if rejectRemotePolicy, request.remoteSessionID != nil,
+               (request.command == .prepareVirtual || request.command == .keepOnly) {
+                throw NSError(domain: "test.remote-policy", code: 1)
+            }
+            if request.remoteSessionID != nil
+                && (request.command == .prepareVirtual || request.command == .keepOnly) {
+                if rejectRemotePolicyWithIdle {
+                    return .init(displays: [display], state: .idle, message: "transactionFailed", helperReady: ready)
+                }
+                state = .active
+                activeRemoteSessionID = request.remoteSessionID
+            } else if request.command == .restore {
+                state = .idle
+                activeRemoteSessionID = nil
+            }
+            let responseState = state
+            return .init(displays: [display], state: responseState, helperReady: ready,
+                         policy: request.policy, remoteSessionID: responseState == .active ? activeRemoteSessionID : nil)
         }
     }
 }

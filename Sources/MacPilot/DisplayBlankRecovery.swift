@@ -368,8 +368,9 @@ enum DisplayBlankRecovery {
             }
             switch powerDecision(current: appliers.readPower(id)) {
             case .alreadyRepaired:
-                let originalPower = snapshot.displayRecords?[key]?.originalPowerState ?? DDCPacket.powerOn
-                if !forceOriginal, appliers.readPower(id) == originalPower { continue }
+                // Crash recovery must not undo a manual power-on, even when
+                // the captured state was standby rather than fully on.
+                if !forceOriginal { continue }
                 restored += 1
             case .restore, .undrivable:
                 // A sleeping/disconnected display may not answer reads but may

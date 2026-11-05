@@ -62,6 +62,17 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
         var delivered: Bool
     }
 
+    enum PendingChallengeAction: Equatable {
+        case waitForResponse
+        case retryDelivery
+        case replaceExpired
+    }
+
+    static func pendingChallengeAction(delivered: Bool, age: TimeInterval, ttl: TimeInterval) -> PendingChallengeAction {
+        if age > ttl { return .replaceExpired }
+        return delivered ? .waitForResponse : .retryDelivery
+    }
+
     @Published private(set) var status: Status = .idle
     @Published private(set) var logLines: [String] = []
     @Published private(set) var lastEchoAt: Date?
@@ -737,15 +748,13 @@ class ProximityBLEPeripheral: NSObject, ObservableObject, @preconcurrency CBPeri
         for (centralID, central) in presenceSubscribedCentrals {
             if let pending = pendingPresence[centralID] {
                 let age = now - pending.issuedAt
-                if age > challengeTTL {
+                switch Self.pendingChallengeAction(delivered: pending.delivered, age: age, ttl: challengeTTL) {
+                case .replaceExpired:
                     pendingPresence.removeValue(forKey: centralID)
-                } else if pending.delivered, age >= challengeInterval {
-                    // Replace the previous nonce on the regular cadence.
-                } else {
-                    // Undelivered or still fresh: retry the same nonce.
-                    if !pending.delivered {
-                        sendPresenceChallenge(pending.nonce, macID: pending.macID, to: central, on: peripheral)
-                    }
+                case .retryDelivery:
+                    sendPresenceChallenge(pending.nonce, macID: pending.macID, to: central, on: peripheral)
+                    continue
+                case .waitForResponse:
                     continue
                 }
             }

@@ -389,6 +389,50 @@ extension DisplayBlankRecoveryTests {
 
 
 extension DisplayBlankRecoveryTests {
+    @Test(arguments: [DDCPacket.powerOn, DDCPacket.powerStandby, DDCPacket.powerOff])
+    func crashRecoveryPreservesAManuallyPoweredOnMonitor(originalPower: UInt16) {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        var snapshot = DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: [:], ddcBacklight: [:], ddcPowerOff: ["1"])
+        snapshot.displayRecords = ["1": DisplayBlankRecord(originalPowerState: originalPower, operationIntent: "ddcPowerOff")]
+        store.save(snapshot)
+        var mode = DDCPacket.powerOn
+        var writes = 0
+        let appliers = DisplayBlankRecovery.Appliers(
+            readSystem: { _ in nil }, writeSystem: { _, _ in false },
+            readDDC: { _ in nil }, writeDDC: { _, _ in false },
+            readPower: { _ in mode },
+            writePower: { _, value in writes += 1; mode = value; return true }
+        )
+
+        #expect(DisplayBlankRecovery.recover(store: store, appliers: appliers) == 0)
+        #expect(writes == 0)
+        #expect(mode == DDCPacket.powerOn)
+        #expect(store.load() == nil)
+    }
+
+    @Test(arguments: [DDCPacket.powerOn, DDCPacket.powerStandby, DDCPacket.powerOff])
+    func explicitUnblankStillRestoresTheCapturedPowerState(originalPower: UInt16) {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        var snapshot = DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: [:], ddcBacklight: [:], ddcPowerOff: ["1"])
+        snapshot.displayRecords = ["1": DisplayBlankRecord(originalPowerState: originalPower, operationIntent: "ddcPowerOff")]
+        store.save(snapshot)
+        var mode = DDCPacket.powerOn
+        var writes: [UInt16] = []
+        let appliers = DisplayBlankRecovery.Appliers(
+            readSystem: { _ in nil }, writeSystem: { _, _ in false },
+            readDDC: { _ in nil }, writeDDC: { _, _ in false },
+            readPower: { _ in mode },
+            writePower: { _, value in writes.append(value); mode = value; return true }
+        )
+
+        #expect(DisplayBlankRecovery.recover(store: store, appliers: appliers, forceOriginal: true) == 1)
+        #expect(writes == [originalPower])
+        #expect(mode == originalPower)
+        #expect(store.load() == nil)
+    }
+
     @Test func unknownPowerStateCannotAuthorizeHardwarePowerOff() {
         #expect(!ScreenBlankPlanner.canPowerOff(originalPower: nil))
         #expect(!ScreenBlankPlanner.canPowerOff(originalPower: 0))

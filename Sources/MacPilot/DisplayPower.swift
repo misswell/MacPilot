@@ -32,6 +32,97 @@ import IOKit.pwr_mgt
 /// member, but it is exactly what "has the user touched anything yet" needs.
 private let anyInputEventType = CGEventType(rawValue: ~0)!
 
+/// The global event counter is a cheap signal that something happened. These
+/// counters distinguish user-facing input from unrelated WindowServer events.
+struct DisplayInputCounters: Equatable {
+    var keyDown: UInt32 = 0
+    var flagsChanged: UInt32 = 0
+    var leftMouseDown: UInt32 = 0
+    var rightMouseDown: UInt32 = 0
+    var otherMouseDown: UInt32 = 0
+    var scrollWheel: UInt32 = 0
+    var mouseMoved: UInt32 = 0
+    var leftMouseDragged: UInt32 = 0
+    var rightMouseDragged: UInt32 = 0
+    var otherMouseDragged: UInt32 = 0
+}
+
+struct DisplayInputCursorPosition: Equatable {
+    let x: Double
+    let y: Double
+}
+
+struct DisplayInputSnapshot: Equatable {
+    var counters: DisplayInputCounters
+    var modifierFlags: UInt64
+    var cursor: DisplayInputCursorPosition?
+}
+
+enum QualifiedDisplayInput: String, Equatable {
+    case keyboard
+    case modifier
+    case mouseButton
+    case scroll
+    case pointerMovement
+}
+
+/// Poll state used by the production watcher and deterministic tests. Details
+/// are read only after the cheap any-event sentinel changes; ignored events
+/// still update the baseline so they do not trigger repeated reads.
+struct DisplayInputPoller {
+    private(set) var anyEventCounter: UInt32
+    private(set) var snapshot: DisplayInputSnapshot
+
+    init(anyEventCounter: UInt32, snapshot: DisplayInputSnapshot) {
+        self.anyEventCounter = anyEventCounter
+        self.snapshot = snapshot
+    }
+
+    mutating func poll(
+        anyEventCounter nextAnyEventCounter: UInt32,
+        readSnapshot: () -> DisplayInputSnapshot
+    ) -> QualifiedDisplayInput? {
+        guard nextAnyEventCounter != anyEventCounter else { return nil }
+
+        let previous = snapshot
+        let next = readSnapshot()
+        anyEventCounter = nextAnyEventCounter
+        snapshot = next
+
+        if counterAdvanced(from: previous.counters.keyDown, to: next.counters.keyDown) {
+            return .keyboard
+        }
+        if counterAdvanced(from: previous.counters.flagsChanged, to: next.counters.flagsChanged),
+           previous.modifierFlags != next.modifierFlags {
+            return .modifier
+        }
+        if counterAdvanced(from: previous.counters.leftMouseDown, to: next.counters.leftMouseDown)
+            || counterAdvanced(from: previous.counters.rightMouseDown, to: next.counters.rightMouseDown)
+            || counterAdvanced(from: previous.counters.otherMouseDown, to: next.counters.otherMouseDown) {
+            return .mouseButton
+        }
+        if counterAdvanced(from: previous.counters.scrollWheel, to: next.counters.scrollWheel) {
+            return .scroll
+        }
+
+        let pointerCounterAdvanced = counterAdvanced(from: previous.counters.mouseMoved, to: next.counters.mouseMoved)
+            || counterAdvanced(from: previous.counters.leftMouseDragged, to: next.counters.leftMouseDragged)
+            || counterAdvanced(from: previous.counters.rightMouseDragged, to: next.counters.rightMouseDragged)
+            || counterAdvanced(from: previous.counters.otherMouseDragged, to: next.counters.otherMouseDragged)
+        if pointerCounterAdvanced, let oldCursor = previous.cursor, let newCursor = next.cursor, oldCursor != newCursor {
+            return .pointerMovement
+        }
+        return nil
+    }
+
+    private func counterAdvanced(from previous: UInt32, to next: UInt32) -> Bool {
+        if next > previous { return true }
+        // A small decrease is a counter reset. Treat only a transition across
+        // the UInt32 boundary as wraparound progress.
+        return previous > UInt32.max - 1_000_000 && next < 1_000_000
+    }
+}
+
 // MARK: - Blank plan
 
 /// One display that is online and awake while the screen is being blacked.
@@ -221,6 +312,10 @@ enum DisplayPower {
             .combinedSessionState,
             eventType: anyInputEventType
         )
+        let inputPollerAtBlank = DisplayInputPoller(
+            anyEventCounter: inputCounterAtBlank,
+            snapshot: currentDisplayInputSnapshot()
+        )
 
         var journal = DisplayBlankSnapshot(capturedAt: Date(), systemBacklight: [:], ddcBacklight: [:])
         journal.displayRecords = [:]
@@ -367,7 +462,7 @@ enum DisplayPower {
             ScreenBlankOverlay.shared.show(covering: overlayScreens)
             isOverlayShowing = true
         }
-        startUnblankWatcher(inputCounterAtBlank: inputCounterAtBlank)
+        startUnblankWatcher(inputPoller: inputPollerAtBlank)
         DiagnosticLog.write(
             "DisplayPower",
             "display blanked idleSleepOverride=false backlightWrites=\(blanked.count) ddc=\(ddcBlanked.count) ddcOffSent=\(ddcPoweredOff.count) ddcOffConfirmed=\(confirmedPowerOff.count) overlay=\(overlayScreens.count) keyboard=\(keyboards.count) displays=\(steps.map(\.displayID))"
@@ -535,24 +630,39 @@ enum DisplayPower {
     }
 
     /// The display is not asleep, so nothing in the system brings the backlight
-    /// back on its own — a key press would leave the screen black until someone
-    /// reached for the brightness key. The WindowServer input counter is polled
-    /// rather than observed through an event monitor because that needs no
-    /// Accessibility grant, and this must not be able to strand a user on a
-    /// black screen.
-    /// Whether the user has touched anything since the screen was blanked.
-    ///
-    /// Pulled out as a pure rule because getting it backwards would strand
-    /// someone on a black screen, and that is worth a test that does not need a
-    /// real key press.
-    static func didUserInputOccur(inputCounterNow: UInt32, inputCounterAtBlank: UInt32) -> Bool {
-        inputCounterNow != inputCounterAtBlank
+    /// back on its own. Polling counters needs no Accessibility grant, but the
+    /// any-event counter alone is too broad: it also changes for system events
+    /// and no-op synthetic pointer movement.
+    private static func currentDisplayInputSnapshot() -> DisplayInputSnapshot {
+        func counter(_ type: CGEventType) -> UInt32 {
+            CGEventSource.counterForEventType(.combinedSessionState, eventType: type)
+        }
+        let modifiers: CGEventFlags = [.maskAlphaShift, .maskShift, .maskControl, .maskAlternate, .maskCommand, .maskSecondaryFn]
+        let flags = CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).rawValue
+        let cursor = NSEvent.mouseLocation
+        return DisplayInputSnapshot(
+            counters: DisplayInputCounters(
+                keyDown: counter(.keyDown),
+                flagsChanged: counter(.flagsChanged),
+                leftMouseDown: counter(.leftMouseDown),
+                rightMouseDown: counter(.rightMouseDown),
+                otherMouseDown: counter(.otherMouseDown),
+                scrollWheel: counter(.scrollWheel),
+                mouseMoved: counter(.mouseMoved),
+                leftMouseDragged: counter(.leftMouseDragged),
+                rightMouseDragged: counter(.rightMouseDragged),
+                otherMouseDragged: counter(.otherMouseDragged)
+            ),
+            modifierFlags: flags,
+            cursor: DisplayInputCursorPosition(x: cursor.x, y: cursor.y)
+        )
     }
 
     @MainActor
-    private static func startUnblankWatcher(inputCounterAtBlank: UInt32) {
+    private static func startUnblankWatcher(inputPoller initialPoller: DisplayInputPoller) {
         unblankWatcher?.cancel()
         unblankWatcher = Task { @MainActor in
+            var poller = initialPoller
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(400))
                 guard !Task.isCancelled, isBlanked else { return }
@@ -560,10 +670,14 @@ enum DisplayPower {
                     .combinedSessionState,
                     eventType: anyInputEventType
                 )
-                if didUserInputOccur(
-                    inputCounterNow: inputCounterNow,
-                    inputCounterAtBlank: inputCounterAtBlank
+                if let qualifiedInput = poller.poll(
+                    anyEventCounter: inputCounterNow,
+                    readSnapshot: currentDisplayInputSnapshot
                 ) {
+                    DiagnosticLog.write(
+                        "DisplayPower",
+                        "held blank released reason=qualifiedInput category=\(qualifiedInput.rawValue)"
+                    )
                     unblankDisplay()
                     return
                 }

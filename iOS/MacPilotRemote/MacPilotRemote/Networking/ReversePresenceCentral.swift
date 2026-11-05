@@ -10,6 +10,10 @@ struct ReversePresenceChallengeGate: Equatable {
     private(set) var lastConsumedNonce: Data?
 
     var hasPendingNonce: Bool { pendingNonce != nil }
+    func hasNewerPendingNonce(after nonce: Data) -> Bool {
+        guard let pendingNonce else { return false }
+        return pendingNonce != nonce
+    }
     /// Read-only: the nonce an RSSI read is issued for. It is consumed only
     /// once a measurement actually comes back for it.
     var pendingChallengeNonce: Data? { pendingNonce }
@@ -897,6 +901,11 @@ final class ReversePresenceCentral: NSObject, ObservableObject, @preconcurrency 
         // that already timed out, says nothing about the current challenge.
         guard !operation.isInvalidated, !connection.awaitingFreshChallenge else {
             log("RSSI read dropped reason=staleOrPreBackground")
+            return
+        }
+        if connection.challenges.hasNewerPendingNonce(after: operation.nonce) {
+            log("RSSI read completed for an older challenge; immediately requesting the latest nonce")
+            requestSample(for: peripheral.identifier)
             return
         }
         guard error == nil else {
