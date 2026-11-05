@@ -107,7 +107,58 @@ enum QuickSearchKeyRouter {
 
 // MARK: - 面板
 
-/// 不抢占前台应用焦点的搜索面板：呼出即可输入，点到别处自动收起。
+/// 非激活面板本身不会让 AppKit 激活文本输入上下文：英文按键能直接插入，
+/// 中文输入法的拼音、候选词和提交则全被吞掉。呼出面板时临时激活本进程，
+/// 关闭时再交还焦点；只在面板自己仍是前台时交还，避免把用户刚点到的 App 抢回来。
+@MainActor
+protocol QuickSearchApplicationActivating: AnyObject {
+    func activateForPanel()
+    func restoreAfterPanel()
+}
+
+@MainActor
+final class SystemQuickSearchApplicationActivation: QuickSearchApplicationActivating {
+    private var previousApplication: NSRunningApplication?
+    private var didActivate = false
+
+    func activateForPanel() {
+        let current = NSRunningApplication.current
+        guard !current.isActive else {
+            didActivate = false
+            return
+        }
+        previousApplication = NSWorkspace.shared.frontmostApplication
+        didActivate = true
+        if !current.activate(options: [.activateAllWindows]) {
+            NSApp.activate()
+        }
+        // Cooperative activation refuses a background LSUIElement app: both
+        // `NSRunningApplication.activate` and `NSApp.activate()` answer false
+        // and the window keeps taking Latin keystrokes without an IME. Setting
+        // our own AX frontmost attribute is the documented escape hatch and is
+        // what actually makes the input context live here.
+        guard !NSApp.isActive else { return }
+        let element = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        AXUIElementSetMessagingTimeout(element, 0.1)
+        _ = AXUIElementSetAttributeValue(
+            element,
+            kAXFrontmostAttribute as CFString,
+            true as CFTypeRef
+        )
+    }
+
+    func restoreAfterPanel() {
+        guard didActivate else { return }
+        didActivate = false
+        defer { previousApplication = nil }
+        guard NSApp.isActive else { return }
+        NSApp.deactivate()
+        _ = previousApplication?.activate(options: [.activateAllWindows])
+    }
+}
+
+/// 呼出即可输入的搜索面板：输入法需要本进程处于激活状态，所以它只在面板
+/// 存续期间临时激活；点到别处自动收起并把焦点还给原来的应用。
 ///
 /// 位置是用户拖动出来的：面板可以拖（顶栏上的抓手），拖完记住，下次呼出回到同一处；
 /// 「回到默认位置」清掉记录即可。与 `ClipboardPanel` 一套做法。
@@ -115,6 +166,7 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
     private(set) var isPresented = false
     private let onClose: () -> Void
     private weak var model: QuickSearchModel?
+    private let applicationActivation: any QuickSearchApplicationActivating
 
     private let hostingView: NSHostingView<QuickSearchPanelContent>
     private var pendingResignClose: DispatchWorkItem?
@@ -122,9 +174,14 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
     private var pendingPositionSave: DispatchWorkItem?
     private var isDraggingFromHeader = false
 
-    init(model: QuickSearchModel, onClose: @escaping () -> Void) {
+    init(
+        model: QuickSearchModel,
+        onClose: @escaping () -> Void,
+        applicationActivation: any QuickSearchApplicationActivating = SystemQuickSearchApplicationActivation()
+    ) {
         self.model = model
         self.onClose = onClose
+        self.applicationActivation = applicationActivation
         self.hostingView = NSHostingView(rootView: QuickSearchPanelContent(model: model))
 
         super.init(
@@ -158,6 +215,18 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func becomeKey() {
+        super.becomeKey()
+        // Activating the process is what makes AppKit activate the field
+        // editor's input context. Do it again once the panel is actually key:
+        // an IME composition must never start against a stale context.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isPresented,
+                  let textView = self.firstResponder as? NSTextView else { return }
+            textView.inputContext?.activate()
+        }
+    }
 
     override func sendEvent(_ event: NSEvent) {
         guard event.type == .keyDown else { super.sendEvent(event); return }
@@ -197,6 +266,7 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
         isPresented = true
         applyPlacement()
         orderFrontRegardless()
+        applicationActivation.activateForPanel()
         makeKey()
     }
 
@@ -206,6 +276,7 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
         pendingResignClose = nil
         isPresented = false
         super.close()
+        applicationActivation.restoreAfterPanel()
         onClose()
     }
 

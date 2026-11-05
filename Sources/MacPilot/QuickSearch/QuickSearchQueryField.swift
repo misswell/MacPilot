@@ -51,6 +51,10 @@ final class QuickSearchQueryTextField: NSTextField, NSTextFieldDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, let panel = self.window as? QuickSearchPanel, panel.isPresented else { return }
             panel.makeFirstResponder(self)
+            // The panel is nonactivating; AppKit does not reliably activate
+            // the field editor's input context on its own. Without this,
+            // pinyin never reaches the IME and only Latin keys are inserted.
+            (panel.fieldEditor(false, for: self) as? NSTextView)?.inputContext?.activate()
         }
     }
 
