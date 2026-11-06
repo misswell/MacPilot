@@ -229,9 +229,11 @@ struct MenuBarDisplayControllerTests {
         #expect(controller.isInserted)
 
         // Tracking ends: the pending topology change still re-runs the dance.
+        let changesBeforeMenuCloses = changes.count
         center.post(name: NSMenu.didEndTrackingNotification, object: menu)
-        #expect(await waitForInsertionState(true, controller))
-        try? await Task.sleep(for: .milliseconds(120))
+        let expectedChanges = changesBeforeMenuCloses + 2
+        #expect(await waitForInsertions(expectedChanges, changes))
+        #expect(changes.count == expectedChanges)
         #expect(controller.isInserted)
     }
 
