@@ -79,12 +79,70 @@ struct QuickAccessTests {
         #expect(FileManager.default.fileExists(atPath: url.path) == false)
     }
 
-    @Test func shortcutConfigEncodesAndDecodesCarbonModifiers() throws {
+    @MainActor @Test func shortcutConfigEncodesAndDecodesCarbonModifiers() throws {
         let original = ShortcutConfig(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(cmdKey))
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(ShortcutConfig.self, from: data)
         #expect(decoded == original)
         #expect(decoded.displayString.contains("⌘"))
+    }
+
+    @MainActor @Test func keyboardLayoutTranslatorReceivesAlignedCompleteOffsetBlob() {
+        let headerSize = MemoryLayout<UCKeyboardLayout>.size
+        var layoutData = Data(repeating: 0, count: headerSize + 32)
+        let tailOffset = headerSize + 19
+        layoutData[tailOffset] = 0xA7
+        let expectedLength = layoutData.count
+        var receivedAlignedPointer = false
+        var receivedCompleteBlob = false
+        var receivedTailByte = false
+
+        let translated = ShortcutConfig.printableKeyDisplayString(
+            for: UInt32(kVK_ANSI_C),
+            layoutData: layoutData
+        ) { layout, byteCount, _, _, output, length in
+            receivedAlignedPointer = Int(bitPattern: UnsafeRawPointer(layout))
+                .isMultiple(of: MemoryLayout<UCKeyboardLayout>.alignment)
+            receivedCompleteBlob = byteCount == expectedLength
+            let bytes = UnsafeRawBufferPointer(start: layout, count: byteCount)
+            receivedTailByte = bytes[tailOffset] == 0xA7
+            output[0] = UniChar("C".utf16.first!)
+            length = 1
+            return noErr
+        }
+
+        #expect(translated == "C")
+        #expect(receivedAlignedPointer)
+        #expect(receivedCompleteBlob)
+        #expect(receivedTailByte)
+    }
+
+    @MainActor @Test func keyboardLayoutTranslatorRejectsDataShorterThanItsHeader() {
+        var translatorCalled = false
+        let translated = ShortcutConfig.printableKeyDisplayString(
+            for: UInt32(kVK_ANSI_C),
+            layoutData: Data(repeating: 0, count: MemoryLayout<UCKeyboardLayout>.size - 1)
+        ) { _, _, _, _, _, _ in
+            translatorCalled = true
+            return noErr
+        }
+
+        #expect(translated == nil)
+        #expect(!translatorCalled)
+    }
+
+    @MainActor @Test func keyboardLayoutTranslatorRejectsKeyCodesOutsideCarbonRange() {
+        var translatorCalled = false
+        let translated = ShortcutConfig.printableKeyDisplayString(
+            for: .max,
+            layoutData: Data(repeating: 0, count: MemoryLayout<UCKeyboardLayout>.size)
+        ) { _, _, _, _, _, _ in
+            translatorCalled = true
+            return noErr
+        }
+
+        #expect(translated == nil)
+        #expect(!translatorCalled)
     }
 
     @Test func ocrToastPreviewCollapsesAndTruncatesRecognizedText() {

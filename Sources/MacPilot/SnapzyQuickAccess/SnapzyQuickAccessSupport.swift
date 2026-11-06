@@ -25,6 +25,10 @@ struct ShortcutConfig: Equatable, Codable {
     let keyCode: UInt32
     let modifiers: UInt32
 
+    typealias KeyboardLayoutTranslator = @MainActor (
+        UnsafePointer<UCKeyboardLayout>, Int, UInt16, inout UInt32, inout [UniChar], inout Int
+    ) -> OSStatus
+
     /// Custom bit used to store the Fn modifier flag.
     /// Carbon does not provide a native Fn constant, so we use an otherwise-unused bit internally.
     static let functionCarbonModifier: UInt32 = 0x2000
@@ -35,7 +39,7 @@ struct ShortcutConfig: Equatable, Codable {
         self.modifiers = modifiers
     }
 
-    var displayString: String {
+    @MainActor var displayString: String {
         var parts: [String] = []
 
         if modifiers & UInt32(cmdKey) != 0 { parts.append("⌘") }
@@ -50,7 +54,7 @@ struct ShortcutConfig: Equatable, Codable {
     }
 
     /// Individual key parts for keycap-style rendering
-    var displayParts: [String] {
+    @MainActor var displayParts: [String] {
         var parts: [String] = []
         if modifiers & UInt32(cmdKey) != 0 { parts.append("⌘") }
         if modifiers & UInt32(shiftKey) != 0 { parts.append("⇧") }
@@ -171,7 +175,7 @@ struct ShortcutConfig: Equatable, Codable {
     }
 
     /// Map key code to the key label users see on their active keyboard layout.
-    static func keyCodeToDisplayString(_ keyCode: UInt32) -> String {
+    @MainActor static func keyCodeToDisplayString(_ keyCode: UInt32) -> String {
         let fallback = keyCodeToString(keyCode)
         if fallback.count != 1, fallback != "?" {
             return fallback
@@ -179,36 +183,60 @@ struct ShortcutConfig: Equatable, Codable {
         return currentLayoutPrintableKeyDisplayString(for: keyCode) ?? fallback
     }
 
-    private static func currentLayoutPrintableKeyDisplayString(for keyCode: UInt32) -> String? {
+    @MainActor private static func currentLayoutPrintableKeyDisplayString(for keyCode: UInt32) -> String? {
         guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue() else { return nil }
         guard let layoutData = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
             return nil
         }
         let data = unsafeBitCast(layoutData, to: CFData.self) as Data
-        var layout = UCKeyboardLayout()
-        guard data.count >= MemoryLayout<UCKeyboardLayout>.size else { return nil }
-        _ = withUnsafeMutableBytes(of: &layout) { bytes in
-            data.copyBytes(to: bytes.bindMemory(to: UInt8.self))
+        return printableKeyDisplayString(for: keyCode, layoutData: data) { layout, _, virtualKeyCode, deadKeyState, unicodeString, length in
+            unicodeString.withUnsafeMutableBufferPointer { buffer in
+                guard let baseAddress = buffer.baseAddress else { return OSStatus(paramErr) }
+                return UCKeyTranslate(
+                    layout,
+                    virtualKeyCode,
+                    UInt16(kUCKeyActionDisplay),
+                    0,
+                    UInt32(LMGetKbdType()),
+                    OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                    &deadKeyState,
+                    buffer.count,
+                    &length,
+                    baseAddress
+                )
+            }
         }
+    }
 
-        var deadKeyState: UInt32 = 0
-        var unicodeString = [UniChar](repeating: 0, count: 4)
-        var length = 0
-        let status = UCKeyTranslate(
-            &layout,
-            UInt16(keyCode),
-            UInt16(kUCKeyActionDisplay),
-            0,
-            UInt32(LMGetKbdType()),
-            OptionBits(kUCKeyTranslateNoDeadKeysBit),
-            &deadKeyState,
-            unicodeString.count,
-            &length,
-            &unicodeString
-        )
-        guard status == noErr, length > 0 else { return nil }
-        let string = String(utf16CodeUnits: unicodeString, count: length)
-        return string.isEmpty ? nil : string
+    @MainActor static func printableKeyDisplayString(
+        for keyCode: UInt32,
+        layoutData: Data,
+        translator: KeyboardLayoutTranslator
+    ) -> String? {
+        guard let virtualKeyCode = UInt16(exactly: keyCode) else { return nil }
+        return layoutData.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> String? in
+            let headerSize = MemoryLayout<UCKeyboardLayout>.size
+            guard bytes.count >= headerSize, let source = bytes.baseAddress else { return nil }
+
+            // `UCKeyboardLayout` is only a header. Its offsets point into the
+            // remainder of the variable-length `uchr` blob, so pass aligned
+            // storage containing every byte for the whole UCKeyTranslate call.
+            let storage = UnsafeMutableRawPointer.allocate(
+                byteCount: bytes.count,
+                alignment: MemoryLayout<UCKeyboardLayout>.alignment
+            )
+            defer { storage.deallocate() }
+            storage.copyMemory(from: source, byteCount: bytes.count)
+            let layout = storage.assumingMemoryBound(to: UCKeyboardLayout.self)
+
+            var deadKeyState: UInt32 = 0
+            var unicodeString = [UniChar](repeating: 0, count: 4)
+            var length = 0
+            let status = translator(layout, bytes.count, virtualKeyCode, &deadKeyState, &unicodeString, &length)
+            guard status == noErr, length > 0, length <= unicodeString.count else { return nil }
+            let string = String(utf16CodeUnits: unicodeString, count: length)
+            return string.isEmpty ? nil : string
+        }
     }
 }
 
