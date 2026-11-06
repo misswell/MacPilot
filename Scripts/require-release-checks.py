@@ -55,22 +55,33 @@ def verify_regression_jobs(repo: str, run_id: int) -> None:
 
 def wait_for_checks(repo: str, sha: str, *, timeout: float, interval: float) -> None:
     deadline = time.monotonic() + timeout
-    for workflow in REQUIRED_RUNS:
-        while True:
+    while True:
+        pending: list[tuple[str, dict[str, Any] | None]] = []
+        passed: list[str] = []
+        for workflow in REQUIRED_RUNS:
             run = matching_run(repo, workflow, sha)
-            if run is not None:
-                status, conclusion = run.get("status"), run.get("conclusion")
-                if status == "completed":
-                    if conclusion != "success":
-                        raise GateError(f"{workflow} for {sha} concluded {conclusion or 'unknown'}")
-                    if workflow == "regression-gate.yml":
-                        verify_regression_jobs(repo, int(run["databaseId"]))
-                    print(f"{workflow} passed for {sha}")
-                    break
-            if time.monotonic() >= deadline:
-                detail = "no run found" if run is None else f"run is {run.get('status')}"
-                raise GateError(f"timed out waiting for {workflow} at {sha}: {detail}")
-            time.sleep(interval)
+            if run is None:
+                pending.append((workflow, None))
+                continue
+            status, conclusion = run.get("status"), run.get("conclusion")
+            if status != "completed":
+                pending.append((workflow, run))
+                continue
+            if conclusion != "success":
+                raise GateError(f"{workflow} for {sha} concluded {conclusion or 'unknown'}")
+            if workflow == "regression-gate.yml":
+                verify_regression_jobs(repo, int(run["databaseId"]))
+            passed.append(workflow)
+
+        if not pending:
+            for workflow in passed:
+                print(f"{workflow} passed for {sha}")
+            return
+        if time.monotonic() >= deadline:
+            workflow, run = pending[0]
+            detail = "no run found" if run is None else f"run is {run.get('status')}"
+            raise GateError(f"timed out waiting for {workflow} at {sha}: {detail}")
+        time.sleep(interval)
 
 
 def main() -> int:

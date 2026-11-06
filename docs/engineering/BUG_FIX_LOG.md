@@ -50,13 +50,13 @@
 
 发布验收：附件 SHA-256、应用签名、固定 DR、公证票据与 DMG 校验通过；未安装。本机 Gatekeeper assessment 已关闭，不能据此声称首开验收通过。iOS 修改尚未分发 TestFlight；黑屏/显示器实机与升级验收仍待完成。
 
-## 2026-11-06：beta.99 复查跟进（PR 验证中）
+## 2026-11-06：beta.99 复查修复
 
 | 复查问题 / 根因 | 修复或澄清与防复发 | 验证入口 |
 |---|---|---|
 | AX 空结果提前清 pending 且取消 fallback；按键已消费但会话不显示 | pending 与 fallback 由同一生命周期状态机管理；仅最终可展示的非空 AX/cache snapshot resolve；fallback 用代次 token 拒绝旧回调 | `WindowSwitcherFirstPressTests`（旧分支 mutant 红、修复后绿） |
 | BLE sampledAt 被误读成可靠的无线测量时间 | 注明它是 iOS 收到 RSSI callback 后写入的诊断墙钟；生产授权仍依赖 Mac 单调 TTL、当前 nonce、设备 ID 与 HMAC；配对密钥持有者仍可伪造 RSSI | `ReversePresenceSampleTests`、`ReversePresenceOperationTrackerTests`、`BLEReversePresenceTests` |
-| 发布只等 Build，回归或 iOS CI 未成功也可能出包 | tag gate 逐项要求同 SHA、main push 的 Build、双 macOS Regression Gate、PilotNest 成功；未触发、旧 SHA、失败、取消、macOS26缺失均阻断 | `python3 Tests/Release/release-gate-tests.py` |
+| 发布只等 Build，回归或 iOS CI 未成功也可能出包；合并后旧逻辑测试从移动 main ref 取样导致递归失败 | tag gate 逐项要求同 SHA、main push 的 Build、双 macOS Regression Gate、PilotNest 成功；逐轮扫描所有门禁，任一失败即阻断；历史 build-only 行为固定为带来源 SHA 的只读 shell fixture | `python3 Tests/Release/release-gate-tests.py` |
 | 门禁索引可缩减测试/路径或增加豁免 | base 版本 guard 禁止删除规则/状态降级/缩小规则及全量 suite 覆盖/新豁免；索引变化升级全量；macOS 26 改为阻断门禁 | `python3 Tests/Python/test_regression_index_guard.py`；`Regression Gate` |
 
-信任边界：仓库 checker 无法阻止有写权限者同时改 checker 与 workflow。当前 GitHub 主分支保护/Rulesets 未配置；需管理员另设 branch protection 与 CODEOWNERS 强制审查。本次只记录，不更改远端权限。BLE 处理是协议/威胁模型澄清，不代表新发现一条超时绕过漏洞。实机显示器与 BLE 验收待完成；本 PR 未发 beta.
+信任边界：仓库 checker 无法阻止有写权限者同时改 checker 与 workflow。当前 GitHub 主分支保护/Rulesets 未配置；需管理员另设 branch protection 与 CODEOWNERS 强制审查。本次只记录，不更改远端权限。BLE 处理是协议/威胁模型澄清，不代表新发现一条超时绕过漏洞。实机显示器与 BLE 验收待完成；本 PR 未发 beta。完整验证证据见关联 PR。

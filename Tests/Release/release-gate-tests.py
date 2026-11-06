@@ -9,9 +9,11 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "Scripts/require-release-checks.py"
+LEGACY_GATE_FIXTURE = ROOT / "Tests/Release/Fixtures/legacy-build-only-gate.sh"
 SHA = "a" * 40
 RUNS = {
     "build.yml": {"databaseId": 1, "headSha": SHA, "headBranch": "main", "event": "push", "status": "completed", "conclusion": "success"},
@@ -37,6 +39,8 @@ if args[:2] == ["run", "list"]:
         runs = [{**runs[0], "event": "workflow_dispatch"}]
     if scenario == "failed" and workflow == "build.yml" and runs:
         runs = [{**runs[0], "conclusion": "failure"}]
+    if scenario == "build_pending_regression_failed" and workflow == "build.yml" and runs:
+        runs = [{**runs[0], "status": "in_progress", "conclusion": None}]
     if scenario == "regression_failed" and workflow == "regression-gate.yml" and runs:
         runs = [{**runs[0], "conclusion": "failure"}]
     if scenario == "cancelled" and workflow == "pilotnest.yml" and runs:
@@ -70,14 +74,6 @@ class ReleaseGateTests(unittest.TestCase):
             )
 
     def run_legacy_build_only_gate(self, scenario: str, data: dict) -> subprocess.CompletedProcess[str]:
-        legacy = subprocess.run(
-            ["git", "show", "origin/main:.github/workflows/release-common.yml"],
-            cwd=ROOT, text=True, capture_output=True, check=True,
-        ).stdout
-        start = legacy.index("      - name: Require successful main-branch validation")
-        run_start = legacy.index("        run: |\n", start) + len("        run: |\n")
-        end = legacy.index("\n  dist:\n", run_start)
-        script = "\n".join(line[10:] for line in legacy[run_start:end].splitlines())
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             gh = root / "gh"
@@ -88,9 +84,23 @@ class ReleaseGateTests(unittest.TestCase):
             env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", SCENARIO=scenario,
                        GATE_DATA=str(data_path), GITHUB_REPOSITORY="misswell/MacPilot", GITHUB_SHA=SHA)
             return subprocess.run(
-                ["bash", "-euo", "pipefail", "-c", script], cwd=ROOT, env=env,
+                ["bash", "-euo", "pipefail", str(LEGACY_GATE_FIXTURE)], cwd=ROOT, env=env,
                 text=True, capture_output=True, check=False,
             )
+
+    def test_legacy_gate_fixture_does_not_read_moving_main_ref(self) -> None:
+        original_run = subprocess.run
+
+        def reject_moving_history_lookup(*args, **kwargs):
+            command = args[0] if args else kwargs.get("args", [])
+            if isinstance(command, (list, tuple)) and list(command[:2]) == ["git", "show"]:
+                raise AssertionError("legacy behavior must come from the pinned fixture")
+            return original_run(*args, **kwargs)
+
+        with patch("subprocess.run", side_effect=reject_moving_history_lookup):
+            result = self.run_legacy_build_only_gate("success", RUNS)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("67665f3b475c5e4e9c19417f1176d459f5897c81", LEGACY_GATE_FIXTURE.read_text(encoding="utf-8"))
 
     def test_all_same_sha_checks_and_both_regression_macos_jobs_pass(self) -> None:
         self.assertEqual(self.run_gate("success", {**RUNS, "jobs": JOBS}).returncode, 0)
@@ -99,6 +109,14 @@ class ReleaseGateTests(unittest.TestCase):
         result = self.run_gate("failed", {**RUNS, "jobs": JOBS})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("build.yml", result.stderr)
+
+    def test_failed_regression_blocks_while_build_is_still_pending(self) -> None:
+        data = {**RUNS, "build.yml": {**RUNS["build.yml"], "status": "in_progress"},
+                "regression-gate.yml": {**RUNS["regression-gate.yml"], "conclusion": "failure"},
+                "jobs": JOBS}
+        result = self.run_gate("build_pending_regression_failed", data)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("regression-gate.yml", result.stderr)
 
     def test_legacy_build_only_gate_passes_while_regression_failure_blocks_new_gate(self) -> None:
         failure = {**RUNS, "regression-gate.yml": {**RUNS["regression-gate.yml"], "conclusion": "failure"},
