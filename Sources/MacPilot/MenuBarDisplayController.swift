@@ -38,6 +38,7 @@ final class MenuBarDisplayController: NSObject, NSMenuDelegate, ObservableObject
     private let iconName: @MainActor () -> String
     private let debounce: Duration
     private let insertionDelay: Duration
+    private let pauseAfterRemoval: @MainActor () async -> Void
     private var topology: [MenuBarDisplay]
     private var trackingMenus = Set<ObjectIdentifier>()
     private var needsReinsert = false
@@ -69,6 +70,7 @@ final class MenuBarDisplayController: NSObject, NSMenuDelegate, ObservableObject
         pointer: @escaping @MainActor () -> CGPoint = { NSEvent.mouseLocation },
         debounce: Duration = .milliseconds(300),
         insertionDelay: Duration = .milliseconds(80),
+        pauseAfterRemoval: @escaping @MainActor () async -> Void = {},
         menuFactory: (@MainActor (MenuBarDisplayController) -> NSMenu)? = nil,
         iconName: @escaping @MainActor () -> String = { "timer" },
         makeStatusItem: @escaping @MainActor () -> any MenuBarStatusItem = {
@@ -86,6 +88,7 @@ final class MenuBarDisplayController: NSObject, NSMenuDelegate, ObservableObject
         self.pointer = pointer
         self.debounce = debounce
         self.insertionDelay = insertionDelay
+        self.pauseAfterRemoval = pauseAfterRemoval
         self.menuFactory = menuFactory
         self.iconName = iconName
         self.makeStatusItem = makeStatusItem
@@ -242,6 +245,7 @@ final class MenuBarDisplayController: NSObject, NSMenuDelegate, ObservableObject
                 removeItem(item)
                 self.statusItem = nil
             }
+            await self.pauseAfterRemoval()
             // The item is out of the menu bar from here on. This sleep is
             // cancellable, so every exit — including a cancellation — has to
             // reinstall it. Returning straight out of a cancelled sleep left

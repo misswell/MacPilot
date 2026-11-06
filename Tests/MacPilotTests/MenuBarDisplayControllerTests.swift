@@ -284,12 +284,20 @@ struct MenuBarDisplayControllerTests {
     @Test func selfHealNeverFightsTheUserAndRespectsTheSwitch() async {
         let state = TestDisplayState([screen("main", x: 0), screen("external", x: 1_920)])
         let center = NotificationCenter()
-        let controller = makeController(center: center, screens: { state.screens })
+        let removalGate = TestRemovalGate()
+        defer { removalGate.release() }
+        let controller = makeController(
+            center: center,
+            screens: { state.screens },
+            pauseAfterRemoval: { await removalGate.pauseOnce() }
+        )
         defer { controller.stop() }
+        let changes = observeInsertions(controller)
 
         state.screens = [screen("main", x: 0)]
         center.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
-        #expect(await waitForInsertionState(false, controller))
+        await removalGate.waitUntilPaused()
+        #expect(!controller.isInserted)
 
         // 菜单正在跟踪时自愈必须让路，否则会重建一个用户正看着的菜单。
         let menu = NSMenu()
@@ -297,7 +305,11 @@ struct MenuBarDisplayControllerTests {
         controller.selfHeal()
         #expect(!controller.isInserted)
         center.post(name: NSMenu.didEndTrackingNotification, object: menu)
-        #expect(await waitForInsertionState(true, controller))
+        // Closing the menu cancels the held pass. Resume it and wait for the
+        // replacement pass to finish its own remove/insert cycle.
+        removalGate.release()
+        #expect(await waitForInsertions(4, changes))
+        #expect(controller.isInserted)
 
         // 用户关掉图标后，自愈不得把它装回来。
         controller.setEnabled(false)
@@ -311,7 +323,8 @@ struct MenuBarDisplayControllerTests {
     private func makeController(
         center: NotificationCenter,
         screens: @escaping @MainActor () -> [MenuBarDisplay],
-        pointer: @escaping @MainActor () -> CGPoint = { .zero }
+        pointer: @escaping @MainActor () -> CGPoint = { .zero },
+        pauseAfterRemoval: @escaping @MainActor () async -> Void = {}
     ) -> MenuBarDisplayController {
         MenuBarDisplayController(
             notificationCenter: center,
@@ -319,6 +332,7 @@ struct MenuBarDisplayControllerTests {
             pointer: pointer,
             debounce: .milliseconds(5),
             insertionDelay: .milliseconds(5),
+            pauseAfterRemoval: pauseAfterRemoval,
             menuFactory: nil
         )
     }
@@ -376,5 +390,32 @@ private final class TestDisplayState {
     init(_ screens: [MenuBarDisplay], pointer: CGPoint = .zero) {
         self.screens = screens
         self.pointer = pointer
+    }
+}
+
+@MainActor
+private final class TestRemovalGate {
+    private var didPause = false
+    private var removalContinuation: CheckedContinuation<Void, Never>?
+    private var enteredContinuation: CheckedContinuation<Void, Never>?
+
+    func pauseOnce() async {
+        guard !didPause else { return }
+        didPause = true
+        await withCheckedContinuation { continuation in
+            removalContinuation = continuation
+            enteredContinuation?.resume()
+            enteredContinuation = nil
+        }
+    }
+
+    func waitUntilPaused() async {
+        guard !didPause else { return }
+        await withCheckedContinuation { enteredContinuation = $0 }
+    }
+
+    func release() {
+        removalContinuation?.resume()
+        removalContinuation = nil
     }
 }
