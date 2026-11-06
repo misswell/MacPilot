@@ -6,9 +6,14 @@ import Foundation
 final class BackgroundTask {
     private var task: Task<Void, Never>?
     private(set) var isRunning = false
+    private let sleep: @MainActor (Duration) async throws -> Void
     private nonisolated static let countLock = NSLock()
     private nonisolated(unsafe) static var runningCount = 0
     nonisolated static var activeCount: Int { countLock.withLock { runningCount } }
+
+    init(sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
+        self.sleep = sleep
+    }
 
     private nonisolated static func updateCount(by change: Int) {
         countLock.withLock { runningCount += change }
@@ -30,10 +35,11 @@ final class BackgroundTask {
         guard task == nil else { return }
         isRunning = true
         Self.updateCount(by: 1)
-        task = Task { [weak self] in
+        let sleep = self.sleep
+        task = Task { [weak self, sleep] in
             while !Task.isCancelled {
                 do {
-                    try await Task.sleep(for: interval)
+                    try await sleep(interval)
                 } catch {
                     break
                 }
@@ -49,9 +55,10 @@ final class BackgroundTask {
         guard task == nil else { return }
         isRunning = true
         Self.updateCount(by: 1)
-        task = Task { [weak self] in
+        let sleep = self.sleep
+        task = Task { [weak self, sleep] in
             while !Task.isCancelled {
-                do { try await Task.sleep(for: interval) }
+                do { try await sleep(interval) }
                 catch { break }
                 guard !Task.isCancelled, self?.isRunning == true else { break }
                 await action()
@@ -71,8 +78,9 @@ final class BackgroundTask {
         guard task == nil else { return }
         isRunning = true
         Self.updateCount(by: 1)
-        task = Task { [weak self] in
-            do { try await Task.sleep(for: interval) }
+        let sleep = self.sleep
+        task = Task { [weak self, sleep] in
+            do { try await sleep(interval) }
             catch { return }
             guard !Task.isCancelled, let self, self.isRunning else { return }
             self.isRunning = false

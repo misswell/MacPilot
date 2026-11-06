@@ -97,5 +97,6 @@ jobs:
           path: |
             .regression-logs/plan.json
             .regression-logs/*.log
+            .regression-logs/crash-diagnostics/**
           include-hidden-files: true
           retention-days: 14

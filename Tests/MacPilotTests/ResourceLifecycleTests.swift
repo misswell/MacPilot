@@ -115,9 +115,21 @@ struct ResourceLifecycleTests {
     @Test func oneShotTaskReleasesItsSlotAfterFiring() async throws {
         let baseline = BackgroundTask.activeCount
         var fired = false
-        let timer = BackgroundTask.once(after: 0.01) { fired = true }
+        let enteredSleep = TestAsyncSignal()
+        let resumeSleep = TestAsyncSignal()
+        let actionFired = TestAsyncSignal()
+        let timer = BackgroundTask(sleep: { _ in
+            enteredSleep.signal()
+            await resumeSleep.wait()
+        })
+        timer.startOnce(after: .milliseconds(10)) {
+            fired = true
+            actionFired.signal()
+        }
+        await enteredSleep.wait()
         #expect(timer.isRunning)
-        try await Task.sleep(for: .milliseconds(50))
+        resumeSleep.signal()
+        await actionFired.wait()
         #expect(fired)
         #expect(!timer.isRunning)
         #expect(BackgroundTask.activeCount == baseline)
@@ -130,5 +142,22 @@ struct ResourceLifecycleTests {
         #expect(BackgroundTask.activeCount == baseline + 1)
         task = nil
         #expect(BackgroundTask.activeCount == baseline)
+    }
+}
+
+@MainActor
+private final class TestAsyncSignal {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var isSignaled = false
+
+    func signal() {
+        isSignaled = true
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func wait() async {
+        guard !isSignaled else { return }
+        await withCheckedContinuation { continuation = $0 }
     }
 }

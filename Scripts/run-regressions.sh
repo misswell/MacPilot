@@ -174,14 +174,18 @@ PY
     echo "   pre-flight: $LISTED test(s) listed"
   fi
 
+  CRASH_MARKER="$LOG_DIR/.test-start-$$-$IDX"
+  touch "$CRASH_MARKER"
   bash -c "$CMD" >"$LOG" 2>&1
   CMD_FAILED=$?
+  echo "   command exit code: $CMD_FAILED"
 
   if [[ "$KIND" == "swift-test" ]]; then
     # Post-flight: prove tests actually executed, not just a zero exit code.
     EXECUTED=$(grep -cE '✔|✘|passed|failed|Test run with|Test Suite' "$LOG" || true)
     if [[ "$EXECUTED" -eq 0 ]]; then
       echo "FAIL: no executed-test evidence in output — refusing to count this as a pass." >&2
+      rm -f "$CRASH_MARKER"
       FAILURES+=("$CMD [no execution evidence]")
       continue
     fi
@@ -190,11 +194,113 @@ PY
 
   if [[ $CMD_FAILED -eq 0 ]]; then
     echo "   PASS"
+    rm -f "$CRASH_MARKER"
     continue
   fi
 
   echo "   failure context (last 50 lines of $LOG):"
   tail -n 50 "$LOG" | sed 's/^/   | /'
+
+  if [[ "$KIND" == "swift-test" ]]; then
+    python3 - "$LOG_DIR" "$CRASH_MARKER" "$CMD_FAILED" "$LOG" <<'PY'
+import json, re, shutil, sys
+from pathlib import Path
+import time
+
+log_dir = Path(sys.argv[1])
+marker = Path(sys.argv[2])
+exit_code = int(sys.argv[3])
+test_log = Path(sys.argv[4])
+started = marker.stat().st_mtime
+destination = log_dir / "crash-diagnostics"
+destination.mkdir(exist_ok=True)
+candidate_roots = [
+    Path.home() / "Library/Logs/DiagnosticReports",
+    Path("/Library/Logs/DiagnosticReports"),
+]
+log_output = test_log.read_text(errors="replace") if test_log.is_file() else ""
+wait_for_report = exit_code >= 128 or "Test run with" not in log_output
+copied = []
+for attempt in range(11 if wait_for_report else 1):
+    for root in candidate_roots:
+        if not root.is_dir():
+            continue
+        try:
+            reports = sorted(
+                (p for p in root.iterdir() if p.is_file() and p.suffix.lower() in {".ips", ".crash"}
+                 and p.stat().st_mtime >= started),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            continue
+        for report in reports:
+            if len(copied) >= 10:
+                break
+            try:
+                content = report.read_text(errors="replace")[:3_000_000]
+            except OSError:
+                continue
+            process_field = re.search(
+                r'"(?:procName|app_name)"\s*:\s*"([^"]+)"|^Process:\s*([^,\n]+)',
+                content,
+                re.I | re.M,
+            )
+            process_name = next((value for value in process_field.groups() if value), "") if process_field else ""
+            relevant = re.search(r"swift|xctest|macpilot|testhost", report.name + "\n" + process_name, re.I)
+            if not relevant:
+                continue
+            target = destination / report.name
+            try:
+                shutil.copy2(report, target)
+            except OSError:
+                continue
+            copied.append((target, content))
+        if len(copied) >= 10:
+            break
+    if copied or attempt == 10 or not wait_for_report:
+        break
+    time.sleep(1)
+
+summary = []
+for path, content in copied:
+    process = "unknown"
+    exception = "unknown"
+    frames = []
+    try:
+        report = json.loads(content)
+    except json.JSONDecodeError:
+        report = None
+    if isinstance(report, dict):
+        process = str(report.get("procName") or report.get("app_name") or process)
+        exception_info = report.get("exception")
+        if isinstance(exception_info, dict):
+            exception = str(exception_info.get("type") or exception_info.get("signal") or exception)
+        threads = report.get("threads", [])
+        faulting = report.get("faultingThread")
+        if isinstance(faulting, int) and faulting < len(threads):
+            frames = threads[faulting].get("frames", [])
+        if not frames and threads:
+            frames = threads[0].get("frames", [])
+        frames = [str(f.get("symbol") or f.get("imageOffset") or f.get("imageIndex")) for f in frames[:12]]
+    else:
+        match = re.search(r"^Process:\s*(.+)$", content, re.M)
+        if match:
+            process = match.group(1).strip()
+        match = re.search(r"^Exception Type:\s*(.+)$", content, re.M)
+        if match:
+            exception = match.group(1).strip()
+        match = re.search(r"^Crashed Thread:\s*(.+)$", content, re.M)
+        if match:
+            frames = content[match.end():].splitlines()[:14]
+    summary.extend([f"{path.name}: process={process}; exception={exception}", *[f"  {frame}" for frame in frames]])
+
+summary_path = destination / "summary.log"
+summary_path.write_text("\n".join(summary) + ("\n" if summary else "No matching Swift/XCTest/MacPilot crash reports found after bounded scan.\n"))
+print(f"   crash diagnostics: {len(copied)} related report(s); waited up to {10 if wait_for_report and not copied else 0}s; {summary_path}")
+PY
+  fi
+  rm -f "$CRASH_MARKER"
 
   # A swift-test failure is only waivable when EVERY failing test is listed in
   # the index's known_flaky_tests AND passes when re-run alone. Anything else —
