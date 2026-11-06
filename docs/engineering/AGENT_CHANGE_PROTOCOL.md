@@ -7,7 +7,7 @@
 ## 第一步：定位模块与历史规则
 
 1. 列出本次修改将触碰的文件。
-2. 运行 `python3 Scripts/regression-plan.py --mode local --dry-run`（或在心里等价地）比对 `docs/engineering/REGRESSION_INDEX.json` 的 `affected_paths`，得出命中的规则 id。
+2. 运行 `python3 Scripts/regression-plan.py --mode local` 比对 `docs/engineering/REGRESSION_INDEX.json` 的 `affected_paths`，得出命中的规则 id。若索引有变更，运行 `python3 Scripts/regression-index-guard.py --base origin/main --head WORKTREE`；这是本地防误改检查，可信的 base 版本校验由 CI 执行。
 3. 阅读 `docs/engineering/regressions/<module>.md` 中的不变量；命中窗口/菜单栏/BLE/显示/配置/发布任一 critical 规则时，必须通读对应文档。
 
 ## 第二步：查历史提交与 Revert
@@ -60,3 +60,9 @@ git log --oneline --all -i --grep=revert
 - 禁止把 `REGRESSION_INDEX.json` 的 `test_filters` 改成不存在的套件来缩小范围（`--validate` 会失败）。
 - 禁止为让构建通过而弱化签名 requirement、绕过 CI、`--no-verify`。
 - 禁止在用户当前会话执行真实锁屏/黑屏/休眠/电源策略变更，或替换 `/Applications/MacPilot.app`。
+
+## Regression Guard 的信任边界
+
+- 修改 `REGRESSION_INDEX.json` 时，必须以 base commit 内的 `regression-index-guard.py` 比较 base/head；禁止删除规则、降低状态、缩小任一历史覆盖项或全量安全套件、增加 flaky 豁免。新增覆盖允许；索引变动自动触发完整安全套件。
+- CI/本地无法用同一个被修改的 head 检查器证明 head 没有削弱检查器本身。首次引入 base 版本不存在的 guard 时只可作为一次 bootstrap；后续检查必须运行 base 中的 checker。
+- 仓库文件不能约束有权限者同时修改 checker 与 workflow，也不能设置 GitHub branch protection。主分支保护及 `CODEOWNERS` 审核需由仓库管理员在 GitHub 设置；本轮只核对配置，不代管理员修改远端权限。

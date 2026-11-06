@@ -81,9 +81,11 @@ public struct RemoteBLEPresenceChallenge: Equatable, Sendable {
 /// The legacy `RemoteBLEPresenceChallenge` answer proves identity only; its
 /// bytes say nothing about distance, and anyone who captured it could replay it
 /// against the same nonce. This type adds the two fields the reverse path needs
-/// — the actual RSSI reading and the sampling timestamp — inside the HMAC and
-/// under a separate domain label, so a proximity proof can never be confused
-/// with an identity proof.
+/// — the RSSI value and the time the iOS app packages its callback — inside the
+/// HMAC and under a separate domain label, so a proximity proof can never be
+/// confused with an identity proof. CoreBluetooth exposes the RSSI callback,
+/// not the underlying radio measurement time, and the phone can set this wall
+/// clock timestamp; it is diagnostic data rather than trusted freshness proof.
 ///
 /// The payload is written once per fresh challenge. The Mac keeps the challenge
 /// pending and consumes it on the first accepted sample, which makes every
@@ -95,10 +97,11 @@ public struct RemoteBLEReversePresenceSample: Equatable, Sendable {
     public static let signatureLength = 32
     /// version + nonce + mac ID + RSSI + timestamp + signature.
     public static let encodedLength = 1 + nonceLength + 16 + 1 + 8 + signatureLength
-    /// A sample older than this is no longer evidence of "right now". BLE can
-    /// stall in the background, so the window is generous but bounded.
+    /// Convenience wall-clock freshness bounds for callers that compare the
+    /// phone's diagnostic timestamp. Production presence authorization uses
+    /// the Mac-local monotonic challenge lifetime instead.
     public static let maximumAge: TimeInterval = 12
-    /// Small allowance for clock drift between the phone and this Mac.
+    /// Convenience tolerance for future phone timestamps during diagnostics.
     public static let maximumFutureSkew: TimeInterval = 3
 
     private static let label = Data("MacPilotRemote-v1-reverse-presence".utf8)
@@ -109,12 +112,13 @@ public struct RemoteBLEReversePresenceSample: Equatable, Sendable {
     public let macID: UUID
     public let nonce: Data
     public let rssi: Int
+    /// Phone wall-clock time at sample construction; signed for diagnostics,
+    /// not a trusted RSSI measurement timestamp.
     public let sampledAtMilliseconds: UInt64
     public let signature: Data
 
-    /// Rejects payloads that could not have come from a real measurement.
-    /// Tampered values are expected to be built by editing encoded bytes, not
-    /// through this initializer.
+    /// Constructs a well-formed signed payload. `sampledAt` is supplied by the
+    /// caller and must not be treated as proof of when the radio read occurred.
     public init?(
         macID: UUID,
         nonce: Data,
@@ -200,13 +204,16 @@ public struct RemoteBLEReversePresenceSample: Equatable, Sendable {
         maximumAge: TimeInterval = Self.maximumAge,
         maximumFutureSkew: TimeInterval = Self.maximumFutureSkew
     ) -> Bool {
+        // This value only describes the signed phone wall-clock field. It
+        // cannot prove when CoreBluetooth measured RSSI or resist a paired
+        // client that chooses its own timestamp.
         let age = now.timeIntervalSince(sampledAt)
         return age <= maximumAge && age >= -maximumFutureSkew
     }
 
-    /// The one check the Mac performs on a written sample: the proof must be
-    /// for this Mac and the challenge still pending, and it must describe a
-    /// measurement taken just now.
+    /// Convenience validation for the signed phone timestamp plus proof
+    /// binding. This does not replace the Mac's production check, which
+    /// validates the live challenge using its local monotonic clock and HMAC.
     public func isValid(
         pairingKey: Data,
         expectedMacID: UUID,
@@ -241,6 +248,8 @@ public struct RemoteBLEReversePresenceSample: Equatable, Sendable {
 
 /// Mac-local lifetime for one reverse-presence nonce. Phone wall-clock time is
 /// authenticated diagnostic data, never the clock that expires this challenge.
+/// This lifetime prevents nonce replay and limits callback delay; by itself it
+/// cannot prevent a client holding the pairing key from fabricating an RSSI.
 public struct RemoteBLEReversePresenceChallenge: Sendable {
     public let macID: UUID
     public let nonce: Data
@@ -261,6 +270,9 @@ public struct RemoteBLEReversePresenceChallenge: Sendable {
     }
 
     public mutating func consume(_ sample: RemoteBLEReversePresenceSample, pairingKey: Data, at uptime: TimeInterval) -> Bool {
+        // Do not use `sample.isFresh` here: its phone wall-clock timestamp is
+        // not a trustworthy measurement clock. The production trust boundary
+        // is the Mac-local challenge expiry, nonce/Mac binding and HMAC.
         guard isPending(at: uptime), sample.macID == macID,
               RemoteCrypto.constantTimeEquals(sample.nonce, nonce),
               sample.isValidSignature(pairingKey: pairingKey) else { return false }

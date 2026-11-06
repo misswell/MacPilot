@@ -3,10 +3,6 @@ name: Build PilotNest
 on:
   push:
     branches: [main, "codex/**"]
-    paths:
-      - "iOS/MacPilotRemote/**"
-      - "Packages/MacPilotRemoteProtocol/**"
-      - ".github/workflows/pilotnest.yml"
   pull_request:
     branches: [main]
     paths:

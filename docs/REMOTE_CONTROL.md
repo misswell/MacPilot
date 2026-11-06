@@ -938,13 +938,16 @@ diagnostic echo as presence evidence.
 
 The Mac advertises only the service UUID. A paired phone connects, reads Mac
 info and subscribes to the presence characteristic. For each subscriber the Mac
-issues a fresh 16-byte nonce by notification (small enough for the default ATT
-MTU), keeps exactly one pending challenge per central with a 15-second TTL, and
-repeats the same nonce when the notification buffer is full. A new nonce is
-issued about every 2.5 seconds while a subscriber exists.
+issues a 16-byte nonce by notification (small enough for the default ATT MTU),
+keeps exactly one pending challenge per central with a 15-second TTL, and
+repeats the same nonce when the notification buffer is full. The cadence ticks
+about every 2.5 seconds; it issues a new nonce only when no delivered,
+unexpired challenge is awaiting its response.
 
-The phone answers a notification only after `readRSSI()` returns a real reading.
-It signs the sample with the Mac's long-term pairing key:
+The phone answers a notification only after `readRSSI()` returns a reading. The
+`sampled at` field is the phone wall-clock time recorded when the RSSI callback
+is packaged, not a hardware timestamp for the radio measurement. It signs that
+diagnostic value with the Mac's long-term pairing key:
 
 | Field | Bytes | Notes |
 | --- | --- | --- |
@@ -958,9 +961,15 @@ It signs the sample with the Mac's long-term pairing key:
 The legacy `RemoteBLEPresenceChallenge.response(pairingKey:)` encoding is
 unchanged. The reverse sample uses a separate domain label, so an identity proof
 can never be replayed as a proximity sample. The Mac expires its challenge using
-local continuous monotonic elapsed time including system sleep (15 seconds); the signed phone timestamp is diagnostic
-only, so device wall-clock skew cannot reject an otherwise valid sample. Only a verified sample consumes
-the pending nonce, so a duplicate write has nothing left to match.
+local continuous monotonic elapsed time including system sleep (15 seconds).
+The signed phone timestamp is diagnostic only: it does not prove when the radio
+measurement occurred, and a paired client can choose it. Mac authorization
+checks the current Mac ID and nonce, the HMAC, and the local challenge lifetime;
+device wall-clock skew therefore cannot reject an otherwise valid response.
+Only a verified sample consumes the pending nonce, so a duplicate write has
+nothing left to match. A client with the pairing key can still fabricate its
+own RSSI value; this protocol authenticates the paired client and prevents
+replay, but does not make that client an unforgeable radio sensor.
 
 On the Mac, the model revalidates everything the GATT layer cannot own: the
 feature and reverse toggle are enabled, the session is on the console, the

@@ -700,6 +700,113 @@ enum WindowSwitcherSessionBootstrap {
         if windowServerCount > 0 { return .windowServerFallback(count: windowServerCount) }
         return .unresolved
     }
+
+}
+
+/// Owns the consumed first-press promise and its timeout as one lifecycle.
+/// Production inventory and timeout callbacks both pass through this object,
+/// so an empty AX result cannot clear the pending press while leaving no task
+/// capable of presenting the WindowServer fallback.
+@MainActor
+final class WindowSwitcherPendingSessionLifecycle {
+    struct Resolution {
+        let pending: WindowSwitcherPendingSession
+        let snapshot: [WindowSwitcherItem]
+        let source: WindowSwitcherPendingSessionSource
+    }
+
+    enum FallbackResult {
+        case resolved(Resolution)
+        case dropped
+    }
+
+    private(set) var pending: WindowSwitcherPendingSession?
+    private(set) var fallbackTask: Task<Void, Never>?
+    private var fallbackToken: UUID?
+    var isFallbackArmed: Bool { fallbackTask != nil }
+
+    func begin(_ pending: WindowSwitcherPendingSession) {
+        cancel()
+        self.pending = pending
+    }
+
+    func adjustPendingSelection(reverse: Bool) {
+        pending?.additionalSelectionOffset += reverse ? -1 : 1
+    }
+
+    func requestPendingCommitWhenReady() {
+        guard pending?.manual == false else { return }
+        pending?.commitWhenReady = true
+    }
+
+    func reserveFallbackToken() -> UUID? {
+        guard pending != nil else { return nil }
+        let token = UUID()
+        fallbackToken = token
+        return token
+    }
+
+    func armFallback(_ task: Task<Void, Never>, token: UUID) {
+        guard fallbackToken == token, pending != nil else {
+            task.cancel()
+            return
+        }
+        fallbackTask?.cancel()
+        fallbackTask = task
+    }
+
+    func isCurrentFallback(_ token: UUID) -> Bool {
+        fallbackToken == token && pending != nil
+    }
+
+    /// Resolves from the completed result, or from cache when the refresh
+    /// reports `nil` (unchanged signature). Empty results keep both the
+    /// consumed press and its currently armed timeout alive.
+    func completeInventory(
+        snapshot: [WindowSwitcherItem]?,
+        cached: [WindowSwitcherItem]
+    ) -> Resolution? {
+        guard let pending else { return nil }
+        let candidate = snapshot ?? cached
+        guard !candidate.isEmpty else { return nil }
+        self.pending = nil
+        fallbackTask?.cancel()
+        fallbackTask = nil
+        fallbackToken = nil
+        return Resolution(pending: pending, snapshot: candidate, source: .accessibilityInventory)
+    }
+
+    func completeFallback(
+        token: UUID,
+        cached: [WindowSwitcherItem],
+        windowServer: [WindowSwitcherItem]
+    ) -> FallbackResult? {
+        guard fallbackToken == token, let pending else { return nil }
+        fallbackTask?.cancel()
+        fallbackTask = nil
+        fallbackToken = nil
+        switch WindowSwitcherSessionBootstrap.pendingResolution(
+            inventoryCount: cached.count,
+            windowServerCount: windowServer.count
+        ) {
+        case .inventoryResolved:
+            self.pending = nil
+            return .resolved(Resolution(pending: pending, snapshot: cached, source: .accessibilityInventory))
+        case .windowServerFallback:
+            self.pending = nil
+            return .resolved(Resolution(pending: pending, snapshot: windowServer, source: .windowServerFallback))
+        case .unresolved:
+            self.pending = nil
+            return .dropped
+        }
+    }
+
+    func cancel() {
+        pending = nil
+        fallbackTask?.cancel()
+        fallbackTask = nil
+        fallbackToken = nil
+    }
 }
 
 // MARK: - Global shortcut event tap
@@ -804,7 +911,7 @@ private func windowSwitcherFocusedWindowCallback(
 
 // MARK: - Runtime model
 
-private struct WindowSwitcherPendingSession {
+struct WindowSwitcherPendingSession {
     var reverse: Bool
     var manual: Bool
     var additionalSelectionOffset = 0
@@ -814,7 +921,7 @@ private struct WindowSwitcherPendingSession {
 
 /// Where the snapshot that finally resolved a pending session came from. It is
 /// written to the diagnostic log so a swallowed press is attributable.
-private enum WindowSwitcherPendingSessionSource: String {
+enum WindowSwitcherPendingSessionSource: String, Equatable {
     case accessibilityInventory = "AX inventory"
     case windowServerFallback = "window-server fallback"
 }
@@ -1035,7 +1142,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         [inventoryTask != nil, inventoryRefreshDebounceTask != nil, thumbnailTask != nil,
          selectedThumbnailTask != nil, manualDismissTask != nil, panelIdleTask != nil,
          activationConfirmTask != nil, focusTask != nil,
-         focusedWindowResolutionTask != nil, pendingSessionFallbackTask != nil].filter { $0 }.count
+         focusedWindowResolutionTask != nil, pendingSessionLifecycle.fallbackTask != nil].filter { $0 }.count
     }
     var diagnosticObserverCount: Int { workspaceObservers.count + focusObservers.count }
     func start() { activateFromConfiguration() }
@@ -1095,7 +1202,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private var inventoryRefreshDebounceTask: Task<Void, Never>?
     private var inventoryRevision = 0
     private var inventorySignature: Int?
-    private var pendingSession: WindowSwitcherPendingSession?
+    private let pendingSessionLifecycle = WindowSwitcherPendingSessionLifecycle()
     private var thumbnailTask: Task<Void, Never>?
     private var thumbnailRevision = 0
     private var thumbnailTaskWindowIDs: Set<String> = []
@@ -1118,7 +1225,6 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     /// The current session was presented from the window-server fallback while
     /// the accessibility inventory was still running.
     private var isShowingWindowServerFallback = false
-    private var pendingSessionFallbackTask: Task<Void, Never>?
     private let workspaceObservers = ObserverBag()
     private var focusObservers: [pid_t: AXObserver] = [:]
     private var manualDismissTask: Task<Void, Never>?
@@ -1254,7 +1360,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
             guard let self, !Task.isCancelled else { return }
             guard WindowSwitcherPanelLifetimePolicy.canRelease(
                 isShowing: self.isShowing,
-                hasPendingSession: self.pendingSession != nil
+                hasPendingSession: self.pendingSessionLifecycle.pending != nil
             ) else { return }
             self.cancelThumbnailRefresh()
             self.clearThumbnailCache()
@@ -1266,7 +1372,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
             guard !Task.isCancelled else { return }
             guard WindowSwitcherPanelLifetimePolicy.canRelease(
                 isShowing: self.isShowing,
-                hasPendingSession: self.pendingSession != nil
+                hasPendingSession: self.pendingSessionLifecycle.pending != nil
             ) else { return }
             self.panelController?.releasePanel()
         }
@@ -1454,7 +1560,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         switch type {
         case .keyDown:
             if keyCode == 53 { // Escape
-                guard isShowing || pendingSession != nil else { return false }
+                guard isShowing || pendingSessionLifecycle.pending != nil else { return false }
                 consumeEscapeKeyUp = true
                 if isShowing { cancelSelection() } else { cancelPendingSession() }
                 return true
@@ -1467,8 +1573,8 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                 tabIsDown = true
                 return true
             }
-            if pendingSession != nil {
-                pendingSession?.additionalSelectionOffset += reverse ? -1 : 1
+            if pendingSessionLifecycle.pending != nil {
+                pendingSessionLifecycle.adjustPendingSelection(reverse: reverse)
                 tabIsDown = true
                 return true
             }
@@ -1481,7 +1587,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
             return true
 
         case .keyUp:
-            if keyCode == 48, isShowing || pendingSession != nil || consumeTabKeyUp {
+            if keyCode == 48, isShowing || pendingSessionLifecycle.pending != nil || consumeTabKeyUp {
                 tabIsDown = false
                 consumeTabKeyUp = false
                 return true
@@ -1493,12 +1599,12 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
             return false
 
         case .flagsChanged:
-            if pendingSession != nil,
-               pendingSession?.manual == false,
+            if pendingSessionLifecycle.pending != nil,
+               pendingSessionLifecycle.pending?.manual == false,
                !flags.contains(.maskAlternate) {
                 consumeTabKeyUp = tabIsDown
                 tabIsDown = false
-                pendingSession?.commitWhenReady = true
+                pendingSessionLifecycle.requestPendingCommitWhenReady()
                 return true
             }
             guard isShowing, !isManualSession, !flags.contains(.maskAlternate) else { return false }
@@ -1564,11 +1670,11 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                 "WindowSwitcher",
                 "Session waiting for inventory: cached and window-server snapshots are both empty"
             )
-            pendingSession = WindowSwitcherPendingSession(
+            pendingSessionLifecycle.begin(WindowSwitcherPendingSession(
                 reverse: reverse,
                 manual: manual,
                 startedAt: startedAt
-            )
+            ))
             requestInventoryRefresh(priority: .userInitiated)
             schedulePendingSessionFallback()
             return true
@@ -1692,8 +1798,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private func finishSession(commit: Bool) {
         manualDismissTask?.cancel()
         manualDismissTask = nil
-        pendingSessionFallbackTask?.cancel()
-        pendingSessionFallbackTask = nil
+        pendingSessionLifecycle.cancel()
         isShowingWindowServerFallback = false
         let selected = selectedIndex.flatMap { windows.indices.contains($0) ? windows[$0] : nil }
         isShowing = false
@@ -1733,9 +1838,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     }
 
     private func cancelPendingSession() {
-        pendingSession = nil
-        pendingSessionFallbackTask?.cancel()
-        pendingSessionFallbackTask = nil
+        pendingSessionLifecycle.cancel()
         isShowingWindowServerFallback = false
         tabIsDown = false
     }
@@ -2161,22 +2264,22 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                         newlyObservedWindowIDs: newlyObservedWindowIDs
                     )
                 }
-                if let pending = self.pendingSession {
-                    self.pendingSession = nil
-                    self.pendingSessionFallbackTask?.cancel()
-                    self.pendingSessionFallbackTask = nil
+                if let resolution = self.pendingSessionLifecycle.completeInventory(
+                    snapshot: refresh.snapshot,
+                    cached: self.cachedWindows
+                ) {
                     self.completePendingSession(
-                        pending,
-                        snapshot: self.cachedWindows,
-                        source: .accessibilityInventory
+                        resolution.pending,
+                        snapshot: resolution.snapshot,
+                        source: resolution.source
                     )
                 }
-                if self.isShowingWindowServerFallback, self.pendingSession == nil {
+                if self.isShowingWindowServerFallback, self.pendingSessionLifecycle.pending == nil {
                     self.reconcileWindowServerFallbackSession()
                 }
             }
             if revision != self.inventoryRevision || !settingsStillMatch {
-                self.scheduleInventoryRefresh(priority: self.pendingSession == nil ? .utility : .userInitiated)
+                self.scheduleInventoryRefresh(priority: self.pendingSessionLifecycle.pending == nil ? .utility : .userInitiated)
                 return
             }
             self.prepareHiddenPanelContents()
@@ -2241,36 +2344,37 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     /// the bounded interval, keep that promise with the window-server snapshot
     /// instead of swallowing the shortcut indefinitely.
     private func schedulePendingSessionFallback() {
-        pendingSessionFallbackTask?.cancel()
-        pendingSessionFallbackTask = Task { @MainActor [weak self] in
+        guard let token = pendingSessionLifecycle.reserveFallbackToken() else { return }
+        pendingSessionLifecycle.fallbackTask?.cancel()
+        let task = Task { @MainActor [weak self] in
             do {
                 try await Task.sleep(for: WindowSwitcherSessionBootstrap.pendingSessionFallbackInterval)
             } catch {
                 return
             }
-            guard let self, !Task.isCancelled, self.isRuntimeActive, let pending = self.pendingSession else { return }
-            self.pendingSessionFallbackTask = nil
+            guard let self, !Task.isCancelled, self.isRuntimeActive,
+                  self.pendingSessionLifecycle.isCurrentFallback(token) else { return }
             let timeout = WindowSwitcherSessionBootstrap.pendingSessionFallbackMilliseconds
             let fallback = self.orderedForSession(self.windowServerFallbackSnapshot())
-            switch WindowSwitcherSessionBootstrap.pendingResolution(
-                inventoryCount: self.cachedWindows.count,
-                windowServerCount: fallback.count
-            ) {
-            case let .inventoryResolved(count):
-                self.pendingSession = nil
+            guard let result = self.pendingSessionLifecycle.completeFallback(
+                token: token,
+                cached: self.cachedWindows,
+                windowServer: fallback
+            ) else { return }
+            switch result {
+            case let .resolved(resolution) where resolution.source == .accessibilityInventory:
                 DiagnosticLog.write(
                     "WindowSwitcher",
-                    "Pending session resolved after \(timeout) ms timeout via AX inventory (\(count) windows)"
+                    "Pending session resolved after \(timeout) ms timeout via AX inventory (\(resolution.snapshot.count) windows)"
                 )
-                self.completePendingSession(pending, snapshot: self.cachedWindows, source: .accessibilityInventory)
-            case let .windowServerFallback(count):
-                self.pendingSession = nil
+                self.completePendingSession(resolution.pending, snapshot: resolution.snapshot, source: resolution.source)
+            case let .resolved(resolution):
                 DiagnosticLog.write(
                     "WindowSwitcher",
-                    "Pending session unresolved after \(timeout) ms; presenting window-server fallback (\(count) windows)"
+                    "Pending session unresolved after \(timeout) ms; presenting window-server fallback (\(resolution.snapshot.count) windows)"
                 )
-                self.completePendingSession(pending, snapshot: fallback, source: .windowServerFallback)
-            case .unresolved:
+                self.completePendingSession(resolution.pending, snapshot: resolution.snapshot, source: resolution.source)
+            case .dropped:
                 DiagnosticLog.write(
                     "WindowSwitcher",
                     "Pending session unresolved after \(timeout) ms and no windows exist; session dropped"
@@ -2278,6 +2382,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                 self.cancelPendingSession()
             }
         }
+        pendingSessionLifecycle.armFallback(task, token: token)
     }
 
     /// The cold-start session was presented from the window-server snapshot.
@@ -2286,7 +2391,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private func reconcileWindowServerFallbackSession() {
         guard isShowing,
               isShowingWindowServerFallback,
-              pendingSession == nil,
+              pendingSessionLifecycle.pending == nil,
               !cachedWindows.isEmpty else { return }
         let ordered = orderedForSession(cachedWindows)
         guard !ordered.isEmpty else { return }
@@ -2336,7 +2441,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     }
 
     private func prepareHiddenPanelContents() {
-        guard !isShowing, pendingSession == nil, !cachedWindows.isEmpty else { return }
+        guard !isShowing, pendingSessionLifecycle.pending == nil, !cachedWindows.isEmpty else { return }
         let ordered = orderedForSession(cachedWindows)
         updatePanelContents(ordered, selectedIndex: nil)
     }

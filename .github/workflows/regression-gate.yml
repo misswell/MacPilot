@@ -32,14 +32,13 @@ jobs:
       fail-fast: false
       matrix:
         # macos-15: 活跃支持，正式门禁。
-        # macos-26: 活跃支持，首次接入，标记 experimental；第一次全绿后把
-        # experimental 改为 false 提升为正式门禁（见 docs/engineering/acceptance/macos-compatibility.md）。
+        # macos-26: 正式门禁，与 macos-15 同等阻断。
         # macos-14: GitHub 活跃支持已于 2026-07 结束，无 Runner，人工验收。
         include:
           - runs-on: macos-15
             experimental: false
           - runs-on: macos-26
-            experimental: true
+            experimental: false
     runs-on: ${{ matrix.runs-on }}
     continue-on-error: ${{ matrix.experimental }}
     steps:
@@ -57,17 +56,22 @@ jobs:
         id: gate
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base="origin/${{ github.base_ref }}"
+            base="${{ github.event.pull_request.base.sha }}"
             full=0
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.force_full }}" == "true" ]]; then
-            base="HEAD~1"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            base="${{ github.event.before }}"
             full=1
           else
-            # push to main and scheduled runs always run the full safe suite
-            base="HEAD~1"
+            # Scheduled/manual runs are full; compare with the checked-out main ref.
+            base="origin/main"
             full=1
           fi
-          git rev-parse --verify "$base" >/dev/null
+          if [[ "$base" =~ ^0+$ ]]; then
+            echo "BOOTSTRAP: event has no usable before SHA; full run compares the introduced guard against this checkout."
+            base="$(git rev-parse HEAD)"
+          else
+            git rev-parse --verify "$base" >/dev/null
+          fi
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "full=$full" >> "$GITHUB_OUTPUT"
           echo "mode: event=${{ github.event_name }} base=$base force_full=$full"
@@ -75,7 +79,21 @@ jobs:
       - name: Produce regression plan
         run: |
           mkdir -p .regression-logs
-          args=(--mode pr --base "${{ steps.gate.outputs.base }}" --head HEAD --out .regression-logs/plan.json)
+          base="${{ steps.gate.outputs.base }}"
+          if [[ -z "$base" ]]; then
+            echo "BOOTSTRAP: this push predates a usable base SHA; validating the introduced guard against the existing base index."
+            base="$(git rev-parse HEAD)"
+          fi
+          # Execute the validator from the trusted base commit. The only fallback
+          # is its one-time introduction; afterward every PR uses base-owned code.
+          if git cat-file -e "$base:Scripts/regression-index-guard.py" 2>/dev/null; then
+            git show "$base:Scripts/regression-index-guard.py" > .regression-logs/base-regression-index-guard.py
+          else
+            echo "BOOTSTRAP: base commit predates regression-index-guard.py; using the new validator for this introduction only."
+            cp Scripts/regression-index-guard.py .regression-logs/base-regression-index-guard.py
+          fi
+          python3 .regression-logs/base-regression-index-guard.py --base "$base" --head HEAD
+          args=(--mode pr --base "$base" --head HEAD --out .regression-logs/plan.json)
           if [[ "${{ steps.gate.outputs.full }}" == "1" ]]; then
             args+=(--force-full)
           fi
