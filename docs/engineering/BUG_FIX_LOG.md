@@ -27,6 +27,6 @@
 | 测试写全局 termination owner 干扰其他套件 | 注入注册动作并断言对象，不污染全局 | 已修复并回归 |
 | 文件树含 main 改动，但提交图缺 main，push 被拒 | 正常 merge；push 前核验 main 是祖先；树等价时复用检查，不 force push | 已处理 |
 | 隐藏日志未上传，CI 失败无诊断附件 | 上传隐藏日志，失败输出最多 50 行上下文 | `c16114e` / `99b7356` 已修改，CI 确认中 |
-| CI：无 GUI runner 无法启动仿真 App；多份 Xcode 使旧路径期望不稳定；runner 的 `ditto` 未生成 provenance；ScreenCapture 测试以 0.1 秒墙钟阈值断言顺序，实测 0.108 秒；Build 聚合运行触发已知菜单栏计时波动 | 注入启动与注册查询、显式创建并验证 provenance 存在、用事件顺序验证截图 overlay、菜单栏 suite 独立串行；保留所有回归断言与 suite 覆盖 | 四项定向回归通过（Xcode 27.2），完整门禁与 Xcode 26.3 CI 待完成；未发布 |
+| CI：无 GUI runner 无法启动仿真 App；多份 Xcode 使旧路径期望不稳定；runner 的 `ditto` 未生成 provenance；ScreenCapture 测试以 0.1 秒墙钟阈值断言顺序，实测 0.108 秒；Build 聚合运行触发已知菜单栏计时波动 | 注入启动与注册查询、显式创建并验证 provenance 存在、用事件顺序验证截图 overlay、菜单栏 suite 独立串行；保留所有回归断言与 suite 覆盖 | 定向回归通过（4/4；菜单栏suite 13/13）；完整本地safe gate通过（0 waiver），strict Release build通过；Xcode 26.3 CI待完成；未发布 |
 
 发版采用一个 Luna 执行者、持久检查点、同源码检查复用、一个等待脚本和一次最终验收；必要诊断修改合并后一次推送。问题解决后更新原行状态，不把“已修改”写成“已发布”。
