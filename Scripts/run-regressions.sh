@@ -29,7 +29,6 @@ MODE="local"
 BASE=""
 HEAD=""
 FORCE_FULL=0
-ALLOW_TEST_DELETION=0
 VALIDATE_ONLY=0
 LOG_DIR="$REPO_ROOT/.regression-logs"
 
@@ -44,7 +43,6 @@ while [[ $# -gt 0 ]]; do
     --mode) MODE="$2"; shift 2 ;;
     --base) BASE="$2"; shift 2 ;;
     --head) HEAD="$2"; shift 2 ;;
-    --allow-test-deletion) ALLOW_TEST_DELETION=1; shift ;;
     --force-full) FORCE_FULL=1; shift ;;
     --validate-only) VALIDATE_ONLY=1; shift ;;
     -h|--help) usage ;;
@@ -62,6 +60,12 @@ if [[ -n "$BASE$HEAD" && "$MODE" == "local" ]]; then
 fi
 
 echo "== [1/4] Validating regression index =="
+GUARD_BASE="${BASE:-HEAD}"
+GUARD_HEAD="${HEAD:-WORKTREE}"
+if ! python3 Scripts/regression-index-guard.py --base "$GUARD_BASE" --head "$GUARD_HEAD"; then
+  echo "FAIL: regression index weakens its base coverage." >&2
+  exit 2
+fi
 if ! python3 Scripts/regression-plan.py --validate; then
   echo "FAIL: REGRESSION_INDEX.json is invalid (references missing suites or malformed rules)." >&2
   exit 2
@@ -78,7 +82,6 @@ if [[ -z "$PLAN_FILE" ]]; then
   [[ -n "$BASE" ]] && PLAN_ARGS+=(--base "$BASE")
   [[ -n "$HEAD" ]] && PLAN_ARGS+=(--head "$HEAD")
   [[ $FORCE_FULL -eq 1 ]] && PLAN_ARGS+=(--force-full)
-  [[ $ALLOW_TEST_DELETION -eq 1 ]] && PLAN_ARGS+=(--allow-test-deletion)
   echo "== [2/4] Building regression plan (${MODE}) =="
   if ! python3 Scripts/regression-plan.py "${PLAN_ARGS[@]}"; then
     echo "FAIL: regression plan has errors (see above)." >&2

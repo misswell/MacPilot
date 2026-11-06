@@ -145,6 +145,97 @@ struct WindowSwitcherFirstPressTests {
         ) == .unresolved)
     }
 
+    @Test func emptyAccessibilityCompletionKeepsPendingPressAndFallbackThenFallbackPresentsIt() throws {
+        let lifecycle = WindowSwitcherPendingSessionLifecycle()
+        lifecycle.begin(WindowSwitcherPendingSession(reverse: false, manual: false))
+        let token = try #require(lifecycle.reserveFallbackToken())
+        let fallbackTask = Task<Void, Never> { @MainActor in
+            do { try await Task.sleep(for: .seconds(3_600)) } catch { }
+        }
+        lifecycle.armFallback(fallbackTask, token: token)
+
+        let emptyAX: [WindowSwitcherItem] = []
+        let fallback = WindowSwitcherWindowServerInventory.snapshot(
+            settings: WindowSwitcherSettings(),
+            serverRecords: [record(windowID: 901, processID: 1900, title: "Fallback", order: 0)],
+            applications: [application(processID: 1900, name: "Fallback App")]
+        )
+
+        #expect(lifecycle.completeInventory(snapshot: emptyAX, cached: []) == nil)
+        #expect(lifecycle.pending != nil, "The consumed shortcut remains pending after an empty AX result")
+        #expect(lifecycle.isFallbackArmed, "The timeout that presents WindowServer fallback remains armed")
+        #expect(!fallbackTask.isCancelled)
+
+        guard case let .resolved(resolution)? = lifecycle.completeFallback(
+            token: token,
+            cached: [],
+            windowServer: fallback
+        ) else {
+            Issue.record("The timeout should resolve the pending press using the WindowServer snapshot")
+            return
+        }
+        #expect(resolution.pending.manual == false)
+        #expect(resolution.snapshot.map(\.id) == ["window-901"])
+        #expect(resolution.source == .windowServerFallback)
+        #expect(lifecycle.pending == nil)
+        #expect(!lifecycle.isFallbackArmed)
+        #expect(fallbackTask.isCancelled)
+        #expect(lifecycle.completeFallback(token: token, cached: [], windowServer: fallback) == nil)
+    }
+
+    @Test func unchangedInventoryCompletionCanResolveFromAUsableCache() throws {
+        let lifecycle = WindowSwitcherPendingSessionLifecycle()
+        lifecycle.begin(WindowSwitcherPendingSession(reverse: false, manual: true))
+        let token = try #require(lifecycle.reserveFallbackToken())
+        let fallbackTask = Task<Void, Never> { @MainActor in
+            do { try await Task.sleep(for: .seconds(3_600)) } catch { }
+        }
+        lifecycle.armFallback(fallbackTask, token: token)
+        let cached = WindowSwitcherWindowServerInventory.snapshot(
+            settings: WindowSwitcherSettings(),
+            serverRecords: [record(windowID: 902, processID: 1901, title: "Cached", order: 0)],
+            applications: [application(processID: 1901, name: "Cached App")]
+        )
+
+        guard let resolution = lifecycle.completeInventory(snapshot: nil, cached: cached) else {
+            Issue.record("A nil refresh with a usable cache should complete the pending press")
+            return
+        }
+        #expect(resolution.snapshot.map(\.id) == ["window-902"])
+        #expect(resolution.source == .accessibilityInventory)
+        #expect(lifecycle.pending == nil)
+        #expect(!lifecycle.isFallbackArmed)
+        #expect(fallbackTask.isCancelled)
+    }
+
+    @Test func cancelledOrSupersededPendingSessionRejectsLateCallbacks() throws {
+        let lifecycle = WindowSwitcherPendingSessionLifecycle()
+        lifecycle.begin(WindowSwitcherPendingSession(reverse: false, manual: false))
+        let oldToken = try #require(lifecycle.reserveFallbackToken())
+        let oldTask = Task<Void, Never> { @MainActor in
+            do { try await Task.sleep(for: .seconds(3_600)) } catch { }
+        }
+        lifecycle.armFallback(oldTask, token: oldToken)
+
+        lifecycle.cancel()
+        #expect(oldTask.isCancelled)
+        #expect(lifecycle.completeInventory(snapshot: [], cached: []) == nil)
+        #expect(lifecycle.completeFallback(token: oldToken, cached: [], windowServer: []) == nil)
+        #expect(lifecycle.pending == nil)
+
+        lifecycle.begin(WindowSwitcherPendingSession(reverse: true, manual: false))
+        let currentToken = try #require(lifecycle.reserveFallbackToken())
+        let currentTask = Task<Void, Never> { @MainActor in
+            do { try await Task.sleep(for: .seconds(3_600)) } catch { }
+        }
+        lifecycle.armFallback(currentTask, token: currentToken)
+        #expect(lifecycle.completeFallback(token: oldToken, cached: [], windowServer: []) == nil)
+        #expect(lifecycle.pending?.reverse == true)
+        #expect(lifecycle.isFallbackArmed)
+        lifecycle.cancel()
+        #expect(currentTask.isCancelled)
+    }
+
     // MARK: - Event tap health
 
     @Test func aDeadTapIsReenabledInPlaceWithoutInstallingASecondTap() {

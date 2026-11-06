@@ -17,6 +17,13 @@
 
 - 挑战 cadence 的生命周期属于 production：只有 `startProduction`/`stopProduction` 可以 arm 或结束它。`issuePresenceChallengesIfNeeded` 和 `didUnsubscribeFrom` 必须把「无 manager、未上电的 radio、空订阅列表、未发布的服务」当作**瞬态**——历史上在任何一个上 cancel 任务，都会让仍订阅着的手机直到 app 重启都得不到挑战，因为重新武装依赖一个不会再来的 subscribe 回调。
 - 反向链路转换必须持久化，不只是内存态：production start/stop、subscribe/unsubscribe、cadence wait/resume、≥30s 后恢复采样的已验证样本，都写 `DiagnosticLog` 的 `BLEReverse` 通道；逐样本拒绝按 10s 节流。`log()` 只写安装版看不到的 ring buffer，链路丢失曾因此无法诊断。
+
+#### Challenge 与 RSSI 样本时序
+
+- Challenge 的 15 秒有效期由 Mac `ContinuousClock` 单调时钟控制；它限制 nonce 重放和迟到响应。手机端 4 秒 RSSI 请求超时会将对应操作标为失效并留在队列中，迟到回调仍归属原 nonce，必须丢弃或只触发读取最新 nonce。
+- 样本 `sampledAt` 是 iOS 收到 `readRSSI()` 回调后构造签名数据时写入的手机墙钟值，不是 CoreBluetooth 的底层测量时间。它可用于诊断；`isFresh`/`isValid` 不作为跨设备生产授权门槛。生产路径由 Mac 校验 live challenge、Mac ID、nonce、配对密钥 HMAC 和 RSSI 范围。
+- 配对密钥持有者可以自选签名的 RSSI 和时间戳；HMAC 认证配对身份、challenge 防重放，不能证明对端诚实报告了无线电读数。不得把“时间戳新鲜”描述成对恶意配对客户端的防伪措施。
+- Tripwires：协议包 `ReversePresenceSampleTests.localChallengeAcceptsClockSkewAndConsumesNonceExactlyOnce`、`localChallengeRejectsExpiryIdentityAndTamperingWithoutConsuming`；iOS `ReversePresenceCentralTests` 的 `aMeasurementOnlyConsumesTheChallengeItWasTakenFor` 与 `ReversePresenceOperationTrackerTests`。
 - 新学 alias 的首个样本仍可能命中 `unlock skipped reason=noFreshSignal`（presence 在 `lastRSSI` 记录前重算）；`updateMonitoredPeripheral` 尾部的逐样本 retry 就是解锁它的。不要当冗余删掉。
 - 挑战过期用本地连续时钟（`5f95fb3`），不得依赖会被挂起的 Timer/Task.sleep。
 

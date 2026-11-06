@@ -14,7 +14,8 @@ Modes:
 Design rules enforced here:
   * A source change that matches no rule escalates to the full safe suite
     instead of silently skipping tests.
-  * Deleting a test file is a hard error unless --allow-test-deletion is given.
+  * Any change to the regression index forces the full safe suite.
+  * Deleting a test file is always a hard error.
   * Test selection is driven only by the JSON index; CI must not keep a
     second list.
 
@@ -268,8 +269,10 @@ def changed_entries(mode: str, base: str | None, head: str | None) -> list[tuple
 
 def classify(path: str) -> str:
     """'test' | 'code' | 'docs' | 'other'."""
+    if path == "docs/engineering/REGRESSION_INDEX.json":
+        return "code"
     if path.startswith("Tests/") or "/Tests/" in path:
-        return "test"
+        return "test" if path.endswith(".swift") else "code"
     if path.startswith(NON_CODE_PREFIXES) or path.endswith(".md"):
         return "docs"
     if path == "Package.swift" or path.endswith("/Package.swift"):
@@ -285,6 +288,10 @@ def classify(path: str) -> str:
     if path == "project.yml" or path.endswith("/project.yml"):
         return "code"
     return "other"
+
+
+def regression_index_changed(entries: list[tuple[str, str, str]], index_path: str) -> bool:
+    return any(index_path in (old, new) for _status, old, new in entries)
 
 
 def path_matches(path: str, patterns: list[str]) -> bool:
@@ -329,7 +336,7 @@ def _globstar_match(path: str, parts: list[str]) -> bool:
 # Planning
 
 
-def build_plan(index: dict, entries: list[tuple[str, str, str]], allow_test_deletion: bool) -> dict:
+def build_plan(index: dict, entries: list[tuple[str, str, str]]) -> dict:
     warnings: list[str] = []
     errors: list[str] = []
     changed: list[dict] = []
@@ -387,11 +394,11 @@ def build_plan(index: dict, entries: list[tuple[str, str, str]], allow_test_dele
                     }
                 )
 
-    if deleted_test_files and not allow_test_deletion:
+    if deleted_test_files:
         errors.append(
             "test files were deleted: "
             + ", ".join(deleted_test_files)
-            + " — deleting tests requires --allow-test-deletion and a PR justification"
+            + " — test deletion is not allowed by the regression planner"
         )
 
     code_changed = bool(unmatched_code or matched_rules)
@@ -464,6 +471,32 @@ def build_plan(index: dict, entries: list[tuple[str, str, str]], allow_test_dele
     }
 
 
+def force_full_plan(plan: dict, index: dict, reason: str, extra_filters: set[str] | None = None) -> dict:
+    """Expand a plan to every safe baseline and historical rule suite."""
+    full = index.get("full_suite", {})
+    filters = {f for f in full.get("baseline_extra_filters", []) if f}
+    filters.update(extra_filters or set())
+    rules = list(iter_rules(index))
+    for _module, rule in rules:
+        filters.update(f for f in rule.get("test_filters", []) if f)
+    pattern = "|".join(sorted(filters))
+    plan["escalation"] = "full"
+    if reason not in plan["unmatched_source_files"]:
+        plan["unmatched_source_files"].append(reason)
+    commands = [{"kind": "swift-test", "command": f"swift test --filter '{pattern}'", "verify_filter": pattern}]
+    for suite in full.get("package_suites", []):
+        commands.append({"kind": "swift-test", "command": f"swift test --package-path {suite['package_path']} --filter '{suite['filter']}'", "verify_filter": suite["filter"]})
+    raw_commands = list(dict.fromkeys(
+        [command for _module, rule in rules for command in rule.get("extra_test_commands", [])]
+        + list(full.get("extra_commands", []))
+    ))
+    commands.extend({"kind": "raw", "command": command} for command in raw_commands)
+    plan["test_commands"] = commands
+    plan["matched_rules"] = [{k: r[k] for k in ("id", "module", "title", "status", "risk_level")} for _m, r in rules]
+    plan["manual_checks"] = sorted({check for _m, rule in rules for check in rule.get("manual_checks", [])})
+    return plan
+
+
 def print_report(plan: dict, base: str, head: str, mode: str) -> None:
     print("=" * 72)
     print("MacPilot regression plan")
@@ -523,7 +556,6 @@ def main() -> int:
         action="store_true",
         help="force full-suite escalation regardless of the diff (main merges, scheduled runs)",
     )
-    parser.add_argument("--allow-test-deletion", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -541,44 +573,15 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
-    plan = build_plan(index, entries, args.allow_test_deletion)
+    index_path = os.path.relpath(args.index, REPO_ROOT)
+    index_changed = regression_index_changed(entries, index_path)
+    plan = build_plan(index, entries)
     base = args.base or ("HEAD" if args.mode == "local" else "origin/main")
     head = args.head or "HEAD"
 
-    if args.force_full:
-        full = index.get("full_suite", {})
-        filters = set()
-        for _m, rule in iter_rules(index):
-            filters.update(rule.get("test_filters", []))
-        filters.update(full.get("baseline_extra_filters", []))
-        plan["escalation"] = "full"
-        plan["unmatched_source_files"] = plan["unmatched_source_files"] or ["(forced by --force-full)"]
-        pattern = "|".join(sorted(f for f in filters if f))
-        commands = [
-            {
-                "kind": "swift-test",
-                "command": f"swift test --filter '{pattern}'",
-                "verify_filter": pattern,
-            }
-        ]
-        for suite in full.get("package_suites", []):
-            commands.append(
-                {
-                    "kind": "swift-test",
-                    "command": f"swift test --package-path {suite['package_path']} --filter '{suite['filter']}'",
-                    "verify_filter": suite["filter"],
-                }
-            )
-        for command in full.get("extra_commands", []):
-            commands.append({"kind": "raw", "command": command})
-        plan["test_commands"] = commands
-        plan["matched_rules"] = [
-            {k: r[k] for k in ("id", "module", "title", "status", "risk_level")}
-            for _m, r in iter_rules(index)
-        ]
-        plan["manual_checks"] = sorted(
-            {c for r in (rule for _m, rule in iter_rules(index)) for c in r.get("manual_checks", [])}
-        )
+    if args.force_full or index_changed:
+        reason = "(regression index changed; forced full safe suite)" if index_changed else "(forced by --force-full)"
+        plan = force_full_plan(plan, index, reason, set(plan.get("test_file_suites", [])))
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as handle:

@@ -29,7 +29,9 @@
       }
     ],
     "extra_commands": [
-      "python3 Tests/Release/stapler-retry-tests.py"
+      "python3 Tests/Release/stapler-retry-tests.py",
+      "python3 Tests/Release/release-gate-tests.py",
+      "python3 Tests/Python/test_regression_index_guard.py"
     ]
   },
   "flaky_waiver_policy": "只有列在此处、且**单独重跑通过**的测试才允许被豁免；豁免会打印为 WAIVED 并计入报告。未列入此清单的失败一律是门禁失败，绝不因为「以前也这样」放行。豁免依据是 AGENTS.md 记录的同族问题：断言依赖真实墙钟时间，全套运行时前一个套件会占住 main actor 数十秒（隔离 0.060s vs 全套 3.982s）。这不是降低测试标准——断言与阈值都不改，只要求在隔离环境下复核。",
@@ -72,6 +74,7 @@
             "MainWindowContentStateTests",
             "WindowFocusServiceTests",
             "WindowSwitcherTests",
+            "WindowSwitcherFirstPressTests",
             "AppLifecycleTests"
           ],
           "extra_test_commands": [],
