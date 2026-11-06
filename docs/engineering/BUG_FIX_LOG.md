@@ -25,7 +25,7 @@
 
 | 问题 / 根因 | 修复与不可破坏的规则 | 回归入口 |
 |---|---|---|
-| 设置窗口在一屏、指针在另一屏时唤起快速搜索，面板闪一下即关闭；应用异步激活完成时 AppKit 优先把另一屏的普通窗口选成 key window，面板 resignKey 后触发延迟关闭（`a071a52` 引入临时激活本进程后暴露） | 打开时若本进程未激活，在 `NSApplication.didBecomeActiveNotification` 到达后重新 `makeKeyAndOrderFront`；等待激活期间 `resignKey` 不得关闭；关闭面板解除观察；激活超时才走正常失焦关闭 | `QuickSearchPanelActivationTests`、`QuickSearch`；双屏实机验收待做 |
+| 设置窗口在一屏、指针在另一屏时唤起快速搜索，面板闪一下即关闭；应用异步激活完成时 AppKit 优先把另一屏的普通窗口选成 key window，面板 resignKey 后触发延迟关闭（`a071a52` 引入临时激活本进程后暴露）。beta.99 的首次修复只在 `didBecomeActive` 重抢一拍，首次仍会闪退，第二次才正常 | 打开时若本进程未激活，在 `NSApplication.didBecomeActiveNotification` 到达后 `makeKeyAndOrderFront`，并保持 0.6 秒 settle：期间每次失 key 都重抢、不关闭；settle 结束仍未拿到 key 才走正常失焦关闭；关闭面板解除观察；激活超时才走兜底 | `QuickSearchPanelActivationTests`、`QuickSearch`；双屏实机验收待做 |
 
 ## 2026-11-06：验证与发布问题
 

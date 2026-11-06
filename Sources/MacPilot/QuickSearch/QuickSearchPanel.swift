@@ -60,9 +60,9 @@ enum QuickSearchPanelResignPolicy {
     static func shouldClose(
         isPresented: Bool,
         isKeyWindow: Bool,
-        isAwaitingActivation: Bool
+        isRecoveringActivation: Bool
     ) -> Bool {
-        isPresented && !isKeyWindow && !isAwaitingActivation
+        isPresented && !isKeyWindow && !isRecoveringActivation
     }
 }
 
@@ -128,22 +128,28 @@ enum QuickSearchKeyRouter {
 final class QuickSearchPanelActivationRecovery {
     private let notificationCenter: NotificationCenter
     private let applicationIsActive: () -> Bool
+    private let scheduleSettle: @MainActor (@escaping @MainActor () -> Void) -> Void
     private var observer: NSObjectProtocol?
-    private(set) var isArmed = false
+    private(set) var isRecovering = false
     var onActivated: (() -> Void)?
+    var onSettled: (() -> Void)?
 
     init(
         notificationCenter: NotificationCenter = .default,
-        applicationIsActive: @escaping @MainActor () -> Bool = { NSApp.isActive }
+        applicationIsActive: @escaping @MainActor () -> Bool = { NSApp.isActive },
+        scheduleSettle: @escaping @MainActor (@escaping @MainActor () -> Void) -> Void = { work in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+        }
     ) {
         self.notificationCenter = notificationCenter
         self.applicationIsActive = applicationIsActive
+        self.scheduleSettle = scheduleSettle
     }
 
     /// 仅在这次打开需要激活本进程时 arm。激活已经完成时不必再抢一次 key。
     func armIfApplicationIsInactive() {
-        guard !applicationIsActive(), observer == nil else { return }
-        isArmed = true
+        guard !applicationIsActive(), !isRecovering, observer == nil else { return }
+        isRecovering = true
         observer = notificationCenter.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -156,16 +162,28 @@ final class QuickSearchPanelActivationRecovery {
     }
 
     func disarm() {
-        isArmed = false
+        isRecovering = false
+        removeObserver()
+    }
+
+    private func removeObserver() {
         if let observer {
             notificationCenter.removeObserver(observer)
             self.observer = nil
         }
     }
 
+    /// AppKit 在 `didBecomeActive` 之后还会继续排定窗口，普通窗口可能在这一拍
+    /// 才抢走 key。保持 recovery 一段时间，让面板在 settle 结束前反复重拿 key；
+    /// 结束后仍未拿到 key 才交给面板关闭。
     private func handleApplicationDidBecomeActive() {
-        guard isArmed else { return }
-        disarm()
+        guard isRecovering else { return }
+        removeObserver()
+        scheduleSettle { [weak self] in
+            guard let self, self.isRecovering else { return }
+            self.isRecovering = false
+            self.onSettled?()
+        }
         onActivated?()
     }
 }
@@ -266,6 +284,10 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
     private lazy var activationRecovery: QuickSearchPanelActivationRecovery = {
         let recovery = QuickSearchPanelActivationRecovery()
         recovery.onActivated = { [weak self] in self?.reclaimKeyAfterActivation() }
+        recovery.onSettled = { [weak self] in
+            guard let self, self.isPresented, !self.isKeyWindow else { return }
+            self.close()
+        }
         return recovery
     }()
 
@@ -391,21 +413,30 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
         guard isPresented else { return }
         // 结束菜单跟踪会让面板短暂失去 key，紧接着又被重新提上来；
         // 同步关闭会让「点了菜单项却没反应」。给它 0.1 秒确认。
+        scheduleResignClose()
+    }
+
+    private func scheduleResignClose(after delay: TimeInterval = 0.1) {
         pendingResignClose?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            // Activation has not landed yet: AppKit has not had its chance to
-            // hand the panel back its key status, so closing now would kill
-            // the panel before the activation notification can re-key it.
+            if self.activationRecovery.isRecovering {
+                // AppKit 在 didBecomeActive 前后还会重新排 key window。等待
+                // settle 期间每次失 key 都重抢一次，不把面板提前关掉。
+                guard self.isPresented, NSApp.isActive, !self.isKeyWindow else { return }
+                self.makeKeyAndOrderFront(nil)
+                self.scheduleResignClose()
+                return
+            }
             guard QuickSearchPanelResignPolicy.shouldClose(
                 isPresented: self.isPresented,
                 isKeyWindow: self.isKeyWindow,
-                isAwaitingActivation: self.activationRecovery.isArmed
+                isRecoveringActivation: false
             ) else { return }
             self.close()
         }
         pendingResignClose = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     /// 激活完成后把面板重新拿回 key。AppKit 在多显示器下会把另一块屏上的
@@ -415,15 +446,20 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
         pendingActivationTimeout = nil
         guard isPresented else { return }
         makeKeyAndOrderFront(nil)
+        // 兜底再抢一拍：有的机器 didBecomeActive 回调返回后才真正切 key。
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isPresented, NSApp.isActive, !self.isKeyWindow else { return }
+            self.makeKeyAndOrderFront(nil)
+        }
     }
 
     /// 激活通知没来之前 `resignKey` 不关面板；但激活本身失败时不能留下一个
     /// 永远拿不到键盘的浮层，超时后解除等待并让正常失焦关闭路径接手。
     private func scheduleActivationTimeoutIfNeeded() {
         pendingActivationTimeout?.cancel()
-        guard activationRecovery.isArmed else { return }
+        guard activationRecovery.isRecovering else { return }
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self, self.isPresented, self.activationRecovery.isArmed else { return }
+            guard let self, self.isPresented, self.activationRecovery.isRecovering else { return }
             self.activationRecovery.disarm()
             if !self.isKeyWindow { self.close() }
         }

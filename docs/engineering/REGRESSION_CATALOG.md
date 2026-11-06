@@ -169,7 +169,7 @@
 
 - 现象：设置窗口放在一块屏，指针在另一块屏时唤起快速搜索，面板出现后闪一下即消失，无法输入。
 - 根因：`a071a52` 为输入法在面板打开时临时激活本进程；`NSRunningApplication.activate` 异步完成，AppKit 在激活落地时优先把另一块屏上的普通窗口（设置页）选成 key window，非激活面板失 key，`resignKey` 的延迟关闭把面板收掉。
-- 最终原则：本进程未激活时打开面板，必须在 `NSApplication.didBecomeActiveNotification` 到达后重新 `makeKeyAndOrderFront`；等待激活期间 `resignKey` 不得关闭面板；关闭面板解除观察；激活超时才走正常失焦关闭。
+- 最终原则：本进程未激活时打开面板，必须在 `NSApplication.didBecomeActiveNotification` 到达后重新 `makeKeyAndOrderFront`，并保持 0.6 秒 settle：期间每次 `resignKey` 都重抢 key 且不得关闭，settle 结束仍未拿到 key 才走正常失焦关闭；关闭面板解除观察；激活超时才走兜底。
 - 测试：`QuickSearchPanelActivationTests`、`QuickSearchApplicationActivationTests`、`QuickSearch`。人工：双显示器设置页一屏、另一屏呼出并输入，关闭后焦点回到原应用。
 
 ## H. 性能 / 资源（module: resource-performance）

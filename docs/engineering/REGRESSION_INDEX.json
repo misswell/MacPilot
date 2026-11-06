@@ -656,7 +656,8 @@
           ],
           "invariants": [
             "本进程未激活时打开面板，要在 NSApplication.didBecomeActiveNotification 到达后重新 makeKeyAndOrderFront；AppKit 会在异步激活落地时优先选另一块屏上的普通窗口。",
-            "等待激活期间 resignKey 的延迟关闭不得收掉面板；关闭面板必须解除激活观察。"
+            "等待激活期间 resignKey 的延迟关闭不得收掉面板；关闭面板必须解除激活观察。",
+            "AppKit 在 didBecomeActive 之后仍可能继续排窗口；面板须保持 0.6 秒 settle：期间每次 resignKey 都重抢 key 且不得关闭，settle 结束仍未拿到 key 才走正常失焦关闭。"
           ],
           "test_filters": [
             "QuickSearchPanelActivationTests",
