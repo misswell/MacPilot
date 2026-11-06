@@ -14,6 +14,8 @@ Contributor guide for **MacPilot**, a native macOS menu-bar app (Swift 6, SwiftP
 
 修改后：`bash Scripts/run-regressions.sh`（强制完整安全套件用 `--force-full`）；CI 的 `Regression Gate` 用同一索引选择测试。索引引用不存在的套件、计划错误、测试失败都会使 CI 失败；失败测试只有逐条列在索引 `known_flaky_tests` 且单独重跑通过时才打印 `WAIVED` 放行，其余一律红。历史问题目录册见 `docs/engineering/REGRESSION_CATALOG.md`；模拟测试不能覆盖的真机/系统版本验收清单见 `docs/engineering/acceptance/`。
 
+**修复必须留简短记录：** 修改前查 `docs/engineering/BUG_FIX_LOG.md`；修复后补一行「现象/根因 → 修复与不变量 → 回归入口」。发布/CI问题也记录；未解决、未发布、待实机验收分别标明。新增回归须进入选择器集合，不只写本次说明；不复制长日志，不靠加豁免防复发。
+
 模块级不变量全文（从本文件迁出，仍然有效）：
 
 - 主窗口/AppKit 生命周期 → `docs/engineering/regressions/window-lifecycle.md`

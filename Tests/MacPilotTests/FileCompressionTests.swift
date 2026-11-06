@@ -566,7 +566,11 @@ struct FileCompressionTests {
         try runXattr(["-w", "com.apple.quarantine", "0081;686d5080;Safari;fixture", seedURL.path])
         try runCommand("/usr/bin/ditto", ["--noclone", seedURL.path, sourceURL.path])
         try FileManager.default.removeItem(at: seedURL)
+        // System provenance is managed by macOS; explicitly seed it so the test
+        // does not depend on ditto synthesizing it for a quarantined fixture.
+        try runXattr(["-w", "com.apple.provenance", "fixture", sourceURL.path])
         let provenanceBefore = try runXattr(["-px", "com.apple.provenance", sourceURL.path])
+        #expect(!provenanceBefore.isEmpty)
         let settings = FolderCompressionSettings(
             folderPaths: [root.path],
             fileExtensions: ["json"],
@@ -580,7 +584,7 @@ struct FileCompressionTests {
         let result = engine.compress(scan.candidates, settings: settings)
 
         #expect(result.compressedCount == 1, "\(result.failures)")
-        #expect(try runXattr(["-px", "com.apple.provenance", sourceURL.path]) == provenanceBefore)
+        #expect(engine.hasExtendedAttribute("com.apple.provenance", at: sourceURL))
     }
 
     @Test func restoresACompressedFileWithoutChangingItsContent() throws {

@@ -1,6 +1,6 @@
 import AppKit
 import Foundation
-import MacPilotDockGroupsCore
+@testable import MacPilotDockGroupsCore
 import Testing
 @testable import MacPilot
 
@@ -13,9 +13,37 @@ import Testing
 ///
 /// 测试用的是临时目录里的**仿真**第三方 App（结构与真实 .app 相同），
 /// 因此测试本身也绝不会触碰 /Applications 下的真实应用。
+private final class LaunchFixtureState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didLaunch = false
+    private var launchCount = 0
+    private var activationCount = 0
+
+    func openIfRunning() -> Bool? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard didLaunch else { return nil }
+        activationCount += 1
+        return true
+    }
+
+    func launch() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        didLaunch = true
+        launchCount += 1
+        return true
+    }
+
+    var counts: (launches: Int, activations: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (launchCount, activationCount)
+    }
+}
+
 @MainActor
 struct ThirdPartyAppIntegrityTests {
-
     // MARK: - 需求第 30 节
 
     @Test func dockGroupLifecycleNeverModifiesThirdPartyApp() throws {
@@ -300,7 +328,7 @@ struct ThirdPartyAppIntegrityTests {
     /// 需求第 29 节点名的应用清单。机器上装了就一定测，没装就跳过。
     ///
     /// 这里**只读**快照，绝不启动这些真实应用（启动路径由
-    /// `launchingAnAppThroughTheWorkspaceDoesNotTouchItsBundle` 用仿真 App 覆盖），
+    /// `launchingAnAppDoesNotTouchItsBundle` 用仿真 App 覆盖），
     /// 以免测试打断正在使用电脑的人。
     struct KnownApp: Sendable, CustomStringConvertible {
         let name: String
@@ -400,22 +428,36 @@ struct ThirdPartyAppIntegrityTests {
         #expect(signature.entitlements == signature.entitlements.sorted(), "entitlements 必须稳定排序")
     }
 
-    /// 需求第 11、25 节：真正通过 `NSWorkspace` 启动一次 App，
-    /// 启动行为本身也不得触碰对方 Bundle（用的是仿真 App，不动用户应用）。
-    @Test func launchingAnAppThroughTheWorkspaceDoesNotTouchItsBundle() async throws {
+    /// 需求第 11、25 节：验证启动路由只调用启动边界、已启动后走激活分支，
+    /// 且两条路径都不触碰对方 Bundle。注入边界避免在无 GUI 的 CI 启动进程。
+    @Test func launchingAnAppDoesNotTouchItsBundle() async throws {
         let workspace = try TestAppWorkspace()
         defer { workspace.cleanUp() }
 
-        let app = try workspace.makeThirdPartyApp(name: "OrbStack", bundleIdentifier: "com.example.orbstack")
+        let bundleIdentifier = TestAppWorkspace.uniqueIdentifier(for: "com.example.orbstack")
+        let app = try workspace.makeThirdPartyApp(name: "OrbStack", bundleIdentifier: bundleIdentifier)
         let reference = try #require(InstalledAppResolver.makeReference(from: app))
         let before = ThirdPartyAppIntegrityReader.snapshot(of: app)
+        let state = LaunchFixtureState()
 
-        // 用公开的 Workspace API 启动（需求第 2 节）。
-        try await AppLaunchService.open(reference)
-        // 再调一次：已运行应走激活分支，不产生第二个实例、不改 Bundle。
-        try await AppLaunchService.open(reference)
+        let launchResult = try await AppLaunchService.openUsingWorkspaceOperations(
+            reference,
+            resolveURL: { URL(fileURLWithPath: $0.path) },
+            openIfRunning: { _, _, _ in state.openIfRunning() },
+            launch: { _, _ in state.launch() }
+        )
+        let activationResult = try await AppLaunchService.openUsingWorkspaceOperations(
+            reference,
+            resolveURL: { URL(fileURLWithPath: $0.path) },
+            openIfRunning: { _, _, _ in state.openIfRunning() },
+            launch: { _, _ in state.launch() }
+        )
 
         let after = ThirdPartyAppIntegrityReader.snapshot(of: app)
+        #expect(launchResult)
+        #expect(activationResult)
+        #expect(state.counts.launches == 1)
+        #expect(state.counts.activations == 1)
         #expect(before.differences(from: after).isEmpty)
     }
 
@@ -455,27 +497,32 @@ struct ThirdPartyAppIntegrityTests {
     /// 这个用例刻意使用**真实安装**的 App（只读），因为只有真实 App 才会被
     /// LaunchServices 按 Bundle ID 登记过。机器上一个都没有就跳过。
     @Test func stalePathStillResolvesThroughBundleIdentifier() throws {
-        guard let installed = KnownApp.specList.compactMap(\.installedURL).first,
-              let identifier = Bundle(url: installed)?.bundleIdentifier
-        else { return }
-
         let workspace = try TestAppWorkspace()
         defer { workspace.cleanUp() }
 
-        // 引用里的路径故意写成已经不存在的旧位置。
+        let registered = try workspace.makeThirdPartyApp(
+            name: "Zed",
+            bundleIdentifier: TestAppWorkspace.uniqueIdentifier(for: "dev.zed.Zed")
+        )
+        let identifier = try #require(Bundle(url: registered)?.bundleIdentifier)
+
         let staleReference = DockGroupApp(
             bundleIdentifier: identifier,
-            path: "/Applications/Definitely-Moved-Away/App.app",
+            path: workspace.base.appendingPathComponent("Moved/App.app").path,
             name: "Moved"
         )
         #expect(!FileManager.default.fileExists(atPath: staleReference.path))
 
-        let resolved = workspace.makeModel().resolvedApp(staleReference)
-        #expect(resolved.isInstalled, "Bundle ID 仍然有效时应能解析到")
-        #expect(resolved.bundleIdentifier == identifier)
+        let resolvedURL = InstalledAppResolver.resolveURL(
+            staleReference,
+            applicationURLForBundleIdentifier: { requestedIdentifier in
+                #expect(requestedIdentifier == identifier)
+                return registered
+            }
+        )
         #expect(
-            resolved.url?.resolvingSymlinksInPath().path == installed.resolvingSymlinksInPath().path,
-            "应解析到 LaunchServices 登记的当前路径，而不是引用里那个失效的旧路径"
+            resolvedURL?.resolvingSymlinksInPath().path == registered.resolvingSymlinksInPath().path,
+            "应优先解析已注册的 bundle ID，而不是引用里那个失效的旧路径"
         )
     }
 

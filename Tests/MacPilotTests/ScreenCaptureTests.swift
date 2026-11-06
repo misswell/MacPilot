@@ -55,6 +55,11 @@ struct ScreenCaptureTests {
         }
     }
 
+    @MainActor
+    private func consumeSignal(_ semaphore: DispatchSemaphore) -> Bool {
+        semaphore.wait(timeout: .now()) == .success
+    }
+
 
     @Test @MainActor func smartSelectionPresentsSnapzyOverlayBeforeInitialAXQueryCompletes() async throws {
         _ = NSApplication.shared
@@ -64,13 +69,14 @@ struct ScreenCaptureTests {
         // 那不是失败，是这个前提不成立。同族性质由下面注入探针的那条钉住。
         guard !ScreenshotPopupWindowProbe.hasOpenPopup() else { return }
 
+        let resolverStarted = DispatchSemaphore(value: 0)
         let controller = SmartScreenshotController(
             language: { .simplifiedChinese },
             onCapture: { _ in },
             onError: { _ in },
             screenCaptureAccessProvider: { true },
             initialTargetResolver: { _, _ in
-                Thread.sleep(forTimeInterval: 0.15)
+                resolverStarted.signal()
                 return nil
             }
         )
@@ -79,13 +85,20 @@ struct ScreenCaptureTests {
             controller.stop()
         }
 
-        let startedAt = Date()
         controller.startSelection(mode: .smartElement)
-        let elapsed = Date().timeIntervalSince(startedAt)
-
-        #expect(elapsed < 0.1)
+        #expect(!consumeSignal(resolverStarted))
         #expect(controller.testOverlayCount == 0)
         #expect(SnapzyAreaSelectionController.shared.isPresenting)
+
+        var resolutionStarted = false
+        let deadline = Date().addingTimeInterval(2)
+        while !resolutionStarted && Date() < deadline {
+            resolutionStarted = consumeSignal(resolverStarted)
+            if !resolutionStarted {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        #expect(resolutionStarted)
     }
 
     /// 与上面同族，但把弹窗探针注入成「没有别的弹出层」，因此与环境无关、必定评估：

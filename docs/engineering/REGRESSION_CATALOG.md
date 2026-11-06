@@ -10,6 +10,8 @@
 
 不要把 SUMMARY.md 复制进本册；SUMMARY.md 保留完整叙事历史。
 
+后续新增问题简短记入 [BUG_FIX_LOG.md](BUG_FIX_LOG.md)，以下历史证据链不重复抄写。
+
 ---
 
 ## A. 主窗口 / 菜单栏（module: window-lifecycle / menu-bar-lifecycle）

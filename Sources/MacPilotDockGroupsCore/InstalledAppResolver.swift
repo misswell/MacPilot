@@ -72,8 +72,18 @@ public enum InstalledAppResolver {
 
     /// 解析单个引用对应的 Bundle URL。
     public static func resolveURL(_ reference: DockGroupApp, workspace: NSWorkspace = .shared) -> URL? {
+        resolveURL(reference) { bundleIdentifier in
+            workspace.urlForApplication(withBundleIdentifier: bundleIdentifier)
+        }
+    }
+
+    /// Test seam for a deterministic LaunchServices registration result.
+    static func resolveURL(
+        _ reference: DockGroupApp,
+        applicationURLForBundleIdentifier: (String) -> URL?
+    ) -> URL? {
         if let bundleIdentifier = reference.bundleIdentifier, !bundleIdentifier.isEmpty,
-           let url = workspace.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+           let url = applicationURLForBundleIdentifier(bundleIdentifier) {
             return url
         }
         let path = reference.path

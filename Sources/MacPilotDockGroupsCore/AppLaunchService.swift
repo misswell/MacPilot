@@ -32,14 +32,46 @@ public enum AppLaunchError: Error, Equatable, LocalizedError {
 public enum AppLaunchService {
     /// 需求第 10 节的统一入口：运行中 → 激活；未运行 → 启动。
     @discardableResult
+    @MainActor
     public static func open(_ reference: DockGroupApp, workspace: NSWorkspace = .shared) async throws -> Bool {
-        guard let url = InstalledAppResolver.resolveURL(reference, workspace: workspace) else {
+        try await openUsingWorkspaceOperations(
+            reference,
+            resolveURL: { InstalledAppResolver.resolveURL($0, workspace: workspace) },
+            openIfRunning: { bundleIdentifier, url, name in
+                guard let running = runningApplication(
+                    bundleIdentifier: bundleIdentifier,
+                    url: url,
+                    workspace: workspace
+                ) else { return nil }
+                return try activate(running, name: name)
+            },
+            launch: { url, name in
+                try await open(url: url, name: name, workspace: workspace)
+            }
+        )
+    }
+
+    /// The orchestration seam keeps unit tests from launching a real app bundle.
+    /// The live overload above supplies NSWorkspace-backed operations.
+    @MainActor
+    static func openUsingWorkspaceOperations(
+        _ reference: DockGroupApp,
+        resolveURL: @MainActor (DockGroupApp) -> URL?,
+        openIfRunning: @MainActor (String?, URL, String) throws -> Bool?,
+        launch: @MainActor (URL, String) async throws -> Bool
+    ) async throws -> Bool {
+        guard let url = resolveURL(reference) else {
             throw AppLaunchError.applicationNotFound(name: reference.name)
         }
-        return try await open(url: url, name: reference.name, workspace: workspace)
+        let bundleIdentifier = Bundle(url: url)?.bundleIdentifier
+        if let result = try openIfRunning(bundleIdentifier, url, reference.name) {
+            return result
+        }
+        return try await launch(url, reference.name)
     }
 
     @discardableResult
+    @MainActor
     public static func open(url: URL, name: String, workspace: NSWorkspace = .shared) async throws -> Bool {
         let bundleIdentifier = Bundle(url: url)?.bundleIdentifier
 
