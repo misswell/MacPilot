@@ -720,6 +720,7 @@ struct PictureInPictureTests {
         try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
         let bundleIdentifier = "com.misswell.macpilot.tests.argument-recorder.\(UUID().uuidString)"
         let outputURL = root.appendingPathComponent("arguments.txt")
+        let temporaryOutputURL = root.appendingPathComponent("arguments.txt.tmp")
         let info: [String: Any] = [
             "CFBundleIdentifier": bundleIdentifier,
             "CFBundleName": "ArgumentRecorder",
@@ -730,7 +731,7 @@ struct PictureInPictureTests {
         let plist = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
         try plist.write(to: contents.appendingPathComponent("Info.plist"))
         let executable = macOS.appendingPathComponent("ArgumentRecorder")
-        let script = "#!/bin/zsh\nprintf '%s\\n' \"$@\" > \(PiPOcclusionAppPatchService.shellQuote(outputURL.path))\n"
+        let script = "#!/bin/zsh\nset -e\nprintf '%s\\n' \"$@\" > \(PiPOcclusionAppPatchService.shellQuote(temporaryOutputURL.path))\nmv \(PiPOcclusionAppPatchService.shellQuote(temporaryOutputURL.path)) \(PiPOcclusionAppPatchService.shellQuote(outputURL.path))\n"
         try Data(script.utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
         try signTestApplication(appURL)
@@ -748,8 +749,12 @@ struct PictureInPictureTests {
             try await Task.sleep(for: .milliseconds(50))
         }
 
-        #expect(try String(contentsOf: outputURL, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines) == "--disable-backgrounding-occluded-windows")
+        let actualArguments = try String(contentsOf: outputURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(
+            actualArguments == "--disable-backgrounding-occluded-windows",
+            "fixture received arguments: \(actualArguments.debugDescription)"
+        )
         #expect(controller.errorMessage == nil)
     }
 
