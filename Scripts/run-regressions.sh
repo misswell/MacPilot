@@ -193,6 +193,9 @@ PY
     continue
   fi
 
+  echo "   failure context (last 50 lines of $LOG):"
+  tail -n 50 "$LOG" | sed 's/^/   | /'
+
   # A swift-test failure is only waivable when EVERY failing test is listed in
   # the index's known_flaky_tests AND passes when re-run alone. Anything else —
   # including an unlisted test that "always flakes" — stays a hard gate failure.
