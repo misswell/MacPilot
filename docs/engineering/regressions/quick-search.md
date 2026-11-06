@@ -1,6 +1,6 @@
 # quick-search — 快捷搜索：按键路由、异步查询取消与索引
 
-规则：`qs-001-key-routing-ime`（按键路由/IME，3 修）、`qs-002-stale-results-generation`（过期结果/回调，4 修）。证据链见 [../REGRESSION_CATALOG.md](../REGRESSION_CATALOG.md) G1/G2。
+规则：`qs-001-key-routing-ime`（按键路由/IME，3 修）、`qs-002-stale-results-generation`（过期结果/回调，4 修）、`qs-003-panel-activation-multiscreen`（应用异步激活抢走面板 key，多显示器）。证据链见 [../REGRESSION_CATALOG.md](../REGRESSION_CATALOG.md) G1/G2/G3。
 
 ## 不变量（原 AGENTS.md「Quick Search」全文）
 
@@ -9,6 +9,7 @@
 - 同时只有一个在飞查询：每次击键 150ms 防抖并打上递增 generation，新查询终止上一个及其通知观察者，关面板停查询。**过期 generation 的结果必须丢弃。**
 - 空 scope 决策属于 model：`startFileSearch` 报 `.noScopeSelected` 而不是派发空 scope 查询（Spotlight 会自行扩大搜索范围）。
 - 面板不依赖主设置窗口打开：召唤时绝不初始化整个设置 UI；app 的拼音与首字母在索引构建时归一化，不是每次击键；磁盘枚举与 Info.plist 读取离开主 actor；面板关闭时无定时器扫盘。
+- 面板打开时若本进程尚未激活，必须在 `NSApplication.didBecomeActiveNotification` 到达后重新 `makeKeyAndOrderFront`：多显示器下 AppKit 会在异步激活完成时把另一块屏上的普通窗口（设置页）选成 key window，面板会因此失 key 并被 `resignKey` 的延迟关闭收掉（「闪一下消失」）。等待激活期间 `resignKey` 不得关闭面板；关闭面板必须解除该观察。人工验收：设置页放一屏，另一屏呼出快速搜索，面板保持可见且可直接输入。
 - Carbon 注册状态如实上报（`isHotKeyRegistered`、`lastRegistrationStatus`）。`RegisterEventHotKey` 失败必须在设置页显示原因且不得标记为已启用；与其他功能冲突时保留先前有效绑定且不写配置。**IME 文字组装期间快捷键仍要分发**（`1415f7a` 复发教训）。
 - 面板位置归用户所有：搜索行 leading 边的手柄拖动面板（`dragFromHeader` → `performDrag`，WindowServer 拥有拖动、`mouseUp` 永远到不了 view，用 `NSEvent.pressedMouseButtons` 轮询检测松手），frame 以**左上角**存进 `quickSearch.panelPosition`，与 clipboard 同一套键校验。绝不召唤时重新居中，锚点绝不取左下角——面板随行数增长必须向下长。坐标校验属于 `rememberPanelPosition`（写到磁盘的 NaN 会让整个 config 保存失败），不属于 decoder。`resetPanelPosition()` 清键并调 `applyPlacement()` 让用户立即看到移动。
 - 面板尺寸同样归用户：6pt 边带（含角）用 `QuickSearchPanelLayout.frameResized` 拖动，对边钉住、钳制 400×180 与当前屏幕，`rememberPanelFrame` 把尺寸与（可能移动过的）左上角一次写入 `quickSearch.panelSize`。用户设定的尺寸取代行数驱动的高度；`resetPanelSize()` 只清尺寸。绝不重新居中或重新适配用户设定。
@@ -31,3 +32,4 @@
 - 中文输入法组装拼音时 Option+Space 仍唤起/关闭面板。
 - 快速连续输入后结果只属最后一次查询；面板出现在静止指针下首行不被顶掉。
 - Spotlight 索引关闭时显示「不能搜索」而非空结果。
+- 双显示器：设置窗口放一屏、指针在另一屏时唤起快速搜索，面板留在指针所在屏并可直接输入；关闭后焦点回到原应用。

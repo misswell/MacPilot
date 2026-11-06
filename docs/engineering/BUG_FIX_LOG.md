@@ -21,6 +21,12 @@
 
 黑屏补充：只读观察捕获“系统休眠 → ANY-only 变化 → 旧版解除保持”的同类路径；**00:11 那次具体事件源仍未知**。手机端修改需另行 iOS 分发，Mac beta 不等于 TestFlight 上传。
 
+## 2026-11-06：快速搜索多显示器闪一下消失
+
+| 问题 / 根因 | 修复与不可破坏的规则 | 回归入口 |
+|---|---|---|
+| 设置窗口在一屏、指针在另一屏时唤起快速搜索，面板闪一下即关闭；应用异步激活完成时 AppKit 优先把另一屏的普通窗口选成 key window，面板 resignKey 后触发延迟关闭（`a071a52` 引入临时激活本进程后暴露） | 打开时若本进程未激活，在 `NSApplication.didBecomeActiveNotification` 到达后重新 `makeKeyAndOrderFront`；等待激活期间 `resignKey` 不得关闭；关闭面板解除观察；激活超时才走正常失焦关闭 | `QuickSearchPanelActivationTests`、`QuickSearch`；双屏实机验收待做 |
+
 ## 2026-11-06：验证与发布问题
 
 以下均已处理；beta.98 的完整 CI 通过，未增加测试豁免。

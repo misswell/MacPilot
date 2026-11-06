@@ -54,6 +54,18 @@ protocol QuickSearchPanelPresenting: AnyObject {
     func applyPlacement()
 }
 
+/// `resignKey` 后的关闭判定。激活尚未完成时 AppKit 还没挑完 key window，
+/// 此刻关闭会杀掉本应被重新拿回焦点的面板；其余情况照旧只关仍然失焦的面板。
+enum QuickSearchPanelResignPolicy {
+    static func shouldClose(
+        isPresented: Bool,
+        isKeyWindow: Bool,
+        isAwaitingActivation: Bool
+    ) -> Bool {
+        isPresented && !isKeyWindow && !isAwaitingActivation
+    }
+}
+
 /// 一次按键应该做什么。纯函数，可脱离真实窗口验证——输入法那条规则必须能被测试覆盖。
 enum QuickSearchKeyAction: Equatable {
     case openSelection
@@ -106,6 +118,57 @@ enum QuickSearchKeyRouter {
 }
 
 // MARK: - 面板
+
+/// 应用激活是异步完成的，而 AppKit 在这段异步激活落地时自己挑 key window：
+/// 多显示器下，它优先选另一块屏上的普通窗口（设置页），而不是刚 order-front
+/// 的浮层。浮层因此失 key，`resignKey` 的延迟关闭随后把面板收掉——表现为
+/// 「闪一下消失」。这里在激活真正完成时把面板重新拿回 key；只认这次打开
+/// 之前 arm 的激活通知，关闭面板立即解除。
+@MainActor
+final class QuickSearchPanelActivationRecovery {
+    private let notificationCenter: NotificationCenter
+    private let applicationIsActive: () -> Bool
+    private var observer: NSObjectProtocol?
+    private(set) var isArmed = false
+    var onActivated: (() -> Void)?
+
+    init(
+        notificationCenter: NotificationCenter = .default,
+        applicationIsActive: @escaping @MainActor () -> Bool = { NSApp.isActive }
+    ) {
+        self.notificationCenter = notificationCenter
+        self.applicationIsActive = applicationIsActive
+    }
+
+    /// 仅在这次打开需要激活本进程时 arm。激活已经完成时不必再抢一次 key。
+    func armIfApplicationIsInactive() {
+        guard !applicationIsActive(), observer == nil else { return }
+        isArmed = true
+        observer = notificationCenter.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleApplicationDidBecomeActive()
+            }
+        }
+    }
+
+    func disarm() {
+        isArmed = false
+        if let observer {
+            notificationCenter.removeObserver(observer)
+            self.observer = nil
+        }
+    }
+
+    private func handleApplicationDidBecomeActive() {
+        guard isArmed else { return }
+        disarm()
+        onActivated?()
+    }
+}
 
 /// 非激活面板本身不会让 AppKit 激活文本输入上下文：英文按键能直接插入，
 /// 中文输入法的拼音、候选词和提交则全被吞掉。呼出面板时临时激活本进程，
@@ -196,9 +259,15 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
 
     private let hostingView: NSHostingView<QuickSearchPanelContent>
     private var pendingResignClose: DispatchWorkItem?
+    private var pendingActivationTimeout: DispatchWorkItem?
     private(set) var isHandlingComposedKey = false
     private var pendingPositionSave: DispatchWorkItem?
     private var isDraggingFromHeader = false
+    private lazy var activationRecovery: QuickSearchPanelActivationRecovery = {
+        let recovery = QuickSearchPanelActivationRecovery()
+        recovery.onActivated = { [weak self] in self?.reclaimKeyAfterActivation() }
+        return recovery
+    }()
 
     init(
         model: QuickSearchModel,
@@ -292,12 +361,20 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
         isPresented = true
         applyPlacement()
         orderFrontRegardless()
+        // Register before asking for activation: a regular window on another
+        // display wins the key-window race when activation completes, and this
+        // notification is the first moment the panel can take it back.
+        activationRecovery.armIfApplicationIsInactive()
+        scheduleActivationTimeoutIfNeeded()
         applicationActivation.activateForPanel()
         makeKey()
     }
 
     override func close() {
         finishHeaderDrag()
+        activationRecovery.disarm()
+        pendingActivationTimeout?.cancel()
+        pendingActivationTimeout = nil
         pendingResignClose?.cancel()
         pendingResignClose = nil
         isPresented = false
@@ -316,11 +393,42 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
         // 同步关闭会让「点了菜单项却没反应」。给它 0.1 秒确认。
         pendingResignClose?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self, self.isPresented, !self.isKeyWindow else { return }
+            guard let self else { return }
+            // Activation has not landed yet: AppKit has not had its chance to
+            // hand the panel back its key status, so closing now would kill
+            // the panel before the activation notification can re-key it.
+            guard QuickSearchPanelResignPolicy.shouldClose(
+                isPresented: self.isPresented,
+                isKeyWindow: self.isKeyWindow,
+                isAwaitingActivation: self.activationRecovery.isArmed
+            ) else { return }
             self.close()
         }
         pendingResignClose = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
+    }
+
+    /// 激活完成后把面板重新拿回 key。AppKit 在多显示器下会把另一块屏上的
+    /// 普通窗口选成 key window；这里显式把刚打开的面板排回前面。
+    private func reclaimKeyAfterActivation() {
+        pendingActivationTimeout?.cancel()
+        pendingActivationTimeout = nil
+        guard isPresented else { return }
+        makeKeyAndOrderFront(nil)
+    }
+
+    /// 激活通知没来之前 `resignKey` 不关面板；但激活本身失败时不能留下一个
+    /// 永远拿不到键盘的浮层，超时后解除等待并让正常失焦关闭路径接手。
+    private func scheduleActivationTimeoutIfNeeded() {
+        pendingActivationTimeout?.cancel()
+        guard activationRecovery.isArmed else { return }
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.isPresented, self.activationRecovery.isArmed else { return }
+            self.activationRecovery.disarm()
+            if !self.isKeyWindow { self.close() }
+        }
+        pendingActivationTimeout = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: workItem)
     }
 
     // MARK: 落点与拖动

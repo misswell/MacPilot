@@ -641,6 +641,32 @@
             { "sha": "8f39f94", "date": "2026-10-29", "subject": "stale 结果 + 进程身份修复" },
             { "sha": "61f36c9", "date": "2026-10-15", "subject": "空字符串 InfoPlist.strings（三局通）：empty 视为 missing 回退 bundle folder 名" }
           ]
+        },
+        {
+          "id": "qs-003-panel-activation-multiscreen",
+          "module": "quick-search",
+          "title": "多显示器下应用异步激活把面板 key 抢走，面板闪一下即关闭",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/QuickSearch/QuickSearchPanel.swift"
+          ],
+          "invariants": [
+            "本进程未激活时打开面板，要在 NSApplication.didBecomeActiveNotification 到达后重新 makeKeyAndOrderFront；AppKit 会在异步激活落地时优先选另一块屏上的普通窗口。",
+            "等待激活期间 resignKey 的延迟关闭不得收掉面板；关闭面板必须解除激活观察。"
+          ],
+          "test_filters": [
+            "QuickSearchPanelActivationTests",
+            "QuickSearchApplicationActivationTests",
+            "QuickSearch"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "双显示器：设置窗口放一屏、指针在另一屏时唤起快速搜索，面板留在指针所在屏且可直接输入；关闭后焦点回到原应用。"
+          ],
+          "evidence_commits": [
+            { "sha": "a071a52", "date": "2026-11-06", "subject": "为输入法临时激活本进程；多显示器下有普通窗口时 AppKit 在激活完成时把 key 交给它" }
+          ]
         }
       ]
     },
