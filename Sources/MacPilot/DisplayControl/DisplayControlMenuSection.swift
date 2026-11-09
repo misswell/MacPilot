@@ -26,34 +26,42 @@ enum DisplayControlMenuPolicy {
 struct DisplayControlMenuSection: View {
     @ObservedObject var control: DisplayControlModel
     @ObservedObject var context: MenuBarDisplayController
+    /// The section owns the divider as well as the rows: when the Home switch
+    /// is off, no empty separator or top-level release row may remain.
+    let isFeatureEnabled: Bool
 
     var body: some View {
-        let uuid = context.targetUUID
-        let target = DisplayControlMenuPolicy.target(uuid: uuid, displays: control.displays)
-        Menu(control.t("displayMenuCurrentScreen")) {
-            if let target {
-                Text(target.isBuiltIn ? control.t("displayKindBuiltIn") : target.name)
-            } else {
-                Text(control.t("displayMenuUnknownScreen"))
-            }
-            Button(control.t("displayMenuDisableCurrent")) {
-                // Defer until NSMenu has finished tracking. Revalidate the
-                // frozen UUID against fresh model state, never the cursor.
-                DispatchQueue.main.async {
-                    guard let target = DisplayControlMenuPolicy.target(uuid: uuid, displays: control.displays),
-                          DisplayControlMenuPolicy.canDisable(target, displays: control.displays) else { return }
-                    control.disable(target)
+        if isFeatureEnabled {
+            let uuid = context.targetUUID
+            let target = DisplayControlMenuPolicy.target(uuid: uuid, displays: control.displays)
+            Divider()
+            Menu(control.t("displayMenuCurrentScreen")) {
+                if let target {
+                    Text(target.isBuiltIn ? control.t("displayKindBuiltIn") : target.name)
+                } else {
+                    Text(control.t("displayMenuUnknownScreen"))
                 }
-            }
-            .disabled(!control.canChange || !DisplayControlMenuPolicy.canDisable(target, displays: control.displays))
-            Button(control.t("displayMenuKeepCurrent")) {
-                DispatchQueue.main.async {
-                    guard let target = DisplayControlMenuPolicy.target(uuid: uuid, displays: control.displays),
-                          DisplayControlMenuPolicy.canKeepOnly(target, displays: control.displays) else { return }
-                    control.keepOnly(target)
+                Button(control.t("displayMenuDisableCurrent")) {
+                    // Defer until NSMenu has finished tracking. Revalidate the
+                    // frozen UUID against fresh model state, never the cursor.
+                    DispatchQueue.main.async {
+                        guard let target = DisplayControlMenuPolicy.target(uuid: uuid, displays: control.displays),
+                              DisplayControlMenuPolicy.canDisable(target, displays: control.displays) else { return }
+                        control.disable(target)
+                    }
                 }
+                .disabled(!control.canChange || !DisplayControlMenuPolicy.canDisable(target, displays: control.displays))
+                Button(control.t("displayMenuKeepCurrent")) {
+                    DispatchQueue.main.async {
+                        guard let target = DisplayControlMenuPolicy.target(uuid: uuid, displays: control.displays),
+                              DisplayControlMenuPolicy.canKeepOnly(target, displays: control.displays) else { return }
+                        control.keepOnly(target)
+                    }
+                }
+                .disabled(!control.canChange || !DisplayControlMenuPolicy.canKeepOnly(target, displays: control.displays))
+                Divider()
+                Button(control.t("displayRestoreAll")) { control.restore() }
             }
-            .disabled(!control.canChange || !DisplayControlMenuPolicy.canKeepOnly(target, displays: control.displays))
         }
     }
 }

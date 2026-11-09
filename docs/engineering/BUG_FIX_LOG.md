@@ -2,6 +2,12 @@
 
 每次修复追加一行：**现象/根因 → 修复与不变量 → 自动回归**。旧历史见 [目录册](REGRESSION_CATALOG.md)；未解决、未发布、待实机验收分开标明。
 
+## 2026-11-09：屏幕控制菜单入口
+
+| 问题 / 根因 | 修复与不可破坏的规则 | 回归入口 |
+|---|---|---|
+| 菜单栏「解除屏幕控制」无条件渲染在顶层；关闭屏幕控制后仍占位，启用时也未归入二级菜单 | `DisplayControlMenuSection` 按 `isFeatureEnabled(.displayControl)` 启禁用，功能关闭时连同分隔线整段不渲染；启用时「解除屏幕控制」放在「当前屏幕」二级菜单，顶层不再有该按钮 | `DisplayControlMenuTests.releaseRowIsNestedInsideTheEnabledDisplayControlSubmenu`、`DisplayControlMenuTests.disabledDisplayControlSectionLeavesNoMenuRowOrDivider`；菜单栏实机点击待验收 |
+
 ## 2026-11-06：源码修复（beta.98）
 
 已随 `v1.2.2-beta.98`（`ed37eab`）发布；同 SHA 的 Build、macOS 15/26 回归门禁与发布工作流通过。真实设备验收未做。

@@ -6531,12 +6531,13 @@ struct MenuBarView: View {
             Divider()
             Button(model.t("clipboardOpenNow")) { deferCaptureAction { clipboard.openPanel() } }
         }
-        // Recovery remains reachable even when the Home switch is off.
-        Divider()
-        if model.isFeatureEnabled(.displayControl), let menuContext {
-            DisplayControlMenuSection(control: model.displayControl, context: menuContext)
+        if let menuContext {
+            DisplayControlMenuSection(
+                control: model.displayControl,
+                context: menuContext,
+                isFeatureEnabled: model.isFeatureEnabled(.displayControl)
+            )
         }
-        Button(model.t("displayRestoreAll")) { model.displayControl.restore() }
         if model.isFeatureEnabled(.quickSearch) && model.quickSearch.settings.isEnabled {
             Divider()
             Button(model.t("quickSearchOpenNow")) { model.quickSearch.openPanel() }

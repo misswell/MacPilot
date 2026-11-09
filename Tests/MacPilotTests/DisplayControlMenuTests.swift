@@ -1,4 +1,6 @@
+import AppKit
 import MacPilotDisplayControlCore
+import SwiftUI
 import Testing
 @testable import MacPilot
 
@@ -66,6 +68,72 @@ struct DisplayControlMenuTests {
             #expect(AppText.displayControlEnglish[key] != nil)
             #expect(AppText.value(key, language: .simplifiedChinese) != key)
             #expect(AppText.value(key, language: .english) != key)
+        }
+    }
+
+    @Test func releaseRowIsNestedInsideTheEnabledDisplayControlSubmenu() throws {
+        guard #available(macOS 14.4, *) else { return }
+        _ = NSApplication.shared
+        let control = DisplayControlModel(
+            showsConfirmation: false,
+            prepareVisibleOutputs: { true },
+            controlStateChanged: { _ in },
+            terminationOwnerRegistration: { _ in }
+        )
+        let controller = makeController()
+        defer { controller.stop() }
+
+        let menu = NSHostingMenu(rootView: DisplayControlMenuSection(
+            control: control,
+            context: controller,
+            isFeatureEnabled: true
+        ))
+        refresh(menu)
+
+        let release = control.t("displayRestoreAll")
+        #expect(!menu.items.contains { $0.title == release })
+        let submenuItem = try #require(menu.items.first { $0.submenu != nil })
+        #expect(submenuItem.title == control.t("displayMenuCurrentScreen"))
+        let submenu = try #require(submenuItem.submenu)
+        #expect(submenu.items.contains { $0.title == release })
+    }
+
+    @Test func disabledDisplayControlSectionLeavesNoMenuRowOrDivider() {
+        guard #available(macOS 14.4, *) else { return }
+        _ = NSApplication.shared
+        let control = DisplayControlModel(
+            showsConfirmation: false,
+            prepareVisibleOutputs: { true },
+            controlStateChanged: { _ in },
+            terminationOwnerRegistration: { _ in }
+        )
+        let controller = makeController()
+        defer { controller.stop() }
+
+        let menu = NSHostingMenu(rootView: DisplayControlMenuSection(
+            control: control,
+            context: controller,
+            isFeatureEnabled: false
+        ))
+        refresh(menu)
+
+        #expect(menu.items.isEmpty)
+    }
+
+    private func makeController() -> MenuBarDisplayController {
+        MenuBarDisplayController(
+            notificationCenter: NotificationCenter(),
+            screens: { [] },
+            pointer: { .zero },
+            menuFactory: { _ in NSMenu() }
+        )
+    }
+
+    private func refresh(_ menu: NSMenu) {
+        menu.delegate?.menuNeedsUpdate?(menu)
+        menu.update()
+        for item in menu.items {
+            if let submenu = item.submenu { refresh(submenu) }
         }
     }
 
