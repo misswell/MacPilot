@@ -362,6 +362,24 @@ struct WindowSwitcherFirstPressTests {
         #expect(WindowSwitcherEventTapRouting.route(type: .flagsChanged, keyCode: 0) == .inspect)
     }
 
+    @Test func aRealHostWithAnInitiallyMissingGrantStillChecksForRecovery() {
+        var checks = 0
+        let model = WindowSwitcherModel(isTrusted: { checks += 1; return false })
+        model.activateFromConfiguration()
+        defer { model.shutdown() }
+        #expect(!model.hasAccessibilityPermission)
+        #expect(model.tapHealthIsArmed)
+        let initialChecks = checks
+        let watchdog = WindowSwitcherTapHealthWatchdog(host: model, log: { _ in })
+        #expect(watchdog.check(reason: "periodic") == .repairFailed)
+        #expect(checks > initialChecks)
+        #expect(model.activeEventTapCount == 0)
+        model.shutdown()
+        let stoppedChecks = checks
+        #expect(watchdog.check(reason: "periodic") == .notArmed)
+        #expect(checks == stoppedChecks)
+    }
+
     // MARK: - Fixtures
 
     private func record(

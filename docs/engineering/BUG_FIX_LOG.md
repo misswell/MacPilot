@@ -2,6 +2,14 @@
 
 每次修复追加一行：**现象/根因 → 修复与不变量 → 自动回归**。旧历史见 [目录册](REGRESSION_CATALOG.md)；未解决、未发布、待实机验收分开标明。
 
+## 2026-11-13：登录启动恢复（未发布，待实机重启验收）
+
+| 问题 / 根因 | 修复与不可破坏的规则 | 回归入口 |
+|---|---|---|
+| 开机后滚轮/窗口切换失效，系统授权开启但进程 AX=false；现场首次 TCC 查询早于 AppKit 注册，窗口切换恢复又被旧权限值禁用 | AppKit 完成启动后的下一轮才构造所有功能模型；恢复以功能意图武装，不能依赖上一次权限结论 | `AppLifecycleTests`、`WindowSwitcherFirstPressTests`、`SmoothScrollRecoveryTests`；真实 tccd 重启恢复待验收 |
+| 后台启动菜单打不开窗口；opener 惰性依赖窗口，creator 晚到不消费 pending；Release 又过滤了打开结果日志 | 进程显式持有 opener，Commands 提供 scene 创建动作，late creator 在下一轮消费请求，Release 保留结果日志 | `MainWindowOpenerTests` 新用例在旧代码创建次数 0（红）；菜单真实冷启动待验收 |
+| 冷启动经 URL 打开时深链早于 `didFinishLaunching` 送达，模型延后构造会错过 | `AppDelegate` 缓冲启动期 URL，模型构造后重放一次，此后不再缓冲 | `AppLifecycleTests.deepLinksDeliveredBeforeServicesAreBufferedAndDrainedOnce` |
+
 ## 2026-11-09：屏幕控制菜单入口
 
 | 问题 / 根因 | 修复与不可破坏的规则 | 回归入口 |

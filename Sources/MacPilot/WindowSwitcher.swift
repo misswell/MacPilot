@@ -1007,6 +1007,7 @@ final class WindowSwitcherTapHealthWatchdog {
     private let log: @MainActor (String) -> Void
     private var periodicTask: Task<Void, Never>?
     private(set) var checkCount = 0
+    private var reportedMissingTapFailure = false
 
     init(
         host: any WindowSwitcherTapHealthHost,
@@ -1045,12 +1046,19 @@ final class WindowSwitcherTapHealthWatchdog {
     @discardableResult
     func check(reason: String) -> WindowSwitcherTapHealthOutcome {
         checkCount += 1
-        guard let host, host.tapHealthIsArmed else { return .notArmed }
+        guard let host, host.tapHealthIsArmed else {
+            reportedMissingTapFailure = false
+            return .notArmed
+        }
         guard host.tapHealthHasEventTap else {
             let rebuilt = host.tapHealthRebuildTap()
-            log("Tap health (\(reason)): no tap installed; rebuild \(rebuilt ? "ok" : "failed") (installs=\(host.tapHealthInstallCount))")
+            if rebuilt || !reportedMissingTapFailure {
+                log("Tap health (\(reason)): no tap installed; rebuild \(rebuilt ? "ok" : "failed") (installs=\(host.tapHealthInstallCount))")
+            }
+            reportedMissingTapFailure = !rebuilt
             return rebuilt ? .rebuilt : .repairFailed
         }
+        reportedMissingTapFailure = false
         if host.tapHealthIsTapEnabled() { return .healthy }
         if host.tapHealthReenableTap() && host.tapHealthIsTapEnabled() {
             log("Tap health (\(reason)): tap was disabled; re-enabled in place (installs=\(host.tapHealthInstallCount))")
@@ -1253,8 +1261,11 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     /// this false; only showing the switcher builds one.
     var panelIsBuilt: Bool { panelController?.panelIsBuilt ?? false }
 
-    init() {
-        hasAccessibilityPermission = AXIsProcessTrusted()
+    private let isTrusted: () -> Bool
+
+    init(isTrusted: @escaping () -> Bool = { AXIsProcessTrusted() }) {
+        self.isTrusted = isTrusted
+        hasAccessibilityPermission = isTrusted()
         noteApplicationActivation(NSWorkspace.shared.frontmostApplication)
     }
 
@@ -1487,7 +1498,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     }
 
     func refreshPermissionStatus() {
-        hasAccessibilityPermission = AXIsProcessTrusted()
+        hasAccessibilityPermission = isTrusted()
         refreshEventTap()
         if hasAccessibilityPermission {
             requestInventoryRefresh(priority: .utility)
@@ -2651,7 +2662,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     }
 
     private func refreshEventTap() {
-        hasAccessibilityPermission = AXIsProcessTrusted()
+        hasAccessibilityPermission = isTrusted()
         refreshSecureInputState()
         removeEventTap()
         guard isRuntimeActive, settings.isEnabled else {
@@ -2760,10 +2771,10 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
 }
 
 extension WindowSwitcherModel: WindowSwitcherTapHealthHost {
-    /// A tap can only exist while Accessibility is granted, so a feature
-    /// without it has nothing to repair (and the activation pass must not log
-    /// a failed rebuild on every app switch).
-    var tapHealthIsArmed: Bool { isRuntimeActive && settings.isEnabled && hasAccessibilityPermission }
+    /// Intent arms recovery, never the previous permission result. Otherwise
+    /// a false result during login prevents every later permission check.
+    /// The watchdog reports a sustained missing tap once, not per activation.
+    var tapHealthIsArmed: Bool { isRuntimeActive && settings.isEnabled }
     var tapHealthHasEventTap: Bool { eventTap != nil }
     var tapHealthInstallCount: Int { eventTapInstallCount }
 

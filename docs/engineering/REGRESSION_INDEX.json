@@ -90,6 +90,41 @@
             { "sha": "d080766", "date": "2026-10-30", "subject": "keep the settings menu able to open the main window（当时误判根因在 opener 侧）" },
             { "sha": "dc224ff", "date": "2026-10-31", "subject": "release the menu snapshot after AppKit dispatches the action（真正根因在菜单侧，见 menu-002）" }
           ]
+        },
+        {
+          "id": "win-002-login-startup-readiness",
+          "module": "window-lifecycle",
+          "title": "登录启动时提前查询权限、缓存拒绝后恢复被禁用及窗口创建入口晚到",
+          "status": "confirmed-potential",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilot/Core/AppLaunchBootstrap.swift",
+            "Sources/MacPilot/MacPilotApp.swift",
+            "Sources/MacPilot/WindowSwitcher.swift",
+            "Sources/MacPilot/MainWindowScene.swift",
+            "Tests/MacPilotTests/AppLifecycleTests.swift"
+          ],
+          "invariants": [
+            "权限使用者与功能模型在 AppKit didFinishLaunching 后下一轮才构造；不得以固定延时或自动重启代替启动边界。",
+            "功能意图决定是否继续恢复；缓存的权限 false 不得禁用新的权限查询。",
+            "窗口通知接收者由进程显式持有；scene Commands 提供创建动作，不依赖窗口先 onAppear。",
+            "creator 晚到必须消费未完成的打开请求；不在菜单跟踪或视图求值中同步创建窗口。"
+          ],
+          "test_filters": [
+            "AppLifecycleTests",
+            "MainWindowOpenerTests",
+            "MainWindowContentStateTests",
+            "WindowSwitcherFirstPressTests",
+            "WindowSwitcherTests",
+            "SmoothScrollRecoveryTests",
+            "EventTapDenialTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "真实重启 Mac 后，不手动重启 app，验证滚轮反向、Option+Tab、菜单设置、Dock 与深链；检查 AppStartup 与 MainWindow 日志。",
+            "核对系统已有授权与进程实际能力；不把模拟权限恢复当成 tccd 重启恢复验收。"
+          ],
+          "evidence_commits": []
         }
       ]
     },

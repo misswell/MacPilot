@@ -6,6 +6,7 @@
 
 | 曾遇到的问题 | 发版前回归 |
 |---|---|
+| 重启 Mac 后权限开关开启但滚轮/窗口切换失效、菜单设置打不开 | `AppLifecycleTests` 验证首次模型构造在 AppKit 启动完成后，`WindowSwitcherFirstPressTests.aRealHostWithAnInitiallyMissingGrantStillChecksForRecovery` 验证生产恢复路径不被 AX=false 禁用，`MainWindowOpenerTests` 验证 creator 晚到消费 pending；真正重启登录验收另列，读取 Release 的 AppStartup/MainWindow 日志。 |
 | `CGDisplayCreateUUIDFromDisplayID` 在当前 macOS 不导出，导致手机点击黑屏获取显示 UUID 失败并提前退出 | `DisplayBlankRecoveryTests.onlineDisplaysHaveRecoverableIdentities`（只读在线显示身份检查）、`sessionBoundFallbackRequiresWindowServerAndDisplayIdentity`、`sessionBoundRecoveryRejectsAnotherWindowServerOrDisplay`；验证 native identity 优先，fallback identity 绑定当前 WindowServer 会话并在恢复时重新核对。真实黑屏/恢复须另行授权及安全环境。 |
 | 手机黑屏后外接屏 DDC 开机失败、记录被丢弃；不可读或断连后恢复 | `DisplayBlankRecoveryTests`、`DisplayPowerTests`、`KeyboardBacklightTests`；现有测试覆盖恢复记录和输入判断。自动化缺口：恢复定时重试、显示连接变化和后续输入触发重试的完整调度链路尚需测试。实机覆盖内屏及外屏、长时间黑屏、键盘唤醒、断连重连和恢复，须明确授权及安全环境。 |
 | 显示拓扑控制丢失后未恢复、最后一块屏幕被关 | 项目显示控制/恢复相关安全测试，验证事务日志、控制失效恢复、最后可用输出和紧急恢复；物理拓扑验证须授权、隔离及可逆恢复。 |

@@ -102,7 +102,7 @@ final class MainWindowOpener: NSObject, ObservableObject {
             DispatchQueue.main.async(execute: work)
         },
         record: @escaping @MainActor (Outcome) -> Void = { outcome in
-            DiagnosticLog.write("MainWindow", "open request outcome=\(outcome.rawValue)", level: .info)
+            DiagnosticLog.write("MainWindow", "open request outcome=\(outcome.rawValue)")
         },
         // A window that survived in name only (ordered out and dropped by the
         // scene) must not be treated as somewhere to show content.
@@ -183,7 +183,18 @@ final class MainWindowOpener: NSObject, ObservableObject {
     /// Provides the scene's `openWindow(id:)` so a request can rebuild a window
     /// the scene dropped.
     func install(createWindow: @escaping () -> Void) {
+        let wasUnavailable = self.createWindow == nil
         self.createWindow = createWindow
+        guard wasUnavailable, pendingRequest else { return }
+        // A hidden login launch can receive an open request before SwiftUI
+        // supplies the scene action. Installing that action is the missing
+        // event that must drain it, even if no window has ever appeared.
+        answeredRequest = 0
+        let token = latestRequest
+        schedule { [weak self] in
+            guard let self, self.latestRequest == token else { return }
+            self.reveal(answer: token)
+        }
     }
 
     // Also provides a window-free seam for lifecycle tests.

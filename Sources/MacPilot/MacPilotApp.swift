@@ -13,16 +13,93 @@ extension Notification.Name {
     static let macPilotShowMainWindow = Notification.Name("MacPilot.showMainWindow")
 }
 
+/// Lets the eagerly created opener reach the model that only exists after
+/// AppKit finishes launching.
+@MainActor
+private final class MainWindowContentBox {
+    weak var model: MacPilotModel?
+}
+
 @main
 struct MacPilotApp: App {
-    @StateObject private var model: MacPilotModel
-    @StateObject private var menuBar: MenuBarDisplayController
-    @StateObject private var presence: AppPresenceController
+    @StateObject private var startup: AppLaunchBootstrap<MacPilotAppServices>
     @StateObject private var mainWindowOpener: MainWindowOpener
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
+        // Capture login-launch facts while the original parent still exists.
+        _ = AppLaunchContext.wasLaunchedAtLogin
+        // The opener touches no privacy permission, so it exists from the
+        // first moment a reopen/deep link can request the window. Only the
+        // models behind `AppLaunchBootstrap` wait for AppKit launch.
+        let contentBox = MainWindowContentBox()
+        let opener = MainWindowOpener(
+            loadContent: { contentBox.model?.loadMainWindowContent() },
+            activate: { NSApp.activate() }
+        )
+        _mainWindowOpener = StateObject(wrappedValue: opener)
+        _startup = StateObject(wrappedValue: AppLaunchBootstrap {
+            MacPilotAppServices(opener: opener, contentBox: contentBox)
+        })
+    }
+
+    var body: some Scene {
+        Window("MacPilot", id: "main") {
+            if let services = startup.value {
+                MainWindowRoot(opener: services.opener).environmentObject(services.model)
+            } else {
+                Color.clear.frame(minWidth: 900, minHeight: 620)
+            }
+        }
+        .windowToolbarStyle(.unified(showsTitle: false))
+        .commands { MainWindowSceneCommands(startup: startup, opener: mainWindowOpener) }
+
+        MenuBarExtra(isInserted: Binding(
+            get: {
+                guard let menuBar = startup.value?.menuBar else { return false }
+                return !menuBar.usesNativeMenu && menuBar.isInserted
+            },
+            set: {
+                guard let menuBar = startup.value?.menuBar, !menuBar.usesNativeMenu else { return }
+                menuBar.isInserted = $0
+            }
+        )) {
+            if let services = startup.value {
+                MenuBarView.mainMenu(model: services.model, context: services.menuBar,
+                    showMainWindow: { services.opener.requestOpen() })
+                    .environmentObject(services.model)
+            }
+        } label: {
+            if let services = startup.value {
+                MenuBarView.iconLabel(model: services.model, context: services.menuBar)
+                    .environmentObject(services.model)
+            }
+        }
+        .menuBarExtraStyle(.menu)
+    }
+}
+
+/// Process-owned services, created only after AppKit finishes launching.
+/// In particular, the window notification receiver is never a lazy StateObject
+/// whose construction depends on the very window it is supposed to open.
+@MainActor
+final class MacPilotAppServices: ObservableObject {
+    let model: MacPilotModel
+    let menuBar: MenuBarDisplayController
+    let presence: AppPresenceController
+    let opener: MainWindowOpener
+    private var changes = Set<AnyCancellable>()
+
+    fileprivate init(opener: MainWindowOpener, contentBox: MainWindowContentBox) {
         let model = MacPilotModel()
+        contentBox.model = model
+        // The model's deep-link observer exists now; hand it the URLs that
+        // arrived during launch before anything else can miss them.
+        if let delegate = NSApp.delegate as? AppDelegate {
+            for url in delegate.takePendingDeepLinks() {
+                NotificationCenter.default.post(name: .macPilotDeepLink, object: url)
+            }
+        }
         // Register tracking before the first lazily constructed native menu,
         // so resource sections see that first session and refresh normally.
         _ = MonitorMenuActivity.shared
@@ -39,7 +116,7 @@ struct MacPilotApp: App {
                 }
                 return NSHostingMenu(rootView: MenuBarView.mainMenu(model: model, context: context,
                     showMainWindow: {
-                        NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
+                        opener.requestOpen()
                     }).environmentObject(model))
             }, iconName: { [weak model] in
                 guard let model else { return "timer" }
@@ -67,42 +144,34 @@ struct MacPilotApp: App {
         // Apply both switches from the moment the app finishes launching. The
         // Dock icon also has to follow the main window, so a fresh launch with
         // no window open shows the menu-bar icon only.
-        let presence = AppPresenceController(settings: model.appPresence)
+        let presence = AppPresenceController(settings: model.appPresence, isLaunched: true)
         presence.attachMenuBarIcon { [weak controller] shows in controller?.setEnabled(shows) }
         model.connectPresence(presence)
-        _model = StateObject(wrappedValue: model)
-        _menuBar = StateObject(wrappedValue: controller)
-        _presence = StateObject(wrappedValue: presence)
-        _mainWindowOpener = StateObject(wrappedValue: MainWindowOpener(
-            loadContent: { [weak model] in model?.loadMainWindowContent() },
-            // `activate(ignoringOtherApps:)` is deprecated and cooperative
-            // since macOS 14; `activate()` is the supported call. The opener
-            // also orders the window front regardless, so a refused activation
-            // still leaves a visible window instead of a dead menu item.
-            activate: { NSApp.activate() }
-        ))
+        self.model = model
+        self.menuBar = controller
+        self.presence = presence
+        self.opener = opener
+        model.objectWillChange.merge(with: controller.objectWillChange)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &changes)
+        DiagnosticLog.write("AppStartup", "services started after AppKit launch; login=\(AppLaunchContext.wasLaunchedAtLogin)")
     }
+}
 
-    var body: some Scene {
-        mainWindowScene
-        MenuBarExtra(isInserted: Binding(
-            get: { !menuBar.usesNativeMenu && menuBar.isInserted },
-            set: { if !menuBar.usesNativeMenu { menuBar.isInserted = $0 } }
-        )) {
-            MenuBarView.mainMenu(model: model, context: menuBar).environmentObject(model)
-        } label: {
-            MenuBarView.iconLabel(model: model, context: menuBar).environmentObject(model)
-        }
-        .menuBarExtraStyle(.menu)
-    }
+/// Commands have a scene environment even when the login-launched app has
+/// never displayed a window. Keep its creation action outside window onAppear.
+private struct MainWindowSceneCommands: Commands {
+    @ObservedObject var startup: AppLaunchBootstrap<MacPilotAppServices>
+    let opener: MainWindowOpener
+    @Environment(\.openWindow) private var openWindow
 
-    private var mainWindowScene: some Scene {
-        Window("MacPilot", id: "main") {
-            MainWindowRoot(opener: mainWindowOpener).environmentObject(model)
-        }
-        .windowToolbarStyle(.unified(showsTitle: false))
-        .commands {
-            CommandGroup(replacing: .appInfo) {
+    var body: some Commands {
+        // The opener is process-owned, so this install does not wait for the
+        // bootstrap: the first commands evaluation is enough. `install` drains
+        // a request that arrived before this environment existed.
+        let _ = opener.install(createWindow: { openWindow(id: "main") })
+        CommandGroup(replacing: .appInfo) {
+            if let model = startup.value?.model {
                 Button(model.t("aboutMacPilot")) {
                     NSApp.orderFrontStandardAboutPanel(options: [
                         .applicationVersion: AppVersionInfo.current().version,
@@ -113,7 +182,6 @@ struct MacPilotApp: App {
                 }
             }
         }
-
     }
 }
 
@@ -205,10 +273,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hideWindowDuringLaunch = false
     }
 
+    /// A cold launch delivers URLs before `applicationDidFinishLaunching`,
+    /// while the model — the only `.macPilotDeepLink` consumer — is built one
+    /// turn after it. Keep those URLs until the services replay them.
+    private var pendingDeepLinks: [URL] = []
+    private var buffersDeepLinks = true
+
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
+            if buffersDeepLinks { pendingDeepLinks.append(url) }
             NotificationCenter.default.post(name: .macPilotDeepLink, object: url)
         }
+    }
+
+    func takePendingDeepLinks() -> [URL] {
+        buffersDeepLinks = false
+        defer { pendingDeepLinks.removeAll() }
+        return pendingDeepLinks
     }
 
     /// 从下载目录直接运行隔离包会触发 App Translocation（随机只读路径），

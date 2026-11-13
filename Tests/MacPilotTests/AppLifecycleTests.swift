@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Testing
 @testable import MacPilot
 
@@ -31,4 +32,92 @@ struct AppLifecycleTests {
         let reply = AppDelegate().applicationShouldTerminate(NSApplication.shared)
         #expect(reply == .terminateNow)
     }
+    @Test func deepLinksDeliveredBeforeServicesAreBufferedAndDrainedOnce() {
+        let delegate = AppDelegate()
+        let url = URL(string: "macpilot://settings")!
+        delegate.application(NSApplication.shared, open: [url])
+        #expect(delegate.takePendingDeepLinks() == [url])
+        #expect(delegate.takePendingDeepLinks().isEmpty)
+        delegate.application(NSApplication.shared, open: [url])
+        #expect(delegate.takePendingDeepLinks().isEmpty)
+    }
+
+    private final class StartupValue: ObservableObject {
+        @Published var revision = 0
+    }
+
+    @Test func permissionUsingModelsAreNotConstructedBeforeAppKitFinishesLaunching() {
+        let center = NotificationCenter()
+        var turns: [@MainActor () -> Void] = []
+        var constructions = 0
+        let startup = AppLaunchBootstrap(
+            center: center, isLaunched: false, schedule: { turns.append($0) },
+            makeValue: { constructions += 1; return StartupValue() }
+        )
+        #expect(constructions == 0)
+        #expect(startup.value == nil)
+        center.post(name: NSApplication.willFinishLaunchingNotification, object: nil)
+        #expect(turns.isEmpty)
+        center.post(name: NSApplication.didFinishLaunchingNotification, object: nil)
+        center.post(name: NSApplication.didFinishLaunchingNotification, object: nil)
+        #expect(constructions == 0)
+        #expect(turns.count == 1)
+        turns.removeFirst()()
+        #expect(constructions == 1)
+        #expect(startup.value != nil)
+        center.post(name: NSApplication.didFinishLaunchingNotification, object: nil)
+        #expect(turns.isEmpty)
+        startup.stop()
+    }
+
+    @Test func lateBootstrapStartsOnceAndForwardsItsServicesChanges() throws {
+        var turns: [@MainActor () -> Void] = []
+        let startup = AppLaunchBootstrap(
+            center: NotificationCenter(), isLaunched: true,
+            schedule: { turns.append($0) }, makeValue: { StartupValue() }
+        )
+        #expect(startup.value == nil)
+        #expect(turns.count == 1)
+        turns.removeFirst()()
+        let value = try #require(startup.value)
+        var changes = 0
+        let observation = startup.objectWillChange.sink { changes += 1 }
+        value.revision += 1
+        #expect(changes == 1)
+        withExtendedLifetime(observation) {}
+        startup.stop()
+    }
+
+    @Test func terminationBeforeTheLaunchTurnCannotResurrectFeatures() {
+        let center = NotificationCenter()
+        var turn: (@MainActor () -> Void)?
+        var constructions = 0
+        let startup = AppLaunchBootstrap(
+            center: center, isLaunched: false, schedule: { turn = $0 },
+            makeValue: { constructions += 1; return StartupValue() }
+        )
+        center.post(name: NSApplication.didFinishLaunchingNotification, object: nil)
+        center.post(name: NSApplication.willTerminateNotification, object: nil)
+        turn?()
+        center.post(name: NSApplication.didFinishLaunchingNotification, object: nil)
+        #expect(constructions == 0)
+        #expect(startup.value == nil)
+    }
+
+    @Test func releasingTheBootstrapCancelsItsQueuedConstruction() {
+        let center = NotificationCenter()
+        var turn: (@MainActor () -> Void)?
+        var constructions = 0
+        var startup: AppLaunchBootstrap<StartupValue>? = AppLaunchBootstrap(
+            center: center, isLaunched: false, schedule: { turn = $0 },
+            makeValue: { constructions += 1; return StartupValue() }
+        )
+        weak var released = startup
+        center.post(name: NSApplication.didFinishLaunchingNotification, object: nil)
+        startup = nil
+        turn?()
+        #expect(released == nil)
+        #expect(constructions == 0)
+    }
+
 }

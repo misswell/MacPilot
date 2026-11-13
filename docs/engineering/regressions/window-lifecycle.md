@@ -29,3 +29,12 @@
 
 - 关闭主窗口后分别从菜单「设置」、Dock 图标、Finder 深链重新打开，连续关闭重开多次。
 - 即使 macOS 拒绝前台激活，`orderFrontRegardless` 也必须让窗口可见。
+
+## 登录启动边界（win-002-login-startup-readiness）
+
+- `MacPilotApp` 只建立启动观察者；`MacPilotAppServices` 在 `didFinishLaunching` 后下一 main-queue turn 才构造模型。模型属性初始化也会查询权限，因此只延后 feature.start 不足以保护第一次 TCC 请求。正常晚创建时同样只构造一次，终止/释放取消尚未执行的构造。
+- `MainWindowOpener` 在 `App.init` 即创建并持在进程级 `StateObject` 中（它不查询任何权限），只有功能模型与界面经由 `AppLaunchBootstrap` 延后。创建场景的动作由 Commands 的首次求值安装，不依赖窗口先出现；窗口的 onAppear 只作补充。creator 晚到时消费 pending 请求，重复安装不得重复开窗。
+- 冷启动经 URL 打开时，`application(_:open:)` 早于 `didFinishLaunching`，而模型与其深链观察者在其后一轮才存在：`AppDelegate` 必须缓冲 URL，并在模型构造后重放一次（之后不再缓冲）。
+- `WindowSwitcherModel.tapHealthIsArmed` 只看运行意图；首次 AX=false 不是关闭功能。恢复路径必须继续调用实际权限检查；持续失败只记录一次，关闭功能立即停止。
+- `MainWindow` 的打开结果必须在 Release 诊断级别也能落盘，否则现场无法区分 action 丢失与 window 创建失败。
+- 自动回归：`AppLifecycleTests`、`MainWindowOpenerTests`、`WindowSwitcherFirstPressTests`、`SmoothScrollRecoveryTests`。现场 tccd 100024 与修复边界见 [启动分析](../REBOOT_RECOVERY_2026-11-13.md)；真实重启验收仍须另做。

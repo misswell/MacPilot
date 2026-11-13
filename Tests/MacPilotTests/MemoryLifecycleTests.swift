@@ -190,6 +190,46 @@ struct MainWindowOpenerTests {
         #expect(outcomes == [.noWindowAndNoCreator])
     }
 
+    @Test func aCreatorArrivingAfterAHiddenLoginLaunchDrainsThePendingRequest() {
+        let center = NotificationCenter()
+        let turns = Turns()
+        var creations = 0
+        var shows = 0
+        let opener = MainWindowOpener(
+            center: center, loadContent: {}, activate: {},
+            schedule: { turns.schedule($0) }, record: { _ in }
+        )
+        center.post(name: .macPilotShowMainWindow, object: nil)
+        turns.runAll()
+        #expect(opener.lastOutcome == .noWindowAndNoCreator)
+
+        opener.install(createWindow: { creations += 1 })
+        // Installing a scene action must also escape SwiftUI/menu evaluation.
+        #expect(creations == 0)
+        turns.runAll()
+        #expect(creations == 1)
+        opener.attach(show: { shows += 1 })
+        turns.runAll()
+        #expect(shows == 1)
+        #expect(opener.lastOutcome == .raisedExistingWindow)
+    }
+
+    @Test func repeatedCreatorInstallationDoesNotDuplicateAnOutstandingOpen() {
+        let turns = Turns()
+        var creations = 0
+        let opener = MainWindowOpener(
+            center: NotificationCenter(), loadContent: {}, activate: {},
+            schedule: { turns.schedule($0) }, record: { _ in }
+        )
+        opener.requestOpen()
+        turns.runAll()
+        opener.install(createWindow: { creations += 1 })
+        opener.install(createWindow: { creations += 1 })
+        opener.requestOpen()
+        turns.runAll()
+        #expect(creations == 1)
+    }
+
     @Test func aWindowTheSceneDroppedIsReplacedInsteadOfReused() {
         let center = NotificationCenter()
         let turns = Turns()
