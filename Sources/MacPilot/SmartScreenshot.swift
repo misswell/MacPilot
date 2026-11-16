@@ -6971,6 +6971,8 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
 
     var testAnnotationCount: Int { model.annotations.count }
     var testCurrentTool: SmartAnnotationTool { model.tool }
+    var testAnnotationBounds: [CGRect] { model.annotations.map(\.normalizedBounds) }
+    var testCurrentStyle: SmartAnnotationStyle { model.currentStyle }
     var testWindow: SmartAnnotationWindow? { window }
 
     /// Installs a real field editor as first responder so the tests can prove
@@ -7369,6 +7371,7 @@ struct SmartAnnotationEditor: View {
                 .help(AppText.value("scAnnotationLineWidth", language: language))
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(AppText.value("scAnnotationLineWidth", language: language))
+                .accessibilityIdentifier("annotation-line-width-row")
                 .accessibilityValue(Text(Self.lineWidthDisplayText(for: model.currentStyle.lineWidth)))
             }
 
@@ -7436,7 +7439,7 @@ struct SmartAnnotationEditor: View {
 
     private var annotationColorControls: some View {
         HStack(spacing: 3) {
-            ForEach(Array(SmartAnnotationColor.presets.enumerated()), id: \.offset) { _, color in
+            ForEach(Array(SmartAnnotationColor.presets.enumerated()), id: \.offset) { index, color in
                 Button {
                     model.setColor(color)
                     // A discrete pick is its own history step; only a
@@ -7456,6 +7459,7 @@ struct SmartAnnotationEditor: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(AppText.value("scAnnotationColor", language: language))
+                .accessibilityIdentifier("annotation-color-preset-\(index)")
             }
 
             ColorPicker(

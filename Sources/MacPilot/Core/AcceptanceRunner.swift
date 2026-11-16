@@ -27,6 +27,21 @@ enum MacPilotAcceptanceRunner {
             .appendingPathComponent("MacPilotAcceptance", isDirectory: true)
     }()
 
+    private static var pauseSeconds: Double {
+        argumentDouble("--acceptance-pause")
+    }
+
+    private static var propertyPauseSeconds: Double {
+        argumentDouble("--acceptance-property-pause")
+    }
+
+    private static func argumentDouble(_ name: String) -> Double {
+        guard let index = CommandLine.arguments.firstIndex(of: name),
+              CommandLine.arguments.indices.contains(index + 1),
+              let value = Double(CommandLine.arguments[index + 1]) else { return 0 }
+        return value
+    }
+
     private static var failures: [String] = []
     private static var checks: [(String, String, String)] = []
     private static var pasteboard = NSPasteboard(
@@ -71,6 +86,9 @@ enum MacPilotAcceptanceRunner {
         try? await Task.sleep(for: .milliseconds(700))
         controller.testWindow?.makeKeyAndOrderFront(nil)
         try? await Task.sleep(for: .milliseconds(300))
+        if pauseSeconds > 0 {
+            try? await Task.sleep(for: .seconds(pauseSeconds))
+        }
 
         guard let window = controller.testWindow else {
             record("完整编辑器窗口", false, "窗口未创建")
@@ -146,6 +164,107 @@ enum MacPilotAcceptanceRunner {
         )
         capture(window.contentView, name: "04-after-redo.png")
 
+        // Real mouse resize: start at the second rectangle's dragged corner.
+        // The corner is also the resize handle hit area.
+        if controller.testAnnotationBounds.indices.contains(1) {
+            let beforeResize = controller.testAnnotationBounds[1]
+            drag(in: window, from: CGPoint(x: 0.76, y: 0.58), to: CGPoint(x: 0.84, y: 0.66))
+            try? await Task.sleep(for: .milliseconds(250))
+            let afterResize = controller.testAnnotationBounds.indices.contains(1)
+                ? controller.testAnnotationBounds[1]
+                : .zero
+            record(
+                "鼠标调整对象大小",
+                afterResize.width > beforeResize.width + 0.01
+                    && afterResize.height > beforeResize.height + 0.01,
+                "before=\(beforeResize) after=\(afterResize)"
+            )
+        }
+
+        // Real mouse move: drag from inside the second rectangle, away from
+        // any handle, and verify the origin moved without changing the size.
+        if controller.testAnnotationBounds.indices.contains(1) {
+            let beforeMove = controller.testAnnotationBounds[1]
+            drag(in: window, from: CGPoint(x: 0.68, y: 0.50), to: CGPoint(x: 0.60, y: 0.57))
+            try? await Task.sleep(for: .milliseconds(250))
+            let afterMove = controller.testAnnotationBounds.indices.contains(1)
+                ? controller.testAnnotationBounds[1]
+                : .zero
+            let sizeUnchanged = abs(afterMove.width - beforeMove.width) < 0.02
+                && abs(afterMove.height - beforeMove.height) < 0.02
+            let originMoved = abs(afterMove.minX - beforeMove.minX) > 0.01
+                || abs(afterMove.minY - beforeMove.minY) > 0.01
+            record(
+                "鼠标移动对象",
+                sizeUnchanged && originMoved,
+                "before=\(beforeMove) after=\(afterMove)"
+            )
+        }
+
+
+        // Real mouse property edits. Prefer an external AX/mouse helper when
+        // `--acceptance-property-pause` is set; otherwise use the stable
+        // toolbar coordinates of the fixed 900×680 editor.
+        if let content = window.contentView {
+            let widthBefore = controller.testCurrentStyle.lineWidth
+            let colorBefore = controller.testCurrentStyle.color
+
+            if propertyPauseSeconds > 0 {
+                let ready = outputDirectory.appendingPathComponent("property-ready")
+                let done = outputDirectory.appendingPathComponent("property-done")
+                try? FileManager.default.removeItem(at: done)
+                try? Data().write(to: ready)
+                let deadline = Date().addingTimeInterval(propertyPauseSeconds + 8)
+                while !FileManager.default.fileExists(atPath: done.path), Date() < deadline {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                try? FileManager.default.removeItem(at: ready)
+                try? FileManager.default.removeItem(at: done)
+            } else {
+                let widthRow = accessibilityElement(
+                    in: content,
+                    identifier: "annotation-line-width-row"
+                ).flatMap(accessibilityFrame(of:))
+                let widthStart: CGPoint
+                let widthEnd: CGPoint
+                if let widthRow {
+                    widthStart = CGPoint(x: widthRow.minX + 4, y: widthRow.midY)
+                    widthEnd = CGPoint(x: widthRow.maxX - 8, y: widthRow.midY)
+                } else {
+                    // Fixed 900×680 editor: the slider sits at content
+                    // x=534…600, y=650. Convert content points to screen.
+                    widthStart = window.convertPoint(
+                        toScreen: NSPoint(x: 534, y: 650)
+                    )
+                    widthEnd = window.convertPoint(
+                        toScreen: NSPoint(x: 600, y: 650)
+                    )
+                }
+                drag(window: window, fromScreen: widthStart, toScreen: widthEnd)
+
+                let colorSwatch = accessibilityElement(
+                    in: content,
+                    identifier: "annotation-color-preset-3"
+                ).flatMap(accessibilityFrame(of:))
+                let colorPoint = colorSwatch.map {
+                    CGPoint(x: $0.midX, y: $0.midY)
+                } ?? window.convertPoint(toScreen: NSPoint(x: 378, y: 650))
+                click(window: window, screenPoint: colorPoint)
+            }
+
+            record(
+                "鼠标修改线宽",
+                controller.testCurrentStyle.lineWidth != widthBefore,
+                "before=\(widthBefore) after=\(controller.testCurrentStyle.lineWidth)"
+            )
+            record(
+                "鼠标修改颜色",
+                controller.testCurrentStyle.color != colorBefore,
+                "before=\(colorBefore) after=\(controller.testCurrentStyle.color)"
+            )
+        }
+        capture(window.contentView, name: "08-after-move-resize-color-width.png")
+
         // Inline HUD: every tool must be a direct visible button.
         let model = SmartAnnotationModel(initialTool: .rectangle)
         let bar = AreaSelectionActionBar { _ in }
@@ -208,6 +327,61 @@ enum MacPilotAcceptanceRunner {
                 inside,
                 "frame=\(frame)"
             )
+        }
+
+        // Real per-display placement: one bar window on every connected
+        // physical display, anchored near that display's bottom-right corner.
+        let screens = NSScreen.screens
+        record(
+            "物理显示器数量",
+            true,
+            screens.enumerated().map { index, screen in
+                "#\(index + 1) \(Int(screen.frame.width))×\(Int(screen.frame.height))@\(screen.backingScaleFactor)x"
+            }.joined(separator: ", ")
+        )
+        for (index, screen) in screens.enumerated() {
+            let displaySize = screen.frame.size
+            let displayBar = AreaSelectionActionBar { _ in }
+            let displayModel = SmartAnnotationModel(initialTool: .rectangle)
+            displayBar.bindAnnotationSession(.init(model: displayModel) { _ in })
+            let displayBarSize = displayBar.intrinsicContentSize
+            let localFrame = AreaSelectionBarLayout.resolve(
+                selectionRect: CGRect(
+                    x: displaySize.width - 90,
+                    y: 8,
+                    width: 80,
+                    height: 50
+                ),
+                barSize: displayBarSize,
+                bounds: displaySize
+            )
+            let frame = CGRect(
+                x: screen.frame.minX + localFrame.minX,
+                y: screen.frame.minY + localFrame.minY,
+                width: localFrame.width,
+                height: localFrame.height
+            )
+            let displayWindow = NSWindow(
+                contentRect: frame,
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            displayWindow.isReleasedWhenClosed = false
+            displayWindow.contentView = displayBar
+            displayWindow.level = .floating
+            displayWindow.orderFrontRegardless()
+            try? await Task.sleep(for: .milliseconds(200))
+            record(
+                "工具栏落在显示器 #\(index + 1)",
+                displayWindow.frame.minX >= screen.visibleFrame.minX - 0.5
+                    && displayWindow.frame.minY >= screen.visibleFrame.minY - 0.5
+                    && displayWindow.frame.maxX <= screen.visibleFrame.maxX + 0.5
+                    && displayWindow.frame.maxY <= screen.visibleFrame.maxY + 0.5,
+                "frame=\(displayWindow.frame) visible=\(screen.visibleFrame) scale=\(screen.backingScaleFactor)"
+            )
+            capture(displayBar, name: "09-toolbar-display-\(index + 1).png")
+            displayWindow.close()
         }
 
         // Full editor window floor keeps the fixed controls reachable.
@@ -274,6 +448,75 @@ enum MacPilotAcceptanceRunner {
             try? areaData.write(to: outputDirectory.appendingPathComponent("07-area-selection-copy.png"))
         }
         barWindow.close()
+    }
+
+    private static func accessibilityElement(
+        in element: Any,
+        identifier: String
+    ) -> Any? {
+        let object = element as AnyObject
+        guard let accessible = object as? NSAccessibilityProtocol else { return nil }
+        if accessible.accessibilityIdentifier() == identifier { return object }
+        for child in accessible.accessibilityChildren() ?? [] {
+            if let found = accessibilityElement(in: child, identifier: identifier) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    private static func accessibilityFrame(of element: Any) -> CGRect? {
+        (element as? NSAccessibilityProtocol)?.accessibilityFrame()
+    }
+
+    private static func click(window: NSWindow, screenPoint: CGPoint) {
+        let windowPoint = window.convertPoint(fromScreen: screenPoint)
+        func event(_ type: NSEvent.EventType) -> NSEvent {
+            NSEvent.mouseEvent(
+                with: type,
+                location: windowPoint,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            )!
+        }
+        window.sendEvent(event(.leftMouseDown))
+        window.sendEvent(event(.leftMouseUp))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+    }
+
+    private static func drag(
+        window: NSWindow,
+        fromScreen start: CGPoint,
+        toScreen end: CGPoint
+    ) {
+        let startPoint = window.convertPoint(fromScreen: start)
+        let endPoint = window.convertPoint(fromScreen: end)
+        func event(_ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent {
+            NSEvent.mouseEvent(
+                with: type,
+                location: point,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            )!
+        }
+        window.sendEvent(event(.leftMouseDown, startPoint))
+        window.sendEvent(event(.leftMouseDragged, CGPoint(
+            x: (startPoint.x + endPoint.x) / 2,
+            y: (startPoint.y + endPoint.y) / 2
+        )))
+        window.sendEvent(event(.leftMouseDragged, endPoint))
+        window.sendEvent(event(.leftMouseUp, endPoint))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
     }
 
     private static func makeImage(width: Int, height: Int) -> CGImage {
@@ -419,6 +662,9 @@ enum MacPilotAcceptanceRunner {
             "05-inline-toolbar.png",
             "06-copy-and-close-clipboard.png",
             "07-area-selection-copy.png",
+            "08-after-move-resize-color-width.png",
+            "09-toolbar-display-1.png",
+            "09-toolbar-display-2.png",
         ] where FileManager.default.fileExists(
             atPath: outputDirectory.appendingPathComponent(name).path
         ) {
