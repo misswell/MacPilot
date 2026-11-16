@@ -84,7 +84,7 @@ Copy & Close 写入剪贴板的最终渲染：
 
 ## 如何重跑验收
 
-解锁 macOS 会话后，在仓库根目录执行（最后一条命令中如有外部鼠标属性辅助，见 `--acceptance-property-pause`）：
+解锁 macOS 会话后，在仓库根目录执行：
 
 ```bash
 swift build
@@ -103,7 +103,7 @@ open -n /tmp/MacPilotAcceptance.app --args \
   --acceptance-commit "$(git rev-parse --short HEAD)"
 ```
 
-解锁后 `完整编辑器窗口激活`、`鼠标绘制第一个矩形`、`连续绘制第二个矩形` 会从「阻塞」变为真实结果；若仍失败，按真实缺陷处理，不得改写成通过。
+重跑后若任一项失败，按真实缺陷处理，不得改写成通过；锁屏会话只会把鼠标项标记为「阻塞」。
 
 ## 自动化交叉证据
 
