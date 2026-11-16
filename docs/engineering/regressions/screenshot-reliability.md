@@ -86,4 +86,4 @@
 
 ## 回归入口
 
-`ScreenshotReliabilityTests`（含 `RefreshHideLedgerTests`、`WindowSelectionLoadingStateTests`、`CapturePixelSizeTests`、`CaptureHistoryServiceTests`、`PostCaptureRoutingTests`）、`ScreenCaptureTests`、`ScreenCaptureClipboardRegressionTests`、`SnapzyCaptureTests`、`SnapzySingleFrameCaptureTests`、`QuickAccessTests`、`ScreenshotPopupCaptureOrderingTests`、`ScreenshotPopupWindowProbeTests`、`ConfigurationSchemaContractTests`、`ConfigStoreTests`。实机验收见 `docs/engineering/acceptance/`（混合 DPI、跨屏、AX 无权限）。
+`ScreenshotReliabilityTests`（含 `RefreshHideLedgerTests`、`WindowSelectionLoadingStateTests`、`CapturePixelSizeTests`、`CaptureHistoryServiceTests`、`PostCaptureRoutingTests`、`CaptureArtifactStoreTests`、`RapidCaptureSequenceTests`、`QuickAccessOperationCoordinatorTests`、`ClipboardArtifactLeaseTests`、`CaptureChromeWindowRegistryTests`）、`ScreenCaptureTests`、`ScreenCaptureClipboardRegressionTests`、`SnapzyCaptureTests`、`SnapzySingleFrameCaptureTests`、`QuickAccessTests`、`ScreenshotPopupCaptureOrderingTests`、`ScreenshotPopupWindowProbeTests`、`ConfigurationSchemaContractTests`、`ConfigStoreTests`。实机验收见 `docs/engineering/acceptance/`（混合 DPI、跨屏、AX 无权限）。

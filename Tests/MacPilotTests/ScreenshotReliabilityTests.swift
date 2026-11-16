@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -389,6 +390,167 @@ struct CaptureArtifactStoreTests {
             ))
         }
     }
+
+    @Test func aFailedPromotionKeepsTheTemporarySourceAndLeavesNoStagingFile() throws {
+        let temp = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let blocker = temp.appendingPathComponent("blocked-destination")
+        try? Data("x".utf8).write(to: blocker)
+        let store = CaptureArtifactStore(encoder: byteWriter(format: .png), validator: acceptsAnySize)
+        let artifact = try store.write(.init(
+            captureID: UUID(),
+            image: SendableScreenCaptureImage(value: makeTestImage()),
+            directory: temp,
+            baseName: "capture",
+            format: .png,
+            quality: 1,
+            isTemporary: true
+        ))
+        #expect(throws: CaptureArtifactError.destinationUnavailable) {
+            _ = try store.promote(artifact, to: blocker, baseName: "saved")
+        }
+        #expect(store.fileExists(at: artifact.url))
+        let remaining = (try? FileManager.default.contentsOfDirectory(atPath: temp.path)) ?? []
+        #expect(remaining.sorted() == ["blocked-destination", artifact.url.lastPathComponent].sorted())
+    }
+
+    @Test func promotingAMissingSourceIsReportedInsteadOfProducingAnEmptySave() {
+        let temp = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let store = CaptureArtifactStore(encoder: byteWriter(format: .png), validator: acceptsAnySize)
+        let missing = CaptureArtifact(
+            captureID: UUID(),
+            url: temp.appendingPathComponent("gone.png"),
+            isTemporary: true,
+            format: .png,
+            pixelWidth: 10,
+            pixelHeight: 10,
+            byteCount: 10,
+            state: .ready
+        )
+        #expect(throws: CaptureArtifactError.sourceMissing) {
+            _ = try store.promote(missing, to: temp, baseName: "saved")
+        }
+    }
+}
+
+@MainActor
+struct RapidCaptureSequenceTests {
+    @Test func twentyRapidCapturesLeaveTwentyDistinctReadyFiles() throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = CaptureArtifactStore(encoder: byteWriter(format: .png), validator: acceptsAnySize)
+        var urls: Set<URL> = []
+        for _ in 0..<20 {
+            let artifact = try store.write(.init(
+                captureID: UUID(),
+                image: SendableScreenCaptureImage(value: makeTestImage()),
+                directory: directory,
+                baseName: "capture",
+                format: .png,
+                quality: 1,
+                isTemporary: true
+            ))
+            #expect(artifact.state == .ready)
+            urls.insert(artifact.url)
+        }
+        #expect(urls.count == 20)
+        let remaining = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        #expect(remaining.count == 20)
+    }
+}
+
+struct QuickAccessOperationCoordinatorTests {
+    private let fileOperations: [QuickAccessFileOperation] = [.copy, .save, .open, .drag, .edit, .pin]
+
+    @Test func everyFileOperationWaitsForAReadyArtifact() {
+        for state in [CaptureArtifactState.reserved, .writing, .promoting, .deleted] {
+            for operation in fileOperations {
+                #expect(!QuickAccessOperationCoordinator.allows(operation, state: state))
+            }
+            #expect(!QuickAccessOperationCoordinator.mayStartSave(state: state))
+            #expect(QuickAccessOperationCoordinator.pauseCountdown(state: state))
+        }
+        for operation in fileOperations {
+            #expect(QuickAccessOperationCoordinator.allows(operation, state: .ready))
+        }
+        #expect(QuickAccessOperationCoordinator.mayStartSave(state: .ready))
+        #expect(QuickAccessOperationCoordinator.shouldRunCountdown(state: .ready))
+    }
+
+    @Test func aFailedWriteKeepsItsCardButOnlyOffersDeletion() {
+        #expect(QuickAccessOperationCoordinator.mayStartDelete(state: .failed))
+        #expect(!QuickAccessOperationCoordinator.mayStartDelete(state: .writing))
+        #expect(!QuickAccessOperationCoordinator.allows(.copy, state: .failed))
+        #expect(QuickAccessOperationCoordinator.userMessageKey(for: .failed) == "qaArtifactFailed")
+    }
+
+    @Test func preparingStatesExplainWhyActionsAreUnavailable() {
+        for state in [CaptureArtifactState.reserved, .writing, .promoting] {
+            #expect(QuickAccessOperationCoordinator.userMessageKey(for: state) == "qaArtifactPreparing")
+        }
+        #expect(QuickAccessOperationCoordinator.userMessageKey(for: .ready) == nil)
+    }
+}
+
+@MainActor
+struct CaptureChromeWindowRegistryTests {
+    private func makeWindow() -> NSWindow {
+        NSWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: false)
+    }
+
+    @Test func onlyRegisteredChromeWindowsAreExcluded() {
+        let chrome = makeWindow()
+        let ordinary = makeWindow()
+        let numbers: [ObjectIdentifier: Int] = [
+            ObjectIdentifier(chrome): 1001,
+            ObjectIdentifier(ordinary): 2002
+        ]
+        let registry = CaptureChromeWindowRegistry { window in
+            numbers[ObjectIdentifier(window)] ?? 0
+        }
+        let session = UUID()
+        registry.register(chrome, sessionID: session, reason: "test")
+
+        #expect(registry.excludedWindowIDs() == [1001])
+        #expect(registry.excludedWindowIDs(for: session) == [1001])
+        #expect(registry.excludedWindowIDs(for: UUID()).isEmpty)
+        #expect(!registry.excludedWindowIDs().contains(2002))
+
+        registry.endSession(session)
+        #expect(registry.excludedWindowIDs().isEmpty)
+        withExtendedLifetime((chrome, ordinary)) {}
+    }
+
+    @Test func endingOneSessionKeepsTheOtherSessionsChrome() {
+        let first = makeWindow()
+        let second = makeWindow()
+        let numbers: [ObjectIdentifier: Int] = [
+            ObjectIdentifier(first): 11,
+            ObjectIdentifier(second): 22
+        ]
+        let registry = CaptureChromeWindowRegistry { window in
+            numbers[ObjectIdentifier(window)] ?? 0
+        }
+        let firstSession = UUID()
+        let secondSession = UUID()
+        registry.register(first, sessionID: firstSession, reason: "first")
+        registry.register(second, sessionID: secondSession, reason: "second")
+
+        registry.endSession(firstSession)
+
+        #expect(registry.excludedWindowIDs(for: firstSession).isEmpty)
+        #expect(registry.excludedWindowIDs(for: secondSession) == [22])
+        withExtendedLifetime((first, second)) {}
+    }
+
+    @Test func unregisteredAndOffscreenWindowsAreNeverExcluded() {
+        let offscreen = makeWindow()
+        let registry = CaptureChromeWindowRegistry { _ in 0 }
+        registry.register(offscreen, reason: "offscreen")
+        #expect(registry.excludedWindowIDs().isEmpty)
+        withExtendedLifetime(offscreen) {}
+    }
 }
 
 @MainActor
@@ -427,6 +589,43 @@ struct ClipboardArtifactLeaseTests {
         #expect(!manager.canReclaim(url: url))
         manager.release(url: url, consumer: "annotation-editor")
         #expect(manager.canReclaim(url: url))
+    }
+
+    @Test func aLeaseDeclaresOnlyTheTypesTheProviderReallyOffers() {
+        let manager = ClipboardArtifactLeaseManager.shared
+        manager.resetForTesting()
+        defer { manager.resetForTesting() }
+        let artifact = CaptureArtifact(
+            captureID: UUID(),
+            url: URL(fileURLWithPath: "/tmp/lease-types.png"),
+            isTemporary: true,
+            format: .png,
+            pixelWidth: 10,
+            pixelHeight: 10,
+            byteCount: 10
+        )
+        let lease = manager.recordCopy(artifact: artifact, changeCount: 3, providedTypes: [.png])
+        #expect(lease.providedTypes == [NSPasteboard.PasteboardType.png.rawValue])
+        #expect(manager.lease(for: artifact.id)?.providedTypes == lease.providedTypes)
+    }
+
+    @Test func aLeasedTempFileSurvivesReclamationUntilThePasteboardMovesOn() {
+        let manager = ClipboardArtifactLeaseManager.shared
+        manager.resetForTesting()
+        defer { manager.resetForTesting() }
+        let artifact = CaptureArtifact(
+            captureID: UUID(),
+            url: URL(fileURLWithPath: "/tmp/lease-survives.png"),
+            isTemporary: true,
+            format: .png,
+            pixelWidth: 10,
+            pixelHeight: 10,
+            byteCount: 10
+        )
+        manager.recordCopy(artifact: artifact, changeCount: 11, providedTypes: [.png])
+        #expect(!manager.canReclaim(url: artifact.url))
+        manager.synchronize(changeCount: 12)
+        #expect(manager.canReclaim(url: artifact.url))
     }
 
     @Test func copyingASecondCaptureDoesNotReleaseTheFirst() {

@@ -490,7 +490,7 @@ final class VideoEditorManager {
     }
 }
 
-// MARK: - PostCaptureActionHandler (no-op seam)
+// MARK: - PostCaptureActionHandler (delegates to the screenshot feature's provider)
 
 @MainActor
 final class PostCaptureActionHandler {

@@ -92,6 +92,7 @@
 | Quick Access 手动保存后历史里没有正式文件，删除后历史仍留失效路径；标注保存用 `try?` 吞掉写入失败 | `CaptureHistoryStore` 改为委托 `SmartCaptureHistoryStore`，提升时用 `previousPath` 重指向正式路径并发外部变更通知；删除同步移除历史；标注写入改为 staging → 解码校验 → 原子替换，失败保留原图并报错 | `CaptureHistoryServiceTests`、`ScreenshotReliabilityTests` |
 | 全屏、当前窗口、滚动截图以 `.other` 调用处理入口，按模式配置永远不生效；设置页也没有任何按模式入口 | 四类入口改为携带真实 `CaptureMode`；`setPerModePostCaptureActions` 写入/删除模式键；设置页新增「按截图模式」卡片，缺省键=跟随全局，取消自定义即删除键 | `PostCaptureRoutingTests`、`ConfigurationSchemaContractTests`、`ConfigStoreTests` |
 | 选区操作栏在标注时仍混排 OCR/贴图/更多，框选阶段则被工具按钮占满 | `AreaSelectionActionBar.applyStageVisibility()` 单点切换两阶段：框选=主要动作，标注=工具+完成/取消；完成按原定动作交付，取消丢弃会话 | `SnapzyCaptureTests` |
+| 截图界面排除、写入前禁用操作、连续截图与剪贴板 lease 缺少可重复的自动化守护 | `CaptureChromeWindowRegistry` 接受可注入的 window number provider（生产仍读真实窗口）；新增产物状态门禁、20 连拍唯一文件、界面窗口按 session 排除、lease 生成器替换测试 | `CaptureArtifactStoreTests`、`RapidCaptureSequenceTests`、`QuickAccessOperationCoordinatorTests`、`ClipboardArtifactLeaseTests`、`CaptureChromeWindowRegistryTests` |
 
-状态：自动化测试已通过；混合 DPI、跨屏、AX 无权限、按模式配置与操作栏分层的实机验收仍待完成；尚未发布 Beta。
+状态：自动化测试已通过；混合 DPI、跨屏、AX 无权限、按模式配置与操作栏分层的实机验收仍待完成。截图可靠性重构已随 `v1.2.2-beta.103` 发布；本轮测试补强随后续 Beta 发布。
 

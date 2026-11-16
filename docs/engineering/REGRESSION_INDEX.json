@@ -73,6 +73,8 @@
           ],
           "test_filters": [
             "CaptureArtifactStoreTests",
+            "RapidCaptureSequenceTests",
+            "QuickAccessOperationCoordinatorTests",
             "ClipboardArtifactLeaseTests",
             "CaptureHistoryServiceTests",
             "ScreenCaptureTests",
@@ -137,6 +139,7 @@
           ],
           "test_filters": [
             "CaptureCompositeValidatorTests",
+            "CaptureChromeWindowRegistryTests",
             "ScreenCaptureTests",
             "SnapzyCaptureTests",
             "SecondarySelectionRegressionTests"

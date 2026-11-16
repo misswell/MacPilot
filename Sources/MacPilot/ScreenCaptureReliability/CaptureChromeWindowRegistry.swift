@@ -32,8 +32,13 @@ final class CaptureChromeWindowRegistry {
     private var entries: [ObjectIdentifier: Entry] = [:]
     private var hides: [ObjectIdentifier: HideState] = [:]
     private var keysBySession: [UUID: Set<ObjectIdentifier>] = [:]
+    private let windowNumber: (NSWindow) -> Int
 
-    private init() {}
+    /// The provider exists so tests can assign window numbers without ordering
+    /// windows on screen; production always reads the live `NSWindow`.
+    init(windowNumber: @escaping (NSWindow) -> Int = { $0.windowNumber }) {
+        self.windowNumber = windowNumber
+    }
 
     func register(_ window: NSWindow, sessionID: UUID? = nil, reason: String) {
         let key = ObjectIdentifier(window)
@@ -62,8 +67,9 @@ final class CaptureChromeWindowRegistry {
                 staleKeys.append(key)
                 continue
             }
-            if window.windowNumber > 0 {
-                result.insert(CGWindowID(window.windowNumber))
+            let number = windowNumber(window)
+            if number > 0 {
+                result.insert(CGWindowID(number))
             }
         }
         for key in staleKeys {
