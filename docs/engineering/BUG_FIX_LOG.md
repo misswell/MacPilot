@@ -95,5 +95,7 @@
 | 截图界面排除、写入前禁用操作、连续截图与剪贴板 lease 缺少可重复的自动化守护 | `CaptureChromeWindowRegistry` 接受可注入的 window number provider（生产仍读真实窗口）；新增产物状态门禁、20 连拍唯一文件、界面窗口按 session 排除、lease 生成器替换测试 | `CaptureArtifactStoreTests`、`RapidCaptureSequenceTests`、`QuickAccessOperationCoordinatorTests`、`ClipboardArtifactLeaseTests`、`CaptureChromeWindowRegistryTests` |
 | 生产落盘绕过 `CaptureArtifactStore`：自动保存直接 `CGImageDestination` 写最终路径，标注覆盖只做临时文件+`replaceItemAt`，临时截图自写 PNG 且先删旧文件再移动，均无解码校验，编码失败可能留下半截文件 | `ScreenCaptureStorage.save`、`ScreenCaptureStorage.replace`（标注覆盖）与 `TempCaptureManager.writeScreenshot`（保留预约路径）统一委托 store；新增 `CaptureArtifactStore.write(to:)`（staging → 解码尺寸校验 → 原子提交，目标已存在时用 `replaceItemAt`），验证失败保留旧文件字节并清掉 staging；删除废弃的 `uniqueFileURL` | `CaptureArtifactStoreTests`、`ScreenCaptureTests` |
 
-状态：自动化测试已通过；混合 DPI、跨屏、AX 无权限、按模式配置与操作栏分层的实机验收仍待完成。截图可靠性重构已随 `v1.2.2-beta.103` 发布；本轮测试补强随后续 Beta 发布。
+| 标注工具被收进「标注」入口再经下拉箭头选变体，常用工具要两次点击；撤销按钮用 `annotations.isEmpty` 判断，删掉最后一个标注后反而不能撤销；没有 Redo 按钮；完整编辑器没有可见 Copy & Close；普通截图复制先关窗后写剪贴板 | 工具区改为常驻独立按钮（分隔线只做视觉分组），属性区默认展开且切换工具不改折叠状态；`SmartAnnotationModel` 新增 `canUndo` 并由历史栈驱动按钮，删除/清空/改属性/移动缩放/文本提交全部入同一事务，连续拖动合并为一步；Inline 与完整编辑器接入 Cmd+Z / Cmd+Shift+Z；Inline Copy 留在会话、Copy & Close 复制成功才关闭；普通截图 Copy 经 `onCaptureReporting` 等剪贴板成功后才关闭选区；完整编辑器与 Quick Access 增加 Copy & Close，失败保留编辑内容 | `AnnotationInteractionParityTests`、`SnapzyCaptureTests`、`QuickAccessTests` |
+
+状态：自动化测试已通过；混合 DPI、跨屏、AX 无权限、按模式配置的实机验收仍待完成。2026-11 标注交互纠偏后，旧的「操作栏阶段分层」契约已废止（旧规则保留在索引中仅供 append-only 校验，实际验收以新条目为准）；标注工具可见性、Undo/Redo、Copy 语义的人工验收见 `docs/engineering/REGRESSION_INDEX.json` 的追加条目。截图可靠性重构已随 `v1.2.2-beta.103` 发布；本轮测试补强随后续 Beta 发布。
 

@@ -548,6 +548,9 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
         onCapture: { [weak self] image, intent, mode in
             self?.handleSmartCapture(image, intent: intent, mode: mode)
         },
+        onCaptureReporting: { [weak self] image, intent, mode, completion in
+            self?.handleSmartCapture(image, intent: intent, mode: mode, completion: completion)
+        },
         onError: { [weak self] error in
             Self.logger.error("Region capture failed: \(error.localizedDescription, privacy: .public)")
             guard let self else { return }
@@ -1257,11 +1260,13 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
     private func handleSmartCapture(
         _ image: CGImage,
         intent: CaptureDeliveryIntent,
-        mode: CaptureMode
+        mode: CaptureMode,
+        completion: ((Bool) -> Void)? = nil
     ) {
         handleCapturedImage(
             image,
-            request: CaptureRequest(mode: mode, trigger: .shortcut, intent: intent)
+            request: CaptureRequest(mode: mode, trigger: .shortcut, intent: intent),
+            completion: completion
         )
     }
 
@@ -1348,14 +1353,18 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
         _ image: CGImage,
         displayIndex: Int? = nil,
         imageFormat: ScreenCaptureImageFormat? = nil,
-        request: CaptureRequest = CaptureRequest(mode: .other, trigger: .other, intent: .automatic)
+        request: CaptureRequest = CaptureRequest(mode: .other, trigger: .other, intent: .automatic),
+        completion: ((Bool) -> Void)? = nil
     ) {
         let actions = PostCaptureRouter.plan(
             request: request,
             global: PostCaptureActionSet(legacy: settings),
             perMode: settings.postCaptureConfiguration.perModeActions
         ).actions
-        guard actions.needsFileArtifact else { return }
+        guard actions.needsFileArtifact else {
+            completion?(false)
+            return
+        }
 
         // 关闭“截图后自动保存到本地”时连保存配置都不准备，避免创建空目录。
         let configuration = actions.saveToDisk
@@ -1384,7 +1393,10 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
         }
 
         let wantsFallbackFile = actions.copyToClipboard || actions.pinToScreen || quickAccessItemID != nil
-        guard configuration != nil || wantsFallbackFile else { return }
+        guard configuration != nil || wantsFallbackFile else {
+            completion?(false)
+            return
+        }
 
         if let quickAccessItemID {
             QuickAccessManager.shared.setArtifactRetryHandler(for: quickAccessItemID) { [weak self] in
@@ -1400,7 +1412,8 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                     actions: actions,
                     request: request,
                     artifactID: artifactID,
-                    quickAccessItemID: quickAccessItemID
+                    quickAccessItemID: quickAccessItemID,
+                    completion: completion
                 )
             }
             QuickAccessManager.shared.markArtifactWriting(id: quickAccessItemID)
@@ -1417,7 +1430,8 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
             actions: actions,
             request: request,
             artifactID: artifactID,
-            quickAccessItemID: quickAccessItemID
+            quickAccessItemID: quickAccessItemID,
+            completion: completion
         )
     }
 
@@ -1432,7 +1446,8 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
         actions: PostCaptureActionSet,
         request: CaptureRequest,
         artifactID: UUID,
-        quickAccessItemID: UUID?
+        quickAccessItemID: UUID?,
+        completion: ((Bool) -> Void)? = nil
     ) {
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1454,7 +1469,8 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                 artifactID: artifactID,
                 quickAccessItemID: quickAccessItemID,
                 imageWidth: imageWidth,
-                imageHeight: imageHeight
+                imageHeight: imageHeight,
+                completion: completion
             )
         }
     }
@@ -1528,7 +1544,8 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
         artifactID: UUID,
         quickAccessItemID: UUID?,
         imageWidth: Int,
-        imageHeight: Int
+        imageHeight: Int,
+        completion: ((Bool) -> Void)? = nil
     ) {
         switch result {
         case .success(let artifact):
@@ -1559,8 +1576,12 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                 )
                 if !copied {
                     errorMessage = AppText.value("qaClipboardFailed", language: language)
+                    completion?(false)
                     return
                 }
+                completion?(true)
+            } else {
+                completion?(true)
             }
             if actions.openAnnotation,
                let quickAccessItemID,
@@ -1578,6 +1599,7 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                 QuickAccessManager.shared.artifactDidFail(id: quickAccessItemID, error: message)
             }
             errorMessage = message
+            completion?(false)
             Self.logger.error(
                 "Smart capture artifact failed: \(error.localizedDescription, privacy: .public)"
             )
@@ -1916,6 +1938,14 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder.path
     }
+
+    #if DEBUG
+    /// Test seam: lets a test pin post-capture actions without touching the
+    /// user's persisted configuration.
+    func testUpdateSettings(_ mutate: (inout ScreenCaptureSettings) -> Void) {
+        updateSettings(mutate)
+    }
+    #endif
 
     private func updateSettings(_ mutate: (inout ScreenCaptureSettings) -> Void) {
         guard !isLoading else { return }

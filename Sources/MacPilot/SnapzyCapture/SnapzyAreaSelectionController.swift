@@ -116,6 +116,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
     private var inlineAnnotationModel: SmartAnnotationModel?
     private var inlineAnnotationImage: CGImage?
     private var inlineAnnotationScaleFactor: CGFloat = 1
+    private var inlineAnnotationLanguage: AppLanguage = .system
     private var inlineAnnotationActionHandler: ((CGImage, AreaSelectionAction) -> Void)?
     private var inlineAnnotationCancelHandler: (() -> Void)?
     private(set) var isRoundedCornersEnabled = false
@@ -332,7 +333,16 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
     /// Closes a post-selection HUD after an action has been handed to the
     /// capture coordinator.  Unlike `cancelSelection`, this does not invoke
     /// the completion callback a second time.
+    #if DEBUG
+    /// Test seam: how many times a real dismissal was requested. The copy
+    /// failure path must not increment it.
+    private(set) var testDismissSelectionCount = 0
+    #endif
+
     func dismissSelection() {
+        #if DEBUG
+        testDismissSelectionCount += 1
+        #endif
         guard !windows.isEmpty else { return }
         let oldWindows = windows
         windows.removeAll(keepingCapacity: false)
@@ -596,6 +606,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         inlineAnnotationModel = model
         inlineAnnotationImage = image
         inlineAnnotationScaleFactor = scaleFactor
+        inlineAnnotationLanguage = language
         inlineAnnotationActionHandler = onAction
         inlineAnnotationCancelHandler = onCancel
 
@@ -614,7 +625,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
                 self?.commitInlineAnnotation(as: .save)
             },
             onDoubleClickCanvas: { [weak self] in
-                self?.commitInlineAnnotation(as: .copy)
+                self?.commitInlineAnnotation(as: .copyAndClose)
             }
         ))
         selectedWindow.overlayView.showEmbeddedAnnotationEditor(
@@ -629,12 +640,64 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         return true
     }
 
+    #if DEBUG
+    /// Test seam: installs an inline session without a live selection window so
+    /// the copy/undo semantics can be exercised headlessly.
+    func testInstallInlineAnnotationSession(
+        image: CGImage,
+        initialTool: SmartAnnotationTool = .rectangle,
+        onAction: @escaping (CGImage, AreaSelectionAction) -> Void = { _, _ in },
+        onCancel: @escaping () -> Void = {}
+    ) {
+        inlineAnnotationModel = SmartAnnotationModel(initialTool: initialTool)
+        inlineAnnotationImage = image
+        inlineAnnotationScaleFactor = 1
+        inlineAnnotationLanguage = .system
+        inlineAnnotationActionHandler = onAction
+        inlineAnnotationCancelHandler = onCancel
+    }
+
+    var testInlineAnnotationModel: SmartAnnotationModel? { inlineAnnotationModel }
+    var testHasInlineAnnotationSession: Bool { hasInlineAnnotationSession }
+    #endif
+
     private func clearInlineAnnotationSession() {
         inlineAnnotationModel = nil
         inlineAnnotationImage = nil
         inlineAnnotationScaleFactor = 1
+        inlineAnnotationLanguage = .system
         inlineAnnotationActionHandler = nil
         inlineAnnotationCancelHandler = nil
+    }
+
+    /// Copies the current annotated render while keeping the inline session
+    /// alive (Snapzy's Inline `Copy`). Only the clipboard is touched: no
+    /// Quick Access card is created for a non-terminal copy.
+    @discardableResult
+    func copyInlineAnnotationWithoutClosing() -> Bool {
+        guard let model = inlineAnnotationModel,
+              let image = inlineAnnotationImage,
+              let rendered = SmartAnnotationRenderer.render(
+                  image: image,
+                  annotations: model.annotations,
+                  styles: model.styledAnnotations.map(\.style)
+              )
+        else { return false }
+        guard SmartCaptureClipboard.copy(image: rendered) else {
+            showInlineClipboardFailure()
+            return false
+        }
+        return true
+    }
+
+    private func showInlineClipboardFailure() {
+        let language = inlineAnnotationLanguage
+        let error = NSError(
+            domain: "MacPilot.Clipboard",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: AppText.value("qaClipboardFailed", language: language)]
+        )
+        SmartCaptureToast.shared.showFailure(error: error, language: language)
     }
 
     /// Renders the live annotations and routes the final image through the
@@ -655,6 +718,19 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             // 「更多」 menu's 圆角截图 / 阴影或边框 did nothing during a live
             // session even though the commit path honours `outputStyle`.
             setOutputStyleToggle(action)
+            return
+        case .copy:
+            // The visible Copy action keeps the inline session alive, matching
+            // Snapzy. Only Copy & Close / Done end the session.
+            copyInlineAnnotationWithoutClosing()
+            return
+        case .copyAndClose:
+            // Copy first, close only when the clipboard write succeeded: a
+            // failed copy must leave the user's annotations on screen.
+            if copyInlineAnnotationWithoutClosing() {
+                clearInlineAnnotationSession()
+                dismissSelection()
+            }
             return
         case .refreshCapture, .scrollingCapture, .newSelection, .adjustSelection, .more, .annotate, .annotateTool:
             return
@@ -713,8 +789,15 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             }
             return true
         }
-        guard let selectedResult else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        // While a text field is the first responder, Cmd+Z/Cmd+Shift+Z belong to
+        // the text editor. Routing them to the annotation history would undo
+        // the whole picture instead of the character the user just typed.
+        let editingText = window.firstResponder is NSTextView
+        if handleInlineAnnotationKey(keyCode: event.keyCode, modifiers: modifiers, editingText: editingText) {
+            return true
+        }
+        guard let selectedResult else { return false }
         if event.keyCode == 8, modifiers == [.command] || modifiers == [.control] {
             commitOrRequest(.copy, window: window)
             return true
@@ -766,6 +849,60 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             return true
         }
         return false
+    }
+
+    /// Single router for annotation keyboard commands. Both the real key event
+    /// path and the tests call this, so "the button works but the shortcut
+    /// doesn't" cannot slip through.
+    @discardableResult
+    func handleInlineAnnotationKey(
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags,
+        editingText: Bool = false
+    ) -> Bool {
+        guard hasInlineAnnotationSession else { return false }
+        if !editingText, keyCode == 6, modifiers.contains(.command) {
+            if modifiers.contains(.shift) {
+                inlineAnnotationModel?.redo()
+            } else {
+                inlineAnnotationModel?.undo()
+            }
+            return true
+        }
+        if !editingText, keyCode == 8, modifiers == [.command, .shift] {
+            commitInlineAnnotation(as: .copyAndClose)
+            return true
+        }
+        if keyCode == 8, modifiers == [.command] || modifiers == [.control] {
+            // Snapzy's inline Copy keeps the session alive so the user can keep
+            // annotating. Closing is a separate, explicit action.
+            copyInlineAnnotationWithoutClosing()
+            return true
+        }
+        if !editingText, modifiers.isEmpty, let tool = Self.toolShortcut(for: keyCode) {
+            inlineAnnotationModel?.selectTool(tool)
+            return true
+        }
+        return false
+    }
+
+    /// Plain-letter tool shortcuts for the inline HUD (Snapzy parity). They only
+    /// fire without modifiers and never while a text field owns the keyboard.
+    static func toolShortcut(for keyCode: UInt16) -> SmartAnnotationTool? {
+        switch keyCode {
+        case 15: return .rectangle      // R
+        case 31: return .ellipse        // O
+        case 0: return .arrow           // A
+        case 37: return .line           // L
+        case 35: return .pencil         // P
+        case 4: return .highlighter     // H
+        case 17: return .text           // T
+        case 45: return .counter        // N
+        case 11: return .blur           // B
+        case 1: return .spotlight       // S
+        case 14: return .eraser         // E
+        default: return nil
+        }
     }
 
     /// Routes a terminal action through the inline session commit when one is

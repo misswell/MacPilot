@@ -1674,6 +1674,10 @@ final class SmartScreenshotController {
     nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     private let language: () -> AppLanguage
     private let onCapture: (CGImage, CaptureDeliveryIntent, CaptureMode) -> Void
+    /// Optional delivery variant that reports whether the clipboard copy
+    /// succeeded. The selection HUD uses it to close only after a confirmed
+    /// copy; callers that ignore the result keep using `onCapture`.
+    private let onCaptureReporting: ((CGImage, CaptureDeliveryIntent, CaptureMode, @escaping (Bool) -> Void) -> Void)?
     private let onError: (Error) -> Void
     /// 双击快速复制后的自动落盘回调；nil 时仅复制不保存。
     private let onQuickCopySave: ((CGImage) -> Void)?
@@ -1780,6 +1784,7 @@ final class SmartScreenshotController {
     init(
         language: @escaping () -> AppLanguage,
         onCapture: @escaping (CGImage, CaptureDeliveryIntent, CaptureMode) -> Void,
+        onCaptureReporting: ((CGImage, CaptureDeliveryIntent, CaptureMode, @escaping (Bool) -> Void) -> Void)? = nil,
         onError: @escaping (Error) -> Void,
         onSelectionRect: @escaping (CGRect) -> Void = { _ in },
         onRecordingSelection: @escaping (CGRect, SmartCaptureSelectionMode) -> Void = { _, _ in },
@@ -1815,6 +1820,7 @@ final class SmartScreenshotController {
     ) {
         self.language = language
         self.onCapture = onCapture
+        self.onCaptureReporting = onCaptureReporting
         self.onError = onError
         self.onQuickCopySave = onQuickCopySave
         self.onSelectionRect = onSelectionRect
@@ -3237,7 +3243,13 @@ final class SmartScreenshotController {
             return
         }
 
-        SnapzyAreaSelectionController.shared.dismissSelection()
+        // Copy routes are confirmed by the delivery pipeline: the HUD stays
+        // until the clipboard write succeeds, and stays (with an error) if it
+        // fails. Non-copy actions keep their historical immediate dismissal.
+        let copyLike = action == .copy || action == .copyAndClose
+        if !copyLike {
+            SnapzyAreaSelectionController.shared.dismissSelection()
+        }
         QuickAccessManager.shared.resumeAfterCapture()
 
         Task { [weak self] in
@@ -3287,10 +3299,16 @@ final class SmartScreenshotController {
                     self.onCapture(crop.image, .automatic, mode)
                 case .save:
                     self.onCapture(crop.image, .explicitSave, mode)
-                case .copy:
+                case .copy, .copyAndClose:
                     // One encode feeds the clipboard and the Quick Access card;
                     // copying straight from the CGImage re-encoded it a second time.
-                    self.onCapture(crop.image, .explicitCopy, mode)
+                    if let reporting = self.onCaptureReporting {
+                        reporting(crop.image, .explicitCopy, mode) { copied in
+                            self.respondToSelectionCopyResult(copied)
+                        }
+                    } else {
+                        self.onCapture(crop.image, .explicitCopy, mode)
+                    }
                 case .upload:
                     self.uploadImageToCloud(crop.image)
                 case .newSelection, .adjustSelection, .more, .scrollingCapture,
@@ -3317,6 +3335,29 @@ final class SmartScreenshotController {
             }
         }
     }
+
+    /// Single decision point for "did the selection's Copy actually reach the
+    /// clipboard?": success closes the HUD, failure keeps it and reports. Both
+    /// the live pipeline and the test seam call this, so the two outcomes can
+    /// never drift apart.
+    func respondToSelectionCopyResult(_ copied: Bool) {
+        if copied {
+            SnapzyAreaSelectionController.shared.dismissSelection()
+        } else {
+            let language = self.language()
+            self.onError(NSError(
+                domain: "MacPilot.Clipboard",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: AppText.value("qaClipboardFailed", language: language)]
+            ))
+        }
+    }
+
+    #if DEBUG
+    func testRespondToSelectionCopyResult(_ copied: Bool) {
+        respondToSelectionCopyResult(copied)
+    }
+    #endif
 
     /// Crops the frozen snapshots off the main actor. The session hands over a
     /// value copy of its snapshots so later refreshes cannot race the crop.
@@ -3370,7 +3411,7 @@ final class SmartScreenshotController {
             // Annotated saves are always a permanent file, whatever the
             // automatic-save switches say.
             onCapture(image, .annotatedSave, mode)
-        case .copy:
+        case .copy, .copyAndClose:
             onCapture(image, .explicitCopy, mode)
         case .upload:
             uploadImageToCloud(image)
@@ -3534,6 +3575,11 @@ final class SmartScreenshotController {
             onQuickCopy: { [weak self] annotated in
                 SmartCaptureClipboard.copy(image: annotated)
                 self?.onQuickCopySave?(annotated)
+            },
+            onCopyAndClose: { [weak self] annotated in
+                let copied = SmartCaptureClipboard.copy(image: annotated)
+                if copied { self?.onQuickCopySave?(annotated) }
+                return copied
             }
         )
         inlineAnnotationControllers[id] = controller
@@ -6107,41 +6153,14 @@ extension SmartAnnotation {
     }
 }
 
-/// A small value-type history seam used by the annotation editor and tests.
-/// New edits invalidate the redo stack, matching standard editor behaviour.
-struct SmartAnnotationHistory: Equatable {
-    private(set) var annotations: [SmartAnnotation] = []
-    private var redoAnnotations: [SmartAnnotation] = []
-
-    mutating func append(_ annotation: SmartAnnotation) {
-        annotations.append(annotation)
-        redoAnnotations.removeAll(keepingCapacity: true)
-    }
-
-    @discardableResult
-    mutating func undo() -> SmartAnnotation? {
-        guard let annotation = annotations.popLast() else { return nil }
-        redoAnnotations.append(annotation)
-        return annotation
-    }
-
-    @discardableResult
-    mutating func redo() -> SmartAnnotation? {
-        guard let annotation = redoAnnotations.popLast() else { return nil }
-        annotations.append(annotation)
-        return annotation
-    }
-
-    mutating func removeAll() {
-        annotations.removeAll(keepingCapacity: true)
-        redoAnnotations.removeAll(keepingCapacity: true)
-    }
-}
-
 @MainActor
 final class SmartAnnotationModel: ObservableObject {
     @Published var tool: SmartAnnotationTool = .rectangle
     @Published private(set) var annotations: [SmartAnnotation] = []
+    /// Undo/Redo availability is owned by the history stacks, never by
+    /// `annotations.count`: erasing the last object still leaves a snapshot to
+    /// restore, and that state must keep Undo enabled.
+    @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
     @Published private(set) var currentStyle = SmartAnnotationStyle.default(for: .rectangle)
     @Published private(set) var selectedIndex: Int?
@@ -6155,6 +6174,19 @@ final class SmartAnnotationModel: ObservableObject {
     private var undoDocuments: [Document] = []
     private var redoDocuments: [Document] = []
     private var activeMutationDocument: Document?
+    /// A continuous style edit (slider drag, colour well scrub) collapses into
+    /// one history step: the first change of a streak records the snapshot and
+    /// every follow-up with the same key is merged into it. `endStyleEditing()`
+    /// closes the streak when the control is released.
+    private struct StyleStreak: Equatable {
+        let tool: SmartAnnotationTool
+        let selectedIndex: Int?
+        let field: StyleField
+    }
+    private enum StyleField: String {
+        case lineWidth, opacity, color, fill, lineStyle
+    }
+    private var activeStyleStreak: StyleStreak?
     private(set) var nextCounter = 1
     /// 各工具最近一次使用的线宽；跨标注会话记忆，下次标注沿用调整后的粗细。
     private static var rememberedLineWidths: [SmartAnnotationTool: CGFloat] = [:]
@@ -6243,14 +6275,14 @@ final class SmartAnnotationModel: ObservableObject {
     }
 
     func adjustLineWidth(by delta: CGFloat) {
-        updateCurrentStyle { style in
+        updateCurrentStyle(.lineWidth) { style in
             style.lineWidth = min(48, max(1, style.lineWidth + delta))
         }
         rememberLineWidth()
     }
 
     func setLineWidth(_ value: CGFloat) {
-        updateCurrentStyle { style in
+        updateCurrentStyle(.lineWidth) { style in
             style.lineWidth = min(48, max(1, value))
         }
         rememberLineWidth()
@@ -6261,31 +6293,31 @@ final class SmartAnnotationModel: ObservableObject {
     }
 
     func adjustOpacity(by delta: CGFloat) {
-        updateCurrentStyle { style in
+        updateCurrentStyle(.opacity) { style in
             style.opacity = min(1, max(0.05, style.opacity + delta))
         }
     }
 
     func setOpacity(_ value: CGFloat) {
-        updateCurrentStyle { style in
+        updateCurrentStyle(.opacity) { style in
             style.opacity = min(1, max(0.05, value))
         }
     }
 
     func setColor(_ color: SmartAnnotationColor) {
-        updateCurrentStyle { style in
+        updateCurrentStyle(.color) { style in
             style.color = color
         }
     }
 
     func setFillEnabled(_ enabled: Bool) {
-        updateCurrentStyle { style in
+        updateCurrentStyle(.fill) { style in
             style.fillEnabled = enabled
         }
     }
 
     func setLineStyle(_ lineStyle: SmartAnnotationLineStyle) {
-        updateCurrentStyle { style in
+        updateCurrentStyle(.lineStyle) { style in
             style.lineStyle = lineStyle
         }
     }
@@ -6298,23 +6330,25 @@ final class SmartAnnotationModel: ObservableObject {
         if case .counter = annotation { nextCounter += 1 }
         selectedIndex = annotations.indices.last
         currentStyle = annotationStyles.last ?? currentStyle
-        updateCanRedo()
+        updateHistoryAvailability()
     }
 
     func undo() {
         commitActiveMutation()
+        endStyleEditing()
         guard let previous = undoDocuments.popLast() else { return }
         redoDocuments.append(document)
         apply(previous)
-        updateCanRedo()
+        updateHistoryAvailability()
     }
 
     func redo() {
         commitActiveMutation()
+        endStyleEditing()
         guard let next = redoDocuments.popLast() else { return }
         undoDocuments.append(document)
         apply(next)
-        updateCanRedo()
+        updateHistoryAvailability()
     }
 
     func removeAll() {
@@ -6325,7 +6359,7 @@ final class SmartAnnotationModel: ObservableObject {
         annotationStyles.removeAll(keepingCapacity: true)
         selectedIndex = nil
         nextCounter = 1
-        updateCanRedo()
+        updateHistoryAvailability()
     }
 
     /// Eraser support: deletes the annotation at `index` as a single undoable
@@ -6355,10 +6389,22 @@ final class SmartAnnotationModel: ObservableObject {
         if selectedIndex == index {
             selectedIndex = nil
         }
-        updateCanRedo()
+        updateHistoryAvailability()
     }
 
-    private func updateCurrentStyle(_ update: (inout SmartAnnotationStyle) -> Void) {
+    /// Every user-visible style change is an undo transaction. Consecutive
+    /// changes with the same (tool, target, field) key — a slider drag or a
+    /// colour-well scrub — merge into the first snapshot so dragging is one
+    /// step, not one step per frame.
+    private func updateCurrentStyle(_ field: StyleField, _ update: (inout SmartAnnotationStyle) -> Void) {
+        let key = StyleStreak(tool: tool, selectedIndex: selectedIndex, field: field)
+        if activeStyleStreak != key {
+            commitActiveMutation()
+            activeStyleStreak = key
+            undoDocuments.append(document)
+            redoDocuments.removeAll(keepingCapacity: true)
+            updateHistoryAvailability()
+        }
         var updated = currentStyle
         update(&updated)
         currentStyle = updated
@@ -6366,6 +6412,12 @@ final class SmartAnnotationModel: ObservableObject {
         if let selectedIndex, annotationStyles.indices.contains(selectedIndex) {
             annotationStyles[selectedIndex] = updated
         }
+    }
+
+    /// Closes the current style streak. The next change of the same field
+    /// starts a new undo step; sliders call this on mouse-up / editing end.
+    func endStyleEditing() {
+        activeStyleStreak = nil
     }
 
     private var document: Document {
@@ -6377,16 +6429,20 @@ final class SmartAnnotationModel: ObservableObject {
     }
 
     private func recordUndoPoint() {
+        activeStyleStreak = nil
         undoDocuments.append(document)
         redoDocuments.removeAll(keepingCapacity: true)
+        updateHistoryAvailability()
     }
 
     private func commitActiveMutation() {
+        activeStyleStreak = nil
         guard let activeMutationDocument else { return }
         self.activeMutationDocument = nil
         guard activeMutationDocument != document else { return }
         undoDocuments.append(activeMutationDocument)
         redoDocuments.removeAll(keepingCapacity: true)
+        updateHistoryAvailability()
     }
 
     private func apply(_ document: Document) {
@@ -6397,13 +6453,14 @@ final class SmartAnnotationModel: ObservableObject {
         currentStyle = stylesByTool[tool] ?? .default(for: tool)
     }
 
-    private func updateCanRedo() {
+    private func updateHistoryAvailability() {
+        canUndo = !undoDocuments.isEmpty
         canRedo = !redoDocuments.isEmpty
     }
 }
 
 @MainActor
-private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
+final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
     nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     private let image: CGImage
     private let language: AppLanguage
@@ -6411,6 +6468,9 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
     private let onClose: () -> Void
     /// 双击画布的快捷路径：渲染结果直接交给宿主复制（不走完整产出管线）。
     private let onQuickCopy: ((CGImage) -> Void)?
+    /// Visible Copy & Close: returns whether the clipboard write succeeded.
+    /// The window closes only on success; a failure keeps the edit on screen.
+    private let onCopyAndClose: ((CGImage) -> Bool)?
     private let model: SmartAnnotationModel
     private var window: NSWindow?
     private var didNotifyClose = false
@@ -6421,7 +6481,8 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
         initialTool: SmartAnnotationTool = .rectangle,
         onComplete: @escaping (CGImage) -> Void,
         onClose: @escaping () -> Void,
-        onQuickCopy: ((CGImage) -> Void)? = nil
+        onQuickCopy: ((CGImage) -> Void)? = nil,
+        onCopyAndClose: ((CGImage) -> Bool)? = nil
     ) {
         self.image = image
         self.language = language
@@ -6429,6 +6490,7 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
         self.onComplete = onComplete
         self.onClose = onClose
         self.onQuickCopy = onQuickCopy
+        self.onCopyAndClose = onCopyAndClose
     }
 
     func show(at screenRect: CGRect? = nil) {
@@ -6460,6 +6522,9 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
             onComplete: { [weak self] in self?.complete() },
             onDoubleClickCanvas: onQuickCopy.map { handler in
                 { [weak self] in self?.copyToClipboardAndClose(with: handler) }
+            },
+            onCopyAndClose: onCopyAndClose.map { _ in
+                { [weak self] in self?.copyAndCloseTapped() }
             }
         ))
         if let targetRect {
@@ -6503,6 +6568,53 @@ private final class SmartAnnotationWindowController: NSObject, NSWindowDelegate 
         handler(rendered)
         close()
     }
+
+    /// Toolbar Copy & Close: render, copy, and close only when the host reports
+    /// a successful clipboard write. On failure the editor stays open with all
+    /// annotations intact and the user sees an explicit message.
+    private func copyAndCloseTapped() {
+        guard let rendered = SmartAnnotationRenderer.render(
+            image: image,
+            annotations: model.annotations,
+            styles: model.styledAnnotations.map(\.style)
+        ) else {
+            presentClipboardFailure()
+            return
+        }
+        guard let onCopyAndClose else {
+            if let onQuickCopy {
+                onQuickCopy(rendered)
+                close()
+            }
+            return
+        }
+        guard onCopyAndClose(rendered) else {
+            presentClipboardFailure()
+            return
+        }
+        close()
+    }
+
+    private func presentClipboardFailure() {
+        let alert = NSAlert()
+        alert.messageText = AppText.value("qaClipboardFailed", language: language)
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: AppText.value("scOK", language: language))
+        if let window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    #if DEBUG
+    /// Test seam: performs the toolbar Copy & Close and reports whether the
+    /// window actually closed (i.e. the clipboard write succeeded).
+    func testCopyAndClose() -> Bool {
+        copyAndCloseTapped()
+        return window == nil
+    }
+    #endif
 
     func windowWillClose(_ notification: Notification) {
         Self.logger.info("Annotation window will close")
@@ -6581,6 +6693,10 @@ struct SmartAnnotationEditor: View {
     let onComplete: () -> Void
     /// 双击画布的确认动作（如"复制并关闭"）；`nil` 时画布保持原有单击语义。
     var onDoubleClickCanvas: (() -> Void)?
+    /// Visible Copy & Close action. It renders the final annotated image,
+    /// copies it, and only then closes; the host decides whether the copy
+    /// succeeded so a failed clipboard write never loses the edit.
+    var onCopyAndClose: (() -> Void)?
     @State private var dragStart: CGPoint?
     @State private var dragCurrent: CGPoint?
     @State private var dragPoints: [CGPoint] = []
@@ -6615,7 +6731,8 @@ struct SmartAnnotationEditor: View {
         embeddedCanvasHorizontalOffset: CGFloat = 0,
         onCancel: @escaping () -> Void,
         onComplete: @escaping () -> Void,
-        onDoubleClickCanvas: (() -> Void)? = nil
+        onDoubleClickCanvas: (() -> Void)? = nil,
+        onCopyAndClose: (() -> Void)? = nil
     ) {
         self.image = image
         self.language = language
@@ -6628,6 +6745,7 @@ struct SmartAnnotationEditor: View {
         self.onCancel = onCancel
         self.onComplete = onComplete
         self.onDoubleClickCanvas = onDoubleClickCanvas
+        self.onCopyAndClose = onCopyAndClose
     }
 
     /// Vertical space the embedded chrome adds above/below the canvas.
@@ -6720,9 +6838,11 @@ struct SmartAnnotationEditor: View {
         HStack(spacing: 6) {
             annotationToolPalette
             Button(AppText.value("scUndo", language: language), action: model.undo)
-                .disabled(model.annotations.isEmpty)
+                .disabled(!model.canUndo)
+                .keyboardShortcut("z", modifiers: .command)
             Button(AppText.value("scRedo", language: language), action: model.redo)
                 .disabled(!model.canRedo)
+                .keyboardShortcut("z", modifiers: [.command, .shift])
             if !model.annotations.isEmpty {
                 Button(AppText.value("scClearAnnotations", language: language)) {
                     model.removeAll()
@@ -6735,6 +6855,13 @@ struct SmartAnnotationEditor: View {
                 onCancel()
             }
                 .keyboardShortcut(.cancelAction)
+            if let onCopyAndClose {
+                Button(AppText.value("scCopyAndClose", language: language)) {
+                    commitPendingClick()
+                    onCopyAndClose()
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            }
             Button(AppText.value("scDone", language: language)) {
                 commitPendingClick()
                 onComplete()

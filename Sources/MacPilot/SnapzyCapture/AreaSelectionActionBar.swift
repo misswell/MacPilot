@@ -60,11 +60,13 @@ final class AreaSelectionActionBar: NSView {
   private var primaryRow: NSStackView?
   private var optionsRow: NSView?
   private var undoButton: NSButton?
+  private var redoButton: NSButton?
   private var eraserButton: NSButton?
-  /// Stage A (selection done) shows the primary actions; stage B (annotating)
-  /// swaps them for the tool row. The two stages never mix.
-  private var annotationEntryButton: NSButton?
   private var completeButton: NSButton?
+  private var copyAndCloseButton: NSButton?
+  /// Tool chips stay visible for the whole post-selection lifetime: the first
+  /// click starts the annotation session with that tool, later clicks switch
+  /// tools. Nothing is hidden behind a stage or a dropdown.
   private var toolViews: [NSView] = []
   private var primaryActionViews: [NSView] = []
   private var widthValueLabel: NSTextField?
@@ -79,40 +81,12 @@ final class AreaSelectionActionBar: NSView {
   /// numbers.
   var chipButtons: [NSButton] = []
   private var toolDisplayButtons: [SmartAnnotationTool: NSButton] = [:]
-  private var groupMainButtons: [ToolGroup: NSButton] = [:]
+  private var toolTagMap: [Int: SmartAnnotationTool] = [:]
   /// The tool the options row was last built for. Selecting an existing
   /// annotation on the canvas swaps `model.tool` outside the bar, so
   /// `syncWithModel` rebuilds the row whenever this drifts.
   private var optionsRowTool: SmartAnnotationTool?
   private var optionsRowCollapsed = false
-
-  private enum ToolGroup: CaseIterable {
-    case shape
-    case pencil
-    case arrow
-
-    var tools: [SmartAnnotationTool] {
-      switch self {
-      case .shape: return [.rectangle, .ellipse]
-      case .pencil: return [.pencil, .highlighter]
-      case .arrow: return [.arrow, .line]
-      }
-    }
-
-    var fallbackTool: SmartAnnotationTool { tools[0] }
-
-    var selectorTag: Int {
-      switch self {
-      case .shape: return 101
-      case .pencil: return 102
-      case .arrow: return 103
-      }
-    }
-
-    static func matching(selectorTag tag: Int) -> ToolGroup? {
-      allCases.first { $0.selectorTag == tag }
-    }
-  }
 
   private enum BarTag {
     static let text = 1
@@ -121,6 +95,8 @@ final class AreaSelectionActionBar: NSView {
     static let spotlight = 11
     static let eraser = 4
     static let undo = 5
+    static let redo = 14
+    static let copyAndClose = 15
     static let ocr = 6
     static let pin = 7
     static let save = 8
@@ -166,6 +142,7 @@ final class AreaSelectionActionBar: NSView {
     ])
 
     rootStack.addArrangedSubview(makePrimaryRow())
+    rootStack.addArrangedSubview(makeActionRow())
     applyStageVisibility()
   }
 
@@ -282,8 +259,6 @@ final class AreaSelectionActionBar: NSView {
     let row = NSStackView()
     row.orientation = .horizontal
     row.alignment = .centerY
-    // 按钮之间保持统一间距；隐藏的橡皮/撤销必须真正脱离布局，否则空闲时
-    // 会在马赛克和分隔线之间留下一个大空洞（NSStackView 默认不脱离）。
     row.spacing = 4
     row.detachesHiddenViews = true
 
@@ -301,63 +276,101 @@ final class AreaSelectionActionBar: NSView {
     grip.widthAnchor.constraint(equalToConstant: 12).isActive = true
     grip.heightAnchor.constraint(equalToConstant: 18).isActive = true
 
-    // Stage A: one 标注 entry instead of a wall of tool chips; the row is
-    // reserved for the actions a finished selection can take.
-    let annotate = makeActionButton("pencil.tip.crop.circle", titleKey: "scToolAnnotate", tag: BarTag.annotate)
-    row.addArrangedSubview(annotate)
-    annotationEntryButton = annotate
-
-    // Tool groups with sub-tool menus (iShot's ▾ affordance). Hidden until the
-    // annotation stage starts.
-    for toolView in [
-      makeToolGroup(.shape),
-      makeToolGroup(.pencil),
-      makeToolGroup(.arrow),
-      makeSingleToolButton("t.square", titleKey: "scAnnotationText", tool: .text, tag: BarTag.text),
-      makeSingleToolButton("1.circle", titleKey: "scAnnotationCounter", tool: .counter, tag: BarTag.counter),
-      makeSingleToolButton("circle.lefthalf.filled", titleKey: "scAnnotationBlur", tool: .blur, tag: BarTag.mosaic),
-      makeSingleToolButton("circle.dashed.inset.filled", titleKey: "scAnnotationSpotlight", tool: .spotlight, tag: BarTag.spotlight),
-    ] {
-      row.addArrangedSubview(toolView)
-      toolViews.append(toolView)
+    // Every implemented tool gets its own button. Snapzy's InlineAreaControlDeck
+    // groups tools with dividers only; it never hides a variant behind a
+    // primary button plus chevron menu. The previous grouped design forced two
+    // clicks for the most common tools (rectangle/ellipse, pencil/highlighter,
+    // arrow/line) and is deliberately gone.
+    let groups: [[SmartAnnotationTool]] = [
+      [.rectangle, .filledRectangle, .ellipse],
+      [.arrow, .line, .pencil, .highlighter],
+      [.text, .counter],
+      [.blur, .spotlight],
+      [.eraser],
+    ]
+    for (groupIndex, group) in groups.enumerated() {
+      if groupIndex > 0 {
+        row.addArrangedSubview(makeDivider())
+      }
+      for tool in group {
+        let tag = 30 + (SmartAnnotationTool.allCases.firstIndex(of: tool) ?? 0)
+        let button = makeSingleToolButton(
+          tool.systemImage,
+          titleKey: tool.titleKey,
+          tool: tool,
+          tag: tag
+        )
+        toolTagMap[tag] = tool
+        row.addArrangedSubview(button)
+        toolViews.append(button)
+        if tool == .eraser { eraserButton = button }
+      }
     }
 
-    let eraser = makeSingleToolButton("eraser", titleKey: "scAnnotationEraser", tool: .eraser, tag: BarTag.eraser)
-    row.addArrangedSubview(eraser)
-    toolViews.append(eraser)
-    eraserButton = eraser
+    row.addArrangedSubview(makeDivider())
 
     let undo = makeSingleToolButton("arrow.uturn.backward", titleKey: "scUndo", tool: nil, tag: BarTag.undo)
     undo.isEnabled = false
     row.addArrangedSubview(undo)
-    toolViews.append(undo)
     undoButton = undo
 
-    let separator = NSBox()
-    separator.boxType = .separator
-    separator.translatesAutoresizingMaskIntoConstraints = false
-    row.addArrangedSubview(separator)
-    separator.widthAnchor.constraint(equalToConstant: 1).isActive = true
-    separator.heightAnchor.constraint(equalToConstant: 20).isActive = true
+    let redo = makeSingleToolButton("arrow.uturn.forward", titleKey: "scRedo", tool: nil, tag: BarTag.redo)
+    redo.isEnabled = false
+    row.addArrangedSubview(redo)
+    redoButton = redo
+
+    row.translatesAutoresizingMaskIntoConstraints = false
+    primaryRow = row
+    return row
+  }
+
+  /// The action rail is its own row. OCR/pin/更多/save/copy must never displace
+  /// tool buttons or hide them: Snapzy keeps `InlineAreaActionRail` separate
+  /// from the tool deck for exactly this reason.
+  private func makeActionRow() -> NSView {
+    let row = NSStackView()
+    row.orientation = .horizontal
+    row.alignment = .centerY
+    row.spacing = 4
+    row.detachesHiddenViews = true
 
     for actionView in [
       makeActionButton("text.viewfinder", titleKey: "scToolOCR", tag: BarTag.ocr),
       makeActionButton("pin", titleKey: "scPin", tag: BarTag.pin),
       makeMoreButton(),
+      makeActionButton("square.and.arrow.down", titleKey: "scToolSave", tag: BarTag.save),
+      makeActionButton("doc.on.doc", titleKey: "scCopy", tag: BarTag.copy),
     ] {
       row.addArrangedSubview(actionView)
       primaryActionViews.append(actionView)
     }
-    row.addArrangedSubview(makeActionButton("square.and.arrow.down", titleKey: "scToolSave", tag: BarTag.save))
-    row.addArrangedSubview(makeActionButton("doc.on.doc", titleKey: "scCopy", tag: BarTag.copy))
+
+    let copyAndClose = makeActionButton(
+      "doc.on.doc.badge.checkmark",
+      titleKey: "scCopyAndClose",
+      tag: BarTag.copyAndClose
+    )
+    copyAndClose.isHidden = true
+    row.addArrangedSubview(copyAndClose)
+    copyAndCloseButton = copyAndClose
+
     let finish = makeActionButton("checkmark", titleKey: "scToolFinish", tag: BarTag.finish)
+    finish.isHidden = true
     row.addArrangedSubview(finish)
     completeButton = finish
     row.addArrangedSubview(makeActionButton("xmark", titleKey: "scClose", tag: BarTag.close))
 
     row.translatesAutoresizingMaskIntoConstraints = false
-    primaryRow = row
     return row
+  }
+
+  private func makeDivider() -> NSView {
+    let separator = NSBox()
+    separator.boxType = .separator
+    separator.translatesAutoresizingMaskIntoConstraints = false
+    separator.widthAnchor.constraint(equalToConstant: 1).isActive = true
+    separator.heightAnchor.constraint(equalToConstant: 20).isActive = true
+    return separator
   }
 
   /// Selection stage ↔ annotation stage. Nothing is duplicated across stages:
@@ -366,62 +379,28 @@ final class AreaSelectionActionBar: NSView {
   /// they commit the annotated pixels; OCR/pin/更多 are selection-stage actions.
   private func applyStageVisibility() {
     let annotating = isAnnotating
-    annotationEntryButton?.isHidden = annotating
-    for view in toolViews {
-      view.isHidden = !annotating
-    }
-    eraserButton?.isHidden = !annotating
-    undoButton?.isHidden = !annotating
-    for view in primaryActionViews {
-      view.isHidden = annotating
-    }
+    // Tools are never stage-gated and never hidden; only the terminal
+    // annotation actions (checkmark / Copy & Close) are contextual.
+    for view in toolViews { view.isHidden = false }
+    undoButton?.isHidden = false
+    redoButton?.isHidden = false
+    for view in primaryActionViews { view.isHidden = false }
     completeButton?.isHidden = !annotating
+    copyAndCloseButton?.isHidden = !annotating
     invalidateIntrinsicContentSize()
     layoutDidChange?()
   }
 
-  private func makeToolGroup(_ group: ToolGroup) -> NSView {
-    let container = NSStackView()
-    container.orientation = .horizontal
-    container.alignment = .centerY
-    container.spacing = 0
-
-    let main = makeGroupMainButton(group)
-    let chevron = NSButton(image: Self.chevronImage, target: self, action: #selector(groupChevronPressed(_:)))
-    chevron.isBordered = false
-    chevron.imagePosition = .imageOnly
-    chevron.contentTintColor = CaptureChromeStyle.glyphMuted
-    chevron.toolTip = AppText.value("scToolPickVariant", language: .system)
-    chevron.setAccessibilityLabel(AppText.value("scToolPickVariant", language: .system))
-    chevron.translatesAutoresizingMaskIntoConstraints = false
-    chevron.widthAnchor.constraint(equalToConstant: 12).isActive = true
-    chevron.heightAnchor.constraint(equalToConstant: CaptureChromeStyle.chipSide).isActive = true
-    chevron.tag = group.selectorTag
-
-    container.addArrangedSubview(main)
-    container.addArrangedSubview(chevron)
-    groupMainButtons[group] = main
-    for tool in group.tools {
-      toolDisplayButtons[tool] = main
-    }
-    return container
+  /// Retained for tests and the controller: which tool chips are visible.
+  var visibleToolButtons: [NSButton] {
+    toolViews.compactMap { $0 as? NSButton }.filter { !$0.isHidden }
   }
 
-  private func makeGroupMainButton(_ group: ToolGroup) -> NSButton {
-    let button = makeChip(
-      symbolName: group.fallbackTool.systemImage,
-      action: #selector(groupMainPressed(_:)),
-      tooltipKey: group.fallbackTool.titleKey
-    )
-    button.tag = group.selectorTag
-    return button
-  }
-
-  private static var chevronImage: NSImage {
-    let config = NSImage.SymbolConfiguration(pointSize: 8, weight: .bold)
-    return NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
-      .withSymbolConfiguration(config) ?? NSImage()
-  }
+  var toolButtonsByTool: [SmartAnnotationTool: NSButton] { toolDisplayButtons }
+  var undoControl: NSButton? { undoButton }
+  var redoControl: NSButton? { redoButton }
+  var copyAndCloseControl: NSButton? { copyAndCloseButton }
+  var finishControl: NSButton? { completeButton }
 
   private func makeSingleToolButton(
     _ symbolName: String,
@@ -542,7 +521,6 @@ final class AreaSelectionActionBar: NSView {
     colorWell = nil
     optionsCollapseButton = nil
     swatchButtons.removeAll()
-    optionsRowCollapsed = false
 
     guard let model = annotationBinding?.model else {
       optionsRowTool = nil
@@ -563,13 +541,16 @@ final class AreaSelectionActionBar: NSView {
       row.addArrangedSubview(makeFillCheckbox(model))
       row.addArrangedSubview(makeLineStylePopUp(model))
       row.addArrangedSubview(makeWidthControl(model, titleKey: "scAnnotationLineWidth"))
+      row.addArrangedSubview(makeOpacityControl(model))
       row.addArrangedSubview(makeColorControls(model))
     case .arrow, .line:
       row.addArrangedSubview(makeLineStylePopUp(model))
       row.addArrangedSubview(makeWidthControl(model, titleKey: "scAnnotationLineWidth"))
+      row.addArrangedSubview(makeOpacityControl(model))
       row.addArrangedSubview(makeColorControls(model))
     case .pencil:
       row.addArrangedSubview(makeWidthControl(model, titleKey: "scAnnotationLineWidth"))
+      row.addArrangedSubview(makeOpacityControl(model))
       row.addArrangedSubview(makeColorControls(model))
     case .highlighter:
       row.addArrangedSubview(makeColorControls(model))
@@ -719,8 +700,11 @@ final class AreaSelectionActionBar: NSView {
     icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
     icon.heightAnchor.constraint(equalToConstant: 12).isActive = true
 
-    let slider = NSSlider(value: Double(model.currentStyle.lineWidth), minValue: 1, maxValue: 48, target: self, action: #selector(widthSliderChanged(_:)))
+    let slider = StreakSlider(value: Double(model.currentStyle.lineWidth), minValue: 1, maxValue: 48, target: self, action: #selector(widthSliderChanged(_:)))
     slider.isContinuous = true
+    slider.onEditingEnded = { [weak self] in
+      self?.annotationBinding?.model?.endStyleEditing()
+    }
     slider.controlSize = .small
     slider.toolTip = AppText.value(titleKey, language: .system)
     slider.setAccessibilityLabel(AppText.value(titleKey, language: .system))
@@ -742,6 +726,66 @@ final class AreaSelectionActionBar: NSView {
 
   @objc private func widthSliderChanged(_ sender: NSSlider) {
     annotationBinding?.model?.setLineWidth(CGFloat(sender.doubleValue.rounded()))
+  }
+
+  @objc private func opacitySliderChanged(_ sender: NSSlider) {
+    annotationBinding?.model?.setOpacity(CGFloat(sender.doubleValue))
+  }
+
+  /// NSSlider fires continuously while dragging. The model merges consecutive
+  /// changes for one field, and this subclass closes the streak on mouse-up so
+  /// the next drag starts a fresh undo step.
+  private final class StreakSlider: NSSlider {
+    var onEditingEnded: (() -> Void)?
+    override func mouseUp(with event: NSEvent) {
+      super.mouseUp(with: event)
+      onEditingEnded?()
+    }
+  }
+
+  private func makeOpacityControl(_ model: SmartAnnotationModel) -> NSView {
+    let stack = NSStackView()
+    stack.orientation = .horizontal
+    stack.alignment = .centerY
+    stack.spacing = 4
+
+    let icon = NSImageView(
+      image: NSImage(
+        systemSymbolName: "circle.lefthalf.filled",
+        accessibilityDescription: AppText.value("scAnnotationOpacity", language: .system)
+      ) ?? NSImage()
+    )
+    icon.contentTintColor = CaptureChromeStyle.glyphMuted
+    icon.imageScaling = .scaleProportionallyDown
+    icon.translatesAutoresizingMaskIntoConstraints = false
+    icon.widthAnchor.constraint(equalToConstant: 12).isActive = true
+    icon.heightAnchor.constraint(equalToConstant: 12).isActive = true
+
+    let slider = StreakSlider(
+      value: Double(model.currentStyle.opacity),
+      minValue: 0.05,
+      maxValue: 1,
+      target: self,
+      action: #selector(opacitySliderChanged(_:))
+    )
+    slider.isContinuous = true
+    slider.controlSize = .small
+    slider.toolTip = AppText.value("scAnnotationOpacity", language: .system)
+    slider.setAccessibilityLabel(AppText.value("scAnnotationOpacity", language: .system))
+    slider.translatesAutoresizingMaskIntoConstraints = false
+    slider.widthAnchor.constraint(equalToConstant: 64).isActive = true
+    slider.onEditingEnded = { [weak self] in
+      self?.annotationBinding?.model?.endStyleEditing()
+    }
+
+    let value = NSTextField(labelWithString: "\(Int((model.currentStyle.opacity * 100).rounded()))%")
+    value.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+    value.textColor = CaptureChromeStyle.glyph
+    value.toolTip = AppText.value("scAnnotationOpacity", language: .system)
+    stack.addArrangedSubview(icon)
+    stack.addArrangedSubview(slider)
+    stack.addArrangedSubview(value)
+    return stack
   }
 
   private func makeColorControls(_ model: SmartAnnotationModel) -> NSView {
@@ -840,14 +884,13 @@ final class AreaSelectionActionBar: NSView {
       rebuildOptionsRow()
     }
 
-    for (group, button) in groupMainButtons {
-      let current = group.tools.first { $0 == activeTool } ?? group.fallbackTool
-      button.image = Self.chipGlyph(current.systemImage)
-      let tooltip = AppText.value(current.titleKey, language: .system)
+    for (tool, button) in toolDisplayButtons {
+      let tooltip = AppText.value(tool.titleKey, language: .system)
       button.toolTip = tooltip
       button.setAccessibilityLabel(tooltip)
     }
-    undoButton?.isEnabled = !model.annotations.isEmpty
+    undoButton?.isEnabled = model.canUndo
+    redoButton?.isEnabled = model.canRedo
     widthValueLabel?.stringValue = "\(Int(model.currentStyle.lineWidth.rounded()))"
     widthSlider?.doubleValue = Double(model.currentStyle.lineWidth)
     lineStyleButton?.image = Self.lineStylePreview(model.currentStyle.lineStyle)
@@ -861,61 +904,30 @@ final class AreaSelectionActionBar: NSView {
   // MARK: - Actions
 
   @objc private func toolPressed(_ sender: NSButton) {
-    let tool: SmartAnnotationTool
     switch sender.tag {
-    case BarTag.text: tool = .text
-    case BarTag.counter: tool = .counter
-    case BarTag.mosaic: tool = .blur
-    case BarTag.spotlight: tool = .spotlight
-    case BarTag.eraser: tool = .eraser
     case BarTag.undo:
       annotationBinding?.model?.undo()
       return
-    default: return
+    case BarTag.redo:
+      annotationBinding?.model?.redo()
+      return
+    default:
+      break
     }
+    guard let tool = toolTagMap[sender.tag] else { return }
     selectTool(tool)
-  }
-
-  @objc private func groupMainPressed(_ sender: NSButton) {
-    guard let group = ToolGroup.matching(selectorTag: sender.tag) else { return }
-    let current = group.tools.first { $0 == annotationBinding?.model?.tool } ?? group.fallbackTool
-    selectTool(current)
-  }
-
-  @objc private func groupChevronPressed(_ sender: NSButton) {
-    guard let group = ToolGroup.matching(selectorTag: sender.tag) else { return }
-    let menu = NSMenu()
-    for (index, tool) in group.tools.enumerated() {
-      let item = NSMenuItem(
-        title: AppText.value(tool.titleKey, language: .system),
-        action: #selector(groupVariantSelected(_:)),
-        keyEquivalent: ""
-      )
-      item.tag = group.selectorTag * 10 + index + 1
-      item.target = self
-      item.image = NSImage(
-        systemSymbolName: tool.systemImage,
-        accessibilityDescription: nil
-      )?.withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
-      menu.addItem(item)
-    }
-    menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.frame.height + 2), in: sender)
-  }
-
-  @objc private func groupVariantSelected(_ sender: NSMenuItem) {
-    guard let group = ToolGroup.matching(selectorTag: sender.tag / 10) else { return }
-    let index = sender.tag % 10 - 1
-    guard group.tools.indices.contains(index) else { return }
-    selectTool(group.tools[index])
   }
 
   private func selectTool(_ tool: SmartAnnotationTool) {
     if let model = annotationBinding?.model {
       let wasAlreadySelected = model.tool == tool
+      model.endStyleEditing()
       model.selectTool(tool)
       // The tool-drift check inside syncWithModel rebuilds the options row.
       syncWithModel()
-      if wasAlreadySelected {
+      // Clicking the already-active tool is the explicit way back to a
+      // properties row the user collapsed. Switching tools never collapses it.
+      if wasAlreadySelected && optionsRowCollapsed {
         toggleOptionsRow()
       }
       return
@@ -951,6 +963,7 @@ final class AreaSelectionActionBar: NSView {
     case BarTag.close: action = .cancel
     case BarTag.copy: action = .copy
     case BarTag.annotate: action = .annotate
+    case BarTag.copyAndClose: action = .copyAndClose
     case BarTag.finish: action = .capture
     default: return
     }
@@ -1099,15 +1112,18 @@ final class AreaSelectionActionBar: NSView {
 
   @objc private func fillChanged(_ sender: NSButton) {
     annotationBinding?.model?.setFillEnabled(sender.state == .on)
+    annotationBinding?.model?.endStyleEditing()
   }
 
   @objc private func customColorChanged(_ sender: NSColorWell) {
     annotationBinding?.model?.setColor(SmartAnnotationColor(sender.color))
+    annotationBinding?.model?.endStyleEditing()
   }
 
   @objc private func swatchPressed(_ sender: NSButton) {
     guard let color = swatchColor(forTag: sender.tag) else { return }
     annotationBinding?.model?.setColor(color)
+    annotationBinding?.model?.endStyleEditing()
   }
 
   @objc private func clearAllPressed(_ sender: NSButton) {

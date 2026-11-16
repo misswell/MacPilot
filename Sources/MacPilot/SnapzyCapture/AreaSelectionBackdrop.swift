@@ -35,6 +35,9 @@ nonisolated enum AreaSelectionAnnotationTool: String, Equatable, Sendable {
 nonisolated enum AreaSelectionAction: Equatable, Sendable {
   case capture
   case copy
+  /// Copy the rendered annotation image and close the session. Distinct from
+  /// `copy`, which copies and keeps the inline session alive.
+  case copyAndClose
   case save
   case newSelection
   case adjustSelection

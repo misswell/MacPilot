@@ -1254,7 +1254,7 @@ struct SnapzyCaptureTests {
         #expect(window.overlayView.isAnnotationSessionActive)
     }
 
-    @Test @MainActor func selectionStageShowsPrimaryActionsBeforeAnyToolIsChosen() throws {
+    @Test @MainActor func everyToolIsADirectButtonBeforeASessionStarts() throws {
         _ = NSApplication.shared
         var started: [AreaSelectionAction] = []
         let bar = AreaSelectionActionBar { started.append($0) }
@@ -1264,20 +1264,36 @@ struct SnapzyCaptureTests {
             return try #require(bar.chipButtons.first { $0.toolTip == title })
         }
 
-        // 状态 A：只有截图后的主要动作，标注工具整体隐藏。
-        #expect(!(try chip("scToolAnnotate")).isHiddenOrHasHiddenAncestor)
+        // Snapzy parity: the tool deck is always on screen. No stage gate, no
+        // primary-button-plus-chevron group, no hidden variants.
+        for key in [
+            "scAnnotationRectangle", "scAnnotationFilledRectangle", "scAnnotationEllipse",
+            "scAnnotationArrow", "scAnnotationLine", "scAnnotationPencil", "scAnnotationHighlighter",
+            "scAnnotationText", "scAnnotationCounter", "scAnnotationBlur", "scAnnotationSpotlight",
+            "scAnnotationEraser",
+        ] {
+            #expect(!(try chip(key)).isHiddenOrHasHiddenAncestor, "\(key) must be directly visible")
+        }
+        #expect(bar.chipButtons.contains {
+            $0.toolTip == AppText.value("scToolPickVariant", language: .system)
+        } == false, "tool variants must not hide behind a dropdown chevron")
+        // Actions live in their own rail, not in place of the tools.
         #expect(!(try chip("scToolOCR")).isHiddenOrHasHiddenAncestor)
         #expect(!(try chip("scPin")).isHiddenOrHasHiddenAncestor)
         #expect(!(try chip("scToolSave")).isHiddenOrHasHiddenAncestor)
         #expect(!(try chip("scCopy")).isHiddenOrHasHiddenAncestor)
-        #expect((try chip("scAnnotationText")).isHiddenOrHasHiddenAncestor)
+        // Terminal annotation actions stay contextual.
         #expect((try chip("scToolFinish")).isHiddenOrHasHiddenAncestor)
 
-        try chip("scToolAnnotate").performClick(nil)
-        #expect(started == [.annotate])
+        // The first tool click starts the session with exactly that tool.
+        try chip("scAnnotationEllipse").performClick(nil)
+        #expect(started == [.annotateTool(.ellipse)])
+        started.removeAll()
+        try chip("scAnnotationPencil").performClick(nil)
+        #expect(started == [.annotateTool(.pencil)])
     }
 
-    @Test @MainActor func annotationStageSwapsToolsInAndKeepsOneCancelChip() throws {
+    @Test @MainActor func aLiveSessionKeepsEveryToolVisibleAndAddsTerminalActions() throws {
         _ = NSApplication.shared
         var committed: [AreaSelectionAction] = []
         let bar = AreaSelectionActionBar { _ in }
@@ -1289,25 +1305,26 @@ struct SnapzyCaptureTests {
             return try #require(bar.chipButtons.first { $0.toolTip == title })
         }
 
-        // 状态 B：工具接管主行，选择阶段动作退出，保存/复制仍然可用，
-        // 完成与取消是唯一的终止入口。
-        #expect((try chip("scToolAnnotate")).isHiddenOrHasHiddenAncestor)
-        #expect((try chip("scToolOCR")).isHiddenOrHasHiddenAncestor)
-        #expect((try chip("scPin")).isHiddenOrHasHiddenAncestor)
+        // Tools and the action rail coexist while annotating; only the
+        // terminal annotation actions appear.
+        #expect(!(try chip("scAnnotationRectangle")).isHiddenOrHasHiddenAncestor)
         #expect(!(try chip("scAnnotationText")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scAnnotationEraser")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scToolOCR")).isHiddenOrHasHiddenAncestor)
         #expect(!(try chip("scToolSave")).isHiddenOrHasHiddenAncestor)
         #expect(!(try chip("scCopy")).isHiddenOrHasHiddenAncestor)
         #expect(!(try chip("scToolFinish")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scCopyAndClose")).isHiddenOrHasHiddenAncestor)
 
         try chip("scToolFinish").performClick(nil)
         try chip("scClose").performClick(nil)
         #expect(committed == [.capture, .cancel])
 
-        // 会话结束后回到状态 A，工具不会残留在操作栏上。
+        // Ending the session removes only the terminal annotation actions.
         bar.bindAnnotationSession(nil)
-        #expect(!(try chip("scToolAnnotate")).isHiddenOrHasHiddenAncestor)
-        #expect((try chip("scAnnotationText")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scAnnotationText")).isHiddenOrHasHiddenAncestor)
         #expect((try chip("scToolFinish")).isHiddenOrHasHiddenAncestor)
+        #expect((try chip("scCopyAndClose")).isHiddenOrHasHiddenAncestor)
     }
 
     @Test @MainActor func annotationSessionToolbarSwitchesToolsWithoutEndingTheSession() throws {
@@ -1397,7 +1414,7 @@ struct SnapzyCaptureTests {
         #expect(size.height >= 28)
     }
 
-    @Test @MainActor func bindingTheSessionRevealsTheEraserAndUndoControls() throws {
+    @Test @MainActor func undoRedoControlsTrackTheHistoryStacksNotTheAnnotationCount() throws {
         let bar = AreaSelectionActionBar { _ in }
 
         func buttons(in view: NSView) -> [NSButton] {
@@ -1408,23 +1425,41 @@ struct SnapzyCaptureTests {
 
         let eraserTooltip = AppText.value("scAnnotationEraser", language: .system)
         let undoTooltip = AppText.value("scUndo", language: .system)
-        let eraserBefore = buttons(in: bar).first(where: { $0.toolTip == eraserTooltip })
-        #expect(eraserBefore?.isHidden ?? true)
+        let redoTooltip = AppText.value("scRedo", language: .system)
+        // Tools (including the eraser) are always visible; history controls are
+        // visible too, just disabled until there is history.
+        let eraserBefore = try #require(buttons(in: bar).first(where: { $0.toolTip == eraserTooltip }))
+        let undoBefore = try #require(buttons(in: bar).first(where: { $0.toolTip == undoTooltip }))
+        #expect(!eraserBefore.isHidden)
+        #expect(!undoBefore.isEnabled)
 
         let model = SmartAnnotationModel(initialTool: .rectangle)
         bar.bindAnnotationSession(.init(model: model) { _ in })
 
-        let eraser = try #require(buttons(in: bar).first(where: { $0.toolTip == eraserTooltip }))
         let undo = try #require(buttons(in: bar).first(where: { $0.toolTip == undoTooltip }))
-        #expect(!eraser.isHidden)
-        #expect(!undo.isHidden)
+        let redo = try #require(buttons(in: bar).first(where: { $0.toolTip == redoTooltip }))
         #expect(!undo.isEnabled)
+        #expect(!redo.isEnabled)
 
         model.append(.rectangle(CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3)))
-        // The bar observes the model through RunLoop.main; pump it so the
-        // objectWillChange delivery lands before the assertion.
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         #expect(undo.isEnabled)
+
+        // The historical bug: erasing the last annotation emptied the array and
+        // disabled Undo even though a snapshot remained. The button must stay
+        // enabled, and using it must bring the rectangle back.
+        model.removeAnnotation(at: 0)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        #expect(model.annotations.isEmpty)
+        #expect(undo.isEnabled, "erasing the last object still leaves an undoable step")
+        undo.performClick(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        #expect(model.annotations.count == 1)
+        #expect(redo.isEnabled)
+
+        redo.performClick(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        #expect(model.annotations.isEmpty)
     }
 
     @Test @MainActor func eraserRemovesTheAnnotationUnderThePointerAsOneUndoableStep() {

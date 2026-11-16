@@ -1055,18 +1055,22 @@ struct ScreenCaptureTests {
         #expect(abs(previewWidth - renderedWidth * displayWidth / imageWidth) < 0.001)
     }
 
-    @Test func smartAnnotationHistorySupportsUndoAndRedo() {
-        var history = SmartAnnotationHistory()
+    @Test @MainActor func theAnnotationModelIsTheSingleUndoHistory() {
+        // The former value-type seam was a second history implementation next
+        // to the model. The model is the only source of truth now; this pins
+        // the same append/undo/redo contract against it.
+        let model = SmartAnnotationModel(initialTool: .rectangle)
         let rectangle = SmartAnnotation.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2))
         let arrow = SmartAnnotation.arrow(CGPoint(x: 0.2, y: 0.2), CGPoint(x: 0.8, y: 0.8))
 
-        history.append(rectangle)
-        history.append(arrow)
-        #expect(history.annotations == [rectangle, arrow])
-        #expect(history.undo() == arrow)
-        #expect(history.annotations == [rectangle])
-        #expect(history.redo() == arrow)
-        #expect(history.annotations == [rectangle, arrow])
+        model.append(rectangle)
+        model.append(arrow)
+        #expect(model.annotations == [rectangle, arrow])
+        model.undo()
+        #expect(model.annotations == [rectangle])
+        #expect(model.canRedo)
+        model.redo()
+        #expect(model.annotations == [rectangle, arrow])
     }
 
     @Test func screenCaptureResetUsesCurrentBundleIdentifier() {
