@@ -736,6 +736,13 @@ struct AnnotationInteractionParityTests {
 
         manager.copyToClipboard(id: itemB.id)
         #expect(manager.items.isEmpty)
+        // The panel dismissal is animated; CI has no active user run loop and
+        // can observe `isVisible` for a few frames after the copy. Wait for the
+        // product state instead of sampling the first frame.
+        let hideDeadline = Date().addingTimeInterval(3)
+        while manager.testIsPanelVisible, Date() < hideDeadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
         #expect(!manager.testIsPanelVisible, "the last copied card closes the empty panel")
     }
 
