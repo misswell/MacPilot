@@ -502,12 +502,18 @@ struct AnnotationInteractionParityTests {
         }
         let model = try #require(controller.testInlineAnnotationModel)
         model.append(.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)))
+        // Inline Copy must deliver the same styled image as Done; a 64×64
+        // capture with the shadow toggle gains 18pt of padding per side.
+        controller.commitInlineAnnotation(as: .toggleShadow)
 
         // Cmd+C copies the render and keeps the session alive.
         #expect(controller.handleInlineAnnotationKey(keyCode: 8, modifiers: [.command]))
         #expect(controller.testHasInlineAnnotationSession)
         #expect(delivered.isEmpty, "inline Copy must not run the terminal delivery path")
-        #expect(pasteboard.data(forType: .png) != nil, "Cmd+C must really write the render")
+        let data = try #require(pasteboard.data(forType: .png))
+        let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))
+        let copied = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        #expect(copied.width == 100 && copied.height == 100)
 
         // Cmd+Shift+C copies and closes.
         #expect(controller.handleInlineAnnotationKey(keyCode: 8, modifiers: [.command, .shift]))

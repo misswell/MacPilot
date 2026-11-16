@@ -681,7 +681,9 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
 
     /// Copies the current annotated render while keeping the inline session
     /// alive (Snapzy's Inline `Copy`). Only the clipboard is touched: no
-    /// Quick Access card is created for a non-terminal copy.
+    /// Quick Access card is created for a non-terminal copy. The round-corner /
+    /// shadow toggles apply here exactly as they do for Done, so Copy and
+    /// Copy & Close never disagree about the delivered pixels.
     @discardableResult
     func copyInlineAnnotationWithoutClosing() -> Bool {
         guard let model = inlineAnnotationModel,
@@ -692,6 +694,11 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
                   styles: model.styledAnnotations.map(\.style)
               )
         else { return false }
+        let output = SmartCaptureOutputStyling.apply(
+            to: rendered,
+            style: outputStyle,
+            scaleFactor: inlineAnnotationScaleFactor
+        )
         #if DEBUG
         if testFailInlineClipboardWrite {
             showInlineClipboardFailure()
@@ -699,7 +706,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         }
         #endif
         guard SmartCaptureClipboard.copy(
-            image: rendered,
+            image: output,
             to: clipboardPasteboard
         ) else {
             showInlineClipboardFailure()
