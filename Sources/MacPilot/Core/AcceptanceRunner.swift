@@ -184,6 +184,40 @@ enum MacPilotAcceptanceRunner {
         )
         capture(bar, name: "05-inline-toolbar.png")
 
+        // Layout reachability at common display sizes: the bar must stay fully
+        // inside the screen even for a right/bottom edge selection.
+        let barSize = bar.intrinsicContentSize
+        for bounds in [CGSize(width: 1_024, height: 768), CGSize(width: 1_920, height: 1_080)] {
+            let selection = CGRect(
+                x: bounds.width - 90,
+                y: 8,
+                width: 80,
+                height: 50
+            )
+            let frame = AreaSelectionBarLayout.resolve(
+                selectionRect: selection,
+                barSize: barSize,
+                bounds: bounds
+            )
+            let inside = frame.minX >= AreaSelectionBarLayout.edgeMargin - 0.5
+                && frame.minY >= AreaSelectionBarLayout.edgeMargin - 0.5
+                && frame.maxX <= bounds.width - AreaSelectionBarLayout.edgeMargin + 0.5
+                && frame.maxY <= bounds.height - AreaSelectionBarLayout.edgeMargin + 0.5
+            record(
+                "工具栏在 \(Int(bounds.width))×\(Int(bounds.height)) 内可达",
+                inside,
+                "frame=\(frame)"
+            )
+        }
+
+        // Full editor window floor keeps the fixed controls reachable.
+        let minSize = window.minSize
+        record(
+            "完整编辑器最小窗口",
+            minSize.width >= 720 && minSize.height >= 420,
+            "minSize=\(minSize)"
+        )
+
         // Copy & Close must close only after the clipboard write succeeds.
         sendKey(to: window, keyCode: 8, modifiers: [.command, .shift], characters: "c")
         try? await Task.sleep(for: .milliseconds(500))
@@ -196,6 +230,48 @@ enum MacPilotAcceptanceRunner {
         record("Copy & Close 写入剪贴板", clipboardData != nil, "pngBytes=\(clipboardData?.count ?? 0)")
         if let clipboardData {
             try? clipboardData.write(to: outputDirectory.appendingPathComponent("06-copy-and-close-clipboard.png"))
+        }
+
+        // Real area-selection result path with a synthetic frozen snapshot:
+        // crop → delivery → clipboard success → dismiss. ScreenCaptureKit is
+        // bypassed because this acceptance app never captures the screen.
+        SnapzyAreaSelectionController.shared.testResetOutputStyle()
+        let dismissalsBefore = SnapzyAreaSelectionController.shared.testDismissSelectionCount
+        let areaController = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _, _, _ in },
+            onCaptureReporting: { image, _, _, completion in
+                completion(SmartCaptureClipboard.copy(image: image, to: pasteboard))
+            },
+            onError: { _ in },
+            screenCaptureAccessProvider: { true }
+        )
+        areaController.testFinishAreaSelectionAction(
+            image: makeImage(width: 200, height: 100),
+            rect: CGRect(x: 20, y: 20, width: 80, height: 50),
+            screenFrame: CGRect(x: 0, y: 0, width: 200, height: 100),
+            action: .copy
+        )
+        try? await Task.sleep(for: .milliseconds(800))
+        let areaData = pasteboard.data(forType: .png)
+        var areaSize: (Int, Int)?
+        if let areaData,
+           let source = CGImageSourceCreateWithData(areaData as CFData, nil),
+           let image = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+            areaSize = (image.width, image.height)
+        }
+        record(
+            "区域选区 Copy 裁剪尺寸",
+            areaSize?.0 == 80 && areaSize?.1 == 50,
+            "size=\(String(describing: areaSize))"
+        )
+        record(
+            "区域选区 Copy 成功后关闭",
+            SnapzyAreaSelectionController.shared.testDismissSelectionCount > dismissalsBefore,
+            "dismissals=\(SnapzyAreaSelectionController.shared.testDismissSelectionCount - dismissalsBefore)"
+        )
+        if let areaData {
+            try? areaData.write(to: outputDirectory.appendingPathComponent("07-area-selection-copy.png"))
         }
         barWindow.close()
     }
@@ -342,6 +418,7 @@ enum MacPilotAcceptanceRunner {
             "04-after-redo.png",
             "05-inline-toolbar.png",
             "06-copy-and-close-clipboard.png",
+            "07-area-selection-copy.png",
         ] where FileManager.default.fileExists(
             atPath: outputDirectory.appendingPathComponent(name).path
         ) {

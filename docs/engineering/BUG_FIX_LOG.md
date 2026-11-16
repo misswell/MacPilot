@@ -121,5 +121,6 @@
 | §6.4 缺延迟粘贴与 Quick Access Copy & Close 一致性验证 | 新增 1.2 秒延迟读取懒加载剪贴板 provider 的测试；QA 编辑器 Copy & Close 抽出 `copyAndCloseAnnotatedItem`，测试同时校验剪贴板、源文件解码尺寸与缩略图 | `AnnotationInteractionParityTests` |
 | 旧 Quick Access HUD 的 Copy & Close 没有直接测试 | HUD 的标注模型与 Copy & Close 动作加 DEBUG seam，测试验证复制成功、保存回调收到标注图、编辑器退出 | `AnnotationInteractionParityTests` |
 | 实机验收只有清单，没有可重复执行的真实 UI 记录 | 新增 DEBUG `--acceptance-annotation` 模式：跳过 `MacPilotAppServices`（不碰全局快捷键/配置/屏幕采集/TCC），启动真实 AppKit 进程，驱动全编辑器/Inline 工具条并写出截图+`acceptance-record.md`。锁屏会话无法投递鼠标事件时标记为「阻塞」，不冒充通过 | `docs/engineering/acceptance/screenshot-annotation-parity-2026-11-16.md` |
+| 完整编辑器可被缩到固定控件以下；区域选区 Copy 只有模型级测试，多显示器/小窗口只有人工清单 | 完整编辑器根视图设置 720×420 内容下限（窗口 `minSize` 720×452），工具面板在内部横向滚动；新增真实 `finishSnapzySelectionAction` 裁剪→剪贴板→关闭测试；验收 App 追加 1024×768/1920×1080 工具栏可达、最小窗口、区域选区 80×50 Copy 检查 | `AnnotationInteractionParityTests`、验收记录 `07-area-selection-copy.png` |
 
 状态：自动化测试与可执行项通过；本次验收会话处于锁屏状态，真实鼠标绘制/窗口激活被标记为阻塞，解锁后重新运行 `--acceptance-annotation` 可补齐。

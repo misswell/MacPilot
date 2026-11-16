@@ -668,6 +668,10 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
 
     var testInlineAnnotationModel: SmartAnnotationModel? { inlineAnnotationModel }
     var testHasInlineAnnotationSession: Bool { hasInlineAnnotationSession }
+    func testResetOutputStyle() {
+        isRoundedCornersEnabled = false
+        isShadowEnabled = false
+    }
     #endif
 
     private func clearInlineAnnotationSession() {

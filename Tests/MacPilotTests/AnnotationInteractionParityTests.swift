@@ -494,6 +494,7 @@ struct AnnotationInteractionParityTests {
             controller.cancelSelection()
             controller.clipboardPasteboard = .general
             controller.testFailInlineClipboardWrite = false
+            controller.testResetOutputStyle()
             pasteboard.releaseGlobally()
         }
         var delivered: [(CGImage, AreaSelectionAction)] = []
@@ -527,6 +528,7 @@ struct AnnotationInteractionParityTests {
             controller.cancelSelection()
             controller.clipboardPasteboard = .general
             controller.testFailInlineClipboardWrite = false
+            controller.testResetOutputStyle()
         }
         controller.testInstallInlineAnnotationSession(image: image())
         let model = try #require(controller.testInlineAnnotationModel)
@@ -619,6 +621,49 @@ struct AnnotationInteractionParityTests {
             "the failure has to be visible to the user"
         )
         #expect(pasteboard.data(forType: .png) == nil)
+    }
+
+    @Test func areaSelectionCopyCropsTheFrozenImageAndClosesAfterCopy() async throws {
+        _ = NSApplication.shared
+        SnapzyAreaSelectionController.shared.testResetOutputStyle()
+        let pasteboard = makePasteboard()
+        defer {
+            SnapzyAreaSelectionController.shared.testResetOutputStyle()
+            pasteboard.releaseGlobally()
+        }
+        var reportedIntent: CaptureDeliveryIntent?
+        let controller = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _, _, _ in },
+            onCaptureReporting: { image, intent, _, completion in
+                reportedIntent = intent
+                completion(SmartCaptureClipboard.copy(image: image, to: pasteboard))
+            },
+            onError: { _ in },
+            screenCaptureAccessProvider: { true }
+        )
+        let dismissalsBefore = SnapzyAreaSelectionController.shared.testDismissSelectionCount
+
+        controller.testFinishAreaSelectionAction(
+            image: image(width: 200, height: 100),
+            rect: CGRect(x: 20, y: 20, width: 80, height: 50),
+            screenFrame: CGRect(x: 0, y: 0, width: 200, height: 100),
+            action: .copy
+        )
+
+        let deadline = Date().addingTimeInterval(5)
+        while pasteboard.data(forType: .png) == nil, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        #expect(reportedIntent == .explicitCopy)
+        let data = try #require(pasteboard.data(forType: .png))
+        let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))
+        let copied = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        #expect(copied.width == 80 && copied.height == 50)
+        #expect(
+            SnapzyAreaSelectionController.shared.testDismissSelectionCount > dismissalsBefore,
+            "the HUD closes after the crop reaches the clipboard"
+        )
     }
 
     @Test func clickingCopyClosesTheHUDOnlyAfterTheClipboardWriteSucceeds() async throws {
@@ -868,6 +913,54 @@ struct AnnotationInteractionParityTests {
         #expect(controller.testCopyAndCloseCurrentAnnotation())
         #expect(saved != nil, "the HUD's save callback must receive the annotated image")
         #expect(pasteboard.data(forType: .png) != nil)
+    }
+
+    @Test func hudBarStaysReachableOnSmallAndLargeDisplays() {
+        let barSize = CGSize(width: 710, height: 82)
+        let displaySizes = [
+            CGSize(width: 1_024, height: 768),
+            CGSize(width: 1_280, height: 800),
+            CGSize(width: 1_440, height: 900),
+            CGSize(width: 1_920, height: 1_080),
+        ]
+        for bounds in displaySizes {
+            let selections = [
+                CGRect(x: bounds.width / 2 - 40, y: bounds.height / 2 - 30, width: 80, height: 60),
+                CGRect(x: bounds.width - 70, y: 8, width: 60, height: 40),
+                CGRect(x: 8, y: 8, width: bounds.width - 16, height: bounds.height - 16),
+            ]
+            for selection in selections {
+                let frame = AreaSelectionBarLayout.resolve(
+                    selectionRect: selection,
+                    barSize: barSize,
+                    bounds: bounds
+                )
+                #expect(frame.minX >= AreaSelectionBarLayout.edgeMargin - 0.5)
+                #expect(frame.minY >= AreaSelectionBarLayout.edgeMargin - 0.5)
+                #expect(frame.maxX <= bounds.width - AreaSelectionBarLayout.edgeMargin + 0.5)
+                #expect(frame.maxY <= bounds.height - AreaSelectionBarLayout.edgeMargin + 0.5)
+                #expect(frame.width <= bounds.width)
+            }
+        }
+    }
+
+    @Test func fullEditorKeepsItsActionRailReachableAtTheMinimumWindowSize() throws {
+        _ = NSApplication.shared
+        let controller = SmartAnnotationWindowController(
+            image: image(),
+            language: .simplifiedChinese,
+            onComplete: { _ in },
+            onClose: {},
+            onCopyAndClose: { _ in true },
+            onPin: { _ in },
+            onDelete: {}
+        )
+        controller.show()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        let window = try #require(controller.testWindow)
+        #expect(window.minSize.width >= 720)
+        #expect(window.minSize.height >= 420)
+        controller.close()
     }
 
     @Test func fullEditorBottomRailExposesTheHostsSupportedActions() {

@@ -1899,6 +1899,39 @@ final class SmartScreenshotController {
     /// Test seam: the frozen-frame deadline. A stalled preparation never
     /// completes, so the deadline is the only observable that settles.
     var testSnapzyDeadlineTask: Task<Void, Never>? { snapzyDeadlineTask }
+    /// Test seam: drives the real selection-result path (crop → delivery →
+    /// copy-result callback) with a synthetic frozen snapshot, so Copy/close
+    /// behavior can be exercised without ScreenCaptureKit.
+    func testFinishAreaSelectionAction(
+        image: CGImage,
+        rect: CGRect,
+        screenFrame: CGRect,
+        action: AreaSelectionAction
+    ) {
+        let displayID = CGMainDisplayID()
+        let snapshot = FrozenDisplaySnapshot(
+            displayID: displayID,
+            screenFrame: screenFrame,
+            scaleFactor: 1,
+            colorSpaceName: nil,
+            image: image
+        )
+        let session = FrozenAreaCaptureSession.fromSnapshot(snapshot)
+        let result = AreaSelectionResult(
+            target: .rect(rect),
+            displayID: displayID,
+            mode: .screenshot
+        )
+        let sessionID = UUID()
+        snapzySessionID = sessionID
+        finishSnapzySelectionAction(
+            result,
+            action: action,
+            requestedMode: .manualArea,
+            sessionID: sessionID,
+            frozenSession: session
+        )
+    }
     #endif
 
     func start() {
@@ -6769,7 +6802,7 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
         window.keyEventHandler = { [weak self] event in
             self?.handleKeyEvent(event) ?? false
         }
-        window.contentView = NSHostingView(rootView: SmartAnnotationEditor(
+        let editor = SmartAnnotationEditor(
             image: image,
             language: language,
             model: model,
@@ -6794,7 +6827,15 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
                     self?.close()
                 }
             }
-        ))
+        )
+        // A standalone full editor has a floor that keeps the fixed bottom
+        // action rail reachable; the tool palette scrolls inside it. The
+        // in-place editor must keep the selected frame's size instead.
+        window.contentView = NSHostingView(
+            rootView: targetRect == nil
+                ? AnyView(editor.frame(minWidth: 720, minHeight: 420))
+                : AnyView(editor)
+        )
         if let targetRect {
             let origin = CGPoint(
                 x: targetRect.midX - editorSize.width / 2,
@@ -6807,6 +6848,14 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
         NSRunningApplication.current.activate(options: [.activateAllWindows])
         window.makeKeyAndOrderFront(nil)
         self.window = window
+        if targetRect == nil {
+            // SwiftUI installs its own content minimum during the first layout.
+            // Apply the editor's floor after that pass so the fixed bottom
+            // action rail never gets clipped when the user resizes the window.
+            DispatchQueue.main.async { [weak window] in
+                window?.minSize = NSSize(width: 720, height: 452)
+            }
+        }
     }
 
     func close() {

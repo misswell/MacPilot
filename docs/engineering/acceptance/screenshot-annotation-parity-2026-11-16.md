@@ -31,10 +31,15 @@
 | Cmd+Z 撤销 | 通过 | `annotations=1`，见 `03-after-undo.png` |
 | Cmd+Shift+Z 重做 | 通过 | `annotations=2`，见 `04-after-redo.png` |
 | Inline 工具常驻 | 通过 | 13 个工具全部直接可见，见 `05-inline-toolbar.png` |
+| 工具栏在 1024×768 内可达 | 通过 | 靠右下角选区时 frame 仍在屏幕内 |
+| 工具栏在 1920×1080 内可达 | 通过 | 同上 |
+| 完整编辑器最小窗口 | 通过 | `minSize=(720, 448)`，底栏不被裁掉 |
 | Copy & Close 关闭编辑器 | 通过 | 窗口关闭 |
 | Copy & Close 写入剪贴板 | 通过 | 501,259 字节 PNG，见 `06-copy-and-close-clipboard.png` |
+| 区域选区 Copy 裁剪尺寸 | 通过 | 200×100 冻结图选 80×50，剪贴板得到 80×50，见 `07-area-selection-copy.png` |
+| 区域选区 Copy 成功后关闭 | 通过 | `dismissals=1` |
 
-结论：**撤销、工具可见性、复制关闭三项均通过**；真实鼠标绘制与前台激活被锁屏会话阻塞，未写成通过。
+结论：**撤销、工具可见性、复制关闭、工具栏屏幕内可达、最小窗口、区域选区裁剪/关闭均通过**；真实鼠标绘制与前台激活被锁屏会话阻塞，未写成通过。多显示器项用真实布局函数在 1024×768 / 1920×1080 边界下验证，未连接第二台物理显示器；普通区域截图的冻结帧由测试图像代替，未调用 ScreenCaptureKit。
 
 ## 截图证据
 
@@ -57,6 +62,10 @@ Inline 工具条（13 个独立工具 + 撤销/重做 + 独立动作行）：
 Copy & Close 写入剪贴板的最终渲染：
 
 ![剪贴板结果](assets/screenshot-annotation-parity/06-copy-and-close-clipboard.png)
+
+普通区域选区 Copy 的裁剪结果（200×100 冻结图 → 80×50 选区）：
+
+![区域选区裁剪](assets/screenshot-annotation-parity/07-area-selection-copy.png)
 
 ## 锁屏阻塞项如何补齐
 
@@ -88,4 +97,7 @@ open -n /tmp/MacPilotAcceptance.app --args \
 - `AnnotationInteractionParityTests.quickAccessAnnotateCopyAndCloseUpdatesCardFileAndClipboard`：复制成功才关闭，源文件与缩略图都变成 60×40。
 - `AnnotationInteractionParityTests.legacyHUDAttachesCopyAndCloseToTheSameClipboardTransaction`：旧 HUD 的 Copy & Close 同样先写剪贴板再退出。
 - `AnnotationInteractionParityTests.fullEditorBottomRailExposesTheHostsSupportedActions`：底栏按宿主能力提供分享/Pin/删除/Copy & Close/保存。
-- `bash Scripts/run-regressions.sh --base cef116f`：完整回归门禁通过；CI `regression-gate.yml` 同步通过。
+- `AnnotationInteractionParityTests.areaSelectionCopyCropsTheFrozenImageAndClosesAfterCopy`：真实 `finishSnapzySelectionAction` → 冻结图裁剪 80×50 → 剪贴板 → 关闭。
+- `AnnotationInteractionParityTests.hudBarStaysReachableOnSmallAndLargeDisplays`：1024×768 到 1920×1080、右下角/近全屏选区都落在屏幕内。
+- `AnnotationInteractionParityTests.fullEditorKeepsItsActionRailReachableAtTheMinimumWindowSize`：完整编辑器最小窗口 720×420 内容区。
+- `bash Scripts/run-regressions.sh`：完整回归门禁通过；CI `regression-gate.yml` 同步通过。
