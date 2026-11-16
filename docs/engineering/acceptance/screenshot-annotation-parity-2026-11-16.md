@@ -17,7 +17,7 @@
 ## 环境
 
 - macOS：版本 27.2.1（版号 26B131）
-- 构建：`worktree-on-dac4c21`（最终提交见 git log）
+- 构建：`bbe5e63`
 - 会话状态：**已解锁**（`IOConsoleLocked = No`）
 
 ## 结果
