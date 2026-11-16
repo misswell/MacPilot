@@ -615,6 +615,61 @@ struct AnnotationInteractionParityTests {
         #expect(pasteboard.data(forType: .png) == nil)
     }
 
+    @Test func clickingCopyClosesTheHUDOnlyAfterTheClipboardWriteSucceeds() async throws {
+        _ = NSApplication.shared
+        let model = ScreenCaptureModel()
+        model.testUpdateSettings { settings in
+            settings.saveAfterCapture = false
+            settings.showQuickAccess = false
+            settings.pinAfterCapture = false
+        }
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        model.clipboardPasteboard = pasteboard
+
+        let controller = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _, _, _ in },
+            onError: { _ in },
+            screenCaptureAccessProvider: { true }
+        )
+        var delivered: Bool?
+        let bar = AreaSelectionActionBar { action in
+            guard action == .copy else { return }
+            model.handleCapturedImage(
+                image(),
+                request: CaptureRequest(
+                    mode: .area,
+                    trigger: .shortcut,
+                    intent: .explicitCopy
+                ),
+                completion: { copied in
+                    delivered = copied
+                    controller.testRespondToSelectionCopyResult(copied)
+                }
+            )
+        }
+        let copyButton = try #require(
+            bar.chipButtons.first {
+                $0.toolTip == AppText.value("scCopy", language: .system)
+            }
+        )
+        let dismissalsBefore = SnapzyAreaSelectionController.shared.testDismissSelectionCount
+
+        copyButton.performClick(nil)
+        let deadline = Date().addingTimeInterval(30)
+        while delivered == nil, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(delivered == true)
+        #expect(pasteboard.data(forType: .png) != nil)
+        #expect(
+            SnapzyAreaSelectionController.shared.testDismissSelectionCount == dismissalsBefore + 1,
+            "the real Copy button must close the selection after a confirmed clipboard write"
+        )
+    }
+
     @Test func selectionCopyFailureKeepsTheHUDAndReportsAnError() {
         var errors: [Error] = []
         let controller = SmartScreenshotController(
