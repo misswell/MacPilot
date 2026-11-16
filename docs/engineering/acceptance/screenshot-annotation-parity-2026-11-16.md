@@ -17,7 +17,7 @@
 ## 环境
 
 - macOS：版本 27.2.1（版号 26B131）
-- 构建：`137753a`
+- 构建：`342da6e`
 - 会话状态：**锁屏**（`CGSSessionScreenIsLocked = Yes`）
 
 ## 结果
