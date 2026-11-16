@@ -451,12 +451,47 @@ private final class QuickAccessPinWindowController: NSObject {
           size: NSSize(width: annotated.width, height: annotated.height)
         ))
         self.restorePinContent()
+      },
+      onCopyAndClose: { [weak self] in
+        self?.copyAndCloseAnnotation(image: cgImage, model: model)
       }
     ))
     annotationHostView = editor
     window.contentView = editor
     window.makeKeyAndOrderFront(nil)
     window.updateMousePassthrough()
+  }
+
+  /// Copy the final render and leave the annotation editor only after the
+  /// clipboard accepted it. The pin keeps the annotated image, so a successful
+  /// Copy & Close never shows the pre-annotation picture afterwards.
+  private func copyAndCloseAnnotation(image: CGImage, model: SmartAnnotationModel) {
+    guard let annotated = SmartAnnotationRenderer.render(
+      image: image,
+      annotations: model.annotations,
+      styles: model.styledAnnotations.map(\.style)
+    ) else {
+      showAnnotationClipboardFailure()
+      return
+    }
+    guard SmartCaptureClipboard.copy(image: annotated) else {
+      showAnnotationClipboardFailure()
+      return
+    }
+    state.updateImage(NSImage(
+      cgImage: annotated,
+      size: NSSize(width: annotated.width, height: annotated.height)
+    ))
+    restorePinContent()
+  }
+
+  private func showAnnotationClipboardFailure() {
+    let error = NSError(
+      domain: "MacPilot.Clipboard",
+      code: -1,
+      userInfo: [NSLocalizedDescriptionKey: AppText.value("qaClipboardFailed", language: language)]
+    )
+    SmartCaptureToast.shared.showFailure(error: error, language: language)
   }
 
   private func restorePinContent() {

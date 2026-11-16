@@ -15,12 +15,14 @@ typealias AreaSelectionResultCompletion = (AreaSelectionResult?) -> Void
 /// capture layer stays independent from SwiftUI/AppKit implementation types.
 nonisolated enum AreaSelectionAnnotationTool: String, Equatable, Sendable {
   case rectangle
+  case filledRectangle
   case ellipse
   case arrow
   case line
   case pencil
   case highlighter
   case text
+  case watermark
   case counter
   case blur
   case spotlight

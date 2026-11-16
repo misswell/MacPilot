@@ -10,8 +10,19 @@ import Testing
 /// - toolbar clicks, keyboard shortcuts and model changes share one router;
 /// - Copy / Copy & Close semantics are per surface and never lose an edit on
 ///   a failed clipboard write.
+@Suite(.serialized)
 @MainActor
 struct AnnotationInteractionParityTests {
+    /// Isolated pasteboard: these tests exercise the real clipboard writer and
+    /// lease path, but must never clear or overwrite the user's clipboard.
+    private func makePasteboard() -> NSPasteboard {
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name("MacPilot.AnnotationParity.\(UUID().uuidString)")
+        )
+        pasteboard.clearContents()
+        return pasteboard
+    }
+
     private func image(width: Int = 64, height: Int = 64) -> CGImage {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let context = CGContext(
@@ -96,6 +107,121 @@ struct AnnotationInteractionParityTests {
         #expect(model.style(at: 0).color == .presets[2])
     }
 
+    @Test func undoingAStyleChangeRestoresThePropertyRowAndToolDefaults() {
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        model.append(.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.3, height: 0.3)))
+        model.selectAnnotation(0)
+        let original = model.currentStyle
+        model.setColor(.presets[2])
+        model.endStyleEditing()
+        #expect(model.currentStyle.color == .presets[2])
+
+        model.undo()
+        #expect(model.style(at: 0).color == original.color)
+        #expect(
+            model.currentStyle.color == original.color,
+            "the property row must show the restored value, not the discarded one"
+        )
+        // The per-tool default was part of the same document snapshot.
+        model.selectTool(.ellipse)
+        model.selectTool(.rectangle)
+        #expect(model.currentStyle.color == original.color)
+    }
+
+    @Test func everyImplementedToolHasOneDirectButtonAndStartsItsExactTool() throws {
+        _ = NSApplication.shared
+        var started: [AreaSelectionAction] = []
+        let bar = AreaSelectionActionBar { started.append($0) }
+        let expected: [(String, AreaSelectionAnnotationTool)] = [
+            ("scAnnotationRectangle", .rectangle),
+            ("scAnnotationFilledRectangle", .filledRectangle),
+            ("scAnnotationEllipse", .ellipse),
+            ("scAnnotationArrow", .arrow),
+            ("scAnnotationLine", .line),
+            ("scAnnotationPencil", .pencil),
+            ("scAnnotationHighlighter", .highlighter),
+            ("scAnnotationText", .text),
+            ("scAnnotationWatermark", .watermark),
+            ("scAnnotationCounter", .counter),
+            ("scAnnotationBlur", .blur),
+            ("scAnnotationSpotlight", .spotlight),
+            ("scAnnotationEraser", .eraser),
+        ]
+        for (key, tool) in expected {
+            let button = try #require(
+                bar.chipButtons.first { $0.toolTip == AppText.value(key, language: .system) }
+            )
+            #expect(!button.isHiddenOrHasHiddenAncestor, "\(key) must be directly visible")
+            button.performClick(nil)
+            #expect(
+                started.last == .annotateTool(tool),
+                "\(key) must start a session with \(tool), not a sibling variant"
+            )
+        }
+    }
+
+    @Test func theShapePropertyRowKeepsTheFilledRectangleTool() throws {
+        _ = NSApplication.shared
+        let bar = AreaSelectionActionBar { _ in }
+        let model = SmartAnnotationModel(initialTool: .filledRectangle)
+        bar.bindAnnotationSession(.init(model: model) { _ in })
+
+        func segmentedControl(in view: NSView) -> NSSegmentedControl? {
+            if let control = view as? NSSegmentedControl { return control }
+            for subview in view.subviews {
+                if let control = segmentedControl(in: subview) { return control }
+            }
+            return nil
+        }
+        let control = try #require(segmentedControl(in: bar))
+        #expect(control.selectedSegment == 1, "the filled variant is its own segment")
+
+        control.selectedSegment = 2
+        control.sendAction(control.action, to: control.target)
+        #expect(model.tool == .ellipse)
+
+        control.selectedSegment = 1
+        control.sendAction(control.action, to: control.target)
+        #expect(model.tool == .filledRectangle)
+    }
+
+    @Test func everyNewAnnotationSessionStartsWithThePropertiesExpanded() throws {
+        _ = NSApplication.shared
+        let bar = AreaSelectionActionBar { _ in }
+        func buttons(in view: NSView) -> [NSButton] {
+            view.subviews.flatMap { subview in
+                (subview as? NSButton).map { [$0] } ?? buttons(in: subview)
+            }
+        }
+        func optionsRow() throws -> NSView {
+            let rootStack = try #require(bar.subviews.compactMap { $0 as? NSStackView }.first)
+            let hideTooltip = AppText.value("scAnnotationHideOptions", language: .system)
+            return try #require(
+                rootStack.arrangedSubviews.first { view in
+                    buttons(in: view).contains { $0.toolTip == hideTooltip }
+                }
+            )
+        }
+
+        let firstModel = SmartAnnotationModel(initialTool: .rectangle)
+        bar.bindAnnotationSession(.init(model: firstModel) { _ in })
+        let collapse = try #require(
+            buttons(in: try optionsRow()).first {
+                $0.toolTip == AppText.value("scAnnotationHideOptions", language: .system)
+            }
+        )
+        collapse.performClick(nil)
+        #expect((try optionsRow()).isHidden)
+
+        bar.bindAnnotationSession(nil)
+        let secondModel = SmartAnnotationModel(initialTool: .ellipse)
+        bar.bindAnnotationSession(.init(model: secondModel) { _ in })
+        #expect(
+            !(try optionsRow()).isHidden,
+            "a new capture starts expanded; the previous session's collapse must not leak"
+        )
+    }
+
     @Test func aContinuousSliderDragIsOneUndoStep() {
         let model = SmartAnnotationModel(initialTool: .rectangle)
         model.append(.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.3, height: 0.3)))
@@ -153,6 +279,47 @@ struct AnnotationInteractionParityTests {
     }
 
     // MARK: - Toolbar integration (real buttons, not direct model calls)
+
+    @Test func textAndCropEditsJoinTheSameHistory() {
+        let model = SmartAnnotationModel(initialTool: .text)
+        model.append(.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)))
+        model.append(.text("hello", CGPoint(x: 0.3, y: 0.3)))
+        #expect(model.annotations.count == 2)
+
+        model.undo()
+        #expect(model.annotations.count == 1, "one text commit is one undo step")
+        model.redo()
+        #expect(model.annotations.count == 2)
+
+        model.selectTool(.crop)
+        model.append(.crop(CGRect(x: 0.05, y: 0.05, width: 0.5, height: 0.5)))
+        #expect(model.annotations.count == 3)
+        model.undo()
+        #expect(
+            model.annotations.count == 2,
+            "undoing a crop returns to the pre-crop annotations"
+        )
+        model.redo()
+        #expect(model.annotations.count == 3)
+    }
+
+    @Test func opacityAndLineStyleChangesAreUndoable() {
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        model.append(.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.3, height: 0.3)))
+        model.selectAnnotation(0)
+        let originalOpacity = model.currentStyle.opacity
+        let originalLineStyle = model.currentStyle.lineStyle
+
+        model.setOpacity(0.3)
+        model.endStyleEditing()
+        model.setLineStyle(.dashed)
+        model.endStyleEditing()
+
+        model.undo()
+        #expect(model.style(at: 0).lineStyle == originalLineStyle)
+        model.undo()
+        #expect(model.style(at: 0).opacity == originalOpacity)
+    }
 
     @Test func toolbarUndoAndRedoDriveTheRealModel() throws {
         _ = NSApplication.shared
@@ -280,6 +447,21 @@ struct AnnotationInteractionParityTests {
         #expect(model.annotations.count == 1, "the picture must not be undone while typing")
     }
 
+    @Test func toolShortcutDisableListIsTheSingleConfigurationSource() {
+        let original = SmartAnnotationToolShortcuts.disabledTools
+        defer { SmartAnnotationToolShortcuts.disabledTools = original }
+
+        SmartAnnotationToolShortcuts.disabledTools = [.watermark, .filledRectangle]
+        #expect(SmartAnnotationToolShortcuts.tool(for: "w") == nil)
+        #expect(SmartAnnotationToolShortcuts.tool(forKeyCode: 13) == nil)
+        #expect(SmartAnnotationToolShortcuts.tool(for: "f") == nil)
+        #expect(SmartAnnotationToolShortcuts.tool(for: "r") == .rectangle)
+
+        SmartAnnotationToolShortcuts.disabledTools = []
+        #expect(SmartAnnotationToolShortcuts.tool(for: "w") == .watermark)
+        #expect(SmartAnnotationToolShortcuts.tool(forKeyCode: 3) == .filledRectangle)
+    }
+
     @Test func plainLetterShortcutsSwitchInlineToolsButNotWhileTyping() throws {
         _ = NSApplication.shared
         let controller = SnapzyAreaSelectionController.shared
@@ -289,6 +471,10 @@ struct AnnotationInteractionParityTests {
 
         #expect(controller.handleInlineAnnotationKey(keyCode: 17, modifiers: [])) // T
         #expect(model.tool == .text)
+        #expect(controller.handleInlineAnnotationKey(keyCode: 3, modifiers: [])) // F
+        #expect(model.tool == .filledRectangle)
+        #expect(controller.handleInlineAnnotationKey(keyCode: 13, modifiers: [])) // W
+        #expect(model.tool == .watermark)
         #expect(controller.handleInlineAnnotationKey(keyCode: 15, modifiers: [])) // R
         #expect(model.tool == .rectangle)
         #expect(controller.handleInlineAnnotationKey(keyCode: 14, modifiers: [])) // E
@@ -302,7 +488,14 @@ struct AnnotationInteractionParityTests {
     @Test func inlineCopyStaysAndCopyAndCloseEndsTheSession() throws {
         _ = NSApplication.shared
         let controller = SnapzyAreaSelectionController.shared
-        defer { controller.cancelSelection() }
+        let pasteboard = makePasteboard()
+        controller.clipboardPasteboard = pasteboard
+        defer {
+            controller.cancelSelection()
+            controller.clipboardPasteboard = .general
+            controller.testFailInlineClipboardWrite = false
+            pasteboard.releaseGlobally()
+        }
         var delivered: [(CGImage, AreaSelectionAction)] = []
         controller.testInstallInlineAnnotationSession(image: image()) { image, action in
             delivered.append((image, action))
@@ -314,10 +507,37 @@ struct AnnotationInteractionParityTests {
         #expect(controller.handleInlineAnnotationKey(keyCode: 8, modifiers: [.command]))
         #expect(controller.testHasInlineAnnotationSession)
         #expect(delivered.isEmpty, "inline Copy must not run the terminal delivery path")
+        #expect(pasteboard.data(forType: .png) != nil, "Cmd+C must really write the render")
 
         // Cmd+Shift+C copies and closes.
         #expect(controller.handleInlineAnnotationKey(keyCode: 8, modifiers: [.command, .shift]))
         #expect(!controller.testHasInlineAnnotationSession)
+    }
+
+    @Test func inlineCopyAndCloseFailureKeepsTheSessionAndAnnotations() throws {
+        _ = NSApplication.shared
+        let controller = SnapzyAreaSelectionController.shared
+        defer {
+            controller.cancelSelection()
+            controller.clipboardPasteboard = .general
+            controller.testFailInlineClipboardWrite = false
+        }
+        controller.testInstallInlineAnnotationSession(image: image())
+        let model = try #require(controller.testInlineAnnotationModel)
+        model.append(.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)))
+        controller.testFailInlineClipboardWrite = true
+
+        #expect(
+            controller.handleInlineAnnotationKey(
+                keyCode: 8,
+                modifiers: [.command, .shift]
+            )
+        )
+        #expect(
+            controller.testHasInlineAnnotationSession,
+            "a failed clipboard write must not close the inline session"
+        )
+        #expect(model.annotations.count == 1, "the edit must survive a failed copy")
     }
 
     // MARK: - Delivery confirmation and Quick Access
@@ -329,8 +549,9 @@ struct AnnotationInteractionParityTests {
             settings.showQuickAccess = false
             settings.pinAfterCapture = false
         }
-        let pasteboard = NSPasteboard.general
-        defer { pasteboard.clearContents() }
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        model.clipboardPasteboard = pasteboard
 
         var delivered: Bool?
         model.handleCapturedImage(
@@ -343,6 +564,55 @@ struct AnnotationInteractionParityTests {
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(delivered == true, "the HUD may only close after this success signal (delivered=\(String(describing: delivered)))")
+        #expect(
+            pasteboard.data(forType: .png) != nil,
+            "the success signal must mean the image really reached the clipboard"
+        )
+
+        // The same signal the HUD receives is what closes it: success dismisses
+        // the selection exactly once, so a copy cannot succeed with the overlay
+        // left behind.
+        let controller = SmartScreenshotController(
+            language: { .simplifiedChinese },
+            onCapture: { _, _, _ in },
+            onError: { _ in },
+            screenCaptureAccessProvider: { true }
+        )
+        let dismissalsBefore = SnapzyAreaSelectionController.shared.testDismissSelectionCount
+        controller.testRespondToSelectionCopyResult(true)
+        #expect(
+            SnapzyAreaSelectionController.shared.testDismissSelectionCount == dismissalsBefore + 1
+        )
+    }
+
+    @Test func explicitCopyFailureKeepsTheSelectionAndReportsTheClipboardError() async throws {
+        let model = ScreenCaptureModel()
+        model.testUpdateSettings { settings in
+            settings.saveAfterCapture = false
+            settings.showQuickAccess = false
+            settings.pinAfterCapture = false
+        }
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        model.clipboardPasteboard = pasteboard
+        model.testFailClipboardWrite = true
+
+        var delivered: Bool?
+        model.handleCapturedImage(
+            image(),
+            request: CaptureRequest(mode: .area, trigger: .shortcut, intent: .explicitCopy),
+            completion: { delivered = $0 }
+        )
+        let deadline = Date().addingTimeInterval(30)
+        while delivered == nil, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(delivered == false, "a failed clipboard write must not report success")
+        #expect(
+            model.errorMessage == AppText.value("qaClipboardFailed", language: model.language),
+            "the failure has to be visible to the user"
+        )
+        #expect(pasteboard.data(forType: .png) == nil)
     }
 
     @Test func selectionCopyFailureKeepsTheHUDAndReportsAnError() {
@@ -373,13 +643,17 @@ struct AnnotationInteractionParityTests {
         let manager = QuickAccessManager.shared
         let previousEnabled = manager.isEnabled
         let previousAutoDismiss = manager.autoDismissEnabled
+        let pasteboard = makePasteboard()
+        manager.clipboardPasteboard = pasteboard
         manager.isEnabled = true
         manager.autoDismissEnabled = false
         manager.dismissAll()
         defer {
             manager.dismissAll()
+            manager.clipboardPasteboard = .general
             manager.autoDismissEnabled = previousAutoDismiss
             manager.isEnabled = previousEnabled
+            pasteboard.releaseGlobally()
         }
 
         let first = TempCaptureManager.shared.saveScreenshot(image(width: 40, height: 30))!
@@ -397,6 +671,7 @@ struct AnnotationInteractionParityTests {
         #expect(manager.items.count == 1, "copying one card must not touch the others")
         #expect(manager.items.first?.id == itemB.id)
         #expect(manager.testIsPanelVisible)
+        #expect(pasteboard.data(forType: .png) != nil, "the card copy must reach the clipboard")
 
         manager.copyToClipboard(id: itemB.id)
         #expect(manager.items.isEmpty)
@@ -408,6 +683,8 @@ struct AnnotationInteractionParityTests {
     @Test func fullEditorCopyAndCloseClosesOnlyOnSuccessfulCopy() throws {
         _ = NSApplication.shared
         let source = image()
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
         let failing = SmartAnnotationWindowController(
             image: source,
             language: .simplifiedChinese,
@@ -416,7 +693,9 @@ struct AnnotationInteractionParityTests {
             onCopyAndClose: { _ in false }
         )
         failing.show()
+        failing.testAppendRectangle()
         #expect(!failing.testCopyAndClose(), "a failed clipboard write must keep the editor open")
+        #expect(failing.testAnnotationCount == 1, "a failed copy must keep the edit on screen")
         failing.close()
 
         let succeeding = SmartAnnotationWindowController(
@@ -424,9 +703,29 @@ struct AnnotationInteractionParityTests {
             language: .simplifiedChinese,
             onComplete: { _ in },
             onClose: {},
-            onCopyAndClose: { _ in true }
+            onCopyAndClose: { annotated in
+                SmartCaptureClipboard.copy(image: annotated, to: pasteboard)
+            }
         )
         succeeding.show()
+        succeeding.testAppendRectangle()
         #expect(succeeding.testCopyAndClose())
+        #expect(
+            pasteboard.data(forType: .png) != nil,
+            "the editor's Copy & Close must write the rendered annotation"
+        )
+    }
+
+    @Test func fullEditorUndoAndRedoShortcutsYieldToTextEditing() {
+        #expect(SmartAnnotationEditor.undoShortcut(isEditingText: false) != nil)
+        #expect(SmartAnnotationEditor.redoShortcut(isEditingText: false) != nil)
+        #expect(
+            SmartAnnotationEditor.undoShortcut(isEditingText: true) == nil,
+            "Cmd+Z belongs to the focused text field"
+        )
+        #expect(
+            SmartAnnotationEditor.redoShortcut(isEditingText: true) == nil,
+            "Cmd+Shift+Z belongs to the focused text field"
+        )
     }
 }

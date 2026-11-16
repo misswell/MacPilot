@@ -99,3 +99,15 @@
 
 状态：自动化测试已通过；混合 DPI、跨屏、AX 无权限、按模式配置的实机验收仍待完成。2026-11 标注交互纠偏后，旧的「操作栏阶段分层」契约已废止（旧规则保留在索引中仅供 append-only 校验，实际验收以新条目为准）；标注工具可见性、Undo/Redo、Copy 语义的人工验收见 `docs/engineering/REGRESSION_INDEX.json` 的追加条目。截图可靠性重构已随 `v1.2.2-beta.103` 发布；本轮测试补强随后续 Beta 发布。
 
+
+## 2026-11-16：标注交互对齐复查补强（beta 待发布）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| 填充矩形按钮首次点击退化成普通矩形：`AreaSelectionAnnotationTool` 没有 `filledRectangle`，工具栏桥接把两种工具合并；水印在 Inline 完全没有入口 | 增加 `.filledRectangle` / `.watermark` 桥接，首次点击以精确工具开始会话；Inline 工具区补齐水印按钮与 `F` / `W` 字母键；文字/水印/计数属性区增加透明度 | `AnnotationInteractionParityTests`、`SnapzyCaptureTests` |
+| 撤销属性修改后画布恢复了，但属性栏和下一笔仍用被撤销的颜色：撤销 `Document` 没有包含 `stylesByTool` | `Document` 纳入 `stylesByTool`；`apply` 同时恢复逐工具默认值，撤销后属性栏、工具默认样式与恢复后的对象一致 | `AnnotationInteractionParityTests` |
+| 完整编辑器 Cmd+Z 在文本框聚焦时仍会撤销整张图；连续滑块拖动跨多次释放仍合并成一步 | SwiftUI 快捷键在 `inlineTextFocused` 时置空，让位原生文本撤销；`Slider.onEditingChanged` 在释放时结束样式事务，离散色板/线型/填充每次点击各自成步 | `AnnotationInteractionParityTests` |
+| Quick Access 标注保存仍自写 staging/PNG，绕过 `CaptureArtifactStore` | `writeAnnotatedImage` 改为 `CaptureArtifactStore.write(to:)`，统一 staging、解码校验与原子替换；失败保留原文件 | `ScreenshotReliabilityTests`、`CaptureArtifactStoreTests` |
+| 复制测试直接清空系统剪贴板；复制失败路径无法验证 | `ScreenCaptureModel` / `SnapzyAreaSelectionController` / `QuickAccessManager` 可注入 pasteboard；新增成功与失败路径测试，成功时验证 pasteboard 实际含 PNG，失败时保留 HUD/会话与编辑内容 | `AnnotationInteractionParityTests` |
+
+状态：自动化测试通过；填充矩形/水印的实际鼠标绘制、完整编辑器文本焦点 Cmd+Z、多屏工具栏可达性仍需实机验收。

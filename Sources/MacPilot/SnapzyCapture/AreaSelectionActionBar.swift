@@ -7,11 +7,13 @@
 //  the first click/keyboard focus behaviour deterministic while the panel is
 //  non-activating.
 //
-//  Interaction model (matching iShot's capture flow): row one hosts the tool
-//  group buttons, the eraser, undo, and the terminal actions.  When an
-//  annotation session is active the bar binds to the `SmartAnnotationModel`
-//  and reveals a contextual second row with that tool's options — shape
-//  switch, fill, line style, stroke width, and the colour palette.
+//  Interaction model (matching Snapzy's InlineAreaControlDeck): one permanent
+//  tool row where every implemented annotation tool has its own button, with
+//  dividers as the only grouping; undo/redo sit beside the tools. The capture
+//  actions (OCR/pin/更多/save/copy) live in their own action row and never
+//  displace the tools. When an annotation session is active the bar adds the
+//  terminal actions (完成 / Copy & Close) and a contextual properties row for
+//  the current tool, expanded by default.
 //
 //  The post-selection HUD is a single bar.  iShot's right-hand column
 //  (圆角截图 / 调整选区 / 阴影或边框 / 刷新截图 / 重新选择) is folded into the
@@ -230,7 +232,13 @@ final class AreaSelectionActionBar: NSView {
   // MARK: - Annotation Session Binding
 
   func bindAnnotationSession(_ binding: AnnotationBinding?) {
+    // A new session starts with the properties row expanded; the collapse is
+    // a per-session choice, not a setting that leaks into the next capture.
+    let wasAnnotating = isAnnotating
     annotationBinding = binding
+    if binding != nil, !wasAnnotating {
+      optionsRowCollapsed = false
+    }
     modelCancellable?.cancel()
     modelCancellable = nil
     if let model = binding?.model {
@@ -240,8 +248,8 @@ final class AreaSelectionActionBar: NSView {
           self?.syncWithModel()
         }
     }
-    // The eraser and undo only make sense with a live annotation session —
-    // reveal them on bind and hide them again when the session commits.
+    // The eraser/undo controls stay mounted; only the terminal annotation
+    // actions and the properties row depend on the session.
     applyStageVisibility()
     rebuildOptionsRow()
     syncWithModel()
@@ -284,7 +292,7 @@ final class AreaSelectionActionBar: NSView {
     let groups: [[SmartAnnotationTool]] = [
       [.rectangle, .filledRectangle, .ellipse],
       [.arrow, .line, .pencil, .highlighter],
-      [.text, .counter],
+      [.text, .watermark, .counter],
       [.blur, .spotlight],
       [.eraser],
     ]
@@ -373,10 +381,10 @@ final class AreaSelectionActionBar: NSView {
     return separator
   }
 
-  /// Selection stage ↔ annotation stage. Nothing is duplicated across stages:
-  /// a chip belongs to exactly one of them, so the bar never shows two rows of
-  /// competing primaries. Save/copy stay reachable while annotating because
-  /// they commit the annotated pixels; OCR/pin/更多 are selection-stage actions.
+  /// The only visibility switch: tools and capture actions are permanent; the
+  /// terminal annotation actions (checkmark / Copy & Close) are contextual.
+  /// Save/copy stay reachable while annotating because they commit the
+  /// annotated pixels.
   private func applyStageVisibility() {
     let annotating = isAnnotating
     // Tools are never stage-gated and never hidden; only the terminal
@@ -538,7 +546,11 @@ final class AreaSelectionActionBar: NSView {
     switch model.tool {
     case .rectangle, .filledRectangle, .ellipse:
       row.addArrangedSubview(makeShapeSwitch(model))
-      row.addArrangedSubview(makeFillCheckbox(model))
+      // A filled rectangle is always filled; its fill checkbox would be a
+      // control with no visible effect.
+      if model.tool != .filledRectangle {
+        row.addArrangedSubview(makeFillCheckbox(model))
+      }
       row.addArrangedSubview(makeLineStylePopUp(model))
       row.addArrangedSubview(makeWidthControl(model, titleKey: "scAnnotationLineWidth"))
       row.addArrangedSubview(makeOpacityControl(model))
@@ -554,8 +566,9 @@ final class AreaSelectionActionBar: NSView {
       row.addArrangedSubview(makeColorControls(model))
     case .highlighter:
       row.addArrangedSubview(makeColorControls(model))
-    case .text, .counter:
+    case .text, .watermark, .counter:
       row.addArrangedSubview(makeWidthControl(model, titleKey: "scToolSize"))
+      row.addArrangedSubview(makeOpacityControl(model))
       row.addArrangedSubview(makeColorControls(model))
     case .eraser:
       let clear = NSButton(
@@ -567,7 +580,7 @@ final class AreaSelectionActionBar: NSView {
       clear.contentTintColor = NSColor.systemRed
       clear.font = NSFont.systemFont(ofSize: 12, weight: .medium)
       row.addArrangedSubview(clear)
-    case .blur, .watermark, .spotlight, .crop:
+    case .blur, .spotlight, .crop:
       break
     }
 
@@ -595,6 +608,7 @@ final class AreaSelectionActionBar: NSView {
     let control = NSSegmentedControl(
       images: [
         NSImage(systemSymbolName: "rectangle", accessibilityDescription: nil) ?? NSImage(),
+        NSImage(systemSymbolName: "rectangle.fill", accessibilityDescription: nil) ?? NSImage(),
         NSImage(systemSymbolName: "oval", accessibilityDescription: nil) ?? NSImage(),
       ],
       trackingMode: .selectOne,
@@ -602,11 +616,20 @@ final class AreaSelectionActionBar: NSView {
       action: #selector(shapeSegmentChanged(_:))
     )
     control.segmentStyle = .roundRect
-    control.selectedSegment = model.tool == .ellipse ? 1 : 0
+    control.selectedSegment = Self.shapeSwitchIndex(for: model.tool)
     control.setToolTip(AppText.value("scAnnotationRectangle", language: .system), forSegment: 0)
-    control.setToolTip(AppText.value("scAnnotationEllipse", language: .system), forSegment: 1)
+    control.setToolTip(AppText.value("scAnnotationFilledRectangle", language: .system), forSegment: 1)
+    control.setToolTip(AppText.value("scAnnotationEllipse", language: .system), forSegment: 2)
     shapeSegmented = control
     return control
+  }
+
+  private static let shapeSwitchTools: [SmartAnnotationTool] = [
+    .rectangle, .filledRectangle, .ellipse,
+  ]
+
+  private static func shapeSwitchIndex(for tool: SmartAnnotationTool) -> Int {
+    shapeSwitchTools.firstIndex(of: tool) ?? 0
   }
 
   private func makeFillCheckbox(_ model: SmartAnnotationModel) -> NSView {
@@ -894,7 +917,7 @@ final class AreaSelectionActionBar: NSView {
     widthValueLabel?.stringValue = "\(Int(model.currentStyle.lineWidth.rounded()))"
     widthSlider?.doubleValue = Double(model.currentStyle.lineWidth)
     lineStyleButton?.image = Self.lineStylePreview(model.currentStyle.lineStyle)
-    shapeSegmented?.selectedSegment = activeTool == .ellipse ? 1 : 0
+    shapeSegmented?.selectedSegment = Self.shapeSwitchIndex(for: activeTool)
     fillCheckbox?.state = model.currentStyle.fillEnabled ? .on : .off
     colorWell?.color = model.currentStyle.color.nsColor
     refreshChips()
@@ -938,19 +961,20 @@ final class AreaSelectionActionBar: NSView {
 
   private static func areaSelectionTool(for tool: SmartAnnotationTool) -> AreaSelectionAnnotationTool? {
     switch tool {
-    case .rectangle, .filledRectangle: return .rectangle
+    case .rectangle: return .rectangle
+    case .filledRectangle: return .filledRectangle
     case .ellipse: return .ellipse
     case .arrow: return .arrow
     case .line: return .line
     case .pencil: return .pencil
     case .highlighter: return .highlighter
     case .text: return .text
+    case .watermark: return .watermark
     case .counter: return .counter
     case .blur: return .blur
     case .spotlight: return .spotlight
     case .eraser: return .eraser
     case .crop: return .crop
-    case .watermark: return nil
     }
   }
 
@@ -1105,8 +1129,9 @@ final class AreaSelectionActionBar: NSView {
   }
 
   @objc private func shapeSegmentChanged(_ sender: NSSegmentedControl) {
-    guard let model = annotationBinding?.model else { return }
-    model.selectTool(sender.selectedSegment == 1 ? .ellipse : .rectangle)
+    guard let model = annotationBinding?.model,
+          Self.shapeSwitchTools.indices.contains(sender.selectedSegment) else { return }
+    model.selectTool(Self.shapeSwitchTools[sender.selectedSegment])
     syncWithModel()
   }
 

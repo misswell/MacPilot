@@ -518,6 +518,15 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
     @Published private(set) var isLoopRunning = false
     @Published private(set) var captureHistory: [SmartCaptureHistoryItem] = []
     var language: AppLanguage = .system
+    /// Pasteboard used by the capture delivery pipeline. Production keeps the
+    /// system pasteboard; tests inject an isolated one and never clear the
+    /// user's clipboard while proving the close-after-copy rule.
+    var clipboardPasteboard: NSPasteboard = .general
+    #if DEBUG
+    /// Test seam: force the delivery clipboard result so the failure branch can
+    /// be exercised without a rejecting pasteboard.
+    var testFailClipboardWrite = false
+    #endif
 
     var persist: (() -> Void)?
     /// Receives the global AppKit rectangle selected by the shared overlay
@@ -733,7 +742,12 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
         // for it, through the same lease-tracked path as every other copy.
         PostCaptureActionHandler.shared.copyActionProvider = { [weak self] type, url in
             guard let self, type == .screenshot, self.settings.copyAfterCapture else { return }
-            _ = SmartCaptureClipboard.copy(imageURL: url, artifactID: UUID(), captureID: UUID())
+            _ = SmartCaptureClipboard.copy(
+                imageURL: url,
+                artifactID: UUID(),
+                captureID: UUID(),
+                to: clipboardPasteboard
+            )
         }
     }
 
@@ -1569,11 +1583,21 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                 )
             }
             if actions.copyToClipboard {
+                #if DEBUG
+                let copied = testFailClipboardWrite ? false : SmartCaptureClipboard.copy(
+                    imageURL: artifact.url,
+                    artifactID: artifactID,
+                    captureID: request.captureID,
+                    to: clipboardPasteboard
+                )
+                #else
                 let copied = SmartCaptureClipboard.copy(
                     imageURL: artifact.url,
                     artifactID: artifactID,
-                    captureID: request.captureID
+                    captureID: request.captureID,
+                    to: clipboardPasteboard
                 )
+                #endif
                 if !copied {
                     errorMessage = AppText.value("qaClipboardFailed", language: language)
                     completion?(false)
@@ -1893,7 +1917,10 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                 guard let self else { return }
                 self.lastCaptureSize = size
                 if self.settings.copyAfterCapture {
-                    SmartCaptureClipboard.copy(imageURL: url)
+                    SmartCaptureClipboard.copy(
+                        imageURL: url,
+                        to: self.clipboardPasteboard
+                    )
                 }
             } catch {
                 self?.errorMessage = error.localizedDescription

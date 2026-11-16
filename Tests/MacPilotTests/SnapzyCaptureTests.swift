@@ -1269,8 +1269,8 @@ struct SnapzyCaptureTests {
         for key in [
             "scAnnotationRectangle", "scAnnotationFilledRectangle", "scAnnotationEllipse",
             "scAnnotationArrow", "scAnnotationLine", "scAnnotationPencil", "scAnnotationHighlighter",
-            "scAnnotationText", "scAnnotationCounter", "scAnnotationBlur", "scAnnotationSpotlight",
-            "scAnnotationEraser",
+            "scAnnotationText", "scAnnotationWatermark", "scAnnotationCounter",
+            "scAnnotationBlur", "scAnnotationSpotlight", "scAnnotationEraser",
         ] {
             #expect(!(try chip(key)).isHiddenOrHasHiddenAncestor, "\(key) must be directly visible")
         }
@@ -1291,6 +1291,12 @@ struct SnapzyCaptureTests {
         started.removeAll()
         try chip("scAnnotationPencil").performClick(nil)
         #expect(started == [.annotateTool(.pencil)])
+        started.removeAll()
+        try chip("scAnnotationFilledRectangle").performClick(nil)
+        #expect(started == [.annotateTool(.filledRectangle)])
+        started.removeAll()
+        try chip("scAnnotationWatermark").performClick(nil)
+        #expect(started == [.annotateTool(.watermark)])
     }
 
     @Test @MainActor func aLiveSessionKeepsEveryToolVisibleAndAddsTerminalActions() throws {

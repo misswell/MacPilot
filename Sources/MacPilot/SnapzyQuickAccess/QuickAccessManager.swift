@@ -36,6 +36,11 @@ enum QuickAccessAnimationStyle: String, CaseIterable, Identifiable {
 final class QuickAccessManager: ObservableObject {
   static let shared = QuickAccessManager()
 
+  /// Clipboard surface for card and annotation copies. Production uses the
+  /// system pasteboard; tests inject a named pasteboard so they exercise the
+  /// real write/lease path without touching the user's clipboard.
+  var clipboardPasteboard: NSPasteboard = .general
+
   // MARK: - Published State
 
   @Published private(set) var items: [QuickAccessItem] = [] {
@@ -1203,7 +1208,7 @@ final class QuickAccessManager: ObservableObject {
         reportNotReady(item, operation: .copy)
         return
       }
-      let pasteboard = NSPasteboard.general
+      let pasteboard = clipboardPasteboard
       pasteboard.clearContents()
       guard pasteboard.setString(cloudURL.absoluteString, forType: .string) else {
         lastOperationError = AppText.value("qaClipboardFailed", language: .system)
@@ -1238,7 +1243,8 @@ final class QuickAccessManager: ObservableObject {
       copied = SmartCaptureClipboard.copy(
         imageURL: url,
         artifactID: item.artifactID,
-        captureID: item.captureID
+        captureID: item.captureID,
+        to: clipboardPasteboard
       )
     }
 
@@ -1642,7 +1648,10 @@ final class QuickAccessManager: ObservableObject {
         }
         // Copy first. A failed clipboard write keeps the editor and every
         // annotation on screen; only a successful copy closes it.
-        guard SmartCaptureClipboard.copy(image: annotated) else {
+        guard SmartCaptureClipboard.copy(
+          image: annotated,
+          to: clipboardPasteboard
+        ) else {
           self.lastOperationError = AppText.value("qaClipboardFailed", language: .system)
           DiagnosticLogger.shared.log(
             .error,
@@ -1694,29 +1703,18 @@ final class QuickAccessManager: ObservableObject {
   /// Encode and replace the capture only after the new bytes decode at the
   /// expected pixel size. A failure leaves the original file untouched; the
   /// staging file never outlives the attempt.
+  ///
+  /// This is still one artifact-store write: the store owns staging, decode
+  /// validation and the atomic replacement, so an annotation save cannot grow
+  /// a second, weaker file-writing path beside the capture pipeline.
   nonisolated static func writeAnnotatedImage(_ image: CGImage, to url: URL) throws {
-    let data = autoreleasepool {
-      NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
-    }
-    guard let data else { throw CaptureArtifactError.encodeFailed }
-
-    let directory = url.deletingLastPathComponent()
-    let staging = directory.appendingPathComponent(
-      ".\(url.deletingPathExtension().lastPathComponent)-annotating-\(UUID().uuidString).png"
+    let format = ScreenCaptureImageFormat(fileExtension: url.pathExtension) ?? .png
+    _ = try CaptureArtifactStore.shared.write(
+      to: url,
+      image: SendableScreenCaptureImage(value: image),
+      format: format,
+      quality: 1
     )
-    do {
-      try data.write(to: staging, options: .atomic)
-      guard let source = CGImageSourceCreateWithURL(staging as CFURL, nil),
-            let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil),
-            decoded.width == image.width,
-            decoded.height == image.height else {
-        throw CaptureArtifactError.validationFailed
-      }
-      _ = try FileManager.default.replaceItemAt(url, withItemAt: staging)
-    } catch {
-      try? FileManager.default.removeItem(at: staging)
-      throw error
-    }
   }
 
   private func restoreAnnotationEditor() {

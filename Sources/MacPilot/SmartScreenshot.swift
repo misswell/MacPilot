@@ -1671,6 +1671,9 @@ final class SmartScreenshotController {
     var activeEventTapCount: Int {
         (shortcutEventTap == nil ? 0 : 1) + (selectionEventTap == nil ? 0 : 1)
     }
+    /// Pasteboard used by the standalone annotation editor's Copy & Close.
+    /// Production keeps the system pasteboard; tests inject a named one.
+    var clipboardPasteboard: NSPasteboard = .general
     nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     private let language: () -> AppLanguage
     private let onCapture: (CGImage, CaptureDeliveryIntent, CaptureMode) -> Void
@@ -3573,11 +3576,17 @@ final class SmartScreenshotController {
                 self?.inlineAnnotationControllers.removeValue(forKey: id)
             },
             onQuickCopy: { [weak self] annotated in
-                SmartCaptureClipboard.copy(image: annotated)
+                SmartCaptureClipboard.copy(
+                    image: annotated,
+                    to: self?.clipboardPasteboard ?? .general
+                )
                 self?.onQuickCopySave?(annotated)
             },
             onCopyAndClose: { [weak self] annotated in
-                let copied = SmartCaptureClipboard.copy(image: annotated)
+                let copied = SmartCaptureClipboard.copy(
+                    image: annotated,
+                    to: self?.clipboardPasteboard ?? .general
+                )
                 if copied { self?.onQuickCopySave?(annotated) }
                 return copied
             }
@@ -3613,6 +3622,7 @@ final class SmartScreenshotController {
             onSave: onSave,
             onDelete: onDelete
         )
+        controller.clipboardPasteboard = clipboardPasteboard
         quickAccessControllers[id] = controller
         let evictedID = quickAccessStack.insert(id)
         if let evictedID { closeQuickAccess(id: evictedID) }
@@ -4975,6 +4985,9 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     private let onDelete: ((URL?) -> Void)?
     private var panel: NSPanel?
     private var annotationHostView: NSView?
+    /// Clipboard surface for the annotation editor's Copy & Close. Production
+    /// uses the system pasteboard; tests can inject a named one.
+    var clipboardPasteboard: NSPasteboard = .general
     private var countdownTimer: BackgroundTask?
     private var isHovered = false
     private var countdownPaused = false
@@ -5161,11 +5174,45 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
                 self.image = annotated
                 self.onSave?(annotated, self.savedURL)
                 self.restoreAnnotationEditor()
+            },
+            onCopyAndClose: { [weak self] in
+                self?.copyAndCloseAnnotation(image: originalImage, model: model)
             }
         ))
         annotationHostView = editor
         panel.contentView = editor
         panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// Copy the final render and close only after the clipboard accepted it.
+    /// The Quick Access card keeps the annotated image and its save callback
+    /// still runs, so copying cannot strand the card on the pre-annotation
+    /// bytes.
+    private func copyAndCloseAnnotation(image: CGImage, model: SmartAnnotationModel) {
+        guard let annotated = SmartAnnotationRenderer.render(
+            image: image,
+            annotations: model.annotations,
+            styles: model.styledAnnotations.map(\.style)
+        ) else {
+            showAnnotationClipboardFailure()
+            return
+        }
+        guard SmartCaptureClipboard.copy(image: annotated, to: clipboardPasteboard) else {
+            showAnnotationClipboardFailure()
+            return
+        }
+        self.image = annotated
+        onSave?(annotated, savedURL)
+        restoreAnnotationEditor()
+    }
+
+    private func showAnnotationClipboardFailure() {
+        let error = NSError(
+            domain: "MacPilot.Clipboard",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: AppText.value("qaClipboardFailed", language: language)]
+        )
+        SmartCaptureToast.shared.showFailure(error: error, language: language)
     }
 
     private func restoreAnnotationEditor() {
@@ -5841,23 +5888,98 @@ enum SmartAnnotationTool: String, CaseIterable, Identifiable {
     }
 }
 
+/// One source of truth for the annotation tool letter shortcuts.
+///
+/// The inline HUD receives raw key codes from its non-activating panel, while
+/// the editor's tool buttons expose the same names. Keeping key codes and
+/// characters in one table means a tool cannot gain a button without gaining
+/// the matching shortcut. Plain letters are deliberately local to the capture
+/// surfaces: the global capture shortcuts remain Carbon-registered and
+/// modifier-based.
+@MainActor
+enum SmartAnnotationToolShortcuts {
+    static let defaults: [SmartAnnotationTool: Character] = [
+        .rectangle: "r",
+        .filledRectangle: "f",
+        .ellipse: "o",
+        .arrow: "a",
+        .line: "l",
+        .pencil: "p",
+        .highlighter: "h",
+        .text: "t",
+        .watermark: "w",
+        .counter: "n",
+        .blur: "b",
+        .spotlight: "s",
+        .eraser: "e",
+    ]
+
+    /// Persisted disable list. This is the configuration source for turning a
+    /// conflicting local key off without deleting the tool button.
+    private static let disabledToolsKey = "MacPilot.annotationToolShortcuts.disabled"
+
+    static var disabledTools: Set<SmartAnnotationTool> {
+        get {
+            let raw = UserDefaults.standard.stringArray(forKey: disabledToolsKey) ?? []
+            return Set(raw.compactMap { SmartAnnotationTool(rawValue: $0) })
+        }
+        set {
+            UserDefaults.standard.set(
+                newValue.map(\.rawValue).sorted(),
+                forKey: disabledToolsKey
+            )
+        }
+    }
+
+    static func tool(for character: Character) -> SmartAnnotationTool? {
+        guard let lowered = character.lowercased().first else { return nil }
+        return defaults.first { $0.value == lowered && !disabledTools.contains($0.key) }?.key
+    }
+
+    static func tool(forKeyCode keyCode: UInt16) -> SmartAnnotationTool? {
+        guard let character = keyCodeCharacters[keyCode] else { return nil }
+        return tool(for: character)
+    }
+
+    /// ANSI key codes for the letters above. `NSEvent.charactersIgnoringModifiers`
+    /// would be the alternative, but the selection panel hands the router a
+    /// keyCode and tests exercise the same table.
+    private static let keyCodeCharacters: [UInt16: Character] = [
+        15: "r", // R
+        3: "f",  // F
+        31: "o", // O
+        0: "a",  // A
+        37: "l", // L
+        35: "p", // P
+        4: "h",  // H
+        17: "t", // T
+        13: "w", // W
+        45: "n", // N
+        11: "b", // B
+        1: "s",  // S
+        14: "e", // E
+    ]
+}
+
 extension AreaSelectionAnnotationTool {
     var smartAnnotationTool: SmartAnnotationTool {
         switch self {
         case .rectangle: return .rectangle
+        case .filledRectangle: return .filledRectangle
         case .ellipse: return .ellipse
         case .arrow: return .arrow
         case .line: return .line
         case .pencil: return .pencil
         case .highlighter: return .highlighter
         case .text: return .text
+        case .watermark: return .watermark
         case .counter: return .counter
         case .blur: return .blur
         case .spotlight: return .spotlight
         case .eraser: return .eraser
         case .crop: return .crop
+        }
     }
-}
 }
 
 struct SmartAnnotationColor: Equatable, Hashable, Sendable {
@@ -6169,6 +6291,11 @@ final class SmartAnnotationModel: ObservableObject {
     private struct Document: Equatable {
         let annotations: [SmartAnnotation]
         let styles: [SmartAnnotationStyle]
+        /// Per-tool defaults are user-visible state too: they decide the
+        /// property row (and the style of the next shape) after an undo. A
+        /// snapshot without them restored the annotation but left the colour
+        /// well and future strokes on the discarded value.
+        let stylesByTool: [SmartAnnotationTool: SmartAnnotationStyle]
         let nextCounter: Int
     }
     private var undoDocuments: [Document] = []
@@ -6397,6 +6524,13 @@ final class SmartAnnotationModel: ObservableObject {
     /// colour-well scrub — merge into the first snapshot so dragging is one
     /// step, not one step per frame.
     private func updateCurrentStyle(_ field: StyleField, _ update: (inout SmartAnnotationStyle) -> Void) {
+        var updated = currentStyle
+        update(&updated)
+        // Clicking the already-selected colour (or a slider settling on its
+        // current value) is not an edit; recording it would add an Undo step
+        // that visibly does nothing.
+        guard updated != currentStyle else { return }
+
         let key = StyleStreak(tool: tool, selectedIndex: selectedIndex, field: field)
         if activeStyleStreak != key {
             commitActiveMutation()
@@ -6405,8 +6539,6 @@ final class SmartAnnotationModel: ObservableObject {
             redoDocuments.removeAll(keepingCapacity: true)
             updateHistoryAvailability()
         }
-        var updated = currentStyle
-        update(&updated)
         currentStyle = updated
         stylesByTool[tool] = updated
         if let selectedIndex, annotationStyles.indices.contains(selectedIndex) {
@@ -6424,6 +6556,7 @@ final class SmartAnnotationModel: ObservableObject {
         Document(
             annotations: annotations,
             styles: annotationStyles,
+            stylesByTool: stylesByTool,
             nextCounter: nextCounter
         )
     }
@@ -6448,6 +6581,7 @@ final class SmartAnnotationModel: ObservableObject {
     private func apply(_ document: Document) {
         annotations = document.annotations
         annotationStyles = document.styles
+        stylesByTool = document.stylesByTool
         nextCounter = document.nextCounter
         selectedIndex = nil
         currentStyle = stylesByTool[tool] ?? .default(for: tool)
@@ -6614,6 +6748,12 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
         copyAndCloseTapped()
         return window == nil
     }
+
+    func testAppendRectangle() {
+        model.append(.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)))
+    }
+
+    var testAnnotationCount: Int { model.annotations.count }
     #endif
 
     func windowWillClose(_ notification: Notification) {
@@ -6839,10 +6979,13 @@ struct SmartAnnotationEditor: View {
             annotationToolPalette
             Button(AppText.value("scUndo", language: language), action: model.undo)
                 .disabled(!model.canUndo)
-                .keyboardShortcut("z", modifiers: .command)
+                // While the inline text field owns the keyboard, Cmd+Z must
+                // stay with the field editor. The shortcut is withheld instead
+                // of letting the toolbar undo the whole picture.
+                .keyboardShortcut(Self.undoShortcut(isEditingText: inlineTextFocused))
             Button(AppText.value("scRedo", language: language), action: model.redo)
                 .disabled(!model.canRedo)
-                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .keyboardShortcut(Self.redoShortcut(isEditingText: inlineTextFocused))
             if !model.annotations.isEmpty {
                 Button(AppText.value("scClearAnnotations", language: language)) {
                     model.removeAll()
@@ -6885,7 +7028,14 @@ struct SmartAnnotationEditor: View {
                         .foregroundStyle(.secondary)
                     Image(systemName: "line.3.horizontal")
                         .foregroundStyle(.secondary)
-                    Slider(value: lineWidthBinding, in: 1...48, step: 1)
+                    Slider(
+                        value: lineWidthBinding,
+                        in: 1...48,
+                        step: 1,
+                        onEditingChanged: { editing in
+                            if !editing { model.endStyleEditing() }
+                        }
+                    )
                         .frame(width: 78)
                     Text(Self.lineWidthDisplayText(for: model.currentStyle.lineWidth))
                         .font(.caption.monospacedDigit())
@@ -6903,7 +7053,14 @@ struct SmartAnnotationEditor: View {
                     .foregroundStyle(.secondary)
                 Image(systemName: "circle.lefthalf.filled")
                     .foregroundStyle(.secondary)
-                Slider(value: opacityBinding, in: 0.05...1, step: 0.05)
+                Slider(
+                    value: opacityBinding,
+                    in: 0.05...1,
+                    step: 0.05,
+                    onEditingChanged: { editing in
+                        if !editing { model.endStyleEditing() }
+                    }
+                )
                     .frame(width: 78)
                 Text(Self.opacityDisplayText(for: model.currentStyle.opacity))
                     .font(.caption.monospacedDigit())
@@ -6915,17 +7072,20 @@ struct SmartAnnotationEditor: View {
             .accessibilityValue(Text(Self.opacityDisplayText(for: model.currentStyle.opacity)))
 
             if model.tool != .highlighter {
-                Toggle(
-                    AppText.value("scAnnotationFill", language: language),
-                    isOn: fillBinding
-                )
-                .toggleStyle(.checkbox)
-                .font(.caption)
+                if model.tool != .filledRectangle {
+                    Toggle(
+                        AppText.value("scAnnotationFill", language: language),
+                        isOn: fillBinding
+                    )
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+                }
 
                 Menu {
                     ForEach(SmartAnnotationLineStyle.allCases) { lineStyle in
                         Button {
                             model.setLineStyle(lineStyle)
+                            model.endStyleEditing()
                         } label: {
                             HStack {
                                 Text(lineStyle.title(language: language))
@@ -6954,6 +7114,9 @@ struct SmartAnnotationEditor: View {
             ForEach(Array(SmartAnnotationColor.presets.enumerated()), id: \.offset) { _, color in
                 Button {
                     model.setColor(color)
+                    // A discrete pick is its own history step; only a
+                    // continuous colour-well scrub may merge.
+                    model.endStyleEditing()
                 } label: {
                     Circle()
                         .fill(color.swiftUIColor)
@@ -7005,8 +7168,23 @@ struct SmartAnnotationEditor: View {
     private var fillBinding: Binding<Bool> {
         Binding(
             get: { model.currentStyle.fillEnabled },
-            set: { model.setFillEnabled($0) }
+            set: {
+                model.setFillEnabled($0)
+                model.endStyleEditing()
+            }
         )
+    }
+
+    /// The undo/redo shortcuts are withheld while the inline text field is the
+    /// first responder. Without this gate SwiftUI's window-level shortcut wins
+    /// over the field editor and Cmd+Z removes the last annotation instead of
+    /// the last typed character.
+    nonisolated static func undoShortcut(isEditingText: Bool) -> KeyboardShortcut? {
+        isEditingText ? nil : KeyboardShortcut("z", modifiers: .command)
+    }
+
+    nonisolated static func redoShortcut(isEditingText: Bool) -> KeyboardShortcut? {
+        isEditingText ? nil : KeyboardShortcut("z", modifiers: [.command, .shift])
     }
 
     nonisolated static func lineWidthDisplayText(for width: CGFloat) -> String {

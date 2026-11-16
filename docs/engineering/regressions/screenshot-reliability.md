@@ -62,13 +62,13 @@
 
 ## 标注工具栏与编辑历史（2026-11 交互纠偏后的契约）
 
-- **工具常驻、独立成键**：选区操作栏的工具区在框选完成后就完整可见，每个工具一个按钮，矩形/填充矩形/椭圆、箭头/直线/铅笔/荧光笔、文字/计数、模糊/聚光灯、橡皮擦都不得藏进「主按钮 + 下拉箭头」或「先点标注」的二级入口。分组只允许用分隔线表达。
+- **工具常驻、独立成键**：选区操作栏的工具区在框选完成后就完整可见，每个工具一个按钮，矩形/填充矩形/椭圆、箭头/直线/铅笔/荧光笔、文字/水印/计数、模糊/聚光灯、橡皮擦都不得藏进「主按钮 + 下拉箭头」或「先点标注」的二级入口。分组只允许用分隔线表达。首次点击“填充矩形”必须直接以 `.filledRectangle` 开始会话（不能退化成普通矩形），水印同样从自己的按钮或 `W` 键进入。
 - **动作独立成行**：OCR、贴图、更多、保存、复制位于独立 Action Rail；进入标注只新增 Copy & Close / 完成两个终止动作，绝不因此隐藏工具或其他动作。`applyStageVisibility()` 仍是唯一决定可见性的地方，但它的语义只剩「终止动作是否出现」。
-- **属性区默认展开**：颜色、线宽、透明度、填充、线型按当前工具显示；切换工具不得自动收起或展开用户已选择的折叠状态；点击当前已选工具是重新展开的显式入口。
+- **属性区默认展开**：颜色、线宽、透明度、填充、线型按当前工具显示；每个新的标注会话重新展开，切换工具不得自动收起或展开用户已选择的折叠状态；点击当前已选工具是重新展开的显式入口。
 - **Undo/Redo 由历史栈决定**：按钮状态只能看 `model.canUndo` / `model.canRedo`，禁止用 `annotations.isEmpty`。删除最后一个对象、清空全部标注之后 Undo 仍然可用；Undo 后 Redo 可用；任何新编辑清空 Redo。
-- **每次用户可感知的编辑都可撤销**：新增、橡皮删除、移动、缩放、颜色/线宽/透明度/填充/线型修改、清空、文本提交、计数重排都进同一份文档快照。连续拖动/滑块必须合并为一步：样式修改按 `(tool, selected, field)` 合并，`endStyleEditing()` 在控件释放时结束合并；拖拽/缩放走 `beginEditing/updateAnnotation/endEditing` 事务。
+- **每次用户可感知的编辑都可撤销**：新增、橡皮删除、移动、缩放、颜色/线宽/透明度/填充/线型修改、清空、文本提交、计数重排都进同一份文档快照；快照必须包含 `annotations`、逐对象样式、`stylesByTool` 与序号，否则撤销后属性栏和下一笔的默认样式会停留在被撤销的值。连续拖动/滑块必须合并为一步：样式修改按 `(tool, selected, field)` 合并，`endStyleEditing()` 在控件释放时结束合并；拖拽/缩放走 `beginEditing/updateAnnotation/endEditing` 事务。
 - **唯一历史实现**：`SmartAnnotationModel` 是唯一历史源（旧的 `SmartAnnotationHistory` 值类型 seam 已删除），工具栏、快捷键、画布手势调用同一组方法。
-- **快捷键**：Cmd+Z / Cmd+Shift+Z 在 Inline 与完整编辑器都可用；文本框是第一响应者时不得抢走原生文本撤销。Cmd+Shift+C 是 Copy & Close。
+- **快捷键**：Cmd+Z / Cmd+Shift+Z 在 Inline 与完整编辑器都可用；文本框是第一响应者时编辑器的快捷键必须让位（Inline 用 `editingText`，完整编辑器把 SwiftUI `keyboardShortcut` 置空），不得让 Cmd+Z 撤销整张图。Cmd+Shift+C 是 Copy & Close。工具字母键集中由 `SmartAnnotationToolShortcuts` 提供，禁用状态持久化在该表的配置键中，不再散落硬编码。
 - **Copy 语义按界面区分**：Inline `Copy` 复制当前渲染并留在会话（Cmd+C 同义）；`Copy & Close` 复制成功才关闭，失败保留标注并报错。普通截图 Copy 只有在剪贴板写入成功后关闭选区窗口，失败保留 HUD。完整编辑器提供可见 Copy & Close，复制失败不关闭。Quick Access 卡片 Copy 成功后只移除该卡片，最后一张移除后面板关闭。
 - 完成（checkmark）结束标注会话并交回原定 post-capture 动作（`.capture` → `.automatic`）；取消（xmark）直接丢弃本次标注。两者都不得在文件尚未写出时移除产物。
 - 历史说明：本文件在 2026-11 之前要求「框选/标注两阶段互斥、工具只在标注阶段出现」，该要求已被产品交互纠偏废止。回归索引里的旧人工检查条目因 append-only 规则保留，不得作为验收依据；以紧随其后的「2026-11 标注交互纠偏取代上一条」为准。
@@ -84,7 +84,7 @@
 - 历史只有一个来源：`SmartCaptureHistoryStore`（`MacPilot.smartCapture.history.v1`）。Quick Access 的 `CaptureHistoryStore` 只是委托，不得再维护第二份记录或空实现。
 - 手动保存/提升产物时必须在同一次成功事务里用 `previousPath` 重指向临时路径，历史中只留一条正式路径；删除产物必须同时移除历史，不能留下失效记录。
 - 非模型写入（提升、删除）发出 `externalChangeNotification`，`ScreenCaptureModel` 收到后重新加载；历史与卡片不能各持一份互相背离的数据。
-- 标注“保存到原文件”先编码到 staging、解码校验尺寸后再原子替换；失败必须保留原文件、在卡片上报告错误，不得用 `try?` 吞掉写入失败。
+- 标注“保存到原文件”必须走 `CaptureArtifactStore.write(to:)`（staging、解码校验、原子替换），失败必须保留原文件、在卡片上报告错误，不得另写一套 `CGImageDestination`/`replaceItemAt` 路径，也不得用 `try?` 吞掉写入失败。
 
 ## 配置兼容
 
@@ -93,4 +93,4 @@
 
 ## 回归入口
 
-`ScreenshotReliabilityTests`（含 `RefreshHideLedgerTests`、`WindowSelectionLoadingStateTests`、`CapturePixelSizeTests`、`CaptureHistoryServiceTests`、`PostCaptureRoutingTests`、`CaptureArtifactStoreTests`、`RapidCaptureSequenceTests`、`QuickAccessOperationCoordinatorTests`、`ClipboardArtifactLeaseTests`、`CaptureChromeWindowRegistryTests`）、`ScreenCaptureTests`、`ScreenCaptureClipboardRegressionTests`、`SnapzyCaptureTests`、`SnapzySingleFrameCaptureTests`、`QuickAccessTests`、`ScreenshotPopupCaptureOrderingTests`、`ScreenshotPopupWindowProbeTests`、`ConfigurationSchemaContractTests`、`ConfigStoreTests`。实机验收见 `docs/engineering/acceptance/`（混合 DPI、跨屏、AX 无权限）。
+`ScreenshotReliabilityTests`（含 `RefreshHideLedgerTests`、`WindowSelectionLoadingStateTests`、`CapturePixelSizeTests`、`CaptureHistoryServiceTests`、`PostCaptureRoutingTests`、`CaptureArtifactStoreTests`、`RapidCaptureSequenceTests`、`QuickAccessOperationCoordinatorTests`、`ClipboardArtifactLeaseTests`、`CaptureChromeWindowRegistryTests`）、`ScreenCaptureTests`、`ScreenCaptureClipboardRegressionTests`、`SnapzyCaptureTests`、`AnnotationInteractionParityTests`、`SnapzySingleFrameCaptureTests`、`QuickAccessTests`、`ScreenshotPopupCaptureOrderingTests`、`ScreenshotPopupWindowProbeTests`、`ConfigurationSchemaContractTests`、`ConfigStoreTests`。实机验收见 `docs/engineering/acceptance/`（混合 DPI、跨屏、AX 无权限）。

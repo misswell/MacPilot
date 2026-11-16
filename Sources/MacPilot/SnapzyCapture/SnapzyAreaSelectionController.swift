@@ -119,6 +119,15 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
     private var inlineAnnotationLanguage: AppLanguage = .system
     private var inlineAnnotationActionHandler: ((CGImage, AreaSelectionAction) -> Void)?
     private var inlineAnnotationCancelHandler: (() -> Void)?
+    /// Clipboard surface for inline Copy / Copy & Close. Production always uses
+    /// the system pasteboard; tests inject an isolated pasteboard so a capture
+    /// test can never clear or overwrite the user's clipboard.
+    var clipboardPasteboard: NSPasteboard = .general
+    #if DEBUG
+    /// Test seam: force the clipboard write to fail without building a
+    /// persistent fake pasteboard.
+    var testFailInlineClipboardWrite = false
+    #endif
     private(set) var isRoundedCornersEnabled = false
     private(set) var isShadowEnabled = false
     static let defaultOutputCornerRadius: CGFloat = 12
@@ -683,7 +692,16 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
                   styles: model.styledAnnotations.map(\.style)
               )
         else { return false }
-        guard SmartCaptureClipboard.copy(image: rendered) else {
+        #if DEBUG
+        if testFailInlineClipboardWrite {
+            showInlineClipboardFailure()
+            return false
+        }
+        #endif
+        guard SmartCaptureClipboard.copy(
+            image: rendered,
+            to: clipboardPasteboard
+        ) else {
             showInlineClipboardFailure()
             return false
         }
@@ -889,20 +907,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
     /// Plain-letter tool shortcuts for the inline HUD (Snapzy parity). They only
     /// fire without modifiers and never while a text field owns the keyboard.
     static func toolShortcut(for keyCode: UInt16) -> SmartAnnotationTool? {
-        switch keyCode {
-        case 15: return .rectangle      // R
-        case 31: return .ellipse        // O
-        case 0: return .arrow           // A
-        case 37: return .line           // L
-        case 35: return .pencil         // P
-        case 4: return .highlighter     // H
-        case 17: return .text           // T
-        case 45: return .counter        // N
-        case 11: return .blur           // B
-        case 1: return .spotlight       // S
-        case 14: return .eraser         // E
-        default: return nil
-        }
+        SmartAnnotationToolShortcuts.tool(forKeyCode: keyCode)
     }
 
     /// Routes a terminal action through the inline session commit when one is
