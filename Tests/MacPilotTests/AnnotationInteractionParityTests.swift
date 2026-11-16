@@ -857,6 +857,7 @@ struct AnnotationInteractionParityTests {
         defer { try? FileManager.default.removeItem(at: url) }
         let thumbnail = NSImage(size: NSSize(width: 40, height: 30))
         let item = try #require(manager.addScreenshot(url: url, thumbnail: thumbnail))
+        #expect(!CaptureHistoryStore.shared.hasRecord(forFilePath: url.path))
         #expect(manager.presentAnnotationEditor(for: item, language: .simplifiedChinese))
         #expect(manager.testAnnotationEditingItemID == item.id)
 
@@ -889,6 +890,10 @@ struct AnnotationInteractionParityTests {
         #expect(savedSize?.0 == 60 && savedSize?.1 == 40)
         let updated = try #require(manager.items.first(where: { $0.id == item.id }))
         #expect(updated.thumbnail.size == NSSize(width: 60, height: 40))
+        #expect(
+            !CaptureHistoryStore.shared.hasRecord(forFilePath: url.path),
+            "a temp Quick Access card must not gain a history record during annotation"
+        )
     }
 
     @Test func legacyHUDAttachesCopyAndCloseToTheSameClipboardTransaction() throws {

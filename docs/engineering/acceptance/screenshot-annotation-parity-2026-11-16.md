@@ -94,7 +94,7 @@ open -n /tmp/MacPilotAcceptance.app --args \
 
 - `AnnotationInteractionParityTests.fullEditorRoutesRealKeyEventsThroughTheWindow`：真实 `NSEvent` 驱动 Cmd+Z、Cmd+Shift+Z、Cmd+Shift+C，并验证 `NSTextView` 为第一响应者时 Cmd+Z 不动画布。
 - `AnnotationInteractionParityTests.aCopiedScreenshotSurvivesADelayedPaste`：复制后延迟 1.2 秒再读取，懒加载 provider 仍返回原尺寸 PNG。
-- `AnnotationInteractionParityTests.quickAccessAnnotateCopyAndCloseUpdatesCardFileAndClipboard`：复制成功才关闭，源文件与缩略图都变成 60×40。
+- `AnnotationInteractionParityTests.quickAccessAnnotateCopyAndCloseUpdatesCardFileAndClipboard`：复制成功才关闭，源文件与缩略图都变成 60×40；临时卡片在标注保存前后都不得进入 `CaptureHistoryStore`。
 - `AnnotationInteractionParityTests.legacyHUDAttachesCopyAndCloseToTheSameClipboardTransaction`：旧 HUD 的 Copy & Close 同样先写剪贴板再退出。
 - `AnnotationInteractionParityTests.fullEditorBottomRailExposesTheHostsSupportedActions`：底栏按宿主能力提供分享/Pin/删除/Copy & Close/保存。
 - `AnnotationInteractionParityTests.areaSelectionCopyCropsTheFrozenImageAndClosesAfterCopy`：真实 `finishSnapzySelectionAction` → 冻结图裁剪 80×50 → 剪贴板 → 关闭。
