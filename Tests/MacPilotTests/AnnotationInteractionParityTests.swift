@@ -700,7 +700,7 @@ struct AnnotationInteractionParityTests {
         )
     }
 
-    @Test func quickAccessCopyRemovesOnlyThatCardAndClosesTheEmptyPanel() throws {
+    @Test func quickAccessCopyRemovesOnlyThatCardAndClosesTheEmptyPanel() async throws {
         let manager = QuickAccessManager.shared
         let previousEnabled = manager.isEnabled
         let previousAutoDismiss = manager.autoDismissEnabled
@@ -736,12 +736,12 @@ struct AnnotationInteractionParityTests {
 
         manager.copyToClipboard(id: itemB.id)
         #expect(manager.items.isEmpty)
-        // The panel dismissal is animated; CI has no active user run loop and
-        // can observe `isVisible` for a few frames after the copy. Wait for the
-        // product state instead of sampling the first frame.
+        // The panel dismissal is animated, and headless CI has no window
+        // animation completion. The transition's watchdog runs as a MainActor
+        // task, so yield the actor while waiting for the product state.
         let hideDeadline = Date().addingTimeInterval(3)
         while manager.testIsPanelVisible, Date() < hideDeadline {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            try await Task.sleep(for: .milliseconds(20))
         }
         #expect(!manager.testIsPanelVisible, "the last copied card closes the empty panel")
     }
