@@ -186,6 +186,63 @@ final class CaptureArtifactStore: @unchecked Sendable {
         }
     }
 
+    /// Writes to an exact destination instead of letting the store pick a name.
+    ///
+    /// Two callers need a known path: temp captures reserve their URL before the
+    /// bytes exist (so Quick Access can publish the card immediately), and an
+    /// annotation edit rewrites the file it came from. Both go through the same
+    /// staging → decode validation → commit sequence, so a failed encode leaves
+    /// the previous screenshot untouched and never deletes it first.
+    @discardableResult
+    func write(
+        to url: URL,
+        image: SendableScreenCaptureImage,
+        format: ScreenCaptureImageFormat,
+        quality: Double,
+        captureID: UUID = UUID(),
+        isTemporary: Bool = false
+    ) throws -> CaptureArtifact {
+        let directory = url.deletingLastPathComponent()
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            throw CaptureArtifactError.destinationUnavailable
+        }
+        guard isWritableDirectory(directory) else {
+            throw CaptureArtifactError.destinationNotWritable
+        }
+        let stagingURL = stagingURL(for: url)
+        do {
+            guard encoder(image.value, stagingURL, format, quality) else {
+                throw CaptureArtifactError.encodeFailed
+            }
+            guard validator(stagingURL, image.value.width, image.value.height) else {
+                throw CaptureArtifactError.validationFailed
+            }
+            guard let size = fileSize(at: stagingURL), size > 0 else {
+                throw CaptureArtifactError.validationFailed
+            }
+            if fileManager.fileExists(atPath: url.path) {
+                _ = try fileManager.replaceItemAt(url, withItemAt: stagingURL)
+            } else {
+                try fileManager.moveItem(at: stagingURL, to: url)
+            }
+            return CaptureArtifact(
+                captureID: captureID,
+                url: url,
+                isTemporary: isTemporary,
+                format: format,
+                pixelWidth: image.value.width,
+                pixelHeight: image.value.height,
+                byteCount: size,
+                state: .ready
+            )
+        } catch {
+            try? fileManager.removeItem(at: stagingURL)
+            throw error
+        }
+    }
+
     func remove(_ artifact: CaptureArtifact) throws {
         guard fileManager.fileExists(atPath: artifact.url.path) else { return }
         do {

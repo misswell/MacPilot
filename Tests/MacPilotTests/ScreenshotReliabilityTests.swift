@@ -432,6 +432,91 @@ struct CaptureArtifactStoreTests {
             _ = try store.promote(missing, to: temp, baseName: "saved")
         }
     }
+
+    @Test func replacingAScreenshotCommitsTheNewBytesAndLeavesNoStagingFile() throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appendingPathComponent("capture.png")
+        try Data("old".utf8).write(to: target)
+        let store = CaptureArtifactStore(
+            encoder: { _, url, _, _ in (try? Data("new".utf8).write(to: url)) != nil },
+            validator: acceptsAnySize
+        )
+        let artifact = try store.write(
+            to: target,
+            image: SendableScreenCaptureImage(value: makeTestImage()),
+            format: .png,
+            quality: 1
+        )
+        #expect(artifact.url == target)
+        #expect(artifact.state == .ready)
+        #expect(try Data(contentsOf: target) == Data("new".utf8))
+        let remaining = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []).sorted()
+        #expect(remaining == ["capture.png"])
+    }
+
+    @Test func aFailedReplaceKeepsTheOldScreenshotBytes() throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appendingPathComponent("capture.png")
+        try Data("old".utf8).write(to: target)
+        let store = CaptureArtifactStore(
+            encoder: { _, url, _, _ in (try? Data("new".utf8).write(to: url)) != nil },
+            validator: { _, _, _ in false }
+        )
+        #expect(throws: CaptureArtifactError.validationFailed) {
+            _ = try store.write(
+                to: target,
+                image: SendableScreenCaptureImage(value: makeTestImage()),
+                format: .png,
+                quality: 1
+            )
+        }
+        #expect(try Data(contentsOf: target) == Data("old".utf8))
+        let remaining = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []).sorted()
+        #expect(remaining == ["capture.png"])
+    }
+
+    @Test func replacingAMissingScreenshotCreatesIt() throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appendingPathComponent("capture.png")
+        let store = CaptureArtifactStore(
+            encoder: { _, url, _, _ in (try? Data("new".utf8).write(to: url)) != nil },
+            validator: acceptsAnySize
+        )
+        let artifact = try store.write(
+            to: target,
+            image: SendableScreenCaptureImage(value: makeTestImage()),
+            format: .png,
+            quality: 1
+        )
+        #expect(store.fileExists(at: artifact.url))
+        #expect(artifact.byteCount > 0)
+    }
+
+    @Test func aReservedTempPathIsWrittenInPlaceAndMarkedTemporary() throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let reserved = directory.appendingPathComponent("MacPilotCapture.png")
+        let captureID = UUID()
+        let store = CaptureArtifactStore(
+            encoder: { _, url, _, _ in (try? Data("png".utf8).write(to: url)) != nil },
+            validator: acceptsAnySize
+        )
+        let artifact = try store.write(
+            to: reserved,
+            image: SendableScreenCaptureImage(value: makeTestImage()),
+            format: .png,
+            quality: 1,
+            captureID: captureID,
+            isTemporary: true
+        )
+        #expect(artifact.url == reserved)
+        #expect(artifact.captureID == captureID)
+        #expect(artifact.isTemporary)
+        #expect(store.fileExists(at: reserved))
+    }
 }
 
 @MainActor

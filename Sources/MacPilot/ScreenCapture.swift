@@ -375,47 +375,25 @@ private enum ScreenCaptureStorage {
         fileFormatter.timeZone = .current
         var baseName = "MacPilot_\(fileFormatter.string(from: date))"
         if let displayIndex { baseName += "_display\(displayIndex + 1)" }
-        let fileURL = uniqueFileURL(
-            in: dayURL,
-            baseName: baseName,
-            fileExtension: configuration.imageFormat.fileExtension
-        )
-
-        guard let destination = CGImageDestinationCreateWithURL(
-            fileURL as CFURL,
-            configuration.imageFormat.utType.identifier as CFString,
-            1,
-            nil
-        ) else {
+        // Route every persist through the one artifact store: it encodes into a
+        // staging file, validates the decoded size, then commits atomically. A
+        // failure therefore leaves neither a partial file nor a stray staging
+        // file, which direct CGImageDestination writes could not guarantee.
+        let artifact: CaptureArtifact
+        do {
+            artifact = try CaptureArtifactStore.shared.write(.init(
+                captureID: UUID(),
+                image: image,
+                directory: dayURL,
+                baseName: baseName,
+                format: configuration.imageFormat,
+                quality: configuration.quality,
+                isTemporary: false
+            ))
+        } catch {
             throw ScreenCaptureError.encodingFailed
         }
-        if configuration.imageFormat.supportsQuality {
-            let options: [CFString: Any] = [
-                kCGImageDestinationLossyCompressionQuality: configuration.quality
-            ]
-            CGImageDestinationAddImage(destination, image.value, options as CFDictionary)
-        } else {
-            CGImageDestinationAddImage(destination, image.value, nil)
-        }
-        guard CGImageDestinationFinalize(destination) else {
-            throw ScreenCaptureError.encodingFailed
-        }
-
-        let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
-        return ScreenCaptureSavedImage(
-            url: fileURL,
-            size: (attributes?[.size] as? NSNumber)?.int64Value ?? 0
-        )
-    }
-
-    private static func uniqueFileURL(in directory: URL, baseName: String, fileExtension: String) -> URL {
-        var index = 1
-        while true {
-            let suffix = index == 1 ? "" : "_\(index)"
-            let candidate = directory.appendingPathComponent("\(baseName)\(suffix).\(fileExtension)")
-            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
-            index += 1
-        }
+        return ScreenCaptureSavedImage(url: artifact.url, size: artifact.byteCount)
     }
 
     static func replace(
@@ -424,26 +402,13 @@ private enum ScreenCaptureStorage {
         configuration: ScreenCaptureSaveConfiguration
     ) throws -> Int64 {
         try autoreleasepool {
-            let temporaryURL = url.deletingLastPathComponent()
-                .appendingPathComponent(".MacPilot-edit-\(UUID().uuidString).\(configuration.imageFormat.fileExtension)")
-            defer { try? FileManager.default.removeItem(at: temporaryURL) }
-            guard let destination = CGImageDestinationCreateWithURL(
-                temporaryURL as CFURL,
-                configuration.imageFormat.utType.identifier as CFString,
-                1,
-                nil
-            ) else { throw ScreenCaptureError.encodingFailed }
-            if configuration.imageFormat.supportsQuality {
-                CGImageDestinationAddImage(destination, image.value, [
-                    kCGImageDestinationLossyCompressionQuality: configuration.quality
-                ] as CFDictionary)
-            } else {
-                CGImageDestinationAddImage(destination, image.value, nil)
-            }
-            guard CGImageDestinationFinalize(destination) else { throw ScreenCaptureError.encodingFailed }
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: temporaryURL)
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-            return (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            let artifact = try CaptureArtifactStore.shared.write(
+                to: url,
+                image: image,
+                format: configuration.imageFormat,
+                quality: configuration.quality
+            )
+            return artifact.byteCount
         }
     }
 

@@ -93,6 +93,7 @@
 | 全屏、当前窗口、滚动截图以 `.other` 调用处理入口，按模式配置永远不生效；设置页也没有任何按模式入口 | 四类入口改为携带真实 `CaptureMode`；`setPerModePostCaptureActions` 写入/删除模式键；设置页新增「按截图模式」卡片，缺省键=跟随全局，取消自定义即删除键 | `PostCaptureRoutingTests`、`ConfigurationSchemaContractTests`、`ConfigStoreTests` |
 | 选区操作栏在标注时仍混排 OCR/贴图/更多，框选阶段则被工具按钮占满 | `AreaSelectionActionBar.applyStageVisibility()` 单点切换两阶段：框选=主要动作，标注=工具+完成/取消；完成按原定动作交付，取消丢弃会话 | `SnapzyCaptureTests` |
 | 截图界面排除、写入前禁用操作、连续截图与剪贴板 lease 缺少可重复的自动化守护 | `CaptureChromeWindowRegistry` 接受可注入的 window number provider（生产仍读真实窗口）；新增产物状态门禁、20 连拍唯一文件、界面窗口按 session 排除、lease 生成器替换测试 | `CaptureArtifactStoreTests`、`RapidCaptureSequenceTests`、`QuickAccessOperationCoordinatorTests`、`ClipboardArtifactLeaseTests`、`CaptureChromeWindowRegistryTests` |
+| 生产落盘绕过 `CaptureArtifactStore`：自动保存直接 `CGImageDestination` 写最终路径，标注覆盖只做临时文件+`replaceItemAt`，临时截图自写 PNG 且先删旧文件再移动，均无解码校验，编码失败可能留下半截文件 | `ScreenCaptureStorage.save`、`ScreenCaptureStorage.replace`（标注覆盖）与 `TempCaptureManager.writeScreenshot`（保留预约路径）统一委托 store；新增 `CaptureArtifactStore.write(to:)`（staging → 解码尺寸校验 → 原子提交，目标已存在时用 `replaceItemAt`），验证失败保留旧文件字节并清掉 staging；删除废弃的 `uniqueFileURL` | `CaptureArtifactStoreTests`、`ScreenCaptureTests` |
 
 状态：自动化测试已通过；混合 DPI、跨屏、AX 无权限、按模式配置与操作栏分层的实机验收仍待完成。截图可靠性重构已随 `v1.2.2-beta.103` 发布；本轮测试补强随后续 Beta 发布。
 
