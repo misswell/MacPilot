@@ -111,3 +111,15 @@
 | 复制测试直接清空系统剪贴板；复制失败路径无法验证 | `ScreenCaptureModel` / `SnapzyAreaSelectionController` / `QuickAccessManager` 可注入 pasteboard；新增成功与失败路径测试，成功时验证 pasteboard 实际含 PNG，失败时保留 HUD/会话与编辑内容 | `AnnotationInteractionParityTests` |
 
 状态：自动化测试通过；填充矩形/水印的实际鼠标绘制、完整编辑器文本焦点 Cmd+Z、多屏工具栏可达性仍需实机验收。
+
+## 2026-11-17：完整编辑器底栏、真实窗口按键与实机验收补强（beta 待发布）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| 完整编辑器把分享/Pin/删除/取消/复制并关闭/完成全部挤在顶部工具行，与 Snapzy 的底部 Action Rail 不一致；旧 HUD 与贴图编辑器也没有分享/删除入口 | standalone 编辑器新增固定底栏：分享（经 `TempCaptureManager`/`CaptureArtifactStore` 生成稳定文件）、Pin（宿主有 pin 目标时）、删除（宿主有可删除源时）、取消、Copy & Close、完成；工具/属性/历史留在顶栏。QA 编辑器、旧 HUD、区域标注窗口都接入对应回调 | `AnnotationInteractionParityTests`、`05-inline-toolbar.png`、实机记录 |
+| 完整编辑器的 Cmd+Z 只靠 SwiftUI `keyboardShortcut`，真实按键路径与文本焦点没有被窗口级验证 | 新增 `SmartAnnotationWindow.performKeyEquivalent`：Cmd+Z/Cmd+Shift+Z/Cmd+Shift+C/工具字母键统一进模型，`NSTextView` 为第一响应者时让位；测试用真实 `NSEvent` 驱动窗口 | `AnnotationInteractionParityTests.fullEditorRoutesRealKeyEventsThroughTheWindow` |
+| §6.4 缺延迟粘贴与 Quick Access Copy & Close 一致性验证 | 新增 1.2 秒延迟读取懒加载剪贴板 provider 的测试；QA 编辑器 Copy & Close 抽出 `copyAndCloseAnnotatedItem`，测试同时校验剪贴板、源文件解码尺寸与缩略图 | `AnnotationInteractionParityTests` |
+| 旧 Quick Access HUD 的 Copy & Close 没有直接测试 | HUD 的标注模型与 Copy & Close 动作加 DEBUG seam，测试验证复制成功、保存回调收到标注图、编辑器退出 | `AnnotationInteractionParityTests` |
+| 实机验收只有清单，没有可重复执行的真实 UI 记录 | 新增 DEBUG `--acceptance-annotation` 模式：跳过 `MacPilotAppServices`（不碰全局快捷键/配置/屏幕采集/TCC），启动真实 AppKit 进程，驱动全编辑器/Inline 工具条并写出截图+`acceptance-record.md`。锁屏会话无法投递鼠标事件时标记为「阻塞」，不冒充通过 | `docs/engineering/acceptance/screenshot-annotation-parity-2026-11-16.md` |
+
+状态：自动化测试与可执行项通过；本次验收会话处于锁屏状态，真实鼠标绘制/窗口激活被标记为阻塞，解锁后重新运行 `--acceptance-annotation` 可补齐。

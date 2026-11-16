@@ -29,6 +29,13 @@ struct MacPilotApp: App {
     init() {
         // Capture login-launch facts while the original parent still exists.
         _ = AppLaunchContext.wasLaunchedAtLogin
+        let isAcceptanceRun: Bool = {
+            #if DEBUG
+            MacPilotAcceptanceRunner.isRequested
+            #else
+            false
+            #endif
+        }()
         // The opener touches no privacy permission, so it exists from the
         // first moment a reopen/deep link can request the window. Only the
         // models behind `AppLaunchBootstrap` wait for AppKit launch.
@@ -38,7 +45,9 @@ struct MacPilotApp: App {
             activate: { NSApp.activate() }
         )
         _mainWindowOpener = StateObject(wrappedValue: opener)
-        _startup = StateObject(wrappedValue: AppLaunchBootstrap {
+        _startup = StateObject(wrappedValue: AppLaunchBootstrap(
+            startsAutomatically: !isAcceptanceRun
+        ) {
             MacPilotAppServices(opener: opener, contentBox: contentBox)
         })
     }
@@ -255,6 +264,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if MacPilotAcceptanceRunner.isRequested {
+            hideRegularWindows()
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            MacPilotAcceptanceRunner.run()
+            return
+        }
+        #endif
         // 启动路径不得触碰任何隐私授权（CMIO 捕获标志、通知、辅助功能等），
         // 否则每次更新重启都会弹出系统授权框。权限请求只由功能入口触发：
         // 移动设备捕获标志在录制页/录制器中设置，通知权限在录制开始时请求。
@@ -965,7 +983,7 @@ enum AppText {
         "scOpenKeyboardSettings": "打开系统键盘快捷键设置",
         "scRecordShortcut": "点击后按下快捷键…", "scResetShortcut": "恢复默认（%@）", "scConfirm": "确认", "scPin": "贴图",
         "scSmartCaptureResources": "空闲时仅监听自定义快捷键，不采集屏幕、不轮询；OCR 与标注仅在使用时加载。智能元素识别需要辅助功能权限。",
-        "scPinTitle": "MacPilot 贴图", "scCopy": "复制", "scAnnotate": "标注", "scClose": "关闭", "scReveal": "在访达中显示", "scDelete": "删除", "scOCR": "OCR", "scEditMedia": "编辑", "scMediaEditor": "媒体编辑", "scMediaGIFEditorHint": "GIF 暂不支持裁剪；你可以打开文件或在访达中查看。", "scMediaTrimStart": "开始", "scMediaTrimEnd": "结束", "scMediaExportTrim": "导出裁剪片段", "scMediaExporting": "正在导出…", "scMediaExported": "已导出：%@", "scMediaInvalidTrimRange": "裁剪范围无效，至少保留 0.25 秒。", "scMediaExporterUnavailable": "当前视频格式无法导出。", "scMediaExportFailed": "媒体导出失败。", "scScrollingSample": "采集当前画面", "scScrollingRetry": "未找到重叠内容。请向上滚回上一画面，再小幅向下滚动；本帧尚未加入长截图。", "scScrollingTitle": "滚动长截图", "scScrollingHint": "选择移动的正文区域，沿同一方向滚动；侧边预览显示已拼接内容。结束后点击“完成”。", "scScrollingFrames": "已拼接 %d 帧", "scScrollingPreview": "长截图预览", "scScrollingCaptured": "已拼接", "scScrollingSyncing": "同步中", "scScrollingPaused": "已暂停", "scScrollingHeight": "高度 %d px", "scScrollingLimit": "采样已达内存上限，继续滚动不会再拼接；请点击“完成”。", "scScrollingStitching": "正在拼接…", "scObjectCutoutFailed": "抠图失败：%@", "scClipboardImageUnavailable": "剪贴板中没有可贴图的图片。",
+        "scPinTitle": "MacPilot 贴图", "scShare": "分享", "scShareFailed": "无法准备分享文件。", "scCopy": "复制", "scAnnotate": "标注", "scClose": "关闭", "scReveal": "在访达中显示", "scDelete": "删除", "scOCR": "OCR", "scEditMedia": "编辑", "scMediaEditor": "媒体编辑", "scMediaGIFEditorHint": "GIF 暂不支持裁剪；你可以打开文件或在访达中查看。", "scMediaTrimStart": "开始", "scMediaTrimEnd": "结束", "scMediaExportTrim": "导出裁剪片段", "scMediaExporting": "正在导出…", "scMediaExported": "已导出：%@", "scMediaInvalidTrimRange": "裁剪范围无效，至少保留 0.25 秒。", "scMediaExporterUnavailable": "当前视频格式无法导出。", "scMediaExportFailed": "媒体导出失败。", "scScrollingSample": "采集当前画面", "scScrollingRetry": "未找到重叠内容。请向上滚回上一画面，再小幅向下滚动；本帧尚未加入长截图。", "scScrollingTitle": "滚动长截图", "scScrollingHint": "选择移动的正文区域，沿同一方向滚动；侧边预览显示已拼接内容。结束后点击“完成”。", "scScrollingFrames": "已拼接 %d 帧", "scScrollingPreview": "长截图预览", "scScrollingCaptured": "已拼接", "scScrollingSyncing": "同步中", "scScrollingPaused": "已暂停", "scScrollingHeight": "高度 %d px", "scScrollingLimit": "采样已达内存上限，继续滚动不会再拼接；请点击“完成”。", "scScrollingStitching": "正在拼接…", "scObjectCutoutFailed": "抠图失败：%@", "scClipboardImageUnavailable": "剪贴板中没有可贴图的图片。",
         "scHistory": "截图与媒体历史", "scHistoryEmpty": "还没有截图、视频或 GIF 记录。", "scHistoryScreenshot": "截图", "scHistoryVideo": "视频", "scHistoryGIF": "GIF", "scScrollingStitchFailed": "无法拼接滚动截图。请减少滚动幅度后重试。", "scObjectCutoutNoForeground": "没有检测到前景对象。", "scObjectCutoutMaskFailed": "无法生成前景蒙版。",
         "scOCRNoText": "未识别到文字。", "scOCRFailed": "文字识别失败。", "scOCRCopied": "OCR 文字已复制", "scOK": "好",
         "scAnnotateTitle": "MacPilot 标注", "scAnnotationTool": "工具", "scAnnotationRectangle": "矩形",
@@ -2302,7 +2320,7 @@ enum AppText {
             "scOpenKeyboardSettings": "Open Keyboard Shortcuts settings",
             "scRecordShortcut": "Click, then press a shortcut…", "scResetShortcut": "Restore default (%@)", "scConfirm": "Confirm", "scPin": "Pin",
             "scSmartCaptureResources": "While idle, MacPilot only listens for your shortcut—no screen stream or polling. OCR and annotation load only when used. Smart elements require Accessibility access.",
-            "scPinTitle": "MacPilot Pin", "scCopy": "Copy", "scAnnotate": "Annotate", "scClose": "Close", "scReveal": "Show in Finder", "scDelete": "Delete", "scOCR": "OCR", "scEditMedia": "Edit", "scMediaEditor": "Media Editor", "scMediaGIFEditorHint": "GIF trimming is not supported yet; you can open the file or reveal it in Finder.", "scMediaTrimStart": "Start", "scMediaTrimEnd": "End", "scMediaExportTrim": "Export Trim", "scMediaExporting": "Exporting…", "scMediaExported": "Exported: %@", "scMediaInvalidTrimRange": "Invalid trim range; keep at least 0.25 seconds.", "scMediaExporterUnavailable": "This video format cannot be exported.", "scMediaExportFailed": "Media export failed.", "scScrollingSample": "Capture Frame", "scScrollingRetry": "No overlap found. Scroll back to the previous view, then down in smaller steps. This frame was not added.", "scScrollingTitle": "Scrolling Screenshot", "scScrollingHint": "Select the moving content and scroll in one direction. The preview shows stitched content. Click Done to save.", "scScrollingFrames": "%d stitched frames", "scScrollingPreview": "Capture Preview", "scScrollingCaptured": "Captured", "scScrollingSyncing": "Syncing", "scScrollingPaused": "Paused", "scScrollingHeight": "Height %d px", "scScrollingLimit": "Sampling limit reached. Further scrolling will not be captured; click Done to stitch the captured frames.", "scScrollingStitching": "Stitching…", "scObjectCutoutFailed": "Object cutout failed: %@", "scClipboardImageUnavailable": "The clipboard does not contain an image that can be pinned.",
+            "scPinTitle": "MacPilot Pin", "scShare": "Share", "scShareFailed": "Could not prepare the file to share.", "scCopy": "Copy", "scAnnotate": "Annotate", "scClose": "Close", "scReveal": "Show in Finder", "scDelete": "Delete", "scOCR": "OCR", "scEditMedia": "Edit", "scMediaEditor": "Media Editor", "scMediaGIFEditorHint": "GIF trimming is not supported yet; you can open the file or reveal it in Finder.", "scMediaTrimStart": "Start", "scMediaTrimEnd": "End", "scMediaExportTrim": "Export Trim", "scMediaExporting": "Exporting…", "scMediaExported": "Exported: %@", "scMediaInvalidTrimRange": "Invalid trim range; keep at least 0.25 seconds.", "scMediaExporterUnavailable": "This video format cannot be exported.", "scMediaExportFailed": "Media export failed.", "scScrollingSample": "Capture Frame", "scScrollingRetry": "No overlap found. Scroll back to the previous view, then down in smaller steps. This frame was not added.", "scScrollingTitle": "Scrolling Screenshot", "scScrollingHint": "Select the moving content and scroll in one direction. The preview shows stitched content. Click Done to save.", "scScrollingFrames": "%d stitched frames", "scScrollingPreview": "Capture Preview", "scScrollingCaptured": "Captured", "scScrollingSyncing": "Syncing", "scScrollingPaused": "Paused", "scScrollingHeight": "Height %d px", "scScrollingLimit": "Sampling limit reached. Further scrolling will not be captured; click Done to stitch the captured frames.", "scScrollingStitching": "Stitching…", "scObjectCutoutFailed": "Object cutout failed: %@", "scClipboardImageUnavailable": "The clipboard does not contain an image that can be pinned.",
             "scHistory": "Screenshot & Media History", "scHistoryEmpty": "No screenshots, videos, or GIFs yet.", "scHistoryScreenshot": "Screenshot", "scHistoryVideo": "Video", "scHistoryGIF": "GIF", "scScrollingStitchFailed": "The scrolling frames could not be stitched. Try smaller scroll steps.",
             "scOCRNoText": "No text was detected.", "scOCRFailed": "Text recognition failed.", "scOCRCopied": "OCR copied to clipboard", "scOK": "OK",
             "scAnnotateTitle": "MacPilot Annotate", "scAnnotationTool": "Tool", "scAnnotationRectangle": "Rectangle",

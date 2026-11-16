@@ -70,6 +70,9 @@
 - **唯一历史实现**：`SmartAnnotationModel` 是唯一历史源（旧的 `SmartAnnotationHistory` 值类型 seam 已删除），工具栏、快捷键、画布手势调用同一组方法。
 - **快捷键**：Cmd+Z / Cmd+Shift+Z 在 Inline 与完整编辑器都可用；文本框是第一响应者时编辑器的快捷键必须让位（Inline 用 `editingText`，完整编辑器把 SwiftUI `keyboardShortcut` 置空），不得让 Cmd+Z 撤销整张图。Cmd+Shift+C 是 Copy & Close。工具字母键集中由 `SmartAnnotationToolShortcuts` 提供，禁用状态持久化在该表的配置键中，不再散落硬编码。
 - **Copy 语义按界面区分**：Inline `Copy` 复制当前渲染并留在会话（Cmd+C 同义）；`Copy & Close` 复制成功才关闭，失败保留标注并报错。普通截图 Copy 只有在剪贴板写入成功后关闭选区窗口，失败保留 HUD。完整编辑器提供可见 Copy & Close，复制失败不关闭。Quick Access 卡片 Copy 成功后只移除该卡片，最后一张移除后面板关闭。
+- **完整编辑器底部 Action Rail**：standalone 完整编辑器把动作从工具行移到独立底栏：分享、Pin（宿主提供 pin 目标时）、删除（宿主提供可删除源时）、取消、Copy & Close、完成。分享必须先经 `TempCaptureManager`/`CaptureArtifactStore` 写出一份稳定文件；Pin 只在宿主能创建贴图时出现；删除只删除宿主拥有的源文件/卡片，绝不因为编辑器的关闭动作顺手删临时文件。工具、属性与历史仍留在顶栏。
+- **完整编辑器按键走真实窗口**：`SmartAnnotationWindow.performKeyEquivalent` 先经过同一个 handler，再交给 SwiftUI/AppKit。Cmd+Z、Cmd+Shift+Z、Cmd+Shift+C 与工具字母键因此和按钮调用同一模型；第一响应者是 `NSTextView` 时 handler 必须返回 false，让原生文本撤销优先生效。
+- **实机验收入口**：DEBUG 构建支持 `--acceptance-annotation` 启动一个跳过 `MacPilotAppServices` 的真实 AppKit 进程，驱动全编辑器/Inline 工具条并写出 `acceptance-record.md` 与截图。最近一次记录见 `docs/engineering/acceptance/screenshot-annotation-parity-2026-11-16.md`；锁屏会话无法投递前台鼠标事件时必须标记为「阻塞」，不得写成通过。
 - 完成（checkmark）结束标注会话并交回原定 post-capture 动作（`.capture` → `.automatic`）；取消（xmark）直接丢弃本次标注。两者都不得在文件尚未写出时移除产物。
 - 历史说明：本文件在 2026-11 之前要求「框选/标注两阶段互斥、工具只在标注阶段出现」，该要求已被产品交互纠偏废止。回归索引里的旧人工检查条目因 append-only 规则保留，不得作为验收依据；以紧随其后的「2026-11 标注交互纠偏取代上一条」为准。
 

@@ -748,6 +748,161 @@ struct AnnotationInteractionParityTests {
 
     // MARK: - Copy & Close in the full editor
 
+    @Test func sharePreparationWritesTheRenderedImageAsAStableFile() throws {
+        let url = try #require(
+            SmartCaptureSharing.prepareShareFile(image: image(width: 32, height: 24))
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let shared = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        #expect(shared.width == 32)
+        #expect(shared.height == 24)
+    }
+
+    @Test func aCopiedScreenshotSurvivesADelayedPaste() async throws {
+        let url = try #require(
+            TempCaptureManager.shared.saveScreenshot(image(width: 40, height: 30))
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let artifactID = UUID()
+        let captureID = UUID()
+
+        #expect(
+            SmartCaptureClipboard.copy(
+                imageURL: url,
+                artifactID: artifactID,
+                captureID: captureID,
+                to: pasteboard
+            )
+        )
+        // Delay longer than a UI frame: the lazy provider must still read the
+        // lease-protected source file when the user pastes later.
+        try await Task.sleep(for: .milliseconds(1_200))
+        #expect(FileManager.default.fileExists(atPath: url.path))
+
+        let data = try #require(pasteboard.data(forType: .png))
+        let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))
+        let pasted = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        #expect(pasted.width == 40)
+        #expect(pasted.height == 30)
+    }
+
+    @Test func quickAccessAnnotateCopyAndCloseUpdatesCardFileAndClipboard() async throws {
+        let manager = QuickAccessManager.shared
+        let previousEnabled = manager.isEnabled
+        let previousAutoDismiss = manager.autoDismissEnabled
+        let pasteboard = makePasteboard()
+        manager.clipboardPasteboard = pasteboard
+        manager.isEnabled = true
+        manager.autoDismissEnabled = false
+        manager.dismissAll()
+        defer {
+            manager.dismissAll()
+            manager.clipboardPasteboard = .general
+            manager.autoDismissEnabled = previousAutoDismiss
+            manager.isEnabled = previousEnabled
+            pasteboard.releaseGlobally()
+        }
+
+        let url = try #require(
+            TempCaptureManager.shared.saveScreenshot(image(width: 40, height: 30))
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+        let thumbnail = NSImage(size: NSSize(width: 40, height: 30))
+        let item = try #require(manager.addScreenshot(url: url, thumbnail: thumbnail))
+        #expect(manager.presentAnnotationEditor(for: item, language: .simplifiedChinese))
+        #expect(manager.testAnnotationEditingItemID == item.id)
+
+        let annotated = image(width: 60, height: 40)
+        #expect(
+            manager.testCopyAndCloseAnnotatedItem(id: item.id, image: annotated),
+            "a successful copy closes the editor"
+        )
+        #expect(manager.testAnnotationEditingItemID == nil)
+
+        let clipboardData = try #require(pasteboard.data(forType: .png))
+        let clipboardSource = try #require(
+            CGImageSourceCreateWithData(clipboardData as CFData, nil)
+        )
+        let copied = try #require(CGImageSourceCreateImageAtIndex(clipboardSource, 0, nil))
+        #expect(copied.width == 60 && copied.height == 40)
+
+        // The background save must land on the card's own source file and the
+        // thumbnail must describe those same bytes.
+        let deadline = Date().addingTimeInterval(5)
+        var savedSize: (Int, Int)?
+        while Date() < deadline {
+            if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+               let saved = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+                savedSize = (saved.width, saved.height)
+                if let size = savedSize, size == (60, 40) { break }
+            }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        #expect(savedSize?.0 == 60 && savedSize?.1 == 40)
+        let updated = try #require(manager.items.first(where: { $0.id == item.id }))
+        #expect(updated.thumbnail.size == NSSize(width: 60, height: 40))
+    }
+
+    @Test func legacyHUDAttachesCopyAndCloseToTheSameClipboardTransaction() throws {
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        var saved: CGImage?
+        let controller = SmartQuickAccessWindowController(
+            image: image(width: 40, height: 30),
+            language: .simplifiedChinese,
+            savedURL: nil,
+            onPin: { _ in },
+            onClose: {},
+            onSave: { image, _ in saved = image },
+            onDelete: { _ in }
+        )
+        controller.clipboardPasteboard = pasteboard
+        controller.show()
+        controller.testOpenAnnotationEditor()
+        let model = try #require(controller.testAnnotationModel)
+        model.append(.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.3, height: 0.3)))
+
+        #expect(controller.testCopyAndCloseCurrentAnnotation())
+        #expect(saved != nil, "the HUD's save callback must receive the annotated image")
+        #expect(pasteboard.data(forType: .png) != nil)
+    }
+
+    @Test func fullEditorBottomRailExposesTheHostsSupportedActions() {
+        let full = SmartAnnotationWindowController(
+            image: image(),
+            language: .simplifiedChinese,
+            onComplete: { _ in },
+            onClose: {},
+            onCopyAndClose: { _ in true },
+            onPin: { _ in },
+            onDelete: {}
+        )
+        #expect(full.actionAvailability == SmartAnnotationActionAvailability(
+            share: true,
+            pin: true,
+            copyAndClose: true,
+            delete: true,
+            save: true
+        ))
+
+        let minimal = SmartAnnotationWindowController(
+            image: image(),
+            language: .simplifiedChinese,
+            onComplete: { _ in },
+            onClose: {}
+        )
+        #expect(minimal.actionAvailability == SmartAnnotationActionAvailability(
+            share: true,
+            pin: false,
+            copyAndClose: false,
+            delete: false,
+            save: true
+        ))
+    }
+
     @Test func fullEditorCopyAndCloseClosesOnlyOnSuccessfulCopy() throws {
         _ = NSApplication.shared
         let source = image()
@@ -782,6 +937,80 @@ struct AnnotationInteractionParityTests {
             pasteboard.data(forType: .png) != nil,
             "the editor's Copy & Close must write the rendered annotation"
         )
+    }
+
+    @Test func fullEditorRoutesRealKeyEventsThroughTheWindow() throws {
+        _ = NSApplication.shared
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let controller = SmartAnnotationWindowController(
+            image: image(),
+            language: .simplifiedChinese,
+            onComplete: { _ in },
+            onClose: {},
+            onCopyAndClose: { annotated in
+                SmartCaptureClipboard.copy(image: annotated, to: pasteboard)
+            }
+        )
+        controller.show()
+        let window = try #require(controller.testWindow)
+
+        func keyEvent(
+            keyCode: UInt16,
+            modifiers: NSEvent.ModifierFlags,
+            characters: String
+        ) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: modifiers,
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: characters,
+                isARepeat: false,
+                keyCode: keyCode
+            ))
+        }
+
+        controller.testAppendRectangle()
+        #expect(controller.testAnnotationCount == 1)
+        _ = window.performKeyEquivalent(
+            with: try keyEvent(keyCode: 6, modifiers: .command, characters: "z")
+        )
+        #expect(controller.testAnnotationCount == 0)
+        _ = window.performKeyEquivalent(
+            with: try keyEvent(keyCode: 6, modifiers: [.command, .shift], characters: "z")
+        )
+        #expect(controller.testAnnotationCount == 1)
+
+        // Plain tool letter runs through the same table as the toolbar.
+        _ = window.performKeyEquivalent(
+            with: try keyEvent(keyCode: 31, modifiers: [], characters: "o")
+        )
+        #expect(controller.testCurrentTool == .ellipse)
+
+        // With a field editor first responder, the window handler leaves Cmd+Z
+        // to the text system. Use keyDown here because SwiftUI key equivalents
+        // are only disabled by the real field's focus state.
+        controller.testAppendRectangle()
+        #expect(controller.testAnnotationCount == 2)
+        _ = controller.testInstallTextEditorFirstResponder()
+        window.keyDown(
+            with: try keyEvent(keyCode: 6, modifiers: .command, characters: "z")
+        )
+        #expect(controller.testAnnotationCount == 2, "text editing owns Cmd+Z")
+
+        // Return focus to the canvas before the Copy & Close shortcut.
+        window.makeFirstResponder(window.contentView)
+        // Cmd+Shift+C copies the final render and closes the window.
+        _ = window.performKeyEquivalent(
+            with: try keyEvent(keyCode: 8, modifiers: [.command, .shift], characters: "c")
+        )
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        #expect(controller.testWindow == nil)
+        #expect(pasteboard.data(forType: .png) != nil)
     }
 
     @Test func fullEditorUndoAndRedoShortcutsYieldToTextEditing() {

@@ -1555,6 +1555,12 @@ final class QuickAccessManager: ObservableObject {
   /// Test seam: panel visibility is private state, but "last card copied closes
   /// the panel" is a product guarantee that needs a real assertion.
   var testIsPanelVisible: Bool { panelController.isVisible }
+  var testAnnotationEditingItemID: UUID? { annotationEditingItemID }
+
+  func testCopyAndCloseAnnotatedItem(id: UUID, image: CGImage) -> Bool {
+    guard let item = items.first(where: { $0.id == id }) else { return false }
+    return copyAndCloseAnnotatedItem(item, annotated: image)
+  }
   #endif
 
   private func hidePanel() {
@@ -1646,58 +1652,71 @@ final class QuickAccessManager: ObservableObject {
           self.lastOperationError = AppText.value("qaArtifactFailed", language: .system)
           return
         }
-        // Copy first. A failed clipboard write keeps the editor and every
-        // annotation on screen; only a successful copy closes it.
-        guard SmartCaptureClipboard.copy(
-          image: annotated,
-          to: clipboardPasteboard
-        ) else {
-          self.lastOperationError = AppText.value("qaClipboardFailed", language: .system)
-          DiagnosticLogger.shared.log(
-            .error,
-            .clipboard,
-            "Quick access annotate Copy & Close failed; editor kept"
-          )
-          return
-        }
-        // Close immediately after the clipboard succeeded, then persist the
-        // edited bytes in the background and refresh the card thumbnail.
-        self.restoreAnnotationEditor()
-        let targetURL = item.url
-        Task { [weak self] in
-          let result = await Task.detached(priority: .userInitiated) {
-            await CaptureImageWorkGate.shared.withPermit {
-              Result { try Self.writeAnnotatedImage(annotated, to: targetURL) }
-            }
-          }.value
-          guard let self else { return }
-          switch result {
-          case .success:
-            let thumbnailImage = NSImage(
-              cgImage: annotated,
-              size: NSSize(width: annotated.width, height: annotated.height)
-            )
-            self.lastOperationError = nil
-            self.updateItemThumbnail(id: item.id, image: thumbnailImage)
-          case .failure(let error):
-            let message = AppText.value("qaArtifactFailed", language: .system)
-            self.lastOperationError = message
-            if let index = self.items.firstIndex(where: { $0.id == item.id }) {
-              self.items[index].artifactErrorDescription = message
-            }
-            DiagnosticLogger.shared.logError(
-              .fileAccess,
-              error,
-              "Quick access annotate Copy & Close save failed; original kept",
-              context: ["fileName": targetURL.lastPathComponent]
-            )
-          }
-        }
+        _ = self.copyAndCloseAnnotatedItem(item, annotated: annotated)
       }
     )
     panelController.updateContent(editor)
     panelController.setAnnotationEditorInteractionEnabled(true)
     return true
+  }
+
+  /// Copy-first transaction for the Quick Access annotation editor. A failed
+  /// clipboard write keeps the editor and every annotation; a success closes
+  /// the editor, writes the same bytes to the card's source file, and refreshes
+  /// the thumbnail so card, file, clipboard and session all agree.
+  @discardableResult
+  private func copyAndCloseAnnotatedItem(
+    _ item: QuickAccessItem,
+    annotated: CGImage
+  ) -> Bool {
+    guard SmartCaptureClipboard.copy(
+      image: annotated,
+      to: clipboardPasteboard
+    ) else {
+      lastOperationError = AppText.value("qaClipboardFailed", language: .system)
+      DiagnosticLogger.shared.log(
+        .error,
+        .clipboard,
+        "Quick access annotate Copy & Close failed; editor kept"
+      )
+      return false
+    }
+    restoreAnnotationEditor()
+    persistAnnotatedImage(annotated, for: item)
+    return true
+  }
+
+  private func persistAnnotatedImage(_ annotated: CGImage, for item: QuickAccessItem) {
+    let targetURL = item.url
+    Task { [weak self] in
+      let result = await Task.detached(priority: .userInitiated) {
+        await CaptureImageWorkGate.shared.withPermit {
+          Result { try Self.writeAnnotatedImage(annotated, to: targetURL) }
+        }
+      }.value
+      guard let self else { return }
+      switch result {
+      case .success:
+        let thumbnailImage = NSImage(
+          cgImage: annotated,
+          size: NSSize(width: annotated.width, height: annotated.height)
+        )
+        self.lastOperationError = nil
+        self.updateItemThumbnail(id: item.id, image: thumbnailImage)
+      case .failure(let error):
+        let message = AppText.value("qaArtifactFailed", language: .system)
+        self.lastOperationError = message
+        if let index = self.items.firstIndex(where: { $0.id == item.id }) {
+          self.items[index].artifactErrorDescription = message
+        }
+        DiagnosticLogger.shared.logError(
+          .fileAccess,
+          error,
+          "Quick access annotate Copy & Close save failed; original kept",
+          context: ["fileName": targetURL.lastPathComponent]
+        )
+      }
+    }
   }
 
   /// Encode and replace the capture only after the new bytes decode at the

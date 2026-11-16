@@ -576,6 +576,36 @@ enum SmartCaptureClipboard {
     }
 }
 
+/// System share-sheet entry point for the annotation editors' bottom action bar.
+/// The rendered image is written once through the artifact store so the share
+/// service keeps a stable file even after the editor closes.
+@MainActor
+enum SmartCaptureSharing {
+    private static var activePicker: NSSharingServicePicker?
+
+    @discardableResult
+    static func prepareShareFile(image: CGImage, language: AppLanguage = .system) -> URL? {
+        guard let url = TempCaptureManager.shared.saveScreenshot(image) else {
+            let error = NSError(
+                domain: "MacPilot.Sharing",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: AppText.value("scShareFailed", language: language)]
+            )
+            SmartCaptureToast.shared.showFailure(error: error, language: language)
+            return nil
+        }
+        return url
+    }
+
+    static func share(image: CGImage, language: AppLanguage = .system) {
+        guard let url = prepareShareFile(image: image, language: language),
+              let anchor = NSApp.keyWindow?.contentView else { return }
+        let picker = NSSharingServicePicker(items: [url])
+        activePicker = picker
+        picker.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+    }
+}
+
 private enum ScreenCaptureClipboardCache {
     private static let directory: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -3589,7 +3619,14 @@ final class SmartScreenshotController {
                 )
                 if copied { self?.onQuickCopySave?(annotated) }
                 return copied
-            }
+            },
+            onPin: { [weak self] annotated in
+                self?.pin(image: annotated)
+            },
+            // The area-annotate editor has no source file of its own; Delete
+            // means "discard this unsaved capture", which the window performs
+            // by closing without calling onComplete.
+            onDelete: {}
         )
         inlineAnnotationControllers[id] = controller
         controller.show(at: screenRect)
@@ -4973,7 +5010,7 @@ struct SmartQuickAccessStackState: Equatable, Sendable {
 }
 
 @MainActor
-private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate, ObservableObject {
+final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate, ObservableObject {
     private static let autoDismissDelay: TimeInterval = 10
 
     private var image: CGImage
@@ -4985,6 +5022,9 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
     private let onDelete: ((URL?) -> Void)?
     private var panel: NSPanel?
     private var annotationHostView: NSView?
+    #if DEBUG
+    private var annotationModelForTesting: SmartAnnotationModel?
+    #endif
     /// Clipboard surface for the annotation editor's Copy & Close. Production
     /// uses the system pasteboard; tests can inject a named one.
     var clipboardPasteboard: NSPasteboard = .general
@@ -5156,6 +5196,9 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
         setCountdownPaused(true)
         let originalImage = image
         let model = SmartAnnotationModel(initialTool: .rectangle)
+        #if DEBUG
+        annotationModelForTesting = model
+        #endif
         let editor = NSHostingView(rootView: SmartAnnotationEditor(
             image: originalImage,
             language: language,
@@ -5215,8 +5258,25 @@ private final class SmartQuickAccessWindowController: NSObject, NSWindowDelegate
         SmartCaptureToast.shared.showFailure(error: error, language: language)
     }
 
+    #if DEBUG
+    func testOpenAnnotationEditor() {
+        openAnnotation()
+    }
+
+    var testAnnotationModel: SmartAnnotationModel? { annotationModelForTesting }
+
+    func testCopyAndCloseCurrentAnnotation() -> Bool {
+        guard let model = annotationModelForTesting, annotationHostView != nil else { return false }
+        copyAndCloseAnnotation(image: image, model: model)
+        return annotationHostView == nil
+    }
+    #endif
+
     private func restoreAnnotationEditor() {
         annotationHostView = nil
+        #if DEBUG
+        annotationModelForTesting = nil
+        #endif
         guard let panel else { return }
         installContent(in: panel)
         setCountdownPaused(false)
@@ -6593,6 +6653,49 @@ final class SmartAnnotationModel: ObservableObject {
     }
 }
 
+/// Which actions the full editor's bottom rail can offer for a given host.
+/// Share and Save are intrinsic; Pin and Delete depend on the surface owning a
+/// pin target or a deletable source artifact.
+nonisolated struct SmartAnnotationActionAvailability: Equatable {
+    let share: Bool
+    let pin: Bool
+    let copyAndClose: Bool
+    let delete: Bool
+    let save: Bool
+
+    static func resolve(
+        hasPin: Bool,
+        hasCopyAndClose: Bool,
+        hasDelete: Bool
+    ) -> Self {
+        Self(
+            share: true,
+            pin: hasPin,
+            copyAndClose: hasCopyAndClose,
+            delete: hasDelete,
+            save: true
+        )
+    }
+}
+
+/// The standalone annotation editor owns its key equivalents so Cmd+Z,
+/// Cmd+Shift+Z, Cmd+Shift+C and tool letters are routed through the same model
+/// as the toolbar, and so a focused text field always keeps native undo.
+@MainActor
+final class SmartAnnotationWindow: NSWindow {
+    var keyEventHandler: ((NSEvent) -> Bool)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if keyEventHandler?(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if keyEventHandler?(event) == true { return }
+        super.keyDown(with: event)
+    }
+}
+
 @MainActor
 final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
     nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
@@ -6605,8 +6708,12 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
     /// Visible Copy & Close: returns whether the clipboard write succeeded.
     /// The window closes only on success; a failure keeps the edit on screen.
     private let onCopyAndClose: ((CGImage) -> Bool)?
+    /// Bottom action rail callbacks. Share is self-contained; Pin/Delete are
+    /// only offered by hosts that own a pin target or a source artifact.
+    private let onPin: ((CGImage) -> Void)?
+    private let onDelete: (() -> Void)?
     private let model: SmartAnnotationModel
-    private var window: NSWindow?
+    private var window: SmartAnnotationWindow?
     private var didNotifyClose = false
 
     init(
@@ -6616,7 +6723,9 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
         onComplete: @escaping (CGImage) -> Void,
         onClose: @escaping () -> Void,
         onQuickCopy: ((CGImage) -> Void)? = nil,
-        onCopyAndClose: ((CGImage) -> Bool)? = nil
+        onCopyAndClose: ((CGImage) -> Bool)? = nil,
+        onPin: ((CGImage) -> Void)? = nil,
+        onDelete: (() -> Void)? = nil
     ) {
         self.image = image
         self.language = language
@@ -6625,6 +6734,16 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
         self.onClose = onClose
         self.onQuickCopy = onQuickCopy
         self.onCopyAndClose = onCopyAndClose
+        self.onPin = onPin
+        self.onDelete = onDelete
+    }
+
+    var actionAvailability: SmartAnnotationActionAvailability {
+        .resolve(
+            hasPin: onPin != nil,
+            hasCopyAndClose: onCopyAndClose != nil,
+            hasDelete: onDelete != nil
+        )
     }
 
     func show(at screenRect: CGRect? = nil) {
@@ -6633,7 +6752,7 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
             width: max(420, targetRect?.width ?? 900),
             height: max(300, targetRect?.height ?? 680)
         )
-        let window = NSWindow(
+        let window = SmartAnnotationWindow(
             contentRect: CGRect(origin: .zero, size: editorSize),
             styleMask: targetRect == nil ? [.titled, .closable, .resizable] : [.borderless],
             backing: .buffered,
@@ -6647,6 +6766,9 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isReleasedWhenClosed = false
         window.delegate = self
+        window.keyEventHandler = { [weak self] event in
+            self?.handleKeyEvent(event) ?? false
+        }
         window.contentView = NSHostingView(rootView: SmartAnnotationEditor(
             image: image,
             language: language,
@@ -6659,6 +6781,18 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
             },
             onCopyAndClose: onCopyAndClose.map { _ in
                 { [weak self] in self?.copyAndCloseTapped() }
+            },
+            onPin: onPin.map { handler in
+                { [weak self] rendered in
+                    handler(rendered)
+                    self?.close()
+                }
+            },
+            onDelete: onDelete.map { handler in
+                { [weak self] in
+                    handler()
+                    self?.close()
+                }
             }
         ))
         if let targetRect {
@@ -6678,6 +6812,37 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
     func close() {
         window?.close()
         window = nil
+    }
+
+    /// Real window key routing. Text editing always wins; otherwise the same
+    /// history and Copy & Close methods as the toolbar run, so a shortcut can
+    /// never diverge from a button.
+    private func handleKeyEvent(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard !(window?.firstResponder is NSTextView) else { return false }
+
+        if event.keyCode == 6,
+           modifiers == [.command] || modifiers == [.command, .shift] { // Z
+            if modifiers.contains(.shift) {
+                model.redo()
+            } else {
+                model.undo()
+            }
+            return true
+        }
+        if event.keyCode == 8, modifiers == [.command, .shift] { // Cmd+Shift+C
+            copyAndCloseTapped()
+            return true
+        }
+        if modifiers.isEmpty,
+           let characters = event.charactersIgnoringModifiers?.lowercased(),
+           characters.count == 1,
+           let character = characters.first,
+           let tool = SmartAnnotationToolShortcuts.tool(for: character) {
+            model.selectTool(tool)
+            return true
+        }
+        return false
     }
 
     private func complete() {
@@ -6749,11 +6914,25 @@ final class SmartAnnotationWindowController: NSObject, NSWindowDelegate {
         return window == nil
     }
 
-    func testAppendRectangle() {
-        model.append(.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)))
+    func testAppendRectangle(
+        _ rect: CGRect = CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)
+    ) {
+        model.append(.rectangle(rect))
     }
 
     var testAnnotationCount: Int { model.annotations.count }
+    var testCurrentTool: SmartAnnotationTool { model.tool }
+    var testWindow: SmartAnnotationWindow? { window }
+
+    /// Installs a real field editor as first responder so the tests can prove
+    /// Cmd+Z is left to native text undo while typing.
+    func testInstallTextEditorFirstResponder() -> NSTextView? {
+        guard let window, let content = window.contentView else { return nil }
+        let textView = NSTextView(frame: CGRect(x: 0, y: 0, width: 120, height: 30))
+        content.addSubview(textView)
+        window.makeFirstResponder(textView)
+        return textView
+    }
     #endif
 
     func windowWillClose(_ notification: Notification) {
@@ -6837,6 +7016,10 @@ struct SmartAnnotationEditor: View {
     /// copies it, and only then closes; the host decides whether the copy
     /// succeeded so a failed clipboard write never loses the edit.
     var onCopyAndClose: (() -> Void)?
+    /// Bottom action rail callbacks. Share is self-contained; Pin/Delete are
+    /// only shown by hosts that own a pin target or source artifact.
+    var onPin: ((CGImage) -> Void)?
+    var onDelete: (() -> Void)?
     @State private var dragStart: CGPoint?
     @State private var dragCurrent: CGPoint?
     @State private var dragPoints: [CGPoint] = []
@@ -6872,7 +7055,9 @@ struct SmartAnnotationEditor: View {
         onCancel: @escaping () -> Void,
         onComplete: @escaping () -> Void,
         onDoubleClickCanvas: (() -> Void)? = nil,
-        onCopyAndClose: (() -> Void)? = nil
+        onCopyAndClose: (() -> Void)? = nil,
+        onPin: ((CGImage) -> Void)? = nil,
+        onDelete: (() -> Void)? = nil
     ) {
         self.image = image
         self.language = language
@@ -6886,6 +7071,8 @@ struct SmartAnnotationEditor: View {
         self.onComplete = onComplete
         self.onDoubleClickCanvas = onDoubleClickCanvas
         self.onCopyAndClose = onCopyAndClose
+        self.onPin = onPin
+        self.onDelete = onDelete
     }
 
     /// Vertical space the embedded chrome adds above/below the canvas.
@@ -6920,11 +7107,12 @@ struct SmartAnnotationEditor: View {
 
     private var standaloneEditorBody: some View {
         VStack(spacing: 0) {
-            annotationToolbar
+            annotationToolbar(showsActions: false)
                 .padding(10)
             GeometryReader { geometry in
                 annotationCanvas(in: geometry.size)
             }
+            annotationActionBar
         }
     }
 
@@ -6944,7 +7132,7 @@ struct SmartAnnotationEditor: View {
         let toolbarMinimumWidth = embeddedCanvasSize.map {
             max($0.width, Self.embeddedToolbarMinimumWidth)
         } ?? Self.embeddedToolbarMinimumWidth
-        let toolbar = annotationToolbar
+        let toolbar = annotationToolbar(showsActions: true)
             .padding(4)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .padding(6)
@@ -6974,7 +7162,8 @@ struct SmartAnnotationEditor: View {
         })
     }
 
-    private var annotationToolbar: some View {
+    @ViewBuilder
+    private func annotationToolbar(showsActions: Bool) -> some View {
         HStack(spacing: 6) {
             annotationToolPalette
             Button(AppText.value("scUndo", language: language), action: model.undo)
@@ -6993,11 +7182,64 @@ struct SmartAnnotationEditor: View {
             }
             annotationStyleControls
             Spacer(minLength: 0)
+            if showsActions {
+                annotationActionButtons
+            }
+        }
+    }
+
+    /// Standalone full editor: actions live on their own bottom rail, matching
+    /// Snapzy's AnnotateBottomBarView. Share is always available; Pin/Delete are
+    /// host capabilities, so they appear only when the surface owns a target.
+    private var annotationActionBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                commitPendingClick()
+                guard let rendered = renderedImage() else { return }
+                SmartCaptureSharing.share(image: rendered, language: language)
+            } label: {
+                Label(
+                    AppText.value("scShare", language: language),
+                    systemImage: "square.and.arrow.up"
+                )
+            }
+            .help(AppText.value("scShare", language: language))
+
+            if let onPin {
+                Button {
+                    commitPendingClick()
+                    guard let rendered = renderedImage() else { return }
+                    onPin(rendered)
+                } label: {
+                    Label(
+                        AppText.value("scPin", language: language),
+                        systemImage: "pin"
+                    )
+                }
+                .help(AppText.value("scPin", language: language))
+            }
+
+            if let onDelete {
+                Button(role: .destructive) {
+                    commitPendingClick()
+                    onDelete()
+                } label: {
+                    Label(
+                        AppText.value("scDelete", language: language),
+                        systemImage: "trash"
+                    )
+                }
+                .help(AppText.value("scDelete", language: language))
+            }
+
+            Spacer(minLength: 0)
+
             Button(AppText.value("scCancel", language: language)) {
                 cancelPendingClick()
                 onCancel()
             }
-                .keyboardShortcut(.cancelAction)
+            .keyboardShortcut(.cancelAction)
+
             if let onCopyAndClose {
                 Button(AppText.value("scCopyAndClose", language: language)) {
                     commitPendingClick()
@@ -7005,13 +7247,47 @@ struct SmartAnnotationEditor: View {
                 }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
             }
+
             Button(AppText.value("scDone", language: language)) {
                 commitPendingClick()
                 onComplete()
             }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+            .buttonStyle(.borderedProminent)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    @ViewBuilder
+    private var annotationActionButtons: some View {
+        Button(AppText.value("scCancel", language: language)) {
+            cancelPendingClick()
+            onCancel()
+        }
+        .keyboardShortcut(.cancelAction)
+        if let onCopyAndClose {
+            Button(AppText.value("scCopyAndClose", language: language)) {
+                commitPendingClick()
+                onCopyAndClose()
+            }
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+        }
+        Button(AppText.value("scDone", language: language)) {
+            commitPendingClick()
+            onComplete()
+        }
+        .keyboardShortcut(.defaultAction)
+        .buttonStyle(.borderedProminent)
+    }
+
+    private func renderedImage() -> CGImage? {
+        SmartAnnotationRenderer.render(
+            image: image,
+            annotations: model.annotations,
+            styles: model.styledAnnotations.map(\.style)
+        )
     }
 
     private var annotationStyleControls: some View {

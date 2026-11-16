@@ -18,6 +18,7 @@ final class AppLaunchBootstrap<Value: ObservableObject>: ObservableObject {
     init(
         center: NotificationCenter = .default,
         isLaunched: Bool = NSRunningApplication.current.isFinishedLaunching,
+        startsAutomatically: Bool = true,
         schedule: @escaping @MainActor (@escaping @MainActor () -> Void) -> Void = {
             DispatchQueue.main.async(execute: $0)
         },
@@ -25,6 +26,7 @@ final class AppLaunchBootstrap<Value: ObservableObject>: ObservableObject {
     ) {
         self.makeValue = makeValue
         self.schedule = schedule
+        guard startsAutomatically else { return }
         launchObservation = center.publisher(for: NSApplication.didFinishLaunchingNotification)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.scheduleLaunch() }
