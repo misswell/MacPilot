@@ -72,7 +72,7 @@ struct ScreenCaptureTests {
         let resolverStarted = DispatchSemaphore(value: 0)
         let controller = SmartScreenshotController(
             language: { .simplifiedChinese },
-            onCapture: { _ in },
+            onCapture: { _, _, _ in },
             onError: { _ in },
             screenCaptureAccessProvider: { true },
             initialTargetResolver: { _, _ in
@@ -110,7 +110,7 @@ struct ScreenCaptureTests {
 
         let controller = SmartScreenshotController(
             language: { .simplifiedChinese },
-            onCapture: { _ in },
+            onCapture: { _, _, _ in },
             onError: { _ in },
             screenCaptureAccessProvider: { true },
             initialTargetResolver: { _, _ in nil }
@@ -184,7 +184,7 @@ struct ScreenCaptureTests {
         var attempts = 0
         let controller = SmartScreenshotController(
             language: { .simplifiedChinese },
-            onCapture: { _ in },
+            onCapture: { _, _, _ in },
             onError: { _ in },
             shortcutRegistrationAttempt: {
                 attempts += 1
@@ -506,7 +506,7 @@ struct ScreenCaptureTests {
         #expect(!SmartCaptureStoredRect(CGRect(x: 0, y: 0, width: 3, height: 20)).isValid)
     }
 
-    @Test func smartCaptureClipboardCopiesAnImageAsPNG() throws {
+    @Test @MainActor func smartCaptureClipboardCopiesAnImageAsPNG() throws {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let context = try #require(CGContext(
             data: nil,

@@ -98,6 +98,61 @@ enum SmartCaptureHistoryStore {
     static func remove(_ id: UUID, from items: [SmartCaptureHistoryItem]) -> [SmartCaptureHistoryItem] {
         items.filter { $0.id != id }
     }
+
+    /// Posted after a non-model writer mutates the persisted list, so the live
+    /// model reloads instead of keeping two diverging copies.
+    static let externalChangeNotification = Notification.Name("MacPilot.smartCaptureHistoryDidChangeExternally")
+
+    static func contains(path: String, defaults: UserDefaults = .standard) -> Bool {
+        load(defaults: defaults).contains { URL(fileURLWithPath: $0.path).path == URL(fileURLWithPath: path).path }
+    }
+
+    static func remove(path: String, defaults: UserDefaults = .standard) {
+        let standardized = URL(fileURLWithPath: path).path
+        let remaining = load(defaults: defaults).filter {
+            URL(fileURLWithPath: $0.path).path != standardized
+        }
+        save(remaining, defaults: defaults)
+        notifyExternalChange()
+    }
+
+    /// Records or re-points exactly one history entry. Quick Access calls this
+    /// after a temporary artifact is promoted so history holds the permanent
+    /// path and never a second, dead temporary record.
+    @discardableResult
+    static func record(
+        url: URL,
+        width: Int,
+        height: Int,
+        byteCount: Int64,
+        kind: SmartCaptureHistoryKind = .screenshot,
+        duration: TimeInterval? = nil,
+        previousPath: String? = nil,
+        defaults: UserDefaults = .standard
+    ) -> SmartCaptureHistoryItem {
+        let standardizedURL = URL(fileURLWithPath: url.path)
+        let previousStandardized = previousPath.map { URL(fileURLWithPath: $0).path }
+        var items = load(defaults: defaults).filter { item in
+            let itemPath = URL(fileURLWithPath: item.path).path
+            return itemPath != standardizedURL.path && itemPath != previousStandardized
+        }
+        let item = SmartCaptureHistoryItem(
+            url: standardizedURL,
+            width: width,
+            height: height,
+            byteCount: byteCount,
+            kind: kind,
+            duration: duration
+        )
+        items.insert(item, at: 0)
+        save(items, defaults: defaults)
+        notifyExternalChange()
+        return item
+    }
+
+    private static func notifyExternalChange() {
+        NotificationCenter.default.post(name: externalChangeNotification, object: nil)
+    }
 }
 
 enum SmartCaptureThumbnail {

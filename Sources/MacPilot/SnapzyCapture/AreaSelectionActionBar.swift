@@ -61,6 +61,12 @@ final class AreaSelectionActionBar: NSView {
   private var optionsRow: NSView?
   private var undoButton: NSButton?
   private var eraserButton: NSButton?
+  /// Stage A (selection done) shows the primary actions; stage B (annotating)
+  /// swaps them for the tool row. The two stages never mix.
+  private var annotationEntryButton: NSButton?
+  private var completeButton: NSButton?
+  private var toolViews: [NSView] = []
+  private var primaryActionViews: [NSView] = []
   private var widthValueLabel: NSTextField?
   private var widthSlider: NSSlider?
   private var shapeSegmented: NSSegmentedControl?
@@ -120,6 +126,8 @@ final class AreaSelectionActionBar: NSView {
     static let save = 8
     static let close = 9
     static let copy = 10
+    static let annotate = 12
+    static let finish = 13
     /// 「更多」 menu items. The former right-hand column lives here now.
     static let moreUpload = 21
     static let moreCrop = 22
@@ -158,6 +166,7 @@ final class AreaSelectionActionBar: NSView {
     ])
 
     rootStack.addArrangedSubview(makePrimaryRow())
+    applyStageVisibility()
   }
 
   @available(*, unavailable)
@@ -256,9 +265,7 @@ final class AreaSelectionActionBar: NSView {
     }
     // The eraser and undo only make sense with a live annotation session —
     // reveal them on bind and hide them again when the session commits.
-    let sessionActive = binding?.model != nil
-    eraserButton?.isHidden = !sessionActive
-    undoButton?.isHidden = !sessionActive
+    applyStageVisibility()
     rebuildOptionsRow()
     syncWithModel()
     invalidateIntrinsicContentSize()
@@ -294,24 +301,36 @@ final class AreaSelectionActionBar: NSView {
     grip.widthAnchor.constraint(equalToConstant: 12).isActive = true
     grip.heightAnchor.constraint(equalToConstant: 18).isActive = true
 
-    // Tool groups with sub-tool menus (iShot's ▾ affordance).
-    makeToolGroup(.shape, in: row)
-    makeToolGroup(.pencil, in: row)
-    makeToolGroup(.arrow, in: row)
-    row.addArrangedSubview(makeSingleToolButton("t.square", titleKey: "scAnnotationText", tool: .text, tag: BarTag.text))
-    row.addArrangedSubview(makeSingleToolButton("1.circle", titleKey: "scAnnotationCounter", tool: .counter, tag: BarTag.counter))
-    row.addArrangedSubview(makeSingleToolButton("circle.lefthalf.filled", titleKey: "scAnnotationBlur", tool: .blur, tag: BarTag.mosaic))
-    row.addArrangedSubview(makeSingleToolButton("circle.dashed.inset.filled", titleKey: "scAnnotationSpotlight", tool: .spotlight, tag: BarTag.spotlight))
+    // Stage A: one 标注 entry instead of a wall of tool chips; the row is
+    // reserved for the actions a finished selection can take.
+    let annotate = makeActionButton("pencil.tip.crop.circle", titleKey: "scToolAnnotate", tag: BarTag.annotate)
+    row.addArrangedSubview(annotate)
+    annotationEntryButton = annotate
+
+    // Tool groups with sub-tool menus (iShot's ▾ affordance). Hidden until the
+    // annotation stage starts.
+    for toolView in [
+      makeToolGroup(.shape),
+      makeToolGroup(.pencil),
+      makeToolGroup(.arrow),
+      makeSingleToolButton("t.square", titleKey: "scAnnotationText", tool: .text, tag: BarTag.text),
+      makeSingleToolButton("1.circle", titleKey: "scAnnotationCounter", tool: .counter, tag: BarTag.counter),
+      makeSingleToolButton("circle.lefthalf.filled", titleKey: "scAnnotationBlur", tool: .blur, tag: BarTag.mosaic),
+      makeSingleToolButton("circle.dashed.inset.filled", titleKey: "scAnnotationSpotlight", tool: .spotlight, tag: BarTag.spotlight),
+    ] {
+      row.addArrangedSubview(toolView)
+      toolViews.append(toolView)
+    }
 
     let eraser = makeSingleToolButton("eraser", titleKey: "scAnnotationEraser", tool: .eraser, tag: BarTag.eraser)
-    eraser.isHidden = true
     row.addArrangedSubview(eraser)
+    toolViews.append(eraser)
     eraserButton = eraser
 
     let undo = makeSingleToolButton("arrow.uturn.backward", titleKey: "scUndo", tool: nil, tag: BarTag.undo)
     undo.isEnabled = false
-    undo.isHidden = true
     row.addArrangedSubview(undo)
+    toolViews.append(undo)
     undoButton = undo
 
     let separator = NSBox()
@@ -321,19 +340,47 @@ final class AreaSelectionActionBar: NSView {
     separator.widthAnchor.constraint(equalToConstant: 1).isActive = true
     separator.heightAnchor.constraint(equalToConstant: 20).isActive = true
 
-    row.addArrangedSubview(makeActionButton("text.viewfinder", titleKey: "scToolOCR", tag: BarTag.ocr))
-    row.addArrangedSubview(makeActionButton("pin", titleKey: "scPin", tag: BarTag.pin))
+    for actionView in [
+      makeActionButton("text.viewfinder", titleKey: "scToolOCR", tag: BarTag.ocr),
+      makeActionButton("pin", titleKey: "scPin", tag: BarTag.pin),
+      makeMoreButton(),
+    ] {
+      row.addArrangedSubview(actionView)
+      primaryActionViews.append(actionView)
+    }
     row.addArrangedSubview(makeActionButton("square.and.arrow.down", titleKey: "scToolSave", tag: BarTag.save))
-    row.addArrangedSubview(makeActionButton("xmark", titleKey: "scClose", tag: BarTag.close))
     row.addArrangedSubview(makeActionButton("doc.on.doc", titleKey: "scCopy", tag: BarTag.copy))
-    row.addArrangedSubview(makeMoreButton())
+    let finish = makeActionButton("checkmark", titleKey: "scToolFinish", tag: BarTag.finish)
+    row.addArrangedSubview(finish)
+    completeButton = finish
+    row.addArrangedSubview(makeActionButton("xmark", titleKey: "scClose", tag: BarTag.close))
 
     row.translatesAutoresizingMaskIntoConstraints = false
     primaryRow = row
     return row
   }
 
-  private func makeToolGroup(_ group: ToolGroup, in row: NSStackView) {
+  /// Selection stage ↔ annotation stage. Nothing is duplicated across stages:
+  /// a chip belongs to exactly one of them, so the bar never shows two rows of
+  /// competing primaries. Save/copy stay reachable while annotating because
+  /// they commit the annotated pixels; OCR/pin/更多 are selection-stage actions.
+  private func applyStageVisibility() {
+    let annotating = isAnnotating
+    annotationEntryButton?.isHidden = annotating
+    for view in toolViews {
+      view.isHidden = !annotating
+    }
+    eraserButton?.isHidden = !annotating
+    undoButton?.isHidden = !annotating
+    for view in primaryActionViews {
+      view.isHidden = annotating
+    }
+    completeButton?.isHidden = !annotating
+    invalidateIntrinsicContentSize()
+    layoutDidChange?()
+  }
+
+  private func makeToolGroup(_ group: ToolGroup) -> NSView {
     let container = NSStackView()
     container.orientation = .horizontal
     container.alignment = .centerY
@@ -353,11 +400,11 @@ final class AreaSelectionActionBar: NSView {
 
     container.addArrangedSubview(main)
     container.addArrangedSubview(chevron)
-    row.addArrangedSubview(container)
     groupMainButtons[group] = main
     for tool in group.tools {
       toolDisplayButtons[tool] = main
     }
+    return container
   }
 
   private func makeGroupMainButton(_ group: ToolGroup) -> NSButton {
@@ -903,6 +950,8 @@ final class AreaSelectionActionBar: NSView {
     case BarTag.save: action = .save
     case BarTag.close: action = .cancel
     case BarTag.copy: action = .copy
+    case BarTag.annotate: action = .annotate
+    case BarTag.finish: action = .capture
     default: return
     }
     perform(action)

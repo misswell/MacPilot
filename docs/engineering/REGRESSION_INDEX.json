@@ -48,6 +48,168 @@
   ],
   "modules": [
     {
+      "id": "screenshot-reliability",
+      "name": "截图状态、文件生命周期与捕获可靠性",
+      "doc": "docs/engineering/regressions/screenshot-reliability.md",
+      "rules": [
+        {
+          "id": "shot-001-single-artifact-lifecycle",
+          "module": "screenshot-reliability",
+          "title": "截图重复编码与文件未写完就被 Quick Access/剪贴板使用",
+          "status": "confirmed-potential",
+          "risk_level": "critical",
+          "affected_paths": [
+            "Sources/MacPilot/ScreenCapture.swift",
+            "Sources/MacPilot/ScreenshotExtras.swift",
+            "Sources/MacPilot/SmartScreenshot.swift",
+            "Sources/MacPilot/ScreenCaptureReliability/**",
+            "Sources/MacPilot/SnapzyQuickAccess/**"
+          ],
+          "invariants": [
+            "一次截图只编码一次，Quick Access、剪贴板、自动保存和贴图引用同一个产物。",
+            "文件依赖操作只在 CaptureArtifactState.ready 后开放；写入前不得复制、保存、拖拽或标注。",
+            "保存/删除是可失败事务：失败保留卡片与文件，不得先移除卡片再执行文件操作。",
+            "临时文件只有在剪贴板 lease 与命名 consumer 都不再引用时才可回收。"
+          ],
+          "test_filters": [
+            "CaptureArtifactStoreTests",
+            "ClipboardArtifactLeaseTests",
+            "CaptureHistoryServiceTests",
+            "ScreenCaptureTests",
+            "ScreenCaptureClipboardRegressionTests",
+            "SnapzyCaptureTests",
+            "SnapzySingleFrameCaptureTests",
+            "QuickAccessTests",
+            "SnapzyPopupCaptureOrderingTests",
+            "ConfigurationSchemaContractTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "连续截取多张图并立即逐张复制、保存、删除、标注，确认卡片状态与磁盘文件一致。",
+            "复制截图后等待超过自动清理时间再粘贴，确认延迟粘贴仍能取到图片。"
+          ],
+          "evidence_commits": []
+        },
+        {
+          "id": "shot-002-window-display-resolution",
+          "module": "screenshot-reliability",
+          "title": "当前窗口/目标显示器识别：最大窗口、尺寸相似与固定 2x 缩放",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/ScreenCapture.swift",
+            "Sources/MacPilot/SnapzyCapture/**"
+          ],
+          "invariants": [
+            "当前窗口截图优先使用 AXFocusedWindow 的 window id；AX 不可用时回退 WindowServer z-order，禁止静默选择最大标题窗口。",
+            "目标显示器只按 CGDirectDisplayID 精确匹配；尺寸或分辨率相似不得作为猜测依据。",
+            "窗口输出像素按 pointPixelScale/backing scale 计算，禁止固定 2 倍。"
+          ],
+          "test_filters": [
+            "CaptureDisplayResolverTests",
+            "CaptureWindowFocusResolverTests",
+            "CapturePixelSizeTests",
+            "ScreenCaptureTests",
+            "SnapzyCaptureTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "在混合 DPI 双显示器上分别从两台屏幕发起全屏与当前窗口截图。",
+            "前台应用存在多个窗口时确认截取的是键盘焦点窗口。"
+          ],
+          "evidence_commits": []
+        },
+        {
+          "id": "shot-003-composite-and-chrome",
+          "module": "screenshot-reliability",
+          "title": "跨屏合成静默跳过缺失显示器、截图界面被截进图里",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/SnapzyCapture/FrozenAreaCaptureSession.swift",
+            "Sources/MacPilot/SnapzyCapture/SnapzyScreenCaptureManager.swift",
+            "Sources/MacPilot/ScreenCaptureReliability/**"
+          ],
+          "invariants": [
+            "跨屏截图必须覆盖全部请求显示器；缺失快照或裁剪失败使整次截图失败，禁止 continue 留下透明空洞。",
+            "合成结果尺寸必须与请求像素尺寸一致，否则报告失败。",
+            "截图界面窗口按 window id 排除，禁止排除整个 MacPilot 进程。"
+          ],
+          "test_filters": [
+            "CaptureCompositeValidatorTests",
+            "ScreenCaptureTests",
+            "SnapzyCaptureTests",
+            "SecondarySelectionRegressionTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "在相邻两台显示器上框选跨屏区域，检查合成图无透明缺口、尺寸正确。",
+            "截图时确认 Quick Access 卡片与选区面板不出现在结果里，普通 MacPilot 窗口仍可被截取。"
+          ],
+          "evidence_commits": []
+        },
+        {
+          "id": "shot-004-refresh-session-binding",
+          "module": "screenshot-reliability",
+          "title": "刷新截图旧任务恢复新会话面板、替换新会话冻结画面",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/SmartScreenshot.swift",
+            "Sources/MacPilot/SnapzyCapture/SnapzyAreaSelectionController.swift"
+          ],
+          "invariants": [
+            "刷新截图任务必须绑定 sessionID 与刷新 token；取消或开启新会话后旧任务的完成不得恢复面板或替换快照。",
+            "面板隐藏由 token 引用计数持有，只允许持有者释放；旧会话的 token 不得解除新会话的隐藏。",
+            "同一会话重复刷新时取消旧任务或合并，不得并行抓取多份快照。"
+          ],
+          "test_filters": [
+            "RefreshHideLedgerTests",
+            "SnapzyPopupCaptureOrderingTests",
+            "ScreenshotPopupWindowProbeTests",
+            "SnapzyCaptureTests",
+            "PostCaptureRoutingTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "连续快速点击刷新截图，确认面板只隐藏一次、最终恢复，画面来自最后一次刷新。",
+            "刷新过程中按 Esc 取消，并立即重新发起截图，确认新会话面板不会被旧任务取消隐藏。"
+          ],
+          "evidence_commits": []
+        },
+        {
+          "id": "shot-005-per-mode-post-capture",
+          "module": "screenshot-reliability",
+          "title": "按截图模式配置后处理：旧配置回退、模式互不串扰与操作栏阶段",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/ScreenCapture.swift",
+            "Sources/MacPilot/ScreenCaptureReliability/**",
+            "Sources/MacPilot/SnapzyCapture/AreaSelectionActionBar.swift"
+          ],
+          "invariants": [
+            "perModeActions 缺省键必须回退到全局开关；旧配置升级后截图动作不得改变。",
+            "每个模式的后处理互不串扰；PostCaptureRouter 是唯一分发入口，显式保存/复制/贴图优先于模式配置。",
+            "全屏、当前窗口、滚动与智能元素截图必须携带真实 CaptureMode，不得以 .other 落入全局而绕开模式配置。",
+            "操作栏按阶段分层：状态 A 只显示主要动作，状态 B 显示标注工具与完成/取消，工具与主要动作不得混排。"
+          ],
+          "test_filters": [
+            "PostCaptureRoutingTests",
+            "ConfigurationSchemaContractTests",
+            "ConfigStoreTests",
+            "SnapzyCaptureTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "给区域截图单独关闭自动保存并开启贴图，确认全屏截图仍按全局设置执行。",
+            "框选后确认操作栏只有主要动作；点标注后工具出现，完成/取消结束会话并恢复主要动作。"
+          ],
+          "evidence_commits": []
+        }
+      ]
+    },
+    {
       "id": "window-lifecycle",
       "name": "主窗口与 AppKit 生命周期",
       "doc": "docs/engineering/regressions/window-lifecycle.md",

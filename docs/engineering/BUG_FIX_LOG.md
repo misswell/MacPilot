@@ -74,3 +74,24 @@
 | 门禁索引可缩减测试/路径或增加豁免 | base 版本 guard 禁止删除规则/状态降级/缩小规则及全量 suite 覆盖/新豁免；索引变化升级全量；macOS 26 改为阻断门禁 | `python3 Tests/Python/test_regression_index_guard.py`；`Regression Gate` |
 
 信任边界：仓库 checker 无法阻止有写权限者同时改 checker 与 workflow。当前 GitHub 主分支保护/Rulesets 未配置；需管理员另设 branch protection 与 CODEOWNERS 强制审查。本次只记录，不更改远端权限。BLE 处理是协议/威胁模型澄清，不代表新发现一条超时绕过漏洞。实机显示器与 BLE 验收待完成；本 PR 未发 beta。完整验证证据见关联 PR。
+
+## 2026-11-16：截图状态、文件生命周期与捕获可靠性重构（beta 待发布）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| Quick Access 卡片先出现、文件还没写完就能复制/保存/拖拽；写入失败后卡片被移除且截图丢失 | `CaptureArtifactState` 状态机 + `QuickAccessOperationCoordinator` 门控；失败保留卡片、错误与重试；自动保存失败保留一份临时回退文件 | `ScreenshotReliabilityTests`、`QuickAccessTests` |
+| 同一张图被 Quick Access、剪贴板、自动保存各自编码多次；工具栏复制绕过保存流程 | `handleCapturedImage` 统一入口 + `PostCaptureRouter` intent 路由；复制/保存/贴图共享同一 `CaptureArtifact`；`.copy` 改走 `.explicitCopy` | `ScreenshotReliabilityTests`、`ScreenCaptureTests` |
+| 延迟粘贴丢失截图：剪贴板用懒加载 provider，但清理逻辑只看 `.fileURL` | `ClipboardArtifactLeaseManager` 按 `changeCount` 记录 lease，并支持命名 consumer；自动清理前查询 lease | `ScreenshotReliabilityTests`、`ScreenCaptureClipboardRegressionTests` |
+| 「当前窗口截图」截到最大的非焦点窗口；目标显示器按尺寸相似猜测；窗口固定 2× 输出 | `CaptureWindowFocusResolver`（AXFocusedWindow → z-order 回退）、`CaptureDisplayResolver`（仅 DisplayID 精确匹配）、`pointPixelScale` 输出比例 | `ScreenshotReliabilityTests` |
+| 跨屏截图缺少某个显示器时静默 `continue`，结果带透明空洞 | `CaptureCompositeValidator` 校验覆盖、裁剪与最终尺寸，失败整次中止 | `ScreenshotReliabilityTests`、`ScreenCaptureTests` |
+| 截图 UI 可能被截进图里，而排除整个进程会连普通 MacPilot 窗口一起排除 | `CaptureChromeWindowRegistry` 按 window id 排除选区面板/Quick Access/HUD；`sharingType = .none` | `ScreenshotReliabilityTests`、`SnapzyCaptureTests` |
+| 刷新截图的任务不归属会话：旧刷新完成后会恢复新会话面板、替换新会话冻结画面；取消后隐藏状态无人恢复 | 刷新任务绑定 sessionID + 递增 token；面板隐藏改为 `RefreshHideLedger` 引用计数，旧会话 token 无法解除新会话隐藏；会话结束释放全部 token | `RefreshHideLedgerTests`、`SnapzyPopupCaptureOrderingTests`、`ScreenshotPopupWindowProbeTests` |
+| 窗口列表未就绪时单击/回车被吞掉；加载失败与“此处无窗口”都表现为什么都不发生 | 引入 loading/ready/failed 状态与对应提示；加载中暂存一次点击并在快照到达后重放，未命中或失败则从该点手动框选 | `WindowSelectionLoadingStateTests`、`ScreenshotReliabilityTests` |
+| 定格后的尺寸徽标把点数当像素显示（混合 DPI 下错误） | `expectedOutputPixelSize` 复用真实裁剪的对齐与放大规则预测输出像素；实时气泡显示 pt，定格徽标显示 px | `CapturePixelSizeTests`、`ScreenshotReliabilityTests` |
+| 选区提交后的裁剪/合成/圆角阴影仍在主线程执行，5K/跨屏截图会卡住选区与 Quick Access 动画 | 裁剪、合成与样式改为 detached + `CaptureImageWorkGate`（并发上限 2）；冻结会话传递快照值拷贝；编码同样经 gate 限流 | `CaptureImageWorkGateTests`、`ScreenshotReliabilityTests` |
+| Quick Access 手动保存后历史里没有正式文件，删除后历史仍留失效路径；标注保存用 `try?` 吞掉写入失败 | `CaptureHistoryStore` 改为委托 `SmartCaptureHistoryStore`，提升时用 `previousPath` 重指向正式路径并发外部变更通知；删除同步移除历史；标注写入改为 staging → 解码校验 → 原子替换，失败保留原图并报错 | `CaptureHistoryServiceTests`、`ScreenshotReliabilityTests` |
+| 全屏、当前窗口、滚动截图以 `.other` 调用处理入口，按模式配置永远不生效；设置页也没有任何按模式入口 | 四类入口改为携带真实 `CaptureMode`；`setPerModePostCaptureActions` 写入/删除模式键；设置页新增「按截图模式」卡片，缺省键=跟随全局，取消自定义即删除键 | `PostCaptureRoutingTests`、`ConfigurationSchemaContractTests`、`ConfigStoreTests` |
+| 选区操作栏在标注时仍混排 OCR/贴图/更多，框选阶段则被工具按钮占满 | `AreaSelectionActionBar.applyStageVisibility()` 单点切换两阶段：框选=主要动作，标注=工具+完成/取消；完成按原定动作交付，取消丢弃会话 | `SnapzyCaptureTests` |
+
+状态：自动化测试已通过；混合 DPI、跨屏、AX 无权限、按模式配置与操作栏分层的实机验收仍待完成；尚未发布 Beta。
+

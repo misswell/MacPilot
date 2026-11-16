@@ -77,6 +77,7 @@ final class AreaSelectionWindow: NSPanel {
     isOpaque = false
     backgroundColor = NSColor(white: 0, alpha: 0.005)
     sharingType = .none
+    CaptureChromeWindowRegistry.shared.register(self, reason: "area-selection")
     level = .screenSaver
     ignoresMouseEvents = false
     acceptsMouseMovedEvents = true
@@ -305,6 +306,12 @@ final class AreaSelectionOverlayView: NSView {
   private(set) var isAnnotationSessionActive = false
   private var embeddedAnnotationView: NSView?
   private var windowSelectionSnapshot: WindowSelectionSnapshot?
+  private var windowSelectionLoadState: WindowSelectionLoadState = .ready
+  private var pendingWindowSelectionClick: CGPoint?
+  /// Exact pixel size of the crop this selection will produce, supplied by the
+  /// frozen session. The point size must never be presented as pixels: on a
+  /// Retina or mixed-DPI selection they differ.
+  private var finalizedPixelSize: CGSize?
   private var hoveredWindowCandidate: WindowSelectionCandidate?
   private var hoveredElementRect: CGRect?
   private var lastElementHoverPoint: CGPoint?
@@ -742,6 +749,7 @@ final class AreaSelectionOverlayView: NSView {
     pendingSelectionStartPoint = nil
     pendingBackdrop = nil
     finalizedSelectionRect = nil
+    finalizedPixelSize = nil
     finalizedSelectionDrag = nil
     isShowingSelectionActions = false
     isSelectionAdjustmentActive = false
@@ -856,6 +864,7 @@ final class AreaSelectionOverlayView: NSView {
   /// visible selection result.
   func showSelectionResult(
     screenRect: CGRect,
+    pixelSize: CGSize? = nil,
     showsActions: Bool,
     actionHandler: @escaping (AreaSelectionAction) -> Void
   ) {
@@ -868,6 +877,7 @@ final class AreaSelectionOverlayView: NSView {
     isSelectionAdjustmentActive = false
     finalizedSelectionDrag = nil
     finalizedSelectionRect = convertToLocalRect(screenRect).intersection(bounds)
+    finalizedPixelSize = pixelSize
     pendingSelectionStartPoint = nil
     hideMagnifier()
     hideSizeIndicator()
@@ -896,6 +906,7 @@ final class AreaSelectionOverlayView: NSView {
   /// visible while the recording-specific pill is anchored to the selection.
   func showRecordingSelectionResult(
     screenRect: CGRect,
+    pixelSize: CGSize? = nil,
     configuration: RecordingSelectionBarConfiguration,
     actionHandler: @escaping (AreaSelectionAction) -> Void
   ) {
@@ -908,6 +919,7 @@ final class AreaSelectionOverlayView: NSView {
     isSelectionAdjustmentActive = false
     finalizedSelectionDrag = nil
     finalizedSelectionRect = convertToLocalRect(screenRect).intersection(bounds)
+    finalizedPixelSize = pixelSize
     pendingSelectionStartPoint = nil
     hideMagnifier()
     hideSizeIndicator()
@@ -938,9 +950,10 @@ final class AreaSelectionOverlayView: NSView {
   /// Updates the selected frame while it is being moved/resized.  This is
   /// intentionally separate from `showSelectionResult` so the active drag is
   /// not reset when the coordinator broadcasts the new rect to every display.
-  func updateSelectionResult(screenRect: CGRect) {
+  func updateSelectionResult(screenRect: CGRect, pixelSize: CGSize? = nil) {
     guard isShowingSelectionActions else { return }
     finalizedSelectionRect = convertToLocalRect(screenRect).intersection(bounds)
+    finalizedPixelSize = pixelSize
     updateFinalizedSelectionVisuals()
     positionSelectionActionBars()
   }
@@ -1078,6 +1091,7 @@ final class AreaSelectionOverlayView: NSView {
     selectionEnabled = true
     isSelectionAdjustmentActive = false
     finalizedSelectionRect = nil
+    finalizedPixelSize = nil
     finalizedSelectionDrag = nil
     removeEmbeddedAnnotationEditor()
     removeSelectionActionBars()
@@ -1169,7 +1183,13 @@ final class AreaSelectionOverlayView: NSView {
 
     let originX = Int(localRect.minX)
     let originY = Int(bounds.height - localRect.maxY)
-    let text = "\(originX),\(originY) \(Int(localRect.width.rounded())) × \(Int(localRect.height.rounded())) px"
+    let sizeText: String
+    if let finalizedPixelSize {
+      sizeText = "\(Int(finalizedPixelSize.width.rounded())) × \(Int(finalizedPixelSize.height.rounded())) px"
+    } else {
+      sizeText = "\(Int(localRect.width.rounded())) × \(Int(localRect.height.rounded())) pt"
+    }
+    let text = "\(originX),\(originY) \(sizeText)"
     let attributes: [NSAttributedString.Key: Any] = [
       .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
       .foregroundColor: NSColor.white,
@@ -1999,14 +2019,15 @@ final class AreaSelectionOverlayView: NSView {
     return true
   }
 
-  /// iShot-style live bubble: "x,y W×H px" anchored above the selection's
-  /// top-left corner (single line, left-aligned) instead of the size-only
-  /// label that used to trail the pointer.
+  /// iShot-style live bubble: "x,y W×H pt" anchored above the selection's
+  /// top-left corner. Points are shown while dragging because the final pixel
+  /// size is not known until the frozen crop exists; claiming `px` here lied
+  /// on every Retina or mixed-DPI selection.
   private func updateSizeIndicator(for rect: CGRect, measuredSize: CGSize? = nil) {
     let displayedSize = measuredSize ?? rect.size
     let originX = Int(rect.minX)
     let originY = Int(bounds.height - rect.maxY)
-    let text = "\(originX),\(originY) \(Int(displayedSize.width.rounded())) × \(Int(displayedSize.height.rounded())) px"
+    let text = "\(originX),\(originY) \(Int(displayedSize.width.rounded())) × \(Int(displayedSize.height.rounded())) pt"
     updateCoordinateBubbleText(text)
     positionBubbleAboveTopLeft(of: rect)
   }
@@ -2105,6 +2126,30 @@ final class AreaSelectionOverlayView: NSView {
       return
     }
 
+    let text = modeHintText()
+    guard let text else {
+      modeHintBackgroundLayer.isHidden = true
+      modeHintTextLayer.isHidden = true
+      return
+    }
+    showModeHint(text)
+  }
+
+  private func modeHintText() -> String? {
+    if interactionMode == .applicationWindow {
+      switch windowSelectionLoadState {
+      case .loading:
+        return L10n.ScreenCapture.windowSelectionLoadingHint
+      case .failed:
+        return L10n.ScreenCapture.windowSelectionUnavailableHint
+      case .ready:
+        // An empty ready snapshot is not an error: nothing selectable is here.
+        if windowSelectionSnapshot?.isEmpty == true {
+          return L10n.ScreenCapture.windowSelectionEmptyHint
+        }
+      }
+    }
+
     let shortcut: CaptureOverlayShortcut? = switch selectionMode {
     case .screenshot, .scrollingCapture:
       CaptureOverlayShortcutSettings.applicationCaptureShortcut
@@ -2112,15 +2157,13 @@ final class AreaSelectionOverlayView: NSView {
       CaptureOverlayShortcutSettings.recordingApplicationCaptureShortcut
     }
 
-    guard let shortcut, !shortcut.isIndependent else {
-      modeHintBackgroundLayer.isHidden = true
-      modeHintTextLayer.isHidden = true
-      return
-    }
-
-    let hint = interactionMode == .manualRegion || interactionMode == .smartElement
+    guard let shortcut, !shortcut.isIndependent else { return nil }
+    return interactionMode == .manualRegion || interactionMode == .smartElement
       ? L10n.ScreenCapture.applicationModeHint(shortcut.displayString)
       : L10n.ScreenCapture.manualModeHint(shortcut.displayString)
+  }
+
+  private func showModeHint(_ hint: String) {
     let attributes = overlayTextAttributes
     let hintSize = hint.size(withAttributes: attributes)
     let padding = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
@@ -2266,11 +2309,20 @@ final class AreaSelectionOverlayView: NSView {
     CATransaction.commit()
   }
 
-  func setWindowSelectionSnapshot(_ windowSelectionSnapshot: WindowSelectionSnapshot?) {
+  func setWindowSelectionSnapshot(_ windowSelectionSnapshot: WindowSelectionSnapshot?, state: WindowSelectionLoadState) {
     self.windowSelectionSnapshot = windowSelectionSnapshot
+    windowSelectionLoadState = state
+    if state != .ready {
+      pendingWindowSelectionClick = nil
+    }
     if interactionMode == .applicationWindow {
       refreshInteractionState()
+      if state == .ready, let pending = pendingWindowSelectionClick {
+        pendingWindowSelectionClick = nil
+        replayWindowSelectionClick(at: pending)
+      }
     }
+    updateModeHint()
   }
 
   func setRetainedMenuBarPopoverCaptures(_ captures: [ImmediateMenuBarPopoverCapture]) {
@@ -2361,6 +2413,27 @@ final class AreaSelectionOverlayView: NSView {
       localPoint = currentMousePosition
     }
     updateWindowHover(at: localPoint)
+  }
+
+  /// A click made while the window list was still loading is replayed against
+  /// the finished list instead of being silently dropped.
+  private func replayWindowSelectionClick(at point: CGPoint) {
+    updateWindowHover(at: point)
+    guard let hoveredWindowCandidate else {
+      updateModeHint()
+      return
+    }
+    delegate?.overlayView(self, didSelectWindow: hoveredWindowCandidate.target)
+  }
+
+  /// Application-window mode falls back to a normal area drag when no app
+  /// window covers the click, so the gesture is never a dead end.
+  private func beginManualFallbackSelection(at point: CGPoint) {
+    interactionMode = .manualRegion
+    isSelecting = true
+    applyActiveCursor()
+    updateModeHint()
+    delegate?.overlayView(self, manualSelectionBeganAt: point)
   }
 
   private func refreshElementHover() {
@@ -2711,7 +2784,7 @@ final class AreaSelectionOverlayView: NSView {
           smartElementDidDrag = false
           updateElementHover(at: point)
         case .applicationWindow:
-          updateWindowHover(at: point)
+          handleApplicationWindowClick(at: point)
         }
       }
       return
@@ -2739,7 +2812,19 @@ final class AreaSelectionOverlayView: NSView {
       smartElementDidDrag = false
       updateElementHover(at: point)
     case .applicationWindow:
-      updateWindowHover(at: point)
+      handleApplicationWindowClick(at: point)
+    }
+  }
+
+  private func handleApplicationWindowClick(at point: CGPoint) {
+    updateWindowHover(at: point)
+    guard hoveredWindowCandidate == nil else { return }
+    if windowSelectionLoadState == .ready {
+      beginManualFallbackSelection(at: point)
+    } else {
+      // Keep the click so the finished window list can answer it.
+      pendingWindowSelectionClick = point
+      updateModeHint()
     }
   }
 
@@ -2841,9 +2926,17 @@ final class AreaSelectionOverlayView: NSView {
         }
       }
     case .applicationWindow:
-      updateWindowHover(at: point)
-      if let hoveredWindowCandidate {
-        delegate?.overlayView(self, didSelectWindow: hoveredWindowCandidate.target)
+      if windowSelectionLoadState == .ready {
+        updateWindowHover(at: point)
+        if let hoveredWindowCandidate {
+          delegate?.overlayView(self, didSelectWindow: hoveredWindowCandidate.target)
+        } else {
+          updateModeHint()
+        }
+      } else {
+        // The click outlives the gesture; replay it once the list arrives.
+        pendingWindowSelectionClick = point
+        updateModeHint()
       }
     }
   }

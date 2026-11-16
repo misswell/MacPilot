@@ -164,6 +164,8 @@ final class QuickAccessManager: ObservableObject {
   private let fileAccessManager = SandboxFileAccessManager.shared
   private let tempCaptureManager = TempCaptureManager.shared
   private var dismissTimers: [UUID: QuickAccessCountdownTimer] = [:]
+  private var artifactRetryHandlers: [UUID: @MainActor () -> Void] = [:]
+  @Published private(set) var lastOperationError: String?
   /// Monotonic per-item save tokens; guards the async save-and-close thumbnail push
   /// against out-of-order arrival when the same item is saved twice quickly.
   private var thumbnailSaveGenerations: [UUID: UInt64] = [:]
@@ -318,6 +320,95 @@ final class QuickAccessManager: ObservableObject {
     let item = QuickAccessItem(url: url, thumbnail: thumbnail)
     insertScreenshotItem(item)
     return item
+  }
+
+  // MARK: - Capture Artifact Lifecycle
+
+  /// Insert a card whose file is still being written. The card shows the
+  /// in-memory thumbnail; every file-backed action stays disabled until the
+  /// artifact reaches `.ready`, so a card can never point at a missing file.
+  @discardableResult
+  func addCaptureArtifactPlaceholder(
+    artifactID: UUID,
+    captureID: UUID,
+    url: URL,
+    thumbnail: NSImage,
+    pixelWidth: Int,
+    pixelHeight: Int
+  ) -> QuickAccessItem? {
+    guard isEnabled else { return nil }
+    let item = QuickAccessItem(
+      url: url,
+      thumbnail: thumbnail,
+      artifactID: artifactID,
+      captureID: captureID,
+      artifactState: .reserved,
+      isTemporaryArtifact: true,
+      pixelWidth: pixelWidth,
+      pixelHeight: pixelHeight
+    )
+    insertCapturePlaceholderItem(item)
+    return item
+  }
+
+  func markArtifactWriting(id: UUID) {
+    updateArtifactState(id: id, state: .writing, error: nil)
+  }
+
+  /// Commit the artifact URL. `byteCount` and `warning` describe the finished
+  /// file; the auto-dismiss countdown starts only now.
+  func artifactDidBecomeReady(
+    id: UUID,
+    url: URL,
+    isTemporary: Bool,
+    warning: String? = nil
+  ) {
+    guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+    items[index].url = url
+    items[index].artifactState = .ready
+    items[index].artifactErrorDescription = warning
+    items[index].isTemporaryArtifact = isTemporary
+    artifactRetryHandlers.removeValue(forKey: id)
+    if warning != nil {
+      lastOperationError = warning
+    }
+    if autoDismissEnabled, QuickAccessOperationCoordinator.shouldRunCountdown(state: .ready) {
+      startDismissTimer(for: id)
+    }
+  }
+
+  func artifactDidFail(id: UUID, error: String) {
+    updateArtifactState(id: id, state: .failed, error: error)
+    lastOperationError = error
+  }
+
+  func setArtifactRetryHandler(for id: UUID, handler: @escaping @MainActor () -> Void) {
+    artifactRetryHandlers[id] = handler
+  }
+
+  /// Retry a failed artifact write. The handler re-runs only the persistence
+  /// step for the original capture, never a new capture.
+  func retryArtifact(id: UUID) {
+    guard let item = items.first(where: { $0.id == id }), item.artifactState == .failed else { return }
+    guard let handler = artifactRetryHandlers[id] else { return }
+    lastOperationError = nil
+    updateArtifactState(id: id, state: .writing, error: nil)
+    handler()
+  }
+
+  private func updateArtifactState(
+    id: UUID,
+    state: CaptureArtifactState,
+    error: String?
+  ) {
+    guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+    items[index].artifactState = state
+    items[index].artifactErrorDescription = error
+    if QuickAccessOperationCoordinator.shouldRunCountdown(state: state), autoDismissEnabled {
+      startDismissTimer(for: id)
+    } else {
+      cancelDismissTimer(for: id)
+    }
   }
 
   /// Add a new video recording to the quick access stack
@@ -508,8 +599,7 @@ final class QuickAccessManager: ObservableObject {
     pinWindowManager.close(id: id)
     editingItemIds.remove(id)
     activityHoldItemIds.remove(id)
-    // Clear annotation session cache for this item
-    AnnotateManager.shared.clearSessionData(for: id)
+    artifactRetryHandlers.removeValue(forKey: id)
     // Fast animation (0.15s) for immediate perceived response
     withAnimation(.spring(response: 0.15, dampingFraction: 0.8)) {
       items.removeAll { $0.id == id }
@@ -567,13 +657,22 @@ final class QuickAccessManager: ObservableObject {
           context: ["fileName": url.lastPathComponent]
         )
       } else {
+        ClipboardArtifactLeaseManager.shared.synchronizeWithGeneralPasteboard()
+        guard ClipboardArtifactLeaseManager.shared.canReclaim(url: url) else {
+          DiagnosticLogger.shared.log(
+            .info,
+            .clipboard,
+            "Quick access item dismissed; temp file preserved by clipboard lease",
+            context: ["fileName": url.lastPathComponent]
+          )
+          return
+        }
         DiagnosticLogger.shared.log(
           .info,
           .action,
           "Quick access item dismissed; temp file auto-delete requested",
           context: ["fileName": url.lastPathComponent]
         )
-        AnnotationSessionStore.shared.deleteSession(for: url)
         tempCaptureManager.deleteTempFile(at: url)
       }
     }
@@ -593,8 +692,7 @@ final class QuickAccessManager: ObservableObject {
     pinWindowManager.close(id: id)
     editingItemIds.remove(id)
     activityHoldItemIds.remove(id)
-    // Clear annotation session cache for this item
-    AnnotateManager.shared.clearSessionData(for: id)
+    artifactRetryHandlers.removeValue(forKey: id)
     withAnimation(.spring(response: 0.15, dampingFraction: 0.8)) {
       items.removeAll { $0.id == id }
     }
@@ -1072,13 +1170,12 @@ final class QuickAccessManager: ObservableObject {
     }
     for item in items {
       cancelDismissTimer(for: item.id)
-      // Clear annotation session cache
-      AnnotateManager.shared.clearSessionData(for: item.id)
     }
     pinWindowManager.closeAll()
     items.removeAll()
     editingItemIds.removeAll()
     activityHoldItemIds.removeAll()
+    artifactRetryHandlers.removeAll()
     hidePanel()
     DiagnosticLogger.shared.log(
       .info,
@@ -1102,9 +1199,16 @@ final class QuickAccessManager: ObservableObject {
 
     // If cloud URL is available, copy the cloud link as text
     if let cloudURL = item.cloudURL {
+      guard item.allows(.copy) else {
+        reportNotReady(item, operation: .copy)
+        return
+      }
       let pasteboard = NSPasteboard.general
       pasteboard.clearContents()
-      pasteboard.setString(cloudURL.absoluteString, forType: .string)
+      guard pasteboard.setString(cloudURL.absoluteString, forType: .string) else {
+        lastOperationError = AppText.value("qaClipboardFailed", language: .system)
+        return
+      }
       DiagnosticLogger.shared.log(
         .info,
         .clipboard,
@@ -1116,40 +1220,77 @@ final class QuickAccessManager: ObservableObject {
       return
     }
 
+    guard item.allows(.copy) else {
+      reportNotReady(item, operation: .copy)
+      return
+    }
+
     let url = item.url
     let isVideo = item.isVideo
 
-    // Load data and write to clipboard BEFORE removing the card.
-    // removeItem/removeScreenshot deletes temp files, which would cause
-    // reads to fail if done after removal.
+    // Write to the clipboard BEFORE removing the card. Image copies register a
+    // lease so the temp file survives dismissal and stays readable until the
+    // pasteboard changes.
+    let copied: Bool
     if isVideo {
-      ClipboardHelper.copyMediaFile(from: url)
-      DiagnosticLogger.shared.log(
-        .info,
-        .clipboard,
-        "Quick access copied video file to clipboard",
-        context: ["fileName": url.lastPathComponent]
-      )
+      copied = ClipboardHelper.copyMediaFile(from: url)
     } else {
-      ClipboardHelper.copyImage(from: url)
-      DiagnosticLogger.shared.log(
-        .info,
-        .clipboard,
-        "Quick access copied image to clipboard",
-        context: ["fileName": url.lastPathComponent]
+      copied = SmartCaptureClipboard.copy(
+        imageURL: url,
+        artifactID: item.artifactID,
+        captureID: item.captureID
       )
     }
+
+    guard copied else {
+      lastOperationError = AppText.value("qaClipboardFailed", language: .system)
+      DiagnosticLogger.shared.log(
+        .error,
+        .clipboard,
+        "Quick access clipboard copy failed; card kept",
+        context: ["fileName": url.lastPathComponent]
+      )
+      return
+    }
+
+    DiagnosticLogger.shared.log(
+      .info,
+      .clipboard,
+      isVideo
+        ? "Quick access copied video file to clipboard"
+        : "Quick access copied image to clipboard",
+      context: ["fileName": url.lastPathComponent]
+    )
 
     // Remove card from UI without deleting the temp file (same as drag-to-app).
     dismissCard(id: id)
 
     // File-based clipboard: the file must stay on disk so the receiving app
-    // can read it at paste time. Orphaned temp files are cleaned on next launch.
+    // can read it at paste time. The lease is released when the pasteboard
+    // changeCount moves past this copy.
 
     SoundManager.play("Pop")
   }
 
-  /// Delete item from disk and remove from stack
+  private func reportNotReady(_ item: QuickAccessItem, operation: QuickAccessFileOperation) {
+    guard let key = QuickAccessOperationCoordinator.userMessageKey(for: item.artifactState) else { return }
+    let message = AppText.value(key, language: .system)
+    lastOperationError = message
+    DiagnosticLogger.shared.log(
+      .warning,
+      .action,
+      "Quick access \(operation.rawValue) rejected before artifact became ready",
+      context: [
+        "itemId": item.id.uuidString,
+        "state": item.artifactState.rawValue,
+      ]
+    )
+  }
+
+  /// Delete item from disk and remove from stack.
+  ///
+  /// The card is removed only after the file operation succeeded, so a failed
+  /// delete never leaves the user with no way to retry.
   func deleteItem(id: UUID) {
     guard let item = items.first(where: { $0.id == id }) else {
       DiagnosticLogger.shared.log(
@@ -1160,9 +1301,13 @@ final class QuickAccessManager: ObservableObject {
       )
       return
     }
+    guard QuickAccessOperationCoordinator.mayStartDelete(state: item.artifactState) else {
+      reportNotReady(item, operation: .delete)
+      return
+    }
 
     let url = item.url
-    let isTempFile = tempCaptureManager.isTempFile(url)
+    let isTempFile = item.isTemporaryArtifact || tempCaptureManager.isTempFile(url)
     DiagnosticLogger.shared.log(
       .info,
       .action,
@@ -1170,41 +1315,36 @@ final class QuickAccessManager: ObservableObject {
       context: ["fileName": url.lastPathComponent, "temp": isTempFile ? "true" : "false"]
     )
 
-    // Remove matching history record up-front so:
-    //  - Temp files: removeItem's history-preservation check now sees no record,
-    //    so the temp file is actually deleted (matches the user's explicit intent).
-    //  - Saved files: history is cleared before the file is trashed, avoiding a
-    //    "file missing" ghost entry in the history panel.
-    CaptureHistoryStore.shared.removeByFilePath(url.path)
-    AnnotationSessionStore.shared.deleteSession(for: url)
-
-    removeItem(id: id)
-
-    // removeItem already handles temp file deletion,
-    // for non-temp files we need to trash them
-    if !isTempFile {
-      Task { @MainActor in
+    cancelDismissTimer(for: id)
+    do {
+      if isTempFile {
+        try tempCaptureManager.deleteTempFileIfPresent(at: url)
+      } else if FileManager.default.fileExists(atPath: url.path) {
         let fileAccess = fileAccessManager.beginAccessingURL(url)
-        let directoryAccess = fileAccessManager.beginAccessingURL(url.deletingLastPathComponent())
         defer { fileAccess.stop() }
-        defer { directoryAccess.stop() }
-
-        do {
-          try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-          if item.isVideo {
-            try? RecordingMetadataStore.delete(for: url)
-          }
-        } catch {
-          logger.error("Failed to delete item \(url.lastPathComponent): \(error.localizedDescription)")
-          DiagnosticLogger.shared.logError(
-            .fileAccess,
-            error,
-            "Quick access delete failed",
-            context: ["fileName": url.lastPathComponent]
-          )
+        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        if item.isVideo {
+          try? RecordingMetadataStore.delete(for: url)
         }
       }
+    } catch {
+      let message = AppText.value("qaDeleteFailed", language: .system)
+      if let index = items.firstIndex(where: { $0.id == id }) {
+        items[index].artifactErrorDescription = message
+      }
+      lastOperationError = message
+      logger.error("Failed to delete item \(url.lastPathComponent): \(error.localizedDescription)")
+      DiagnosticLogger.shared.logError(
+        .fileAccess,
+        error,
+        "Quick access delete failed; card kept",
+        context: ["fileName": url.lastPathComponent]
+      )
+      return
     }
+
+    CaptureHistoryStore.shared.removeByFilePath(url.path)
+    removeItem(id: id)
   }
 
   /// Open screenshot in Finder
@@ -1218,20 +1358,26 @@ final class QuickAccessManager: ObservableObject {
       )
       return
     }
+    guard item.allows(.open) else {
+      reportNotReady(item, operation: .open)
+      return
+    }
 
-    // Capture URL before removal
+    guard !item.isTemporaryArtifact else {
+      // Revealing a temp file in Finder used to delete it right after the
+      // card dismissal. Promote first, then reveal the permanent artifact.
+      promoteItem(id: id, revealInFinder: true)
+      return
+    }
+
     let url = item.url
-
-    // Remove immediately - animation starts now
-    removeScreenshot(id: id)
-
-    // Async Finder reveal
     DiagnosticLogger.shared.log(
       .info,
       .action,
       "Quick access reveal in Finder requested",
       context: ["fileName": url.lastPathComponent]
     )
+    dismissCard(id: id)
     Task { @MainActor in
       let fileAccess = fileAccessManager.beginAccessingURL(url)
       defer { fileAccess.stop() }
@@ -1240,6 +1386,13 @@ final class QuickAccessManager: ObservableObject {
   }
 
   func saveItem(id: UUID) {
+    promoteItem(id: id, revealInFinder: false)
+  }
+
+  /// Promote a temporary artifact into the export folder. The card, history
+  /// path and Finder reveal are committed only after the file operation
+  /// succeeded; on failure the card stays and shows a retryable error.
+  private func promoteItem(id: UUID, revealInFinder: Bool) {
     guard let item = items.first(where: { $0.id == id }) else {
       DiagnosticLogger.shared.log(
         .warning,
@@ -1249,8 +1402,41 @@ final class QuickAccessManager: ObservableObject {
       )
       return
     }
+    guard QuickAccessOperationCoordinator.mayStartSave(state: item.artifactState) else {
+      reportNotReady(item, operation: revealInFinder ? .open : .save)
+      return
+    }
+
+    guard item.isTemporaryArtifact else {
+      // Already permanent: never copy it a second time.
+      if revealInFinder {
+        lastOperationError = nil
+        dismissCard(id: id)
+        Task { @MainActor in
+          NSWorkspace.shared.selectFile(item.url.path, inFileViewerRootedAtPath: "")
+        }
+      } else {
+        NSWorkspace.shared.selectFile(item.url.path, inFileViewerRootedAtPath: "")
+      }
+      return
+    }
+
     let tempURL = item.url
-    let cachedSessionData = AnnotateManager.shared.getSessionData(for: id)
+    let artifact = CaptureArtifact(
+      id: item.artifactID,
+      captureID: item.captureID,
+      url: tempURL,
+      isTemporary: true,
+      format: ScreenCaptureImageFormat(fileExtension: tempURL.pathExtension) ?? .png,
+      pixelWidth: item.pixelWidth,
+      pixelHeight: item.pixelHeight,
+      state: .ready
+    )
+    let exportDirectory = fileAccessManager.resolvedExportDirectoryURL()
+    let baseName = tempURL.deletingPathExtension().lastPathComponent
+    cancelDismissTimer(for: id)
+    updateArtifactState(id: id, state: .promoting, error: nil)
+
     DiagnosticLogger.shared.log(
       .info,
       .action,
@@ -1258,57 +1444,62 @@ final class QuickAccessManager: ObservableObject {
       context: ["fileName": tempURL.lastPathComponent]
     )
 
-    // Remove card immediately (don't trigger temp file deletion since we're saving)
-    cancelDismissTimer(for: id)
-    pinWindowManager.close(id: id)
-    editingItemIds.remove(id)
-    activityHoldItemIds.remove(id)
-    withAnimation(.spring(response: 0.15, dampingFraction: 0.8)) {
-      items.removeAll { $0.id == id }
-    }
-    if items.isEmpty {
-      hidePanel()
-    }
+    Task { @MainActor [weak self] in
+      let result = await Task.detached(priority: .utility) {
+        Result { try CaptureArtifactStore.shared.promote(artifact, to: exportDirectory, baseName: baseName) }
+      }.value
 
-    // Move file from temp to export location
-    Task { @MainActor in
-      if let savedURL = tempCaptureManager.saveToExportLocation(tempURL: tempURL) {
-        // Update history records by original file path. QuickAccess item IDs are
-        // independent from persisted history record IDs.
-        CaptureHistoryStore.shared.updateFilePath(
-          from: tempURL.path,
-          to: savedURL.path
+      guard let self else { return }
+      switch result {
+      case .success(let promoted):
+        CaptureHistoryStore.shared.recordSavedCapture(
+          url: promoted.url,
+          width: promoted.pixelWidth,
+          height: promoted.pixelHeight,
+          byteCount: promoted.byteCount,
+          previousPath: tempURL.path,
+          isVideo: item.isVideo
         )
-        if !AnnotationSessionStore.shared.moveSession(from: tempURL, to: savedURL),
-           let cachedSessionData,
-           AnnotationSessionStore.shared.shouldPersist(for: savedURL) {
-          AnnotationSessionStore.shared.persist(cachedSessionData, for: savedURL)
+
+        if let index = self.items.firstIndex(where: { $0.id == id }) {
+          self.items[index].url = promoted.url
+          self.items[index].artifactState = .ready
+          self.items[index].artifactErrorDescription = nil
+          self.items[index].isTemporaryArtifact = false
         }
+        self.artifactRetryHandlers.removeValue(forKey: id)
+        self.lastOperationError = nil
 
         let captureType: CaptureType = item.isVideo ? .recording : .screenshot
         PostCaptureActionHandler.shared.copyEditedCaptureToClipboardIfEnabled(
           for: captureType,
-          url: savedURL
+          url: promoted.url
         )
 
-        let fileAccess = fileAccessManager.beginAccessingURL(savedURL)
-        defer { fileAccess.stop() }
-        NSWorkspace.shared.selectFile(savedURL.path, inFileViewerRootedAtPath: "")
+        if revealInFinder {
+          let fileAccess = self.fileAccessManager.beginAccessingURL(promoted.url)
+          defer { fileAccess.stop() }
+          NSWorkspace.shared.selectFile(promoted.url.path, inFileViewerRootedAtPath: "")
+        }
+        self.dismissCard(id: id)
         DiagnosticLogger.shared.log(
           .info,
           .action,
           "Quick access manual save completed",
-          context: ["fileName": savedURL.lastPathComponent]
+          context: ["fileName": promoted.url.lastPathComponent]
         )
-      } else {
-        DiagnosticLogger.shared.log(
-          .error,
+
+      case .failure(let error):
+        let message = AppText.value("qaArtifactFailed", language: .system)
+        self.updateArtifactState(id: id, state: .ready, error: message)
+        self.lastOperationError = message
+        DiagnosticLogger.shared.logError(
           .fileAccess,
-          "Quick access manual save failed",
+          error,
+          "Quick access manual save failed; card kept",
           context: ["fileName": tempURL.lastPathComponent]
         )
       }
-      AnnotateManager.shared.clearSessionData(for: id)
     }
   }
 
@@ -1396,24 +1587,75 @@ final class QuickAccessManager: ObservableObject {
                 image: image,
                 annotations: model.annotations,
                 styles: model.styledAnnotations.map(\.style)
-              ) else { return }
-        autoreleasepool {
-          let representation = NSBitmapImageRep(cgImage: annotated)
-          if let data = representation.representation(using: .png, properties: [:]) {
-            try? data.write(to: item.url, options: .atomic)
-          }
+              ) else {
+          self?.lastOperationError = AppText.value("qaArtifactFailed", language: .system)
+          self?.restoreAnnotationEditor()
+          return
         }
-        let thumbnailImage = NSImage(
-          cgImage: annotated,
-          size: NSSize(width: annotated.width, height: annotated.height)
-        )
-        self.updateItemThumbnail(id: item.id, image: thumbnailImage)
-        self.restoreAnnotationEditor()
+        let targetURL = item.url
+        Task { [weak self] in
+          let result = await Task.detached(priority: .userInitiated) {
+            await CaptureImageWorkGate.shared.withPermit {
+              Result { try Self.writeAnnotatedImage(annotated, to: targetURL) }
+            }
+          }.value
+          guard let self else { return }
+          switch result {
+          case .success:
+            let thumbnailImage = NSImage(
+              cgImage: annotated,
+              size: NSSize(width: annotated.width, height: annotated.height)
+            )
+            self.lastOperationError = nil
+            self.updateItemThumbnail(id: item.id, image: thumbnailImage)
+          case .failure(let error):
+            let message = AppText.value("qaArtifactFailed", language: .system)
+            self.lastOperationError = message
+            if let index = self.items.firstIndex(where: { $0.id == item.id }) {
+              self.items[index].artifactErrorDescription = message
+            }
+            DiagnosticLogger.shared.logError(
+              .fileAccess,
+              error,
+              "Quick access annotation write failed; original kept",
+              context: ["fileName": targetURL.lastPathComponent]
+            )
+          }
+          self.restoreAnnotationEditor()
+        }
       }
     )
     panelController.updateContent(editor)
     panelController.setAnnotationEditorInteractionEnabled(true)
     return true
+  }
+
+  /// Encode and replace the capture only after the new bytes decode at the
+  /// expected pixel size. A failure leaves the original file untouched; the
+  /// staging file never outlives the attempt.
+  nonisolated static func writeAnnotatedImage(_ image: CGImage, to url: URL) throws {
+    let data = autoreleasepool {
+      NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+    }
+    guard let data else { throw CaptureArtifactError.encodeFailed }
+
+    let directory = url.deletingLastPathComponent()
+    let staging = directory.appendingPathComponent(
+      ".\(url.deletingPathExtension().lastPathComponent)-annotating-\(UUID().uuidString).png"
+    )
+    do {
+      try data.write(to: staging, options: .atomic)
+      guard let source = CGImageSourceCreateWithURL(staging as CFURL, nil),
+            let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil),
+            decoded.width == image.width,
+            decoded.height == image.height else {
+        throw CaptureArtifactError.validationFailed
+      }
+      _ = try FileManager.default.replaceItemAt(url, withItemAt: staging)
+    } catch {
+      try? FileManager.default.removeItem(at: staging)
+      throw error
+    }
   }
 
   private func restoreAnnotationEditor() {
@@ -1578,6 +1820,29 @@ final class QuickAccessManager: ObservableObject {
     }
   }
 
+  private func insertCapturePlaceholderItem(_ item: QuickAccessItem) {
+    withAnimation(QuickAccessAnimations.cardInsert) {
+      if items.count >= maxVisibleItems, let oldestId = items.last?.id {
+        cancelDismissTimer(for: oldestId)
+        pinWindowManager.close(id: oldestId)
+        items.removeLast()
+      }
+      items.insert(item, at: 0)
+    }
+    DiagnosticLogger.shared.log(
+      .info,
+      .action,
+      "Quick access placeholder added",
+      context: [
+        "fileName": item.url.lastPathComponent,
+        "itemCount": "\(items.count)",
+        "artifactId": item.artifactID.uuidString,
+      ]
+    )
+    showPanelIfNeeded()
+    // No countdown until the artifact reaches .ready.
+  }
+
   private func insertScreenshotItem(_ item: QuickAccessItem, retryURL: URL? = nil) {
     // Animate insertion explicitly — no implicit .animation on the stack.
     withAnimation(QuickAccessAnimations.cardInsert) {
@@ -1631,6 +1896,7 @@ final class QuickAccessManager: ObservableObject {
 
   private func startDismissTimer(for id: UUID) {
     guard let index = items.firstIndex(where: { $0.id == id }), !items[index].isPinned else { return }
+    guard QuickAccessOperationCoordinator.shouldRunCountdown(state: items[index].artifactState) else { return }
     let delay = autoDismissDelay
     let timer = QuickAccessCountdownTimer(duration: delay) { [weak self] in
       self?.removeScreenshot(id: id)

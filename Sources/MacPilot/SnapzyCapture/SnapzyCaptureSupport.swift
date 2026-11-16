@@ -33,7 +33,7 @@ struct ShareableContentPrefetchTask: @unchecked Sendable {
 
 typealias SnapzyCaptureError = ScreenCaptureError
 
-enum SelectionMode {
+enum SelectionMode: Sendable {
     case screenshot
     case recording
     case scrollingCapture
@@ -133,6 +133,10 @@ enum L10n {
         static func manualModeHint(_ shortcut: String) -> String {
             "Area selection · (shortcut)"
         }
+
+        static let windowSelectionLoadingHint = "Identifying windows…"
+        static let windowSelectionUnavailableHint = "Window list unavailable · drag to select an area"
+        static let windowSelectionEmptyHint = "No window here · drag to select an area"
     }
 }
 

@@ -137,7 +137,7 @@ struct SnapzyCaptureTests {
         var didInvokeClipboardPin = false
         let controller = SmartScreenshotController(
             language: { .simplifiedChinese },
-            onCapture: { _ in },
+            onCapture: { _, _, _ in },
             onError: { _ in },
             screenCaptureAccessProvider: { false },
             pinClipboardShortcutOverride: {
@@ -350,7 +350,7 @@ struct SnapzyCaptureTests {
 
         let controller = SmartScreenshotController(
             language: { .simplifiedChinese },
-            onCapture: { _ in },
+            onCapture: { _, _, _ in },
             onError: { _ in },
             screenCaptureAccessProvider: { true }
         )
@@ -989,7 +989,7 @@ struct SnapzyCaptureTests {
         let recorder = InitialTargetResolverRecorder()
         let controller = SmartScreenshotController(
             language: { .simplifiedChinese },
-            onCapture: { _ in },
+            onCapture: { _, _, _ in },
             onError: { _ in },
             screenCaptureAccessProvider: { true },
             initialTargetResolver: { _, _ in
@@ -1252,6 +1252,62 @@ struct SnapzyCaptureTests {
         // …and the selection border remains visible, matching iShot.
         #expect(window.overlayView.testSelectionBorderPathBounds != nil)
         #expect(window.overlayView.isAnnotationSessionActive)
+    }
+
+    @Test @MainActor func selectionStageShowsPrimaryActionsBeforeAnyToolIsChosen() throws {
+        _ = NSApplication.shared
+        var started: [AreaSelectionAction] = []
+        let bar = AreaSelectionActionBar { started.append($0) }
+
+        func chip(_ titleKey: String) throws -> NSButton {
+            let title = AppText.value(titleKey, language: .system)
+            return try #require(bar.chipButtons.first { $0.toolTip == title })
+        }
+
+        // 状态 A：只有截图后的主要动作，标注工具整体隐藏。
+        #expect(!(try chip("scToolAnnotate")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scToolOCR")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scPin")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scToolSave")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scCopy")).isHiddenOrHasHiddenAncestor)
+        #expect((try chip("scAnnotationText")).isHiddenOrHasHiddenAncestor)
+        #expect((try chip("scToolFinish")).isHiddenOrHasHiddenAncestor)
+
+        try chip("scToolAnnotate").performClick(nil)
+        #expect(started == [.annotate])
+    }
+
+    @Test @MainActor func annotationStageSwapsToolsInAndKeepsOneCancelChip() throws {
+        _ = NSApplication.shared
+        var committed: [AreaSelectionAction] = []
+        let bar = AreaSelectionActionBar { _ in }
+        let model = SmartAnnotationModel(initialTool: .rectangle)
+        bar.bindAnnotationSession(.init(model: model) { committed.append($0) })
+
+        func chip(_ titleKey: String) throws -> NSButton {
+            let title = AppText.value(titleKey, language: .system)
+            return try #require(bar.chipButtons.first { $0.toolTip == title })
+        }
+
+        // 状态 B：工具接管主行，选择阶段动作退出，保存/复制仍然可用，
+        // 完成与取消是唯一的终止入口。
+        #expect((try chip("scToolAnnotate")).isHiddenOrHasHiddenAncestor)
+        #expect((try chip("scToolOCR")).isHiddenOrHasHiddenAncestor)
+        #expect((try chip("scPin")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scAnnotationText")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scToolSave")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scCopy")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try chip("scToolFinish")).isHiddenOrHasHiddenAncestor)
+
+        try chip("scToolFinish").performClick(nil)
+        try chip("scClose").performClick(nil)
+        #expect(committed == [.capture, .cancel])
+
+        // 会话结束后回到状态 A，工具不会残留在操作栏上。
+        bar.bindAnnotationSession(nil)
+        #expect(!(try chip("scToolAnnotate")).isHiddenOrHasHiddenAncestor)
+        #expect((try chip("scAnnotationText")).isHiddenOrHasHiddenAncestor)
+        #expect((try chip("scToolFinish")).isHiddenOrHasHiddenAncestor)
     }
 
     @Test @MainActor func annotationSessionToolbarSwitchesToolsWithoutEndingTheSession() throws {

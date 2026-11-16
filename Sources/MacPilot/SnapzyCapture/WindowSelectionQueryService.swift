@@ -22,6 +22,8 @@ struct WindowSelectionCandidate: Equatable, Sendable {
 struct WindowSelectionSnapshot: Sendable {
   let orderedCandidates: [WindowSelectionCandidate]
 
+  var isEmpty: Bool { orderedCandidates.isEmpty }
+
   func hitTest(at point: CGPoint) -> WindowSelectionCandidate? {
     orderedCandidates.first { $0.contains(point) }
   }
@@ -35,6 +37,20 @@ struct WindowSelectionSnapshot: Sendable {
       }
     )
   }
+}
+
+/// Loading, success and failure are distinct: an empty ready snapshot means
+/// "nothing selectable here", while a failure means the list could not be
+/// read at all. Neither may be presented to the user as the other.
+enum WindowSelectionLoadOutcome: Sendable {
+  case ready(WindowSelectionSnapshot)
+  case failed
+}
+
+enum WindowSelectionLoadState: Equatable, Sendable {
+  case loading
+  case ready
+  case failed
 }
 
 @MainActor
@@ -52,7 +68,7 @@ enum WindowSelectionQueryService {
   static func prepareSnapshot(
     prefetchedContentTask: ShareableContentPrefetchTask?,
     excludedWindowIDs: Set<CGWindowID>
-  ) async -> WindowSelectionSnapshot? {
+  ) async -> WindowSelectionLoadOutcome {
     do {
       let content = try await loadShareableContent(prefetchedContentTask: prefetchedContentTask).value
       let shareableWindowsByID = Dictionary(
@@ -160,14 +176,14 @@ enum WindowSelectionQueryService {
         )
       }
 
-      return WindowSelectionSnapshot(orderedCandidates: orderedCandidates)
+      return .ready(WindowSelectionSnapshot(orderedCandidates: orderedCandidates))
     } catch {
       DiagnosticLogger.shared.logError(
         .capture,
         error,
         "Failed to prepare application mode window candidates"
       )
-      return nil
+      return .failed
     }
   }
 

@@ -403,7 +403,7 @@ enum CaptureHistoryType: String, Codable, Equatable, CaseIterable {
     case gif
 }
 
-// MARK: - CaptureHistoryStore (no-op seam)
+// MARK: - CaptureHistoryStore
 
 struct CaptureHistoryRecord {
     var fileURL: URL
@@ -413,32 +413,53 @@ struct CaptureHistoryRecord {
     var duration: TimeInterval?
 }
 
+/// Bridges the Quick Access sources onto MacPilot's one persisted capture
+/// history (`SmartCaptureHistoryStore`). There is deliberately no second
+/// database: reads, removals and path moves all go through the same file the
+/// capture model displays, and the model reloads on the change notification.
 @MainActor
 final class CaptureHistoryStore {
     static let shared = CaptureHistoryStore()
-    var isDatabaseAvailable = false
+    private let defaults: UserDefaults
+    var isDatabaseAvailable = true
 
-    func hasRecord(forFilePath: String) -> Bool { false }
-    func removeByFilePath(_ path: String) {}
-    func updateFilePath(from: String, to: String) {}
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func hasRecord(forFilePath path: String) -> Bool {
+        SmartCaptureHistoryStore.contains(path: path, defaults: defaults)
+    }
+
+    func removeByFilePath(_ path: String) {
+        SmartCaptureHistoryStore.remove(path: path, defaults: defaults)
+    }
+
+    func recordSavedCapture(
+        url: URL,
+        width: Int,
+        height: Int,
+        byteCount: Int64,
+        previousPath: String?,
+        isVideo: Bool
+    ) {
+        SmartCaptureHistoryStore.record(
+            url: url,
+            width: width,
+            height: height,
+            byteCount: byteCount,
+            kind: isVideo ? .video : .screenshot,
+            previousPath: previousPath,
+            defaults: defaults
+        )
+    }
+
 }
 
 extension UserDefaults {
     var snapzyHistoryEnabled: Bool {
         object(forKey: "MacPilot.historyEnabled") as? Bool ?? false
     }
-}
-
-// MARK: - AnnotationSessionStore (no-op seam)
-
-@MainActor
-final class AnnotationSessionStore {
-    static let shared = AnnotationSessionStore()
-
-    func deleteSession(for url: URL) {}
-    func moveSession(from: URL, to: URL) -> Bool { false }
-    func shouldPersist(for url: URL) -> Bool { false }
-    func persist(_ data: Data?, for url: URL) {}
 }
 
 // MARK: - AnnotateManager (bridge to the app's annotation editor)
@@ -456,9 +477,6 @@ final class AnnotateManager {
     func openAnnotation(for item: QuickAccessItem) {
         onOpenAnnotation?(item)
     }
-
-    func clearSessionData(for id: UUID) {}
-    func getSessionData(for id: UUID) -> Data? { nil }
 }
 
 // MARK: - VideoEditorManager (no-op seam; video editing is not part of the migrated slice)
@@ -478,7 +496,13 @@ final class VideoEditorManager {
 final class PostCaptureActionHandler {
     static let shared = PostCaptureActionHandler()
 
-    func copyEditedCaptureToClipboardIfEnabled(for type: CaptureType, url: URL) {}
+    /// Registered by the screenshot feature so this helper never guesses the
+    /// user's preference. Unset means "do not copy".
+    var copyActionProvider: (@MainActor (CaptureType, URL) -> Void)?
+
+    func copyEditedCaptureToClipboardIfEnabled(for type: CaptureType, url: URL) {
+        copyActionProvider?(type, url)
+    }
 }
 
 // MARK: - SoundManager
@@ -518,12 +542,22 @@ enum ClipboardHelper {
         NSPasteboard.general.writeObjects([image])
     }
 
-    static func copyMediaFile(from url: URL) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([url as NSURL])
+    @discardableResult
+    static func copyMediaFile(from url: URL) -> Bool {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        return pasteboard.writeObjects([url as NSURL])
     }
 
+    @MainActor
     static func isReferencedByGeneralPasteboard(_ url: URL) -> Bool {
+        // The lease manager is the authority: it tracks both file-URL writes
+        // and image copies whose provider can still read the file.
+        ClipboardArtifactLeaseManager.shared.synchronizeWithGeneralPasteboard()
+        if !ClipboardArtifactLeaseManager.shared.canReclaim(url: url) {
+            return true
+        }
+
         let pasteboard = NSPasteboard.general
         for item in pasteboard.pasteboardItems ?? [] {
             if let string = item.string(forType: .fileURL), string == url.absoluteString {
@@ -639,6 +673,12 @@ final class TempCaptureManager {
     func deleteTempFile(at url: URL) {
         guard isTempFile(url) else { return }
         try? FileManager.default.removeItem(at: url)
+    }
+
+    /// Throwing variant for explicit delete, so a failure reaches the card.
+    func deleteTempFileIfPresent(at url: URL) throws {
+        guard isTempFile(url), FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
     }
 
     /// Cleanup all orphaned temp files (call on app launch).

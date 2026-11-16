@@ -228,7 +228,11 @@ final class SnapzyScreenCaptureManager {
            let app = content.applications.first(where: { $0.bundleIdentifier == bundleIdentifier }) {
             return SCContentFilter(display: display, excludingApplications: [app], exceptingWindows: [])
         }
-        return SCContentFilter(display: display, excludingWindows: [])
+        // Screenshot chrome is excluded by window ID, never by process: an
+        // ordinary MacPilot window must stay capturable.
+        let chromeIDs = CaptureChromeWindowRegistry.shared.excludedWindowIDs()
+        let chromeWindows = content.windows.filter { chromeIDs.contains($0.windowID) }
+        return SCContentFilter(display: display, excludingWindows: chromeWindows)
     }
 
     private func displayScaleFactor(

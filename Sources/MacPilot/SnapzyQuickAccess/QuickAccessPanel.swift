@@ -25,6 +25,7 @@ final class QuickAccessPanel: NSPanel {
       defer: false
     )
     configurePanel()
+    CaptureChromeWindowRegistry.shared.register(self, reason: "quick-access")
     installMouseMonitors()
   }
 
@@ -101,6 +102,8 @@ final class QuickAccessPanel: NSPanel {
     isOpaque = false
     backgroundColor = .clear
     hasShadow = false  // Cards have their own shadows
+    // The preview cards must never appear inside the screenshot they show.
+    sharingType = .none
     collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
     acceptsMouseMovedEvents = true
     ignoresMouseEvents = false

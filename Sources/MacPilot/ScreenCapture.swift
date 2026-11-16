@@ -99,6 +99,9 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
     /// 贴图窗口的边角形状：圆角（系统窗口半径）或直角。
     var pinCornerStyle: ScreenCapturePinCornerStyle
     var imageHosting: ImageHostingSettings
+    /// Per-capture-mode overrides for the four post-capture switches. Empty by
+    /// default, which keeps the legacy global behaviour byte-for-byte.
+    var postCaptureConfiguration: PostCaptureConfiguration
 
     init(
         isEnabled: Bool = false,
@@ -134,6 +137,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         pinAfterCapture: Bool = false,
         pinCornerStyle: ScreenCapturePinCornerStyle = .rounded,
         imageHosting: ImageHostingSettings = ImageHostingSettings(),
+        postCaptureConfiguration: PostCaptureConfiguration = PostCaptureConfiguration(),
         migrateLegacyScreenshotShortcuts: Bool = false
     ) {
         self.isEnabled = isEnabled
@@ -178,6 +182,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.pinAfterCapture = pinAfterCapture
         self.pinCornerStyle = pinCornerStyle
         self.imageHosting = imageHosting
+        self.postCaptureConfiguration = postCaptureConfiguration.sanitized()
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -187,6 +192,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         case smartCaptureShortcut, areaCaptureShortcut, repeatAreaCaptureShortcut, delayedAreaCaptureShortcut, delayedCaptureSeconds, applicationWindowCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut, pinCaptureShortcut, postSelectionPinShortcut
         case screenshotEnabled
         case saveAfterCapture, copyAfterCapture, showQuickAccess, pinAfterCapture, pinCornerStyle, imageHosting
+        case postCaptureConfiguration
     }
 
     init(from decoder: Decoder) throws {
@@ -225,6 +231,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
             pinAfterCapture: try c.decodeIfPresent(Bool.self, forKey: .pinAfterCapture) ?? false,
             pinCornerStyle: try c.decodeIfPresent(ScreenCapturePinCornerStyle.self, forKey: .pinCornerStyle) ?? .rounded,
             imageHosting: try c.decodeIfPresent(ImageHostingSettings.self, forKey: .imageHosting) ?? ImageHostingSettings(),
+            postCaptureConfiguration: try c.decodeIfPresent(PostCaptureConfiguration.self, forKey: .postCaptureConfiguration) ?? PostCaptureConfiguration(),
             migrateLegacyScreenshotShortcuts: true
         )
     }
@@ -292,13 +299,12 @@ private struct ScreenCaptureSavedImage: Sendable {
     let size: Int64
 }
 
-private struct ScreenCapturePersistenceOutcome: Sendable {
-    let savedImage: ScreenCaptureSavedImage?
-    let quickAccessWriteSucceeded: Bool
-    let fallbackURL: URL?
-    let errorDescription: String?
-    /// 用户关闭“截图后自动保存到本地”时为 true；此时没有保存失败，只是不落盘。
-    let skippedAutoSave: Bool
+private struct CapturedArtifactOutcome: Sendable {
+    let url: URL
+    let byteCount: Int64
+    let isTemporary: Bool
+    /// Non-nil when the permanent write failed and a temporary file was kept.
+    let warning: String?
 }
 
 private struct ScreenCaptureStorageStatistics: Sendable {
@@ -566,6 +572,7 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
     /// Only touched from the main actor and from deinit, which runs after the
     /// last strong reference is gone — no concurrent access is possible.
     nonisolated(unsafe) private var permissionRecoveryObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var historyChangeObserver: NSObjectProtocol?
     private var diskUsageRevision = 0
     private let lastAreaDefaultsKey = "MacPilot.smartCapture.lastArea"
     private var smartCapture: SmartScreenshotController?
@@ -573,7 +580,9 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
     private func makeSmartCaptureController() -> SmartScreenshotController {
         SmartScreenshotController(
         language: { [weak self] in self?.language ?? .system },
-        onCapture: { [weak self] image in self?.handleSmartCapture(image) },
+        onCapture: { [weak self] image, intent, mode in
+            self?.handleSmartCapture(image, intent: intent, mode: mode)
+        },
         onError: { [weak self] error in
             Self.logger.error("Region capture failed: \(error.localizedDescription, privacy: .public)")
             guard let self else { return }
@@ -629,7 +638,13 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
             self?.presentAreaAnnotation(image, at: screenRect, initialTool: tool)
         },
         onOCRCapture: { [weak self] image in self?.handleOCRCapture(image) },
-        onScrollingCapture: { [weak self] image in self?.handleCapturedImage(image, imageFormat: .png) },
+        onScrollingCapture: { [weak self] image in
+            self?.handleCapturedImage(
+                image,
+                imageFormat: .png,
+                request: CaptureRequest(mode: .scrolling, trigger: .shortcut, intent: .automatic)
+            )
+        },
         onObjectCutoutCapture: { [weak self] image in self?.handleObjectCutout(image) },
         onDelayedAreaCapture: { [weak self] in self?.startDelayedAreaCapture() },
         onQuickCopySave: { [weak self] image in self?.saveSmartCaptureQuickCopy(image) }
@@ -665,6 +680,9 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
         permissionPollTask?.cancel()
         if let permissionRecoveryObserver {
             NotificationCenter.default.removeObserver(permissionRecoveryObserver)
+        }
+        if let historyChangeObserver {
+            NotificationCenter.default.removeObserver(historyChangeObserver)
         }
     }
 
@@ -713,6 +731,7 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
 
     func activateFromConfiguration() {
         installPermissionRecovery()
+        installHistoryChangeObserver()
         CloudManager.shared.apply(settings: settings.imageHosting)
         captureHistory = SmartCaptureHistoryStore.load()
         updateSmartCaptureRuntime()
@@ -740,6 +759,29 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                 for: item,
                 language: self.language
             )
+        }
+        // Quick Access holds only promoted files after a manual save; copy them
+        // to the clipboard only when the user's copy-after-capture setting asks
+        // for it, through the same lease-tracked path as every other copy.
+        PostCaptureActionHandler.shared.copyActionProvider = { [weak self] type, url in
+            guard let self, type == .screenshot, self.settings.copyAfterCapture else { return }
+            _ = SmartCaptureClipboard.copy(imageURL: url, artifactID: UUID(), captureID: UUID())
+        }
+    }
+
+    /// Quick Access writes history from a different module; reloading keeps the
+    /// displayed list identical to the persisted one instead of letting the two
+    /// copies overwrite each other.
+    private func installHistoryChangeObserver() {
+        guard historyChangeObserver == nil else { return }
+        historyChangeObserver = NotificationCenter.default.addObserver(
+            forName: SmartCaptureHistoryStore.externalChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.captureHistory = SmartCaptureHistoryStore.load()
+            }
         }
     }
 
@@ -819,6 +861,18 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
 
     func setPinAfterCapture(_ value: Bool) {
         updateSettings { $0.pinAfterCapture = value }
+    }
+
+    /// `nil` removes the mode entry so that mode follows the global switches
+    /// again — exactly the pre-upgrade behaviour.
+    func setPerModePostCaptureActions(_ actions: PostCaptureActionSet?, for mode: CaptureMode) {
+        updateSettings { settings in
+            if let actions {
+                settings.postCaptureConfiguration.perModeActions[mode.rawValue] = actions
+            } else {
+                settings.postCaptureConfiguration.perModeActions.removeValue(forKey: mode.rawValue)
+            }
+        }
     }
 
     func setPinCornerStyle(_ style: ScreenCapturePinCornerStyle) {
@@ -1235,8 +1289,15 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
         return true
     }
 
-    private func handleSmartCapture(_ image: CGImage) {
-        handleCapturedImage(image)
+    private func handleSmartCapture(
+        _ image: CGImage,
+        intent: CaptureDeliveryIntent,
+        mode: CaptureMode
+    ) {
+        handleCapturedImage(
+            image,
+            request: CaptureRequest(mode: mode, trigger: .shortcut, intent: intent)
+        )
     }
 
     func showRecordingQuickAccess(url: URL) {
@@ -1316,210 +1377,272 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
         return ScreenCaptureMediaMetadata(width: width, height: height, duration: duration, byteCount: byteCount, kind: kind)
     }
 
-    /// 截图后的统一产出入口：按设置写入保存文件夹（可关闭）、剪贴板、
-    /// 快捷操作与贴图。`internal` 以便测试关闭自动保存后的产出行为。
+    /// 截图后的统一产出入口：由 CaptureRequest 决定保存、剪贴板、快捷操作与
+    /// 贴图，所有使用者引用同一个文件，只编码一次。`internal` 以便测试。
     func handleCapturedImage(
         _ image: CGImage,
         displayIndex: Int? = nil,
-        imageFormat: ScreenCaptureImageFormat? = nil
+        imageFormat: ScreenCaptureImageFormat? = nil,
+        request: CaptureRequest = CaptureRequest(mode: .other, trigger: .other, intent: .automatic)
     ) {
-        let saveAfterCapture = settings.saveAfterCapture
+        let actions = PostCaptureRouter.plan(
+            request: request,
+            global: PostCaptureActionSet(legacy: settings),
+            perMode: settings.postCaptureConfiguration.perModeActions
+        ).actions
+        guard actions.needsFileArtifact else { return }
+
         // 关闭“截图后自动保存到本地”时连保存配置都不准备，避免创建空目录。
-        let configuration = saveAfterCapture
+        let configuration = actions.saveToDisk
             ? ScreenCaptureSaveConfiguration(
                 outputFolder: smartCaptureOutputFolder(),
                 imageFormat: imageFormat ?? settings.imageFormat,
                 quality: settings.quality
             )
             : nil
-        let copyAfterCapture = settings.copyAfterCapture
-        let showQuickAccess = settings.showQuickAccess
-        let pinAfterCapture = settings.pinAfterCapture
+
         let sendableImage = SendableScreenCaptureImage(value: image)
-        let quickAccessPreviewID: UUID?
-        let quickAccessURL: URL?
-        if settings.showQuickAccess {
-            let tempURL = TempCaptureManager.shared.makeScreenshotURL()
-            let thumbnail = QuickAccessManager.cgImageThumbnail(image)
-            if let item = QuickAccessManager.shared.addScreenshot(url: tempURL, thumbnail: thumbnail) {
-                let itemID = item.id
-                quickAccessPreviewID = itemID
-                quickAccessURL = tempURL
-            } else {
-                quickAccessPreviewID = nil
-                quickAccessURL = nil
-            }
-        } else {
-            quickAccessPreviewID = nil
-            quickAccessURL = nil
-        }
-        // 临时文件服务两类需求：保存失败时给剪贴板兜底，以及关闭自动保存后
-        // 给剪贴板/贴图提供文件；两者都不需要时不为截图留任何磁盘文件。
-        let temporaryCaptureURL: URL? = {
-            if saveAfterCapture {
-                return copyAfterCapture
-                    ? (quickAccessURL ?? TempCaptureManager.shared.makeScreenshotURL())
-                    : nil
-            }
-            return (copyAfterCapture || pinAfterCapture)
-                ? (quickAccessURL ?? TempCaptureManager.shared.makeScreenshotURL())
-                : nil
-        }()
         let imageWidth = image.width
         let imageHeight = image.height
-        // Keep one persistence task per captured image. The previous code
-        // launched a Quick Access PNG encoder and a permanent-image encoder in
-        // parallel, so each task retained the full-resolution CGImage until it
-        // completed. Serializing the two disk writes bounds the full-image
-        // lifetime and avoids two large encoder buffers at once.
-        let persistenceTask = Task.detached(priority: .utility) {
-            var quickAccessWriteSucceeded = true
-            if let quickAccessURL {
-                quickAccessWriteSucceeded = TempCaptureManager.writeScreenshot(
-                    sendableImage,
-                    to: quickAccessURL
+        let artifactID = UUID()
+        let previewURL = TempCaptureManager.shared.makeScreenshotURL()
+        var quickAccessItemID: UUID?
+        if actions.showQuickAccess {
+            quickAccessItemID = QuickAccessManager.shared.addCaptureArtifactPlaceholder(
+                artifactID: artifactID,
+                captureID: request.captureID,
+                url: previewURL,
+                thumbnail: QuickAccessManager.cgImageThumbnail(image),
+                pixelWidth: imageWidth,
+                pixelHeight: imageHeight
+            )?.id
+        }
+
+        let wantsFallbackFile = actions.copyToClipboard || actions.pinToScreen || quickAccessItemID != nil
+        guard configuration != nil || wantsFallbackFile else { return }
+
+        if let quickAccessItemID {
+            QuickAccessManager.shared.setArtifactRetryHandler(for: quickAccessItemID) { [weak self] in
+                guard let self else { return }
+                self.startCapturePersistence(
+                    image: sendableImage,
+                    imageWidth: imageWidth,
+                    imageHeight: imageHeight,
+                    configuration: configuration,
+                    temporaryURL: previewURL,
+                    fallbackURL: wantsFallbackFile ? previewURL : nil,
+                    displayIndex: displayIndex,
+                    actions: actions,
+                    request: request,
+                    artifactID: artifactID,
+                    quickAccessItemID: quickAccessItemID
                 )
             }
+            QuickAccessManager.shared.markArtifactWriting(id: quickAccessItemID)
+        }
 
-            guard let configuration else {
-                var temporaryURL = quickAccessWriteSucceeded ? quickAccessURL : nil
-                if temporaryURL == nil,
-                   let temporaryCaptureURL,
-                   TempCaptureManager.writeScreenshot(sendableImage, to: temporaryCaptureURL) {
-                    temporaryURL = temporaryCaptureURL
+        startCapturePersistence(
+            image: sendableImage,
+            imageWidth: imageWidth,
+            imageHeight: imageHeight,
+            configuration: configuration,
+            temporaryURL: previewURL,
+            fallbackURL: wantsFallbackFile ? previewURL : nil,
+            displayIndex: displayIndex,
+            actions: actions,
+            request: request,
+            artifactID: artifactID,
+            quickAccessItemID: quickAccessItemID
+        )
+    }
+
+    private func startCapturePersistence(
+        image: SendableScreenCaptureImage,
+        imageWidth: Int,
+        imageHeight: Int,
+        configuration: ScreenCaptureSaveConfiguration?,
+        temporaryURL: URL,
+        fallbackURL: URL?,
+        displayIndex: Int?,
+        actions: PostCaptureActionSet,
+        request: CaptureRequest,
+        artifactID: UUID,
+        quickAccessItemID: UUID?
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await Task.detached(priority: .utility) {
+                await CaptureImageWorkGate.shared.withPermit {
+                    Self.persistCapture(
+                        image: image,
+                        configuration: configuration,
+                        temporaryURL: temporaryURL,
+                        fallbackURL: fallbackURL,
+                        displayIndex: displayIndex
+                    )
                 }
-                return ScreenCapturePersistenceOutcome(
-                    savedImage: nil,
-                    quickAccessWriteSucceeded: quickAccessWriteSucceeded,
-                    fallbackURL: temporaryURL,
-                    errorDescription: nil,
-                    skippedAutoSave: true
-                )
-            }
+            }.value
+            self.finishCaptureDelivery(
+                result,
+                actions: actions,
+                request: request,
+                artifactID: artifactID,
+                quickAccessItemID: quickAccessItemID,
+                imageWidth: imageWidth,
+                imageHeight: imageHeight
+            )
+        }
+    }
 
-            do {
-                let savedImage = try autoreleasepool {
+    nonisolated private static func persistCapture(
+        image: SendableScreenCaptureImage,
+        configuration: ScreenCaptureSaveConfiguration?,
+        temporaryURL: URL,
+        fallbackURL: URL?,
+        displayIndex: Int?
+    ) -> Result<CapturedArtifactOutcome, Error> {
+        do {
+            if let configuration {
+                let saved = try autoreleasepool {
                     try ScreenCaptureStorage.save(
-                        image: sendableImage,
+                        image: image,
                         displayIndex: displayIndex,
                         date: Date(),
                         configuration: configuration
                     )
                 }
-                return ScreenCapturePersistenceOutcome(
-                    savedImage: savedImage,
-                    quickAccessWriteSucceeded: quickAccessWriteSucceeded,
-                    fallbackURL: nil,
-                    errorDescription: nil,
-                    skippedAutoSave: false
-                )
-            } catch {
-                var fallbackURL: URL?
-                if let temporaryCaptureURL {
-                    if quickAccessURL == nil || !quickAccessWriteSucceeded {
-                        quickAccessWriteSucceeded = TempCaptureManager.writeScreenshot(
-                            sendableImage,
-                            to: temporaryCaptureURL
-                        )
-                    }
-                    if quickAccessWriteSucceeded {
-                        fallbackURL = temporaryCaptureURL
-                    }
-                }
-                return ScreenCapturePersistenceOutcome(
-                    savedImage: nil,
-                    quickAccessWriteSucceeded: quickAccessWriteSucceeded,
-                    fallbackURL: fallbackURL,
-                    errorDescription: error.localizedDescription,
-                    skippedAutoSave: false
+                return .success(
+                    CapturedArtifactOutcome(
+                        url: saved.url,
+                        byteCount: saved.size,
+                        isTemporary: false,
+                        warning: nil
+                    )
                 )
             }
-        }
-        Task { [weak self] in
-            let outcome = await persistenceTask.value
-            if outcome.skippedAutoSave {
-                await self?.finishSkippedAutoSave(
-                    outcome,
-                    quickAccessPreviewID: quickAccessPreviewID,
-                    copyAfterCapture: copyAfterCapture,
-                    showQuickAccess: showQuickAccess,
-                    pinAfterCapture: pinAfterCapture
+
+            guard TempCaptureManager.writeScreenshot(image, to: temporaryURL) else {
+                return .failure(CaptureArtifactError.encodeFailed)
+            }
+            return .success(
+                CapturedArtifactOutcome(
+                    url: temporaryURL,
+                    byteCount: Self.fileByteCount(at: temporaryURL),
+                    isTemporary: true,
+                    warning: nil
                 )
-                return
-            }
-            guard let saved = outcome.savedImage else {
-                Self.logger.error(
-                    "Smart capture save failed: \(outcome.errorDescription ?? "unknown error", privacy: .public)"
-                )
-                if copyAfterCapture, let fallbackURL = outcome.fallbackURL {
-                    // The fallback is also file-backed; no full image is
-                    // reloaded just to populate the pasteboard.
-                    SmartCaptureClipboard.copy(imageURL: fallbackURL)
-                }
-                if showQuickAccess,
-                   quickAccessPreviewID == nil,
-                   let fallbackURL = outcome.fallbackURL {
-                    await QuickAccessManager.shared.addScreenshot(url: fallbackURL)
-                }
-                self?.errorMessage = outcome.errorDescription
-                return
-            }
-            if !outcome.quickAccessWriteSucceeded, let quickAccessPreviewID {
-                QuickAccessManager.shared.removeScreenshot(id: quickAccessPreviewID)
-            }
-            guard let self else { return }
-            self.lastCaptureDate = Date()
-            self.lastCaptureSize = saved.size
-            self.captureCount += 1
-            self.screenshotCount += 1
-            self.totalDiskUsage += saved.size
-            self.diskUsageRevision += 1
-            self.captureHistory.removeAll { $0.url == saved.url }
-            self.captureHistory.insert(
-                SmartCaptureHistoryItem(
-                    url: saved.url,
-                    width: imageWidth,
-                    height: imageHeight,
-                    byteCount: saved.size
-                ),
-                at: 0
             )
-            self.captureHistory = Array(self.captureHistory.prefix(60))
-            SmartCaptureHistoryStore.save(self.captureHistory)
-            if copyAfterCapture {
-                SmartCaptureClipboard.copy(imageURL: saved.url)
+        } catch {
+            // Auto-save failed, but clipboard/pin/Quick Access can still use a
+            // temporary file. The card stays visible with a warning instead of
+            // silently losing the capture.
+            guard let fallbackURL,
+                  TempCaptureManager.writeScreenshot(image, to: fallbackURL) else {
+                return .failure(error)
             }
-            self.errorMessage = nil
-            if pinAfterCapture {
-                _ = await QuickAccessManager.shared.pinScreenshot(url: saved.url)
-            }
+            return .success(
+                CapturedArtifactOutcome(
+                    url: fallbackURL,
+                    byteCount: Self.fileByteCount(at: fallbackURL),
+                    isTemporary: true,
+                    warning: error.localizedDescription
+                )
+            )
         }
     }
 
-    /// 关闭“截图后自动保存到本地”后的收尾：不写保存文件夹，也不计入截图
-    /// 历史与磁盘占用，只把临时文件交给剪贴板、快捷操作与贴图。
-    private func finishSkippedAutoSave(
-        _ outcome: ScreenCapturePersistenceOutcome,
-        quickAccessPreviewID: UUID?,
-        copyAfterCapture: Bool,
-        showQuickAccess: Bool,
-        pinAfterCapture: Bool
-    ) async {
-        if !outcome.quickAccessWriteSucceeded, let quickAccessPreviewID {
-            QuickAccessManager.shared.removeScreenshot(id: quickAccessPreviewID)
+    nonisolated private static func fileByteCount(at url: URL) -> Int64 {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?
+            .int64Value ?? 0
+    }
+
+    private func finishCaptureDelivery(
+        _ result: Result<CapturedArtifactOutcome, Error>,
+        actions: PostCaptureActionSet,
+        request: CaptureRequest,
+        artifactID: UUID,
+        quickAccessItemID: UUID?,
+        imageWidth: Int,
+        imageHeight: Int
+    ) {
+        switch result {
+        case .success(let artifact):
+            let warning = artifact.warning == nil
+                ? nil
+                : AppText.value("qaArtifactFallback", language: language)
+            if let quickAccessItemID {
+                QuickAccessManager.shared.artifactDidBecomeReady(
+                    id: quickAccessItemID,
+                    url: artifact.url,
+                    isTemporary: artifact.isTemporary,
+                    warning: warning
+                )
+            }
+            if !artifact.isTemporary {
+                recordPermanentCapture(
+                    url: artifact.url,
+                    byteCount: artifact.byteCount,
+                    imageWidth: imageWidth,
+                    imageHeight: imageHeight
+                )
+            }
+            if actions.copyToClipboard {
+                let copied = SmartCaptureClipboard.copy(
+                    imageURL: artifact.url,
+                    artifactID: artifactID,
+                    captureID: request.captureID
+                )
+                if !copied {
+                    errorMessage = AppText.value("qaClipboardFailed", language: language)
+                    return
+                }
+            }
+            if actions.openAnnotation,
+               let quickAccessItemID,
+               let item = QuickAccessManager.shared.items.first(where: { $0.id == quickAccessItemID }) {
+                _ = QuickAccessManager.shared.presentAnnotationEditor(for: item, language: language)
+            }
+            if actions.pinToScreen {
+                Task { _ = await QuickAccessManager.shared.pinScreenshot(url: artifact.url) }
+            }
+            errorMessage = warning
+
+        case .failure(let error):
+            let message = AppText.value("qaArtifactFailed", language: language)
+            if let quickAccessItemID {
+                QuickAccessManager.shared.artifactDidFail(id: quickAccessItemID, error: message)
+            }
+            errorMessage = message
+            Self.logger.error(
+                "Smart capture artifact failed: \(error.localizedDescription, privacy: .public)"
+            )
         }
-        if copyAfterCapture, let fallbackURL = outcome.fallbackURL {
-            SmartCaptureClipboard.copy(imageURL: fallbackURL)
-        }
-        if showQuickAccess,
-           quickAccessPreviewID == nil,
-           let fallbackURL = outcome.fallbackURL {
-            await QuickAccessManager.shared.addScreenshot(url: fallbackURL)
-        }
-        if pinAfterCapture, let fallbackURL = outcome.fallbackURL {
-            _ = await QuickAccessManager.shared.pinScreenshot(url: fallbackURL)
-        }
-        errorMessage = nil
+    }
+
+    private func recordPermanentCapture(
+        url: URL,
+        byteCount: Int64,
+        imageWidth: Int,
+        imageHeight: Int
+    ) {
+        lastCaptureDate = Date()
+        lastCaptureSize = byteCount
+        captureCount += 1
+        screenshotCount += 1
+        totalDiskUsage += byteCount
+        diskUsageRevision += 1
+        captureHistory.removeAll { $0.url == url }
+        captureHistory.insert(
+            SmartCaptureHistoryItem(
+                url: url,
+                width: imageWidth,
+                height: imageHeight,
+                byteCount: byteCount
+            ),
+            at: 0
+        )
+        captureHistory = Array(captureHistory.prefix(60))
+        SmartCaptureHistoryStore.save(captureHistory)
     }
 
     /// 双击快速复制后的自动落盘：沿用常规截图的输出目录、格式与命名，
@@ -1637,7 +1760,7 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
             let image: CGImage
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                guard let display = activeDisplay(from: content.displays) else {
+                guard let display = targetDisplay(from: content.displays) else {
                     throw ScreenCaptureError.noDisplayFound
                 }
                 image = try await captureDisplay(display, showsCursor: settings.showsCursor)
@@ -1649,7 +1772,10 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                 }
                 image = snapshot
             }
-            handleCapturedImage(image)
+            handleCapturedImage(
+                image,
+                request: CaptureRequest(mode: .fullscreen, trigger: .other, intent: .automatic)
+            )
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1663,7 +1789,7 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
             let image: CGImage
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                guard let window = preferredCaptureWindow(from: content.windows, processID: pid) else {
+                guard let window = focusedCaptureWindow(from: content.windows, processID: pid) else {
                     throw ScreenCaptureError.captureFailed(AppText.value("scActiveWindowUnavailable", language: language))
                 }
                 let filter = SCContentFilter(desktopIndependentWindow: window)
@@ -1671,8 +1797,9 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                 configuration.queueDepth = SnapzyCaptureConfiguration.singleFrameQueueDepth
                 configuration.scalesToFit = true
                 configuration.showsCursor = false
-                configuration.width = max(1, window.frame.width > 0 ? Int(window.frame.width * 2) : 1)
-                configuration.height = max(1, window.frame.height > 0 ? Int(window.frame.height * 2) : 1)
+                let scale = windowOutputScale(for: window, filter: filter)
+                configuration.width = max(1, Int((window.frame.width * scale).rounded()))
+                configuration.height = max(1, Int((window.frame.height * scale).rounded()))
                 image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
             } catch {
                 guard let windowID = SmartWindowSnapshotCapture.frontmostWindowID(processID: pid),
@@ -1681,36 +1808,83 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
                 }
                 image = fallback
             }
-            handleCapturedImage(image)
+            handleCapturedImage(
+                image,
+                request: CaptureRequest(mode: .activeWindow, trigger: .other, intent: .automatic)
+            )
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    private func preferredCaptureWindow(from windows: [SCWindow], processID: pid_t) -> SCWindow? {
-        // Layer 0 keeps this to ordinary document windows: a floating panel or
-        // popover of the frontmost application — including MacPilot's own — is not
-        // what 「当前窗口截图」 means.
-        let candidates = windows.filter {
-            $0.owningApplication?.processID == processID && $0.isOnScreen && $0.windowID != 0
-                && $0.windowLayer == 0
-                && $0.frame.width >= 80 && $0.frame.height >= 60
+    private func captureScreenInfos() -> [CaptureScreenInfo] {
+        NSScreen.screens.compactMap { screen in
+            guard let displayID = screen.displayID else { return nil }
+            return CaptureScreenInfo(
+                displayID: displayID,
+                frame: screen.frame,
+                backingScaleFactor: screen.backingScaleFactor,
+                pixelWidth: Int((screen.frame.width * screen.backingScaleFactor).rounded()),
+                pixelHeight: Int((screen.frame.height * screen.backingScaleFactor).rounded())
+            )
         }
-        let titled = candidates.filter { !($0.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        return titled.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
-            ?? candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
     }
 
-    private func activeDisplay(from displays: [SCDisplay]) -> SCDisplay? {
-        let pointer = NSEvent.mouseLocation
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(pointer) }) {
-            return displays.max { lhs, rhs in
-                let lhsDistance = abs(CGFloat(lhs.width) - screen.frame.width) + abs(CGFloat(lhs.height) - screen.frame.height)
-                let rhsDistance = abs(CGFloat(rhs.width) - screen.frame.width) + abs(CGFloat(rhs.height) - screen.frame.height)
-                return lhsDistance > rhsDistance
+    /// Resolves the target display by `CGDirectDisplayID`. Matching display
+    /// sizes was ambiguous on mixed-DPI setups, where two screens can report
+    /// the same diagonal at different scales.
+    private func targetDisplay(from displays: [SCDisplay]) -> SCDisplay? {
+        let resolution = CaptureDisplayResolver.resolve(
+            mouseLocation: NSEvent.mouseLocation,
+            screens: captureScreenInfos(),
+            mainDisplayID: NSScreen.main?.displayID
+        )
+        guard let displayID = resolution.displayID else { return nil }
+        return displays.first { $0.displayID == displayID }
+    }
+
+    private func focusedCaptureWindow(
+        from windows: [SCWindow],
+        processID: pid_t
+    ) -> SCWindow? {
+        let probe = CaptureWindowFocusResolver.probe(
+            processID: processID,
+            mainScreenHeight: NSScreen.screens.first?.frame.height ?? 0
+        )
+        let candidates = windows.enumerated().compactMap { index, window -> CaptureWindowCandidate? in
+            guard window.owningApplication?.processID == processID, window.windowID != 0 else {
+                return nil
             }
+            return CaptureWindowCandidate(
+                windowID: window.windowID,
+                processID: processID,
+                title: window.title,
+                frame: window.frame,
+                layer: window.windowLayer,
+                isOnScreen: window.isOnScreen,
+                zIndex: index
+            )
         }
-        return displays.first
+        let selection = CaptureWindowFocusResolver.select(
+            probe: probe,
+            candidates: candidates,
+            allowLargestFallback: false
+        )
+        guard let windowID = selection.windowID else { return nil }
+        return windows.first { $0.windowID == windowID }
+    }
+
+    private func windowOutputScale(for window: SCWindow, filter: SCContentFilter) -> CGFloat {
+        let midpoint = CGPoint(x: window.frame.midX, y: window.frame.midY)
+        let screen = NSScreen.screens.first { $0.frame.contains(midpoint) } ?? NSScreen.main
+        var pointPixelScale: CGFloat?
+        if #available(macOS 14.0, *) {
+            pointPixelScale = CGFloat(filter.pointPixelScale)
+        }
+        return CaptureDisplayResolver.outputScale(
+            screenBackingScale: screen?.backingScaleFactor ?? 2,
+            pointPixelScale: pointPixelScale
+        )
     }
 
     private func saveEditedSmartCapture(
@@ -2105,6 +2279,7 @@ struct ScreenCaptureView: View {
     @State private var resetFailureMessage: String?
     @State private var imageHostingCredential = ""
     @State private var imageHostingCredentialMessage: String?
+    @State private var postCaptureMode: CaptureMode = .area
 
     init(
         capture: ScreenCaptureModel,
@@ -2129,6 +2304,7 @@ struct ScreenCaptureView: View {
             ScrollView {
                 VStack(spacing: 24) {
                     smartCaptureCard
+                    postCaptureModeCard
                     imageHostingCard
                     outputCard
                     scheduleCard
@@ -2288,6 +2464,124 @@ struct ScreenCaptureView: View {
             shortcutRow(.scrolling, action: { capture.startScrollingCapture() })
             shortcutRow(.objectCutout, action: { capture.startObjectCutoutCapture() })
             shortcutRow(.pin, action: { capture.startPinCapture() })
+        }
+    }
+
+    // MARK: - Per-mode post-capture card
+
+    private static let configurablePostCaptureModes: [CaptureMode] = [
+        .area, .applicationWindow, .activeWindow, .fullscreen, .smartElement, .scrolling
+    ]
+
+    private var globalPostCaptureActions: PostCaptureActionSet {
+        PostCaptureActionSet(legacy: capture.settings)
+    }
+
+    private func selectedPostCaptureActions() -> PostCaptureActionSet {
+        capture.settings.postCaptureConfiguration.perModeActions[postCaptureMode.rawValue]
+            ?? globalPostCaptureActions
+    }
+
+    private func updateSelectedPostCaptureActions(_ mutate: (inout PostCaptureActionSet) -> Void) {
+        var actions = selectedPostCaptureActions()
+        mutate(&actions)
+        capture.setPerModePostCaptureActions(actions, for: postCaptureMode)
+    }
+
+    private func postCaptureModeLabel(_ mode: CaptureMode) -> String {
+        switch mode {
+        case .area: return t("scPostCaptureModeArea")
+        case .applicationWindow: return t("scPostCaptureModeApplicationWindow")
+        case .activeWindow: return t("scPostCaptureModeActiveWindow")
+        case .fullscreen: return t("scPostCaptureModeFullscreen")
+        case .smartElement: return t("scPostCaptureModeSmartElement")
+        case .scrolling: return t("scPostCaptureModeScrolling")
+        case .pin, .other: return t("scPostCaptureModeOther")
+        }
+    }
+
+    private var postCaptureModeCard: some View {
+        SettingsCard {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 13).fill(Color.purple.opacity(0.13))
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.purple)
+                }
+                .frame(width: 52, height: 52)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(t("scPostCapturePerMode")).font(.headline)
+                    Text(t("scPostCapturePerModeHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            Divider()
+
+            HStack {
+                Text(t("scPostCaptureModeLabel"))
+                Spacer()
+                Picker("", selection: $postCaptureMode) {
+                    ForEach(Self.configurablePostCaptureModes, id: \.self) { mode in
+                        Text(postCaptureModeLabel(mode)).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 220)
+            }
+
+            Toggle(t("scPostCaptureFollowGlobal"), isOn: Binding(
+                get: {
+                    capture.settings.postCaptureConfiguration
+                        .perModeActions[postCaptureMode.rawValue] == nil
+                },
+                set: { follow in
+                    capture.setPerModePostCaptureActions(
+                        follow ? nil : globalPostCaptureActions,
+                        for: postCaptureMode
+                    )
+                }
+            ))
+            .toggleStyle(.checkbox)
+
+            if capture.settings.postCaptureConfiguration
+                .perModeActions[postCaptureMode.rawValue] == nil {
+                Text(t("scPostCaptureFollowGlobalHint", postCaptureModeLabel(postCaptureMode)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Toggle(t("scSaveAfterCapture"), isOn: Binding(
+                    get: { selectedPostCaptureActions().saveToDisk },
+                    set: { value in updateSelectedPostCaptureActions { $0.saveToDisk = value } }
+                ))
+                .toggleStyle(.checkbox)
+                Toggle(t("scCopyAfterCapture"), isOn: Binding(
+                    get: { selectedPostCaptureActions().copyToClipboard },
+                    set: { value in updateSelectedPostCaptureActions { $0.copyToClipboard = value } }
+                ))
+                .toggleStyle(.checkbox)
+                Toggle(t("scShowQuickAccess"), isOn: Binding(
+                    get: { selectedPostCaptureActions().showQuickAccess },
+                    set: { value in updateSelectedPostCaptureActions { $0.showQuickAccess = value } }
+                ))
+                .toggleStyle(.checkbox)
+                Toggle(t("scPinAfterSmartCapture"), isOn: Binding(
+                    get: { selectedPostCaptureActions().pinToScreen },
+                    set: { value in updateSelectedPostCaptureActions { $0.pinToScreen = value } }
+                ))
+                .toggleStyle(.checkbox)
+                if postCaptureMode != .scrolling {
+                    Toggle(t("scPostCaptureOpenAnnotation"), isOn: Binding(
+                        get: { selectedPostCaptureActions().openAnnotation },
+                        set: { value in updateSelectedPostCaptureActions { $0.openAnnotation = value } }
+                    ))
+                    .toggleStyle(.checkbox)
+                }
+            }
         }
     }
 

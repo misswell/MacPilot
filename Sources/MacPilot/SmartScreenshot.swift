@@ -434,34 +434,97 @@ struct SmartCaptureSelectionState: Equatable, Sendable {
 enum SmartCaptureClipboard {
     /// Put a file-backed, lazy image provider on the pasteboard.
     ///
-    /// MacPilot keeps only the provider and its URL in memory. PNG bytes are
-    /// generated only when another application requests them, then released
-    /// after that request finishes.
+    /// The caller is expected to have written the capture bytes once already;
+    /// this path exists for callers that only hold an image and is kept as a
+    /// single encode into the cache directory.
+    @discardableResult
+    @MainActor
     static func copy(
         image: CGImage,
         to pasteboard: NSPasteboard = .general,
         cacheURL: URL? = nil
-    ) {
+    ) -> Bool {
         let sourceURL = autoreleasepool {
             ScreenCaptureClipboardCache.write(image, to: cacheURL)
         }
-        guard let sourceURL else { return }
-        copy(imageURL: sourceURL, to: pasteboard)
+        guard let sourceURL else { return false }
+        return copy(imageURL: sourceURL, to: pasteboard)
     }
 
     /// Copy an image file without loading its full contents into long-lived
-    /// application state. The source file is retained by URL only.
-    static func copy(imageURL: URL, to pasteboard: NSPasteboard = .general) {
-        guard FileManager.default.fileExists(atPath: imageURL.path) else { return }
-        let provider = FileBackedClipboardImageProvider(sourceURL: imageURL)
-        let item = NSPasteboardItem()
-        guard item.setDataProvider(provider, forTypes: [.png]) else { return }
+    /// application state. The source file is retained by URL only, and a lease
+    /// tied to the pasteboard generation keeps temp files alive until the
+    /// pasteboard changes.
+    @discardableResult
+    @MainActor
+    static func copy(
+        imageURL: URL,
+        artifactID: UUID = UUID(),
+        captureID: UUID = UUID(),
+        to pasteboard: NSPasteboard = .general
+    ) -> Bool {
+        guard FileManager.default.fileExists(atPath: imageURL.path) else {
+            DiagnosticLogger.shared.log(
+                .error,
+                .clipboard,
+                "Clipboard copy failed; source file missing",
+                context: ["fileName": imageURL.lastPathComponent]
+            )
+            return false
+        }
 
-        pasteboard.clearContents()
+        let provider = FileBackedClipboardImageProvider(sourceURL: imageURL)
+        provider.failureHandler = { error in
+            Task { @MainActor in
+                ClipboardArtifactLeaseManager.shared.providerDidFail(
+                    artifactID: artifactID,
+                    error: error
+                )
+            }
+        }
+
+        let item = NSPasteboardItem()
+        guard item.setDataProvider(provider, forTypes: [.png]) else {
+            DiagnosticLogger.shared.log(
+                .error,
+                .clipboard,
+                "Clipboard copy failed; pasteboard rejected the image provider",
+                context: ["fileName": imageURL.lastPathComponent]
+            )
+            return false
+        }
+
         // ClipboardMonitor recognizes this marker and will not re-ingest
         // MacPilot's own screenshot copy as a new history entry.
         item.setString("", forType: .fromMacPilot)
-        _ = pasteboard.writeObjects([item])
+
+        pasteboard.clearContents()
+        guard pasteboard.writeObjects([item]) else {
+            DiagnosticLogger.shared.log(
+                .error,
+                .clipboard,
+                "Clipboard copy failed; pasteboard write refused",
+                context: ["fileName": imageURL.lastPathComponent]
+            )
+            return false
+        }
+
+        let artifact = CaptureArtifact(
+            id: artifactID,
+            captureID: captureID,
+            url: imageURL,
+            isTemporary: TempCaptureManager.shared.isTempFile(imageURL),
+            format: ScreenCaptureImageFormat(fileExtension: imageURL.pathExtension) ?? .png,
+            pixelWidth: 0,
+            pixelHeight: 0,
+            state: .ready
+        )
+        ClipboardArtifactLeaseManager.shared.recordCopy(
+            artifact: artifact,
+            changeCount: pasteboard.changeCount,
+            providedTypes: [.png]
+        )
+        return true
     }
 
     /// Read only an image representation from the pasteboard.
@@ -546,6 +609,7 @@ private enum ScreenCaptureClipboardCache {
 
 private final class FileBackedClipboardImageProvider: NSObject, NSPasteboardItemDataProvider {
     private let sourceURL: URL
+    var failureHandler: (@Sendable (Error) -> Void)?
 
     init(sourceURL: URL) {
         self.sourceURL = sourceURL
@@ -556,12 +620,16 @@ private final class FileBackedClipboardImageProvider: NSObject, NSPasteboardItem
         item: NSPasteboardItem,
         provideDataForType type: NSPasteboard.PasteboardType
     ) {
-        guard type == .png,
-              let data = autoreleasepool(invoking: { pngData() }) else { return }
+        guard type == .png else { return }
+        guard let data = autoreleasepool(invoking: { pngData() }) else {
+            failureHandler?(ClipboardProviderError.unreadable(sourceURL))
+            return
+        }
         item.setData(data, forType: type)
     }
 
     private func pngData() -> Data? {
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else { return nil }
         if sourceURL.pathExtension.caseInsensitiveCompare("png") == .orderedSame {
             return try? Data(contentsOf: sourceURL, options: .mappedIfSafe)
         }
@@ -569,7 +637,27 @@ private final class FileBackedClipboardImageProvider: NSObject, NSPasteboardItem
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             return nil
         }
-        return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
+    }
+}
+
+private enum ClipboardProviderError: LocalizedError {
+    case unreadable(URL)
+
+    var errorDescription: String? {
+        switch self {
+        case .unreadable(let url):
+            return "Clipboard image source could not be read: \(url.lastPathComponent)"
+        }
     }
 }
 
@@ -1585,7 +1673,7 @@ final class SmartScreenshotController {
     }
     nonisolated private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "SmartCapture")
     private let language: () -> AppLanguage
-    private let onCapture: (CGImage) -> Void
+    private let onCapture: (CGImage, CaptureDeliveryIntent, CaptureMode) -> Void
     private let onError: (Error) -> Void
     /// 双击快速复制后的自动落盘回调；nil 时仅复制不保存。
     private let onQuickCopySave: ((CGImage) -> Void)?
@@ -1665,6 +1753,9 @@ final class SmartScreenshotController {
     private var initialTargetUpdateTask: Task<Void, Never>?
     private var snapzyPreparationTask: Task<Void, Never>?
     private var snapzySessionID: UUID?
+    private var snapzyRefreshTask: Task<Void, Never>?
+    private var snapzyRefreshToken: UUID?
+    private var snapzyRefreshHideToken: UUID?
     private var snapzyFrozenSession: FrozenAreaCaptureSession?
     /// A frozen frame normally arrives in well under a second, but
     /// `ScreenCaptureKit` can stall indefinitely (display asleep or mid
@@ -1688,7 +1779,7 @@ final class SmartScreenshotController {
 
     init(
         language: @escaping () -> AppLanguage,
-        onCapture: @escaping (CGImage) -> Void,
+        onCapture: @escaping (CGImage, CaptureDeliveryIntent, CaptureMode) -> Void,
         onError: @escaping (Error) -> Void,
         onSelectionRect: @escaping (CGRect) -> Void = { _ in },
         onRecordingSelection: @escaping (CGRect, SmartCaptureSelectionMode) -> Void = { _, _ in },
@@ -2760,6 +2851,9 @@ final class SmartScreenshotController {
                         : nil,
                     sessionID: sessionID,
                     recordingConfiguration: recordingConfiguration,
+                    pixelSizeProvider: { [weak self] result in
+                        self?.snapzyFrozenSession?.expectedOutputPixelSize(for: result)
+                    },
                     selectionPreview: presentsPostSelectionActions
                         ? { [weak self] result in
                             self?.handleSnapzySelectionPreview(
@@ -2988,6 +3082,9 @@ final class SmartScreenshotController {
 
     /// 刷新截图 (iShot): hides the panels, re-grabs the covered displays and
     /// swaps the frozen backdrop so the selection shows live pixels again.
+    /// The task, its hide token and its session all move together: a late
+    /// completion may never reveal a newer session's panels or replace its
+    /// frozen snapshots.
     private func performSnapzyRefreshCapture(sessionID: UUID) {
         guard snapzySessionID == sessionID,
               let frozenSession = snapzyFrozenSession else { return }
@@ -2995,9 +3092,23 @@ final class SmartScreenshotController {
         guard !controller.hasInlineAnnotationSession else { return }
         let displayIDs = frozenSession.displayIDs
         guard !displayIDs.isEmpty else { return }
-        controller.setPanelsHiddenForRefresh(true)
-        Task { @MainActor [weak self] in
-            defer { controller.setPanelsHiddenForRefresh(false) }
+
+        snapzyRefreshTask?.cancel()
+        releaseSnapzyRefreshHide()
+
+        let token = UUID()
+        guard let hideToken = controller.beginRefreshHide(for: sessionID) else { return }
+        snapzyRefreshToken = token
+        snapzyRefreshHideToken = hideToken
+        snapzyRefreshTask = Task { @MainActor [weak self] in
+            defer {
+                controller.endRefreshHide(hideToken, for: sessionID)
+                if let self, self.snapzyRefreshToken == token {
+                    self.snapzyRefreshTask = nil
+                    self.snapzyRefreshToken = nil
+                    self.snapzyRefreshHideToken = nil
+                }
+            }
             do {
                 // Let WindowServer composite the panels away before grabbing,
                 // otherwise the fresh backdrop includes the overlay itself.
@@ -3012,9 +3123,13 @@ final class SmartScreenshotController {
                 )
                 guard !snapshots.isEmpty,
                       let self,
-                      self.snapzySessionID == sessionID else { return }
+                      !Task.isCancelled,
+                      self.snapzySessionID == sessionID,
+                      self.snapzyRefreshToken == token else { return }
                 frozenSession.replaceSnapshots(Array(snapshots.values))
                 controller.updateBackdrops(frozenSession.backdrops, for: sessionID)
+            } catch is CancellationError {
+                // A newer refresh or a dismissed session superseded this one.
             } catch {
                 // Keep the previous frozen frame; surface the failure.
                 guard let self, self.snapzySessionID == sessionID else { return }
@@ -3023,9 +3138,20 @@ final class SmartScreenshotController {
         }
     }
 
+    private func releaseSnapzyRefreshHide() {
+        snapzyRefreshTask?.cancel()
+        snapzyRefreshTask = nil
+        snapzyRefreshToken = nil
+        if let hideToken = snapzyRefreshHideToken, let sessionID = snapzySessionID {
+            SnapzyAreaSelectionController.shared.endRefreshHide(hideToken, for: sessionID)
+        }
+        snapzyRefreshHideToken = nil
+    }
+
     private func resetSnapzyPreparationState(invalidateFrozenSession: Bool = true) {
         snapzyPreparationTask?.cancel()
         snapzyPreparationTask = nil
+        releaseSnapzyRefreshHide()
         clearSnapzyBackdropDeadline()
         snapzySessionID = nil
         if invalidateFrozenSession {
@@ -3064,12 +3190,11 @@ final class SmartScreenshotController {
             Task { [weak self] in
                 defer { frozenSession.invalidate() }
                 do {
-                    let crop: FrozenAreaCropResult
-                    if result.spansMultipleDisplays {
-                        crop = try frozenSession.cropCompositeImage(for: result)
-                    } else {
-                        crop = try frozenSession.cropImage(for: result)
-                    }
+                    let snapshots = frozenSession.allSnapshots()
+                    let crop = try await Self.cropSnapzySelectionOffMain(
+                        snapshots: snapshots,
+                        selection: result
+                    )
                     guard let self else { return }
                     if requestedMode == .manualArea {
                         self.onSelectionRect(result.rect)
@@ -3087,7 +3212,8 @@ final class SmartScreenshotController {
                                 rendered,
                                 scaleFactor: crop.scaleFactor,
                                 screenRect: crop.screenRect,
-                                action: committedAction
+                                action: committedAction,
+                                requestedMode: requestedMode
                             )
                         },
                         onCancel: { [weak self] in
@@ -3117,12 +3243,11 @@ final class SmartScreenshotController {
         Task { [weak self] in
             defer { frozenSession.invalidate() }
             do {
-                var crop: FrozenAreaCropResult
-                if result.spansMultipleDisplays {
-                    crop = try frozenSession.cropCompositeImage(for: result)
-                } else {
-                    crop = try frozenSession.cropImage(for: result)
-                }
+                let snapshots = frozenSession.allSnapshots()
+                var crop = try await Self.cropSnapzySelectionOffMain(
+                    snapshots: snapshots,
+                    selection: result
+                )
                 guard let self else { return }
                 if requestedMode == .manualArea {
                     self.onSelectionRect(result.rect)
@@ -3138,20 +3263,34 @@ final class SmartScreenshotController {
                 }
                 // Side-bar output style (圆角/阴影) applies to the delivered
                 // image only, never to the frozen backdrop.
+                let style = SnapzyAreaSelectionController.shared.outputStyle
+                let unstyledImage = crop.image
+                let scaleFactor = crop.scaleFactor
+                let screenRect = crop.screenRect
+                let styled = await Task.detached(priority: .userInitiated) {
+                    await CaptureImageWorkGate.shared.withPermit {
+                        SmartCaptureOutputStyling.apply(
+                            to: unstyledImage,
+                            style: style,
+                            scaleFactor: scaleFactor
+                        )
+                    }
+                }.value
                 crop = FrozenAreaCropResult(
-                    image: SmartCaptureOutputStyling.apply(
-                        to: crop.image,
-                        style: SnapzyAreaSelectionController.shared.outputStyle,
-                        scaleFactor: crop.scaleFactor
-                    ),
-                    scaleFactor: crop.scaleFactor,
-                    screenRect: crop.screenRect
+                    image: styled,
+                    scaleFactor: scaleFactor,
+                    screenRect: screenRect
                 )
+                let mode = self.captureMode(for: requestedMode)
                 switch action {
-                case .capture, .save:
-                    self.onCapture(crop.image)
+                case .capture:
+                    self.onCapture(crop.image, .automatic, mode)
+                case .save:
+                    self.onCapture(crop.image, .explicitSave, mode)
                 case .copy:
-                    SmartCaptureClipboard.copy(image: crop.image)
+                    // One encode feeds the clipboard and the Quick Access card;
+                    // copying straight from the CGImage re-encoded it a second time.
+                    self.onCapture(crop.image, .explicitCopy, mode)
                 case .upload:
                     self.uploadImageToCloud(crop.image)
                 case .newSelection, .adjustSelection, .more, .scrollingCapture,
@@ -3179,19 +3318,60 @@ final class SmartScreenshotController {
         }
     }
 
+    /// Crops the frozen snapshots off the main actor. The session hands over a
+    /// value copy of its snapshots so later refreshes cannot race the crop.
+    private nonisolated static func cropSnapzySelectionOffMain(
+        snapshots: [CGDirectDisplayID: FrozenDisplaySnapshot],
+        selection: AreaSelectionResult
+    ) async throws -> FrozenAreaCropResult {
+        try await Task.detached(priority: .userInitiated) {
+            try await CaptureImageWorkGate.shared.withPermit {
+                if selection.spansMultipleDisplays {
+                    return try FrozenAreaCaptureSession.cropCompositeImage(
+                        snapshots: snapshots,
+                        for: selection
+                    )
+                }
+                return try FrozenAreaCaptureSession.cropImage(
+                    snapshots: snapshots,
+                    for: selection
+                )
+            }
+        }.value
+    }
+
+    /// Maps the selection mode the user started from onto the persisted
+    /// capture mode, so per-mode post-processing overrides find their entry.
+    private func captureMode(for mode: SmartCaptureSelectionMode) -> CaptureMode {
+        switch mode {
+        case .applicationWindow: return .applicationWindow
+        case .scrolling: return .scrolling
+        case .smartElement: return .smartElement
+        case .areaAnnotate, .ocr, .manualArea: return .area
+        case .objectCutout: return .smartElement
+        case .recordingArea, .recordingApplication: return .other
+        }
+    }
+
     /// Routes a committed (already rendered + styled) annotation session image
     /// to the pipeline matching the toolbar button the user pressed.
     private func deliverAnnotatedCapture(
         _ image: CGImage,
         scaleFactor: CGFloat,
         screenRect: CGRect,
-        action: AreaSelectionAction
+        action: AreaSelectionAction,
+        requestedMode: SmartCaptureSelectionMode
     ) {
+        let mode = captureMode(for: requestedMode)
         switch action {
-        case .capture, .save:
-            onCapture(image)
+        case .capture:
+            onCapture(image, .automatic, mode)
+        case .save:
+            // Annotated saves are always a permanent file, whatever the
+            // automatic-save switches say.
+            onCapture(image, .annotatedSave, mode)
         case .copy:
-            SmartCaptureClipboard.copy(image: image)
+            onCapture(image, .explicitCopy, mode)
         case .upload:
             uploadImageToCloud(image)
         case .ocr:
@@ -3241,9 +3421,9 @@ final class SmartScreenshotController {
                     self.presentScrollingCapture(initialImage: crop.image, for: result.rect, quartzClickPoint: .zero)
                 case .applicationWindow, .manualArea:
                     if requestedMode == .manualArea { self.onSelectionRect(result.rect) }
-                    self.onCapture(crop.image)
+                    self.onCapture(crop.image, .automatic, self.captureMode(for: requestedMode))
                 default:
-                    self.onCapture(crop.image)
+                    self.onCapture(crop.image, .automatic, self.captureMode(for: requestedMode))
                 }
             } catch {
                 self?.onError(error)
@@ -3346,7 +3526,7 @@ final class SmartScreenshotController {
             onComplete: { [weak self] annotated in
                 guard let self else { return }
                 self.inlineAnnotationControllers.removeValue(forKey: id)
-                self.onCapture(annotated)
+                self.onCapture(annotated, .automatic, .area)
             },
             onClose: { [weak self] in
                 self?.inlineAnnotationControllers.removeValue(forKey: id)
@@ -3804,7 +3984,7 @@ final class SmartScreenshotController {
                 } else if captureMode == .objectCutout {
                     self.onObjectCutoutCapture(image)
                 } else {
-                    self.onCapture(image)
+                    self.onCapture(image, .automatic, self.captureMode(for: captureMode))
                 }
             } catch {
                 self?.onError(error)
@@ -4041,6 +4221,7 @@ private final class SmartCaptureOverlayPanel: NSPanel {
         backgroundColor = .clear
         hasShadow = false
         sharingType = .none
+        CaptureChromeWindowRegistry.shared.register(self, reason: "smart-capture-overlay")
         contentView = overlayView
         setFrame(screenFrame, display: false)
     }

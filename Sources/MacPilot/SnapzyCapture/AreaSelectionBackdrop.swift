@@ -133,7 +133,7 @@ nonisolated struct ImmediateMenuBarPopoverCapture {
   let scaleFactor: CGFloat
 }
 
-nonisolated enum AreaSelectionTarget: Equatable {
+nonisolated enum AreaSelectionTarget: Equatable, Sendable {
   case rect(CGRect)
   case window(WindowCaptureTarget)
 
@@ -169,7 +169,7 @@ nonisolated struct AreaSelectionApplicationConfiguration {
   }
 }
 
-nonisolated struct AreaSelectionResult {
+nonisolated struct AreaSelectionResult: Sendable {
   let target: AreaSelectionTarget
   let displayID: CGDirectDisplayID
   let mode: SelectionMode

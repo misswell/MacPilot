@@ -29,7 +29,7 @@ nonisolated struct FrozenDisplaySnapshot: @unchecked Sendable {
   }
 }
 
-nonisolated struct FrozenAreaCropResult {
+nonisolated struct FrozenAreaCropResult: @unchecked Sendable {
   let image: CGImage
   let scaleFactor: CGFloat
   let screenRect: CGRect
@@ -233,6 +233,69 @@ nonisolated final class FrozenAreaCaptureSession {
     )
   }
 
+  /// Exact pixel size the committed crop will have, computed from the same
+  /// rect alignment and scale rules as the real crop. The overlay uses it so a
+  /// mixed-DPI selection never advertises the point size as its pixel size.
+  func expectedOutputPixelSize(
+    for selection: AreaSelectionResult,
+    minimumOutputScaleFactor: CGFloat = 1
+  ) -> CGSize? {
+    Self.expectedOutputPixelSize(
+      snapshots: snapshots,
+      for: selection,
+      minimumOutputScaleFactor: minimumOutputScaleFactor
+    )
+  }
+
+  nonisolated static func expectedOutputPixelSize(
+    snapshots: [CGDirectDisplayID: FrozenDisplaySnapshot],
+    for selection: AreaSelectionResult,
+    minimumOutputScaleFactor: CGFloat = 1
+  ) -> CGSize? {
+    if selection.spansMultipleDisplays {
+      let requestedDisplayIDs = selection.displayIDs.isEmpty ? [selection.displayID] : selection.displayIDs
+      let candidates = snapshots.values.filter { snapshot in
+        requestedDisplayIDs.contains(snapshot.displayID)
+          && snapshot.screenFrame.intersects(selection.rect)
+      }
+      guard !candidates.isEmpty else { return nil }
+      let outputScale = max(candidates.map(\.pixelScaleFactor).max() ?? 1, minimumOutputScaleFactor)
+      let captureBounds = candidates.reduce(CGRect.null) { $0.union($1.screenFrame) }
+      let aligned = Self.pixelAlignedRect(
+        selection.rect.intersection(captureBounds),
+        scaleFactor: outputScale,
+        bounds: captureBounds
+      )
+      guard !aligned.isEmpty else { return nil }
+      return CGSize(
+        width: max(1, Int((aligned.width * outputScale).rounded())),
+        height: max(1, Int((aligned.height * outputScale).rounded()))
+      )
+    }
+
+    guard let snapshot = snapshots[selection.displayID] else { return nil }
+    let relativeRect = CGRect(
+      x: selection.rect.origin.x - snapshot.screenFrame.origin.x,
+      y: selection.rect.origin.y - snapshot.screenFrame.origin.y,
+      width: selection.rect.width,
+      height: selection.rect.height
+    )
+    let screenBounds = CGRect(origin: .zero, size: snapshot.screenFrame.size)
+    let aligned = Self.pixelAlignedRect(
+      relativeRect.intersection(screenBounds),
+      scaleFactor: snapshot.pixelScaleFactor,
+      bounds: screenBounds
+    )
+    guard !aligned.isEmpty else { return nil }
+    // Mirrors `cropImage`: crop at the snapshot scale, then promote to the
+    // minimum output scale when that is higher.
+    let effectiveScale = max(snapshot.pixelScaleFactor, minimumOutputScaleFactor)
+    return CGSize(
+      width: max(1, Int((aligned.width * effectiveScale).rounded())),
+      height: max(1, Int((aligned.height * effectiveScale).rounded()))
+    )
+  }
+
   /// Heavy multi-display composite pipeline, decoupled from session state so
   /// callers can run it off the main actor with a snapshots value copy.
   static func cropCompositeImage(
@@ -242,6 +305,12 @@ nonisolated final class FrozenAreaCaptureSession {
   ) throws -> FrozenAreaCropResult {
     let requestedSelectionRect = selection.rect
     let requestedDisplayIDs = selection.displayIDs.isEmpty ? [selection.displayID] : selection.displayIDs
+    // A cross-display capture is all-or-nothing: a missing snapshot used to
+    // be skipped, which returned an image with transparent holes.
+    try CaptureCompositeValidator.validateCoverage(
+      requested: Set(requestedDisplayIDs),
+      captured: Set(snapshots.keys)
+    )
     let candidateSnapshots = snapshots.values.filter { snapshot in
       requestedDisplayIDs.contains(snapshot.displayID) && snapshot.screenFrame.intersects(requestedSelectionRect)
     }
@@ -312,7 +381,9 @@ nonisolated final class FrozenAreaCaptureSession {
         scaleFactor: snapshotScaleFactor,
         bounds: screenBounds
       )
-      guard !alignedRect.isEmpty else { continue }
+      guard !alignedRect.isEmpty else {
+        throw CaptureCompositeError.cropFailed(snapshot.displayID)
+      }
 
       let flippedY = snapshot.screenFrame.height - alignedRect.origin.y - alignedRect.height
       let pixelCropRect = CGRect(
@@ -330,7 +401,7 @@ nonisolated final class FrozenAreaCaptureSession {
       )
 
       guard let croppedImage = snapshot.image.cropping(to: pixelCropRect), !pixelCropRect.isEmpty else {
-        continue
+        throw CaptureCompositeError.cropFailed(snapshot.displayID)
       }
 
       let alignedScreenRect = CGRect(
@@ -377,6 +448,10 @@ nonisolated final class FrozenAreaCaptureSession {
     guard let renderedImage = context.makeImage() else {
       throw ScreenCaptureError.captureFailed(AppText.value("scCaptureCropFailed", language: .system))
     }
+    try CaptureCompositeValidator.validateOutput(
+      image: renderedImage,
+      expectedSize: CGSize(width: outputWidth, height: outputHeight)
+    )
 
     return FrozenAreaCropResult(
       image: renderedImage,

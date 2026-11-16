@@ -37,6 +37,48 @@ nonisolated struct SmartCaptureOutputStyle: Equatable, Sendable {
     static let inactive = SmartCaptureOutputStyle(roundedCorners: false, cornerRadius: 0, shadow: false)
 }
 
+/// Reference-counted hide ownership for 刷新截图. Each refresh takes a token;
+/// panels are hidden on the first token and revealed only when the last one
+/// for the *visible* session is released. A cancelled session's late
+/// completion therefore cannot reveal a newer session's panels.
+nonisolated struct RefreshHideLedger {
+    private var tokensBySession: [UUID: Set<UUID>] = [:]
+
+    enum ReleaseResult: Equatable {
+        case untouched
+        case stillHidden
+        case reveal
+    }
+
+    mutating func begin(sessionID: UUID) -> (token: UUID, hide: Bool) {
+        let token = UUID()
+        let shouldHide = tokensBySession[sessionID]?.isEmpty ?? true
+        tokensBySession[sessionID, default: []].insert(token)
+        return (token, shouldHide)
+    }
+
+    mutating func end(token: UUID, sessionID: UUID) -> ReleaseResult {
+        guard var tokens = tokensBySession[sessionID],
+              tokens.remove(token) != nil else { return .untouched }
+        guard tokens.isEmpty else {
+            tokensBySession[sessionID] = tokens
+            return .stillHidden
+        }
+        tokensBySession[sessionID] = nil
+        return .reveal
+    }
+
+    mutating func endAll(sessionID: UUID) -> ReleaseResult {
+        guard let tokens = tokensBySession.removeValue(forKey: sessionID),
+              !tokens.isEmpty else { return .untouched }
+        return .reveal
+    }
+
+    func isHolding(sessionID: UUID) -> Bool {
+        !(tokensBySession[sessionID]?.isEmpty ?? true)
+    }
+}
+
 @MainActor
 final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate {
     static let shared = SnapzyAreaSelectionController()
@@ -59,6 +101,9 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
     private var completion: AreaSelectionResultCompletion?
     private var selectionPreview: ((AreaSelectionResult) -> Void)?
     private var actionHandler: ((AreaSelectionResult, AreaSelectionAction) -> Void)?
+    /// Supplies the exact pixel size of the crop a result will produce, so the
+    /// dimension badge can show real pixels instead of the point size.
+    private var selectionPixelSizeProvider: ((AreaSelectionResult) -> CGSize?)?
     private var selectedResult: AreaSelectionResult?
     private weak var selectedWindow: AreaSelectionWindow?
     private var selectionMode: SelectionMode = .screenshot
@@ -111,6 +156,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         elementTargetResolver: ((CGPoint) -> CGRect?)? = nil,
         sessionID requestedSessionID: UUID? = nil,
         recordingConfiguration: RecordingSelectionBarConfiguration? = nil,
+        pixelSizeProvider: ((AreaSelectionResult) -> CGSize?)? = nil,
         selectionPreview: ((AreaSelectionResult) -> Void)? = nil,
         actionHandler: ((AreaSelectionResult, AreaSelectionAction) -> Void)? = nil,
         completion: @escaping AreaSelectionResultCompletion
@@ -122,6 +168,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         self.completion = completion
         self.selectionPreview = selectionPreview
         self.actionHandler = actionHandler
+        self.selectionPixelSizeProvider = pixelSizeProvider
         self.postSelectionPinShortcut = postSelectionPinShortcut
         self.recordingSelectionConfiguration = recordingConfiguration
         selectedResult = nil
@@ -146,6 +193,9 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
             window.updateSelectionMode(mode)
             window.setReceivesKeyboardInput(true)
             window.overlayView.setAllowsApplicationWindowSelection(applicationConfiguration != nil)
+            if applicationConfiguration != nil {
+                window.overlayView.setWindowSelectionSnapshot(nil, state: .loading)
+            }
             window.overlayView.setElementTargetResolver(elementTargetResolver)
             window.overlayView.setInteractionMode(initialInteractionMode)
             if let displayID = screen.displayID,
@@ -166,13 +216,18 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
                 let excludedWindowIDs = Set(
                     sessionPanels.map(\.windowNumber).filter { $0 > 0 }.map(CGWindowID.init)
                 )
-                let snapshot = await WindowSelectionQueryService.prepareSnapshot(
+                let outcome = await WindowSelectionQueryService.prepareSnapshot(
                     prefetchedContentTask: task,
                     excludedWindowIDs: excludedWindowIDs
                 )
                 guard let self, self.sessionID == sessionID else { return }
                 for window in self.windows {
-                    window.overlayView.setWindowSelectionSnapshot(snapshot)
+                    switch outcome {
+                    case .ready(let snapshot):
+                        window.overlayView.setWindowSelectionSnapshot(snapshot, state: .ready)
+                    case .failed:
+                        window.overlayView.setWindowSelectionSnapshot(nil, state: .failed)
+                    }
                 }
             }
         }
@@ -208,6 +263,35 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         }
     }
 
+    // Refresh hides are token owned: a late completion may only release the
+    // hide it took, and a cancelled session can never reveal a newer one's
+    // still-hidden panels.
+    private var refreshHideLedger = RefreshHideLedger()
+
+    func beginRefreshHide(for sessionID: UUID) -> UUID? {
+        guard self.sessionID == sessionID, !windows.isEmpty else { return nil }
+        let grant = refreshHideLedger.begin(sessionID: sessionID)
+        if grant.hide { setPanelsHiddenForRefresh(true) }
+        return grant.token
+    }
+
+    func endRefreshHide(_ token: UUID, for sessionID: UUID) {
+        switch refreshHideLedger.end(token: token, sessionID: sessionID) {
+        case .untouched, .stillHidden:
+            return
+        case .reveal:
+            // Only the session that owns the visible panels may reveal them.
+            guard self.sessionID == sessionID else { return }
+            setPanelsHiddenForRefresh(false)
+        }
+    }
+
+    func endAllRefreshHides(for sessionID: UUID) {
+        guard refreshHideLedger.endAll(sessionID: sessionID) == .reveal else { return }
+        guard self.sessionID == sessionID else { return }
+        setPanelsHiddenForRefresh(false)
+    }
+
     func updateBackdrops(
         _ backdrops: [CGDirectDisplayID: AreaSelectionBackdrop],
         for sessionID: UUID
@@ -233,6 +317,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         manualStart = nil
         manualRect = nil
         clearInlineAnnotationSession()
+        refreshHideLedger = RefreshHideLedger()
+        selectionPixelSizeProvider = nil
         sessionID = UUID()
         for window in oldWindows {
             window.overlayView.clearBackdrop()
@@ -259,6 +345,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         manualStart = nil
         manualRect = nil
         clearInlineAnnotationSession()
+        refreshHideLedger = RefreshHideLedger()
+        selectionPixelSizeProvider = nil
         sessionID = UUID()
         for window in oldWindows {
             window.overlayView.hideSelectionResult()
@@ -286,6 +374,8 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         manualStart = nil
         manualRect = nil
         clearInlineAnnotationSession()
+        refreshHideLedger = RefreshHideLedger()
+        selectionPixelSizeProvider = nil
         for window in currentWindows {
             // A committed selection follows a different teardown path from
             // cancel/dismiss. Clear the layer contents and the cached luma
@@ -327,6 +417,7 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
 
         selectedResult = result
         selectedWindow = window
+        let pixelSize = selectionPixelSizeProvider?(result)
         for candidate in windows {
             let actionHandler: (AreaSelectionAction) -> Void = { [weak self, weak candidate] action in
                 guard let self, let candidate else { return }
@@ -337,12 +428,14 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
                let recordingSelectionConfiguration {
                 candidate.overlayView.showRecordingSelectionResult(
                     screenRect: result.rect,
+                    pixelSize: pixelSize,
                     configuration: recordingSelectionConfiguration,
                     actionHandler: actionHandler
                 )
             } else {
                 candidate.overlayView.showSelectionResult(
                     screenRect: result.rect,
+                    pixelSize: pixelSize,
                     showsActions: candidate === window,
                     actionHandler: actionHandler
                 )
@@ -455,8 +548,9 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         guard fitted.width >= 4, fitted.height >= 4,
               let updated = result(for: .rect(fitted), in: selectedWindow) else { return }
         self.selectedResult = updated
+        let pixelSize = selectionPixelSizeProvider?(updated)
         for candidate in windows {
-            candidate.overlayView.updateSelectionResult(screenRect: updated.rect)
+            candidate.overlayView.updateSelectionResult(screenRect: updated.rect, pixelSize: pixelSize)
         }
         selectionPreview?(updated)
     }
@@ -472,8 +566,9 @@ final class SnapzyAreaSelectionController: NSObject, AreaSelectionWindowDelegate
         guard selectedWindow === window,
               let updated = result(for: .rect(rect), in: window) else { return }
         selectedResult = updated
+        let pixelSize = selectionPixelSizeProvider?(updated)
         for candidate in windows {
-            candidate.overlayView.updateSelectionResult(screenRect: updated.rect)
+            candidate.overlayView.updateSelectionResult(screenRect: updated.rect, pixelSize: pixelSize)
         }
         selectionPreview?(updated)
     }

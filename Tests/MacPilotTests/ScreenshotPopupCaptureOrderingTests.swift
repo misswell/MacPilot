@@ -120,7 +120,7 @@ struct SnapzyPopupCaptureOrderingTests {
     private func makeController(onError: @escaping (Error) -> Void = { _ in }) -> SmartScreenshotController {
         SmartScreenshotController(
             language: { .simplifiedChinese },
-            onCapture: { _ in },
+            onCapture: { _, _, _ in },
             onError: onError,
             screenCaptureAccessProvider: { true }
         )
@@ -264,7 +264,7 @@ struct SnapzyPopupCaptureOrderingTests {
         var reportedErrors: [Error] = []
         let controller = SmartScreenshotController(
             language: { .simplifiedChinese },
-            onCapture: { _ in },
+            onCapture: { _, _, _ in },
             onError: { reportedErrors.append($0) },
             screenCaptureAccessProvider: { true },
             snapzyBackdropDeadline: .milliseconds(60)
@@ -302,7 +302,7 @@ struct SnapzyPopupCaptureOrderingTests {
         let session = try frozenSession()
         let controller = SmartScreenshotController(
             language: { .simplifiedChinese },
-            onCapture: { _ in },
+            onCapture: { _, _, _ in },
             onError: { reportedErrors.append($0) },
             screenCaptureAccessProvider: { true },
             snapzyBackdropDeadline: .milliseconds(120)
