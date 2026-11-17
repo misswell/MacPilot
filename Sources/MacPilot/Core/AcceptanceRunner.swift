@@ -303,6 +303,48 @@ enum MacPilotAcceptanceRunner {
         )
         capture(bar, name: "05-inline-toolbar.png")
 
+        // Text and watermark share the in-place entry path but not the look:
+        // the text capsule must be light with dark ink, the watermark capsule
+        // dark with light ink. Both are driven through real key/mouse events
+        // against the live editor, and each entry is committed with Return.
+        window.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(200))
+        let annotationsBeforeText = controller.testAnnotationCount
+        sendKey(to: window, keyCode: 17, modifiers: [], characters: "t")
+        try? await Task.sleep(for: .milliseconds(150))
+        click(in: window, at: CGPoint(x: 0.28, y: 0.78))
+        try? await Task.sleep(for: .milliseconds(350))
+        typeText(into: window, "Test")
+        try? await Task.sleep(for: .milliseconds(250))
+        record(
+            "文字工具打开输入框",
+            window.firstResponder is NSTextView,
+            "firstResponder=\(window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")"
+        )
+        capture(window.contentView, name: "10-text-entry.png")
+        pressReturn(into: window)
+        try? await Task.sleep(for: .milliseconds(300))
+
+        sendKey(to: window, keyCode: 13, modifiers: [], characters: "w")
+        try? await Task.sleep(for: .milliseconds(150))
+        click(in: window, at: CGPoint(x: 0.64, y: 0.78))
+        try? await Task.sleep(for: .milliseconds(350))
+        typeText(into: window, "Mark")
+        try? await Task.sleep(for: .milliseconds(250))
+        record(
+            "水印工具打开输入框",
+            window.firstResponder is NSTextView,
+            "firstResponder=\(window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")"
+        )
+        capture(window.contentView, name: "11-watermark-entry.png")
+        pressReturn(into: window)
+        try? await Task.sleep(for: .milliseconds(300))
+        record(
+            "文字/水印提交为标注",
+            controller.testAnnotationCount == annotationsBeforeText + 2,
+            "annotations=\(controller.testAnnotationCount) before=\(annotationsBeforeText)"
+        )
+
         // Layout reachability at common display sizes: the bar must stay fully
         // inside the screen even for a right/bottom edge selection.
         let barSize = bar.intrinsicContentSize
@@ -582,6 +624,72 @@ enum MacPilotAcceptanceRunner {
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
     }
 
+    /// Single real click at a normalized point inside the content view.
+    private static func click(in window: NSWindow, at point: CGPoint) {
+        guard let content = window.contentView else { return }
+        let bounds = content.bounds
+        let location = CGPoint(
+            x: bounds.minX + bounds.width * point.x,
+            y: bounds.minY + bounds.height * point.y
+        )
+        func event(_ type: NSEvent.EventType) -> NSEvent {
+            NSEvent.mouseEvent(
+                with: type,
+                location: location,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            )!
+        }
+        window.sendEvent(event(.mouseMoved))
+        window.sendEvent(event(.leftMouseDown))
+        window.sendEvent(event(.leftMouseUp))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
+
+    /// Types into the focused field editor through real key-down events, so the
+    /// rendered capsule proves the actual text colour rather than a preview.
+    private static func typeText(into window: NSWindow, _ text: String) {
+        for character in text {
+            let value = String(character)
+            guard let event = NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: value,
+                charactersIgnoringModifiers: value,
+                isARepeat: false,
+                keyCode: 0
+            ) else { continue }
+            window.sendEvent(event)
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
+
+    private static func pressReturn(into window: NSWindow) {
+        guard let event = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 36
+        ) else { return }
+        window.sendEvent(event)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
+
     private static func sendKey(
         to window: NSWindow,
         keyCode: UInt16,
@@ -667,6 +775,8 @@ enum MacPilotAcceptanceRunner {
             "08-after-move-resize-color-width.png",
             "09-toolbar-display-1.png",
             "09-toolbar-display-2.png",
+            "10-text-entry.png",
+            "11-watermark-entry.png",
         ] where FileManager.default.fileExists(
             atPath: outputDirectory.appendingPathComponent(name).path
         ) {
