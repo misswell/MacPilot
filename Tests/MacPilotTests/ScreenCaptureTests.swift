@@ -884,6 +884,35 @@ struct ScreenCaptureTests {
         #expect(cropped.height == 96)
     }
 
+    @Test func smartAnnotationTextIsBareGlyphsWithoutABackgroundPlate() throws {
+        let source = try #require(makeTestImage(width: 240, height: 160, color: .black))
+        let rendered = try #require(SmartAnnotationRenderer.render(
+            image: source,
+            annotations: [.text("Bare", CGPoint(x: 0.2, y: 0.6))],
+            styles: [SmartAnnotationStyle(lineWidth: 3, opacity: 1, color: .red)]
+        ))
+        let bitmap = NSBitmapImageRep(cgImage: rendered)
+        var whitePixels = 0
+        var redPixels = 0
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                if color.redComponent > 0.9,
+                   color.greenComponent > 0.9,
+                   color.blueComponent > 0.9 {
+                    whitePixels += 1
+                }
+                if color.redComponent > 0.5,
+                   color.redComponent > color.greenComponent * 1.7,
+                   color.redComponent > color.blueComponent * 1.7 {
+                    redPixels += 1
+                }
+            }
+        }
+        #expect(redPixels > 20, "the text glyphs must still be rendered")
+        #expect(whitePixels < 20, "the text must not paint a white background plate")
+    }
+
     @Test func highlighterFillsTheDraggedRectangleAndRemainsEditable() throws {
         let mark = SmartAnnotation.highlighter(CGPoint(x: 0.8, y: 0.7), CGPoint(x: 0.2, y: 0.3))
         #expect(mark.hitTest(CGPoint(x: 0.3, y: 0.6)))

@@ -265,20 +265,59 @@ enum MacPilotAcceptanceRunner {
         }
         capture(window.contentView, name: "08-after-move-resize-color-width.png")
 
-        // Inline HUD: every tool must be a direct visible button.
+        // Inline HUD: the horizontal tool deck and the vertical action column
+        // beside the screenshot are separate cards. The selected frame is a
+        // mock view only so the placement is visible in the capture.
         let model = SmartAnnotationModel(initialTool: .rectangle)
-        let bar = AreaSelectionActionBar { _ in }
-        bar.bindAnnotationSession(.init(model: model) { _ in })
-        let size = bar.intrinsicContentSize
-        bar.frame = CGRect(origin: .zero, size: size)
+        let inlineBinding = AreaSelectionActionBar.AnnotationBinding(model: model) { _ in }
+        let bar = AreaSelectionActionBar(mode: .tools) { _ in }
+        let rail = AreaSelectionActionBar(mode: .actions) { _ in }
+        bar.bindAnnotationSession(inlineBinding)
+        rail.bindAnnotationSession(inlineBinding)
+
+        let mockSelection = CGRect(x: 120, y: 120, width: 520, height: 340)
+        let canvasSize = CGSize(width: 900, height: 620)
+        let container = NSView(frame: CGRect(origin: .zero, size: canvasSize))
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor(white: 0.12, alpha: 1).cgColor
+        let mockScreenshot = NSView(frame: mockSelection)
+        mockScreenshot.wantsLayer = true
+        mockScreenshot.layer?.backgroundColor = NSColor(
+            red: 0.24,
+            green: 0.40,
+            blue: 0.64,
+            alpha: 1
+        ).cgColor
+        mockScreenshot.layer?.borderColor = NSColor.systemBlue.cgColor
+        mockScreenshot.layer?.borderWidth = 1
+        container.addSubview(mockScreenshot)
+
+        let railSize = rail.intrinsicContentSize
+        let railFrame = AreaSelectionRailLayout.resolve(
+            selectionRect: mockSelection,
+            railSize: railSize,
+            bounds: canvasSize
+        )
+        rail.frame = railFrame
+        container.addSubview(rail)
+        let barSize = bar.intrinsicContentSize
+        let barFrame = AreaSelectionBarLayout.resolve(
+            selectionRect: mockSelection,
+            barSize: barSize,
+            bounds: canvasSize,
+            avoiding: railFrame
+        )
+        bar.frame = barFrame
+        container.addSubview(bar)
+
         let barWindow = NSWindow(
-            contentRect: CGRect(origin: .zero, size: size),
+            contentRect: CGRect(origin: .zero, size: canvasSize),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
         barWindow.isReleasedWhenClosed = false
-        barWindow.contentView = bar
+        barWindow.contentView = container
         barWindow.level = .floating
         barWindow.orderFrontRegardless()
         inlineWindow = barWindow
@@ -301,7 +340,17 @@ enum MacPilotAcceptanceRunner {
             missing.isEmpty,
             "visible=\(visibleTooltips.count) missing=\(missing.joined(separator: ","))"
         )
-        capture(bar, name: "05-inline-toolbar.png")
+        record(
+            "动作栏竖排在截图右侧",
+            railFrame.minX >= mockSelection.maxX - 0.5 && !railFrame.intersects(mockSelection),
+            "rail=\(railFrame) selection=\(mockSelection)"
+        )
+        record(
+            "工具栏与动作栏不重叠",
+            !barFrame.intersects(railFrame),
+            "bar=\(barFrame) rail=\(railFrame)"
+        )
+        capture(container, name: "05-inline-toolbar.png")
 
         // Text and watermark share the in-place entry path but not the look:
         // the text capsule must be light with dark ink, the watermark capsule
@@ -345,9 +394,17 @@ enum MacPilotAcceptanceRunner {
             "annotations=\(controller.testAnnotationCount) before=\(annotationsBeforeText)"
         )
 
-        // Layout reachability at common display sizes: the bar must stay fully
-        // inside the screen even for a right/bottom edge selection.
-        let barSize = bar.intrinsicContentSize
+        // Layout reachability at common display sizes: the deck and the side
+        // action column must stay fully inside the screen even for a
+        // right/bottom edge selection.
+        let deckLayoutSize = bar.intrinsicContentSize
+        let railLayoutSize = rail.intrinsicContentSize
+        func insideBounds(_ frame: CGRect, _ bounds: CGSize) -> Bool {
+            frame.minX >= AreaSelectionBarLayout.edgeMargin - 0.5
+                && frame.minY >= AreaSelectionBarLayout.edgeMargin - 0.5
+                && frame.maxX <= bounds.width - AreaSelectionBarLayout.edgeMargin + 0.5
+                && frame.maxY <= bounds.height - AreaSelectionBarLayout.edgeMargin + 0.5
+        }
         for bounds in [CGSize(width: 1_024, height: 768), CGSize(width: 1_920, height: 1_080)] {
             let selection = CGRect(
                 x: bounds.width - 90,
@@ -355,24 +412,32 @@ enum MacPilotAcceptanceRunner {
                 width: 80,
                 height: 50
             )
-            let frame = AreaSelectionBarLayout.resolve(
+            let railFrame = AreaSelectionRailLayout.resolve(
                 selectionRect: selection,
-                barSize: barSize,
+                railSize: railLayoutSize,
                 bounds: bounds
             )
-            let inside = frame.minX >= AreaSelectionBarLayout.edgeMargin - 0.5
-                && frame.minY >= AreaSelectionBarLayout.edgeMargin - 0.5
-                && frame.maxX <= bounds.width - AreaSelectionBarLayout.edgeMargin + 0.5
-                && frame.maxY <= bounds.height - AreaSelectionBarLayout.edgeMargin + 0.5
+            let frame = AreaSelectionBarLayout.resolve(
+                selectionRect: selection,
+                barSize: deckLayoutSize,
+                bounds: bounds,
+                avoiding: railFrame
+            )
             record(
                 "工具栏在 \(Int(bounds.width))×\(Int(bounds.height)) 内可达",
-                inside,
+                insideBounds(frame, bounds),
                 "frame=\(frame)"
+            )
+            record(
+                "动作栏在 \(Int(bounds.width))×\(Int(bounds.height)) 内可达",
+                insideBounds(railFrame, bounds) && !frame.intersects(railFrame),
+                "frame=\(railFrame)"
             )
         }
 
-        // Real per-display placement: one bar window on every connected
-        // physical display, anchored near that display's bottom-right corner.
+        // Real per-display placement: one composed window per physical display,
+        // anchored near that display's bottom-right corner. Both the deck and
+        // the side column must stay inside the display and must not overlap.
         let screens = NSScreen.screens
         record(
             "物理显示器数量",
@@ -383,46 +448,102 @@ enum MacPilotAcceptanceRunner {
         )
         for (index, screen) in screens.enumerated() {
             let displaySize = screen.frame.size
-            let displayBar = AreaSelectionActionBar { _ in }
+            let selection = CGRect(
+                x: displaySize.width - 90,
+                y: 8,
+                width: 80,
+                height: 50
+            )
+            let displayBar = AreaSelectionActionBar(mode: .tools) { _ in }
+            let displayRail = AreaSelectionActionBar(mode: .actions) { _ in }
             let displayModel = SmartAnnotationModel(initialTool: .rectangle)
-            displayBar.bindAnnotationSession(.init(model: displayModel) { _ in })
-            let displayBarSize = displayBar.intrinsicContentSize
-            let localFrame = AreaSelectionBarLayout.resolve(
-                selectionRect: CGRect(
-                    x: displaySize.width - 90,
-                    y: 8,
-                    width: 80,
-                    height: 50
-                ),
-                barSize: displayBarSize,
+            let displayBinding = AreaSelectionActionBar.AnnotationBinding(model: displayModel) { _ in }
+            displayBar.bindAnnotationSession(displayBinding)
+            displayRail.bindAnnotationSession(displayBinding)
+
+            let railFrame = AreaSelectionRailLayout.resolve(
+                selectionRect: selection,
+                railSize: displayRail.intrinsicContentSize,
                 bounds: displaySize
             )
-            let frame = CGRect(
-                x: screen.frame.minX + localFrame.minX,
-                y: screen.frame.minY + localFrame.minY,
-                width: localFrame.width,
-                height: localFrame.height
+            let barFrame = AreaSelectionBarLayout.resolve(
+                selectionRect: selection,
+                barSize: displayBar.intrinsicContentSize,
+                bounds: displaySize,
+                avoiding: railFrame
+            )
+            let contentBounds = selection
+                .union(barFrame)
+                .union(railFrame)
+                .insetBy(dx: -24, dy: -24)
+            let container = NSView(frame: CGRect(origin: .zero, size: contentBounds.size))
+            container.wantsLayer = true
+            container.layer?.backgroundColor = NSColor(white: 0.12, alpha: 1).cgColor
+            let mockScreenshot = NSView(frame: selection.offsetBy(
+                dx: -contentBounds.minX,
+                dy: -contentBounds.minY
+            ))
+            mockScreenshot.wantsLayer = true
+            mockScreenshot.layer?.backgroundColor = NSColor(
+                red: 0.24,
+                green: 0.40,
+                blue: 0.64,
+                alpha: 1
+            ).cgColor
+            mockScreenshot.layer?.borderColor = NSColor.systemBlue.cgColor
+            mockScreenshot.layer?.borderWidth = 1
+            container.addSubview(mockScreenshot)
+            displayBar.frame = barFrame.offsetBy(dx: -contentBounds.minX, dy: -contentBounds.minY)
+            displayRail.frame = railFrame.offsetBy(dx: -contentBounds.minX, dy: -contentBounds.minY)
+            container.addSubview(displayBar)
+            container.addSubview(displayRail)
+
+            let windowFrame = CGRect(
+                x: screen.frame.minX + contentBounds.minX,
+                y: screen.frame.minY + contentBounds.minY,
+                width: contentBounds.width,
+                height: contentBounds.height
             )
             let displayWindow = NSWindow(
-                contentRect: frame,
+                contentRect: windowFrame,
                 styleMask: [.borderless],
                 backing: .buffered,
                 defer: false
             )
             displayWindow.isReleasedWhenClosed = false
-            displayWindow.contentView = displayBar
+            displayWindow.contentView = container
             displayWindow.level = .floating
             displayWindow.orderFrontRegardless()
             try? await Task.sleep(for: .milliseconds(200))
+            let barOnScreen = CGRect(
+                x: windowFrame.minX + displayBar.frame.minX,
+                y: windowFrame.minY + displayBar.frame.minY,
+                width: displayBar.frame.width,
+                height: displayBar.frame.height
+            )
+            let railOnScreen = CGRect(
+                x: windowFrame.minX + displayRail.frame.minX,
+                y: windowFrame.minY + displayRail.frame.minY,
+                width: displayRail.frame.width,
+                height: displayRail.frame.height
+            )
+            func insideVisible(_ frame: CGRect) -> Bool {
+                frame.minX >= screen.visibleFrame.minX - 0.5
+                    && frame.minY >= screen.visibleFrame.minY - 0.5
+                    && frame.maxX <= screen.visibleFrame.maxX + 0.5
+                    && frame.maxY <= screen.visibleFrame.maxY + 0.5
+            }
             record(
                 "工具栏落在显示器 #\(index + 1)",
-                displayWindow.frame.minX >= screen.visibleFrame.minX - 0.5
-                    && displayWindow.frame.minY >= screen.visibleFrame.minY - 0.5
-                    && displayWindow.frame.maxX <= screen.visibleFrame.maxX + 0.5
-                    && displayWindow.frame.maxY <= screen.visibleFrame.maxY + 0.5,
-                "frame=\(displayWindow.frame) visible=\(screen.visibleFrame) scale=\(screen.backingScaleFactor)"
+                insideVisible(barOnScreen),
+                "frame=\(barOnScreen) visible=\(screen.visibleFrame) scale=\(screen.backingScaleFactor)"
             )
-            capture(displayBar, name: "09-toolbar-display-\(index + 1).png")
+            record(
+                "动作栏落在显示器 #\(index + 1)",
+                insideVisible(railOnScreen) && !barOnScreen.intersects(railOnScreen),
+                "frame=\(railOnScreen) visible=\(screen.visibleFrame) scale=\(screen.backingScaleFactor)"
+            )
+            capture(container, name: "09-toolbar-display-\(index + 1).png")
             displayWindow.close()
         }
 

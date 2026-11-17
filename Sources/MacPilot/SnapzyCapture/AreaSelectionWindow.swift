@@ -397,6 +397,7 @@ final class AreaSelectionOverlayView: NSView {
   private var selectionDimensionBackgroundLayer: CALayer!
   private var selectionDimensionTextLayer: CATextLayer!
   private var selectionActionBar: AreaSelectionActionBar?
+  private var selectionActionRail: AreaSelectionActionBar?
   private var recordingSelectionActionBar: NSView?
 
   private enum SelectionHandle: CaseIterable {
@@ -887,13 +888,21 @@ final class AreaSelectionOverlayView: NSView {
     updateFinalizedSelectionVisuals()
 
     if showsActions {
-      let actionBar = AreaSelectionActionBar(onAction: actionHandler)
+      let actionBar = AreaSelectionActionBar(mode: .tools, onAction: actionHandler)
       actionBar.layoutDidChange = { [weak self] in
         self?.positionSelectionActionBars()
       }
       actionBar.layer?.zPosition = 100
       selectionActionBar = actionBar
       addSubview(actionBar)
+
+      let actionRail = AreaSelectionActionBar(mode: .actions, onAction: actionHandler)
+      actionRail.layoutDidChange = { [weak self] in
+        self?.positionSelectionActionBars()
+      }
+      actionRail.layer?.zPosition = 100
+      selectionActionRail = actionRail
+      addSubview(actionRail)
       positionSelectionActionBars()
     } else {
       removeSelectionActionBars()
@@ -1067,22 +1076,22 @@ final class AreaSelectionOverlayView: NSView {
     refreshActiveCursor()
   }
 
-  /// Hands the live annotation model to the bottom HUD toolbar so its tool
-  /// buttons switch tools in place and its action buttons commit the session.
+  /// Hands the live annotation model to the tool deck and the side action
+  /// column so their controls switch tools and commit the same session.
   func attachAnnotationSession(
     model: SmartAnnotationModel,
     commit: @escaping (AreaSelectionAction) -> Void
   ) {
-    selectionActionBar?.bindAnnotationSession(
-      AreaSelectionActionBar.AnnotationBinding(model: model, commit: commit)
-    )
+    let binding = AreaSelectionActionBar.AnnotationBinding(model: model, commit: commit)
+    selectionActionBar?.bindAnnotationSession(binding)
+    selectionActionRail?.bindAnnotationSession(binding)
     positionSelectionActionBars()
   }
 
-  /// Mirrors the output-style toggle state into the HUD's 「更多」 menu
-  /// (圆角截图 / 阴影或边框), which now hosts the former side-bar toggles.
+  /// Mirrors the output-style toggle state into the action column's 「更多」
+  /// menu (圆角截图 / 阴影或边框), which now hosts the former side-bar toggles.
   func syncOutputStyleToggles(roundedCorners: Bool, shadow: Bool) {
-    selectionActionBar?.outputStyleState = (roundedCorners, shadow)
+    selectionActionRail?.outputStyleState = (roundedCorners, shadow)
   }
 
   func hideSelectionResult() {
@@ -1126,8 +1135,11 @@ final class AreaSelectionOverlayView: NSView {
   private func removeSelectionActionBars() {
     selectionActionBar?.bindAnnotationSession(nil)
     selectionActionBar?.removeFromSuperview()
+    selectionActionRail?.bindAnnotationSession(nil)
+    selectionActionRail?.removeFromSuperview()
     recordingSelectionActionBar?.removeFromSuperview()
     selectionActionBar = nil
+    selectionActionRail = nil
     recordingSelectionActionBar = nil
   }
 
@@ -1253,12 +1265,36 @@ final class AreaSelectionOverlayView: NSView {
       )
       return
     }
-    // 单栏布局：横栏贴在选区下方（放不下换上方）并夹回屏幕内。
-    selectionActionBar?.frame = AreaSelectionBarLayout.resolve(
-      selectionRect: rect,
-      barSize: selectionActionBar?.intrinsicContentSize ?? .zero,
-      bounds: bounds.size
-    )
+    // 双栏布局：工具栏贴在选区下方（放不下换上方），动作栏竖直贴在选区右侧
+    // 或用左侧/内侧兜底；两者互相避让，动作按钮不再挤进工具栏右侧。
+    let railFrame: CGRect?
+    if let rail = selectionActionRail {
+      let frame = AreaSelectionRailLayout.resolve(
+        selectionRect: rect,
+        railSize: rail.intrinsicContentSize,
+        bounds: bounds.size
+      )
+      rail.frame = frame
+      railFrame = frame
+    } else {
+      railFrame = nil
+    }
+    if let bar = selectionActionBar {
+      bar.frame = if let railFrame {
+        AreaSelectionBarLayout.resolve(
+          selectionRect: rect,
+          barSize: bar.intrinsicContentSize,
+          bounds: bounds.size,
+          avoiding: railFrame
+        )
+      } else {
+        AreaSelectionBarLayout.resolve(
+          selectionRect: rect,
+          barSize: bar.intrinsicContentSize,
+          bounds: bounds.size
+        )
+      }
+    }
   }
 
   func activatePendingSelectionIfNeeded() {

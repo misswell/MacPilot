@@ -7977,10 +7977,10 @@ struct SmartAnnotationEditor: View {
     }
 
     /// In-place text entry. The text tool gets a white capsule with black ink
-    /// (its committed annotation is also a white bubble); the watermark tool
-    /// gets a dark capsule with white ink (its committed annotation is white,
-    /// semi-transparent text without a bubble). Forcing the matching colour
-    /// scheme keeps the field legible in either system appearance.
+    /// while typing; once committed, the annotation is bare text with no
+    /// background plate. The watermark tool gets a dark capsule with white ink
+    /// (its committed annotation is white, semi-transparent text). Forcing the
+    /// matching colour scheme keeps the field legible in either appearance.
     @ViewBuilder
     private func inlineTextEditorCapsule(in fitted: CGRect) -> some View {
         if showingTextEntry {
@@ -8282,7 +8282,7 @@ struct SmartAnnotationEditor: View {
                 context: &context
             )
         case .text(let text, let point):
-            drawTextBubble(
+            drawTextAnnotation(
                 text,
                 at: denormalized(point, in: rect),
                 style: style,
@@ -8304,40 +8304,21 @@ struct SmartAnnotationEditor: View {
         CGRect(x: rect.minX + value.minX * rect.width, y: rect.minY + value.minY * rect.height, width: value.width * rect.width, height: value.height * rect.height)
     }
 
-    /// Canvas-preview twin of the renderer's white text bubble: text renders
-    /// on a white capsule so the preview matches the committed output.
-    private func drawTextBubble(
+    /// Text is drawn directly on the screenshot: no background plate, no
+    /// capsule. The canvas preview and the committed renderer share this
+    /// appearance, so the text does not gain a bubble when it is exported.
+    private func drawTextAnnotation(
         _ text: String,
         at point: CGPoint,
         style: SmartAnnotationStyle,
         context: inout GraphicsContext
     ) {
         let fontSize = 18 * max(0.75, min(1.5, style.lineWidth / 3))
-        let resolved = context.resolve(
-            Text(text).font(.system(size: fontSize, weight: .bold))
-        )
-        let measured = resolved.measure(in: CGSize(width: 10_000, height: 10_000))
-        let paddingH: CGFloat = 9
-        let paddingV: CGFloat = 5
-        let bubble = CGRect(
-            x: point.x - paddingH,
-            y: point.y - paddingV,
-            width: measured.width + paddingH * 2,
-            height: measured.height + paddingV * 2
-        )
-        context.fill(
-            Path(roundedRect: bubble, cornerRadius: bubble.height * 0.4, style: .continuous),
-            with: .color(.white.opacity(style.opacity))
-        )
         context.draw(
             Text(text).font(.system(size: fontSize, weight: .bold))
                 .foregroundColor(style.color.swiftUIColor.opacity(style.opacity)),
-            in: CGRect(
-                x: bubble.minX + paddingH,
-                y: bubble.minY + paddingV,
-                width: measured.width,
-                height: measured.height
-            )
+            at: point,
+            anchor: .topLeading
         )
     }
 
@@ -8843,24 +8824,8 @@ enum SmartAnnotationRenderer {
         ]
         let size = (text as NSString).size(withAttributes: attributes)
         let originY = counter ? point.y - size.height / 2 : point.y - size.height
-        if !watermark, !counter {
-            // iShot-style text lives on a white capsule so it stays legible
-            // on any backdrop; the canvas preview draws the same bubble.
-            let paddingH: CGFloat = 9
-            let paddingV: CGFloat = 5
-            let bubble = CGRect(
-                x: point.x - paddingH,
-                y: originY - paddingV,
-                width: size.width + paddingH * 2,
-                height: size.height + paddingV * 2
-            )
-            NSColor.white.withAlphaComponent(style.opacity).setFill()
-            NSBezierPath(
-                roundedRect: bubble,
-                xRadius: bubble.height * 0.4,
-                yRadius: bubble.height * 0.4
-            ).fill()
-        }
+        // Text is drawn directly on the pixels. There is deliberately no white
+        // capsule behind it: the annotation is just the glyphs the user typed.
         (text as NSString).draw(at: CGPoint(x: point.x, y: originY), withAttributes: attributes)
         NSGraphicsContext.restoreGraphicsState()
     }

@@ -8,18 +8,19 @@
 //  non-activating.
 //
 //  Interaction model (matching Snapzy's InlineAreaControlDeck): one permanent
-//  tool row where every implemented annotation tool has its own button, with
-//  dividers as the only grouping; undo/redo sit beside the tools. The capture
-//  actions (OCR/pin/更多/save/copy) live in their own action row and never
-//  displace the tools. When an annotation session is active the bar adds the
-//  terminal actions (完成 / Copy & Close) and a contextual properties row for
-//  the current tool, expanded by default.
+//  horizontal tool row where every implemented annotation tool has its own
+//  button, with dividers as the only grouping; undo/redo sit beside the tools.
+//  The capture actions (OCR/pin/upload/save/copy/更多/close) live in a separate
+//  vertical column anchored to the right edge of the selected screenshot, so
+//  they are always visible without widening or displacing the tool deck. When
+//  an annotation session is active the column adds the terminal actions
+//  (完成 / Copy & Close) and the deck adds a contextual properties row for the
+//  current tool, expanded by default.
 //
-//  The post-selection HUD is a single bar.  iShot's right-hand column
-//  (圆角截图 / 调整选区 / 阴影或边框 / 刷新截图 / 重新选择) is folded into the
-//  「更多」 menu instead of a second floating bar: the two bars had to be kept
-//  apart by a collision solver, and three of the column's commands duplicated
-//  gestures the frame already supports.
+//  iShot's former right-hand column commands (圆角截图 / 调整选区 / 阴影或边框 /
+//  刷新截图 / 重新选择) stay in 「更多」: three of them duplicate gestures the
+//  frame already supports, and the column itself is now reserved for the
+//  always-visible actions.
 //
 //  Its chrome is not bespoke: the card and the round tool chips are all drawn
 //  from `CaptureChromeStyle`, so the toolbar moves as one surface whenever that
@@ -33,6 +34,14 @@ import Combine
 
 @MainActor
 final class AreaSelectionActionBar: NSView {
+  /// One AppKit card renders in two roles: the horizontal tool deck below the
+  /// selection, and the vertical action column beside it. They share the same
+  /// chips, typography and dispatch path but never occupy the same surface.
+  enum Mode {
+    case tools
+    case actions
+  }
+
   /// Binding to the live annotation session. `nil` while no tool has been
   /// picked yet: tool buttons then start a session instead of switching tools.
   struct AnnotationBinding {
@@ -49,6 +58,7 @@ final class AreaSelectionActionBar: NSView {
   /// the overlay can re-anchor the bars around the selected frame.
   var layoutDidChange: (() -> Void)?
 
+  private let mode: Mode
   private let onAction: (AreaSelectionAction) -> Void
   private var annotationBinding: AnnotationBinding?
   private var modelCancellable: AnyCancellable?
@@ -60,7 +70,6 @@ final class AreaSelectionActionBar: NSView {
 
   private let rootStack = NSStackView()
   private var primaryRow: NSStackView?
-  private var actionRail: NSStackView?
   private var optionsRow: NSView?
   private var undoButton: NSButton?
   private var redoButton: NSButton?
@@ -118,7 +127,8 @@ final class AreaSelectionActionBar: NSView {
     static let moreScrolling = 28
   }
 
-  init(onAction: @escaping (AreaSelectionAction) -> Void) {
+  init(mode: Mode = .tools, onAction: @escaping (AreaSelectionAction) -> Void) {
+    self.mode = mode
     self.onAction = onAction
     super.init(frame: .zero)
     wantsLayer = true
@@ -138,31 +148,25 @@ final class AreaSelectionActionBar: NSView {
     rootStack.translatesAutoresizingMaskIntoConstraints = false
     addSubview(rootStack)
 
-    let rail = makeActionRail()
-    rail.translatesAutoresizingMaskIntoConstraints = false
-    actionRail = rail
-    addSubview(rail)
-
-    let divider = NSBox()
-    divider.boxType = .separator
-    divider.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(divider)
-
-    NSLayoutConstraint.activate([
-      rootStack.leadingAnchor.constraint(equalTo: leadingAnchor),
-      rootStack.topAnchor.constraint(equalTo: topAnchor),
-      rootStack.bottomAnchor.constraint(equalTo: bottomAnchor),
-      rootStack.trailingAnchor.constraint(equalTo: divider.leadingAnchor, constant: -4),
-      divider.widthAnchor.constraint(equalToConstant: 1),
-      divider.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-      divider.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-      rail.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 6),
-      rail.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-      rail.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-      rail.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-    ])
-
-    rootStack.addArrangedSubview(makePrimaryRow())
+    switch mode {
+    case .tools:
+      NSLayoutConstraint.activate([
+        rootStack.leadingAnchor.constraint(equalTo: leadingAnchor),
+        rootStack.trailingAnchor.constraint(equalTo: trailingAnchor),
+        rootStack.topAnchor.constraint(equalTo: topAnchor),
+        rootStack.bottomAnchor.constraint(equalTo: bottomAnchor),
+      ])
+      rootStack.addArrangedSubview(makePrimaryRow())
+    case .actions:
+      rootStack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+      NSLayoutConstraint.activate([
+        rootStack.leadingAnchor.constraint(equalTo: leadingAnchor),
+        rootStack.trailingAnchor.constraint(equalTo: trailingAnchor),
+        rootStack.topAnchor.constraint(equalTo: topAnchor),
+        rootStack.bottomAnchor.constraint(equalTo: bottomAnchor),
+      ])
+      rootStack.addArrangedSubview(makeActionColumn())
+    }
     applyStageVisibility()
   }
 
@@ -172,12 +176,18 @@ final class AreaSelectionActionBar: NSView {
   }
 
   override var intrinsicContentSize: NSSize {
-    let leftSize = rootStack.fittingSize
-    let railSize = actionRail?.fittingSize ?? .zero
-    // left | 4pt gap | 1pt divider | 6pt gap | side action rail | 10pt edge
-    let width = leftSize.width + 11 + railSize.width + 10
-    let height = max(leftSize.height, railSize.height + 16)
-    return NSSize(width: max(240, width), height: height)
+    switch mode {
+    case .tools:
+      // The tool deck is a compact horizontal card: tool row plus the
+      // contextual properties row while it is expanded.
+      let size = rootStack.fittingSize
+      return NSSize(width: max(240, size.width), height: size.height)
+    case .actions:
+      // The action column hangs beside the screenshot, so it is tall and
+      // narrow instead of widening the bar itself.
+      let size = rootStack.fittingSize
+      return NSSize(width: max(46, size.width), height: size.height)
+    }
   }
 
   private static let rowSpacing: CGFloat = 8
@@ -254,10 +264,13 @@ final class AreaSelectionActionBar: NSView {
         }
     }
     // The eraser/undo controls stay mounted; only the terminal annotation
-    // actions and the properties row depend on the session.
+    // actions and the properties row depend on the session. The action column
+    // has no properties row: it only reveals its terminal actions.
     applyStageVisibility()
-    rebuildOptionsRow()
-    syncWithModel()
+    if mode == .tools {
+      rebuildOptionsRow()
+      syncWithModel()
+    }
     invalidateIntrinsicContentSize()
     layoutDidChange?()
   }
@@ -338,37 +351,17 @@ final class AreaSelectionActionBar: NSView {
     return row
   }
 
-  /// The action rail is its own row. OCR/pin/upload/更多/save/copy must never
-  /// displace tool buttons or hide them: Snapzy keeps
-  /// `InlineAreaActionRail` separate from the tool deck for exactly this
-  /// reason. A divider separates capture utilities from output actions.
-  private func makeActionRail() -> NSStackView {
-    let rail = NSStackView()
-    rail.orientation = .vertical
-    rail.alignment = .leading
-    rail.spacing = CaptureChromeStyle.barItemSpacing
-    rail.detachesHiddenViews = true
+  /// The action column hangs beside the screenshot: OCR/pin/upload and the
+  /// output actions are a single vertical list, never a block wedged into the
+  /// tool bar. `detachesHiddenViews` keeps the terminal group out of the
+  /// layout until an annotation session starts.
+  private func makeActionColumn() -> NSStackView {
+    let column = NSStackView()
+    column.orientation = .vertical
+    column.alignment = .centerX
+    column.spacing = CaptureChromeStyle.barItemSpacing
+    column.detachesHiddenViews = true
 
-    func actionRow(_ views: [NSView]) -> NSStackView {
-      let row = NSStackView()
-      row.orientation = .horizontal
-      row.alignment = .centerY
-      row.spacing = CaptureChromeStyle.barItemSpacing
-      row.detachesHiddenViews = true
-      for view in views { row.addArrangedSubview(view) }
-      return row
-    }
-
-    let utilityRow = actionRow([
-      makeActionButton("text.viewfinder", titleKey: "scToolOCR", tag: BarTag.ocr),
-      makeActionButton("pin", titleKey: "scPin", tag: BarTag.pin),
-      makeActionButton("icloud.and.arrow.up", titleKey: "scImageHostingUpload", tag: BarTag.upload),
-    ])
-    let outputRow = actionRow([
-      makeActionButton("square.and.arrow.down", titleKey: "scToolSave", tag: BarTag.save),
-      makeActionButton("doc.on.doc", titleKey: "scCopy", tag: BarTag.copy),
-      makeMoreButton(),
-    ])
     let copyAndClose = makeActionButton(
       image: Self.copyAndCloseGlyph(),
       titleKey: "scCopyAndClose",
@@ -379,19 +372,27 @@ final class AreaSelectionActionBar: NSView {
     let finish = makeActionButton("checkmark", titleKey: "scToolFinish", tag: BarTag.finish)
     finish.isHidden = true
     completeButton = finish
-    let terminalRow = actionRow([
+
+    let actions: [NSButton] = [
+      makeActionButton("text.viewfinder", titleKey: "scToolOCR", tag: BarTag.ocr),
+      makeActionButton("pin", titleKey: "scPin", tag: BarTag.pin),
+      makeActionButton("icloud.and.arrow.up", titleKey: "scImageHostingUpload", tag: BarTag.upload),
+      makeActionButton("square.and.arrow.down", titleKey: "scToolSave", tag: BarTag.save),
+      makeActionButton("doc.on.doc", titleKey: "scCopy", tag: BarTag.copy),
+      makeMoreButton(),
       copyAndClose,
       finish,
       makeActionButton("xmark", titleKey: "scClose", tag: BarTag.close),
-    ])
-
-    for view in [utilityRow, outputRow, terminalRow] {
-      rail.addArrangedSubview(view)
+    ]
+    for action in actions {
+      column.addArrangedSubview(action)
+      primaryActionViews.append(action)
     }
-    for button in [utilityRow, outputRow, terminalRow].flatMap({ $0.arrangedSubviews }) {
-      primaryActionViews.append(button)
-    }
-    return rail
+    // Breathing room between capture utilities, output actions and the
+    // terminal actions without adding dividers that would survive hiding.
+    column.setCustomSpacing(CaptureChromeStyle.barRowSpacing, after: actions[2])
+    column.setCustomSpacing(CaptureChromeStyle.barRowSpacing, after: actions[5])
+    return column
   }
 
   private func makeDivider() -> NSView {
@@ -965,6 +966,7 @@ final class AreaSelectionActionBar: NSView {
   // MARK: - Model Sync
 
   private func syncWithModel() {
+    guard mode == .tools else { return }
     guard let model = annotationBinding?.model else { return }
     let activeTool = model.tool
     if activeTool != optionsRowTool {
@@ -1258,5 +1260,72 @@ nonisolated enum AreaSelectionBarLayout {
       width: barSize.width,
       height: barSize.height
     )
+  }
+
+  /// Places the tool deck without covering the action column that hangs beside
+  /// the screenshot. The default anchor is still below/above the selection; if
+  /// a small selection makes the wide deck run into the column, the deck moves
+  /// left of it, then above the selection, then to its right.
+  static func resolve(
+    selectionRect: CGRect,
+    barSize: CGSize,
+    bounds: CGSize,
+    avoiding railFrame: CGRect
+  ) -> CGRect {
+    let base = resolve(selectionRect: selectionRect, barSize: barSize, bounds: bounds)
+    guard base.intersects(railFrame) else { return base }
+    let maxX = max(edgeMargin, bounds.width - barSize.width - edgeMargin)
+    let maxY = max(edgeMargin, bounds.height - barSize.height - edgeMargin)
+    func candidate(x: CGFloat, y: CGFloat) -> CGRect? {
+      let frame = CGRect(
+        x: min(maxX, max(edgeMargin, x)),
+        y: min(maxY, max(edgeMargin, y)),
+        width: barSize.width,
+        height: barSize.height
+      )
+      let insideBounds = frame.minX >= edgeMargin - 0.5
+        && frame.minY >= edgeMargin - 0.5
+        && frame.maxX <= bounds.width - edgeMargin + 0.5
+        && frame.maxY <= bounds.height - edgeMargin + 0.5
+      return insideBounds && !frame.intersects(railFrame) ? frame : nil
+    }
+    let spacing: CGFloat = 8
+    let candidates = [
+      candidate(x: railFrame.minX - spacing - barSize.width, y: base.minY),
+      candidate(x: base.minX, y: selectionRect.maxY + gap),
+      candidate(x: railFrame.maxX + spacing, y: base.minY),
+      candidate(x: base.minX, y: railFrame.minY - spacing - barSize.height),
+    ].compactMap { $0 }
+    return candidates.first ?? base
+  }
+}
+
+/// Placement of the vertical action column beside the screenshot. It prefers
+/// the selection's right edge, falls back to the left edge, and only tucks
+/// inside the selection (top-right) when a near-fullscreen selection leaves no
+/// room outside. It never reflows into the tool deck.
+nonisolated enum AreaSelectionRailLayout {
+  static let gap: CGFloat = 10
+  static let edgeMargin: CGFloat = 8
+  static let insideInset: CGFloat = 20
+
+  static func resolve(
+    selectionRect: CGRect,
+    railSize: CGSize,
+    bounds: CGSize
+  ) -> CGRect {
+    let maxX = max(edgeMargin, bounds.width - railSize.width - edgeMargin)
+    let maxY = max(edgeMargin, bounds.height - railSize.height - edgeMargin)
+    let spaceRight = bounds.width - edgeMargin - selectionRect.maxX
+    let proposedX = spaceRight >= railSize.width + gap
+      ? selectionRect.maxX + gap
+      : selectionRect.minX - gap - railSize.width
+    var x = min(maxX, max(edgeMargin, proposedX))
+    var y = min(maxY, max(edgeMargin, selectionRect.maxY - railSize.height))
+    let frame = CGRect(x: x, y: y, width: railSize.width, height: railSize.height)
+    guard frame.intersects(selectionRect) else { return frame }
+    x = min(maxX, max(edgeMargin, selectionRect.maxX - railSize.width - insideInset))
+    y = min(maxY, max(edgeMargin, selectionRect.maxY - railSize.height - insideInset))
+    return CGRect(x: x, y: y, width: railSize.width, height: railSize.height)
   }
 }

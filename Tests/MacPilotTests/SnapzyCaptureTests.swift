@@ -698,26 +698,53 @@ struct SnapzyCaptureTests {
         #expect(window.overlayView.isSelectionAdjustmentActive)
     }
 
-    @Test @MainActor func postSelectionHudInstallsTheOnlyActionBar() throws {
+    @Test @MainActor func postSelectionHudInstallsTheToolDeckAndSideActionColumn() throws {
         _ = NSApplication.shared
         guard let screen = NSScreen.main else { return }
 
         let window = AreaSelectionWindow(screen: screen, pooled: true)
         defer { window.close() }
+        let selection = CGRect(
+            x: screen.frame.minX + 160,
+            y: screen.frame.minY + 200,
+            width: 320,
+            height: 220
+        )
         window.overlayView.showSelectionResult(
-            screenRect: CGRect(
-                x: screen.frame.minX + 160,
-                y: screen.frame.minY + 200,
-                width: 320,
-                height: 220
-            ),
+            screenRect: selection,
             showsActions: true,
             actionHandler: { _ in }
         )
 
-        // 右侧竖栏已并入「更多」菜单：浮层里只有一条操作栏。
-        let bars = window.overlayView.subviews.filter { $0 is AreaSelectionActionBar }
-        #expect(bars.count == 1)
+        // Two AppKit cards: the horizontal tool deck and the vertical action
+        // column beside the screenshot. Actions must not be folded back into
+        // the deck or into the More menu.
+        let cards = window.overlayView.subviews.compactMap { $0 as? AreaSelectionActionBar }
+        #expect(cards.count == 2)
+        let deck = try #require(cards.first {
+            $0.chipButtons.contains {
+                $0.toolTip == AppText.value("scAnnotationRectangle", language: .system)
+            }
+        })
+        let rail = try #require(cards.first {
+            $0.chipButtons.contains {
+                $0.toolTip == AppText.value("scPin", language: .system)
+            }
+        })
+        #expect(deck !== rail)
+        #expect(!deck.chipButtons.contains {
+            $0.toolTip == AppText.value("scPin", language: .system)
+        })
+
+        let localSelection = CGRect(
+            x: selection.minX - screen.frame.minX,
+            y: selection.minY - screen.frame.minY,
+            width: selection.width,
+            height: selection.height
+        )
+        #expect(rail.frame.minX >= localSelection.maxX - 0.5, "the action column sits beside the screenshot")
+        #expect(!rail.frame.intersects(localSelection))
+        #expect(!deck.frame.intersects(rail.frame), "the deck and the column must not overlap")
     }
 
     @Test @MainActor func annotationEditorToolbarIsMountedOutsideTheSelectedFrame() throws {
@@ -1277,13 +1304,25 @@ struct SnapzyCaptureTests {
         #expect(bar.chipButtons.contains {
             $0.toolTip == AppText.value("scToolPickVariant", language: .system)
         } == false, "tool variants must not hide behind a dropdown chevron")
-        // Actions live in their own rail, not in place of the tools.
-        #expect(!(try chip("scToolOCR")).isHiddenOrHasHiddenAncestor)
-        #expect(!(try chip("scPin")).isHiddenOrHasHiddenAncestor)
-        #expect(!(try chip("scToolSave")).isHiddenOrHasHiddenAncestor)
-        #expect(!(try chip("scCopy")).isHiddenOrHasHiddenAncestor)
+        // Actions live in their own vertical column beside the screenshot, not
+        // inside the tool deck.
+        var startedActions: [AreaSelectionAction] = []
+        let rail = AreaSelectionActionBar(mode: .actions) { startedActions.append($0) }
+        func actionChip(_ titleKey: String) throws -> NSButton {
+            let title = AppText.value(titleKey, language: .system)
+            return try #require(rail.chipButtons.first { $0.toolTip == title })
+        }
+        #expect(!(try actionChip("scToolOCR")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try actionChip("scPin")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try actionChip("scImageHostingUpload")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try actionChip("scToolSave")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try actionChip("scCopy")).isHiddenOrHasHiddenAncestor)
         // Terminal annotation actions stay contextual.
-        #expect((try chip("scToolFinish")).isHiddenOrHasHiddenAncestor)
+        #expect((try actionChip("scToolFinish")).isHiddenOrHasHiddenAncestor)
+        #expect((try actionChip("scCopyAndClose")).isHiddenOrHasHiddenAncestor)
+        #expect(!bar.chipButtons.contains {
+            $0.toolTip == AppText.value("scPin", language: .system)
+        })
 
         // The first tool click starts the session with exactly that tool.
         try chip("scAnnotationEllipse").performClick(nil)
@@ -1303,34 +1342,42 @@ struct SnapzyCaptureTests {
         _ = NSApplication.shared
         var committed: [AreaSelectionAction] = []
         let bar = AreaSelectionActionBar { _ in }
+        let rail = AreaSelectionActionBar(mode: .actions) { _ in }
         let model = SmartAnnotationModel(initialTool: .rectangle)
-        bar.bindAnnotationSession(.init(model: model) { committed.append($0) })
+        let binding = AreaSelectionActionBar.AnnotationBinding(model: model) { committed.append($0) }
+        bar.bindAnnotationSession(binding)
+        rail.bindAnnotationSession(binding)
 
         func chip(_ titleKey: String) throws -> NSButton {
             let title = AppText.value(titleKey, language: .system)
             return try #require(bar.chipButtons.first { $0.toolTip == title })
         }
+        func actionChip(_ titleKey: String) throws -> NSButton {
+            let title = AppText.value(titleKey, language: .system)
+            return try #require(rail.chipButtons.first { $0.toolTip == title })
+        }
 
-        // Tools and the action rail coexist while annotating; only the
-        // terminal annotation actions appear.
+        // The tool deck keeps every tool; the action column reveals its
+        // terminal actions while the session is live.
         #expect(!(try chip("scAnnotationRectangle")).isHiddenOrHasHiddenAncestor)
         #expect(!(try chip("scAnnotationText")).isHiddenOrHasHiddenAncestor)
         #expect(!(try chip("scAnnotationEraser")).isHiddenOrHasHiddenAncestor)
-        #expect(!(try chip("scToolOCR")).isHiddenOrHasHiddenAncestor)
-        #expect(!(try chip("scToolSave")).isHiddenOrHasHiddenAncestor)
-        #expect(!(try chip("scCopy")).isHiddenOrHasHiddenAncestor)
-        #expect(!(try chip("scToolFinish")).isHiddenOrHasHiddenAncestor)
-        #expect(!(try chip("scCopyAndClose")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try actionChip("scToolOCR")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try actionChip("scToolSave")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try actionChip("scCopy")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try actionChip("scToolFinish")).isHiddenOrHasHiddenAncestor)
+        #expect(!(try actionChip("scCopyAndClose")).isHiddenOrHasHiddenAncestor)
 
-        try chip("scToolFinish").performClick(nil)
-        try chip("scClose").performClick(nil)
+        try actionChip("scToolFinish").performClick(nil)
+        try actionChip("scClose").performClick(nil)
         #expect(committed == [.capture, .cancel])
 
         // Ending the session removes only the terminal annotation actions.
         bar.bindAnnotationSession(nil)
+        rail.bindAnnotationSession(nil)
         #expect(!(try chip("scAnnotationText")).isHiddenOrHasHiddenAncestor)
-        #expect((try chip("scToolFinish")).isHiddenOrHasHiddenAncestor)
-        #expect((try chip("scCopyAndClose")).isHiddenOrHasHiddenAncestor)
+        #expect((try actionChip("scToolFinish")).isHiddenOrHasHiddenAncestor)
+        #expect((try actionChip("scCopyAndClose")).isHiddenOrHasHiddenAncestor)
     }
 
     @Test @MainActor func annotationSessionToolbarSwitchesToolsWithoutEndingTheSession() throws {
@@ -1341,9 +1388,14 @@ struct SnapzyCaptureTests {
             startedSessions.append(action)
         }
         let model = SmartAnnotationModel(initialTool: .rectangle)
-        bar.bindAnnotationSession(.init(model: model) { action in
+        let binding = AreaSelectionActionBar.AnnotationBinding(model: model) { action in
             committedActions.append(action)
-        })
+        }
+        bar.bindAnnotationSession(binding)
+        let rail = AreaSelectionActionBar(mode: .actions) { action in
+            startedSessions.append(action)
+        }
+        rail.bindAnnotationSession(binding)
 
         func buttons(in view: NSView) -> [NSButton] {
             view.subviews.flatMap { subview in
@@ -1365,7 +1417,7 @@ struct SnapzyCaptureTests {
 
         // Action presses route through the session commit, not the HUD start.
         let saveButton = try #require(
-            buttons(in: bar).first(where: {
+            buttons(in: rail).first(where: {
                 $0.toolTip == AppText.value("scToolSave", language: .system)
             })
         )
@@ -1394,14 +1446,22 @@ struct SnapzyCaptureTests {
             }
         )
         #expect(!optionsRow.isHidden)
-        // The side action rail is a three-row block and owns the bar's minimum
-        // height; collapsing the properties row only removes the contextual
-        // controls, not the whole rail.
-        #expect(bar.intrinsicContentSize.height >= CaptureChromeStyle.chipSide * 3)
+        // The tool deck owns only the tool row and the contextual properties
+        // row; the action column is a separate card beside the screenshot.
+        let expandedHeight = bar.intrinsicContentSize.height
+        #expect(expandedHeight >= CaptureChromeStyle.chipSide)
 
         collapseButton.performClick(nil)
         #expect(optionsRow.isHidden)
-        #expect(bar.intrinsicContentSize.height >= CaptureChromeStyle.chipSide * 3)
+        let collapsedHeight = bar.intrinsicContentSize.height
+        #expect(collapsedHeight < expandedHeight)
+        #expect(collapsedHeight >= CaptureChromeStyle.chipSide)
+
+        // The action column stays mounted and tall enough for its vertical
+        // list, independent of the properties row state.
+        let rail = AreaSelectionActionBar(mode: .actions) { _ in }
+        #expect(rail.intrinsicContentSize.height > expandedHeight)
+        #expect(rail.intrinsicContentSize.width <= CaptureChromeStyle.chipSide * 2)
 
         let rectangleButton = try #require(
             buttons(in: bar).first {

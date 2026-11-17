@@ -163,9 +163,9 @@ struct AnnotationInteractionParityTests {
     @Test func uploadIsADirectActionOnTheRailAgain() throws {
         _ = NSApplication.shared
         var started: [AreaSelectionAction] = []
-        let bar = AreaSelectionActionBar { started.append($0) }
+        let rail = AreaSelectionActionBar(mode: .actions) { started.append($0) }
         let upload = try #require(
-            bar.chipButtons.first {
+            rail.chipButtons.first {
                 $0.toolTip == AppText.value("scImageHostingUpload", language: .system)
             }
         )
@@ -173,7 +173,7 @@ struct AnnotationInteractionParityTests {
         upload.performClick(nil)
         #expect(started == [.upload])
         #expect(
-            bar.makeMoreMenu().items.contains {
+            rail.makeMoreMenu().items.contains {
                 $0.title == AppText.value("scImageHostingUpload", language: .system)
             } == false,
             "the direct upload chip replaces the duplicate More item"
@@ -182,22 +182,32 @@ struct AnnotationInteractionParityTests {
 
     @Test func pinAndUploadLiveOnThePersistentSideRail() throws {
         _ = NSApplication.shared
-        let bar = AreaSelectionActionBar { _ in }
-        let stacks = bar.subviews.compactMap { $0 as? NSStackView }
-        #expect(stacks.count >= 2, "left content stack plus the side action rail")
-        let rail = try #require(stacks.dropFirst().first)
-        #expect(rail.orientation == .vertical)
+        let rail = AreaSelectionActionBar(mode: .actions) { _ in }
+        let stacks = rail.subviews.compactMap { $0 as? NSStackView }
+        let actionColumn = try #require(stacks.first, "the action column lives in one vertical stack")
+        #expect(actionColumn.orientation == .vertical)
+
         let tooltips = Set(
-            rail.subviews
+            actionColumn.arrangedSubviews
                 .flatMap { buttons(in: $0) }
                 .compactMap(\.toolTip)
         )
-        for key in ["scPin", "scImageHostingUpload", "scToolOCR", "scToolSave", "scCopy"] {
+        for key in [
+            "scPin", "scImageHostingUpload", "scToolOCR", "scToolSave", "scCopy", "scClose",
+        ] {
             #expect(
                 tooltips.contains(AppText.value(key, language: .system)),
                 "\(key) must stay on the visible side rail"
             )
         }
+
+        // The tool deck itself must not swallow the actions: they belong to the
+        // column beside the screenshot, never to a block inside the bar.
+        let deck = AreaSelectionActionBar { _ in }
+        let deckTooltips = Set(deck.chipButtons.compactMap(\.toolTip))
+        #expect(!deckTooltips.contains(AppText.value("scPin", language: .system)))
+        #expect(!deckTooltips.contains(AppText.value("scImageHostingUpload", language: .system)))
+        #expect(!deckTooltips.contains(AppText.value("scCopy", language: .system)))
     }
 
     @Test func watermarkTextEntryLooksDifferentFromTextEntry() {
@@ -749,7 +759,7 @@ struct AnnotationInteractionParityTests {
             screenCaptureAccessProvider: { true }
         )
         var delivered: Bool?
-        let bar = AreaSelectionActionBar { action in
+        let rail = AreaSelectionActionBar(mode: .actions) { action in
             guard action == .copy else { return }
             model.handleCapturedImage(
                 image(),
@@ -765,7 +775,7 @@ struct AnnotationInteractionParityTests {
             )
         }
         let copyButton = try #require(
-            bar.chipButtons.first {
+            rail.chipButtons.first {
                 $0.toolTip == AppText.value("scCopy", language: .system)
             }
         )
