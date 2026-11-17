@@ -90,6 +90,10 @@ final class MainWindowOpener: NSObject, ObservableObject {
     private var latestRequest = 0
     private var answeredRequest = 0
     private(set) var lastOutcome: Outcome?
+    /// Told whenever the window is asked for on purpose (menu bar, Dock click,
+    /// deep link, Finder reopen). The login launch's own window never routes
+    /// here, which is what keeps the Dock icon out of a login launch.
+    var onUserRequest: (@MainActor () -> Void)?
 
     init(
         center: NotificationCenter = .default,
@@ -118,6 +122,7 @@ final class MainWindowOpener: NSObject, ObservableObject {
     }
 
     @objc func requestOpen() {
+        onUserRequest?()
         // Load first, while the menu is still closing: the window then appears
         // with its content instead of flashing empty.
         loadContent()

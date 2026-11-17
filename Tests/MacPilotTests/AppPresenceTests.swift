@@ -192,6 +192,115 @@ struct AppPresenceTests {
         #expect(controller.isMainWindowOpen == false)
         #expect(controller.appliedActivationPolicy == .accessory)
     }
+
+    // MARK: - 登录启动只留菜单栏图标
+
+    @Test func aLoginLaunchShowsOnlyTheMenuBarIconUntilTheUserAsksForTheWindow() {
+        let recorded = Recorder()
+        let controller = AppPresenceController(
+            settings: .standard,
+            isMainWindowOpen: false,
+            isLaunched: true,
+            defersDockIcon: true,
+            notificationCenter: NotificationCenter(),
+            applyPolicy: { recorded.policies.append($0) }
+        )
+        var icons: [Bool] = []
+        controller.attachMenuBarIcon { icons.append($0) }
+
+        // 登录启动：没有窗口，Dock 图标不能出现。
+        #expect(controller.appliedActivationPolicy == .accessory)
+
+        // SwiftUI 自己建出的主窗口会短暂成为 key/main——那不是用户要的窗口。
+        controller.mainWindowVisibilityChanged(true)
+        #expect(controller.appliedActivationPolicy == .accessory)
+        #expect(recorded.policies == [.accessory])
+
+        // 用户从菜单栏真正打开窗口：Dock 图标随窗口回来。
+        controller.mainWindowRequestedByUser()
+        #expect(controller.isDockIconDeferred == false)
+        #expect(controller.appliedActivationPolicy == .regular)
+        #expect(recorded.policies == [.accessory, .regular])
+
+        // 之后回到普通规则：关窗收起 Dock 图标，重开恢复。
+        controller.mainWindowVisibilityChanged(false)
+        controller.mainWindowVisibilityChanged(true)
+        #expect(recorded.policies == [.accessory, .regular, .accessory, .regular])
+        #expect(icons == [true])
+    }
+
+    @Test func aLoginLaunchWindowThatTheUserNeverOpensLeavesTheDockIconHidden() {
+        let recorded = Recorder()
+        let controller = AppPresenceController(
+            settings: .standard,
+            isMainWindowOpen: false,
+            isLaunched: true,
+            defersDockIcon: true,
+            notificationCenter: NotificationCenter(),
+            applyPolicy: { recorded.policies.append($0) }
+        )
+
+        // 开机自启：窗口自己出现、被 orderOut 收起（不触发 willClose），
+        // 用户始终没开口要窗口——整场都不该出现 Dock 图标。
+        controller.mainWindowVisibilityChanged(true)
+        controller.mainWindowVisibilityChanged(false)
+
+        #expect(controller.appliedActivationPolicy == .accessory)
+        #expect(recorded.policies == [.accessory])
+    }
+
+    @Test func aDockOnlyConfigurationStillShowsItsIconAtALoginLaunch() {
+        let recorded = Recorder()
+        let controller = AppPresenceController(
+            settings: AppPresenceSettings(showsDockIcon: true, showsMenuBarIcon: false),
+            isMainWindowOpen: false,
+            isLaunched: true,
+            defersDockIcon: true,
+            notificationCenter: NotificationCenter(),
+            applyPolicy: { recorded.policies.append($0) }
+        )
+        var icons: [Bool] = []
+        controller.attachMenuBarIcon { icons.append($0) }
+
+        // Dock 图标是唯一入口：登录启动也必须显示，否则开机后无路可回。
+        #expect(controller.appliedActivationPolicy == .regular)
+        #expect(recorded.policies == [.regular])
+        #expect(icons == [false])
+    }
+
+    @Test func theLoginLaunchDeferralIsIgnoredWhileTheDockIconIsSwitchedOff() {
+        let recorded = Recorder()
+        let controller = AppPresenceController(
+            settings: AppPresenceSettings(showsDockIcon: false, showsMenuBarIcon: true),
+            isMainWindowOpen: true,
+            isLaunched: true,
+            defersDockIcon: true,
+            notificationCenter: NotificationCenter(),
+            applyPolicy: { recorded.policies.append($0) }
+        )
+
+        controller.mainWindowVisibilityChanged(true)
+        controller.mainWindowRequestedByUser()
+
+        #expect(controller.appliedActivationPolicy == .accessory)
+        #expect(recorded.policies == [.accessory])
+    }
+
+    @Test func thePolicyKeepsTheDockIconDeferredOnlyWhileAMenuBarIconExists() {
+        // 两者都开 + 登录启动：窗口在也不显示，等用户真正打开窗口。
+        #expect(!AppPresencePolicy.showsDockIcon(
+            .standard, isMainWindowOpen: true, isDockIconDeferred: true
+        ))
+        #expect(AppPresencePolicy.showsDockIcon(
+            .standard, isMainWindowOpen: true, isDockIconDeferred: false
+        ))
+
+        // 只剩 Dock 图标：没有任何东西可以推迟它，否则开机后无路可回。
+        let dockOnly = AppPresenceSettings(showsDockIcon: true, showsMenuBarIcon: false)
+        #expect(AppPresencePolicy.showsDockIcon(
+            dockOnly, isMainWindowOpen: false, isDockIconDeferred: true
+        ))
+    }
 }
 
 @MainActor

@@ -124,3 +124,11 @@
 | 完整编辑器可被缩到固定控件以下；区域选区 Copy 只有模型级测试，多显示器/小窗口只有人工清单 | 完整编辑器根视图设置 720×420 内容下限（窗口 `minSize` 720×452），工具面板在内部横向滚动；新增真实 `finishSnapzySelectionAction` 裁剪→剪贴板→关闭测试；验收 App 追加 1024×768/1920×1080 工具栏可达、最小窗口、区域选区 80×50 Copy 检查 | `AnnotationInteractionParityTests`、验收记录 `07-area-selection-copy.png` |
 
 状态：自动化测试与可执行项通过；本次验收会话处于锁屏状态，真实鼠标绘制/窗口激活被标记为阻塞，解锁后重新运行 `--acceptance-annotation` 可补齐。
+
+## 2026-11-17：登录启动只显示菜单栏图标（beta 待发布）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| 两个入口都开启时，开机自启仍出现 Dock 图标：登录启动时 SwiftUI 自己建出主窗口并短暂成为 key/main，`didBecomeMain` 把 `mainWindowVisibilityChanged(true)` 喂给 presence，策略从 `.accessory` 切成 `.regular`；随后 `hideRegularWindows` 只是 `orderOut`，不触发 `willClose`，于是 Dock 图标留在整个会话里 | 新增 `AppPresencePolicy.showsDockIcon(..., isDockIconDeferred:)` 与 `AppPresenceController.mainWindowRequestedByUser()`：登录启动期间（`defersDockIcon = AppLaunchContext.wasLaunchedAtLogin`）Dock 图标推迟，窗口自己出现不算用户请求；只有 `MainWindowOpener.requestOpen` 经 `onUserRequest` 通告真实请求（菜单栏、Dock 点击、深链、Finder 重开）后才解除，之后照常跟随窗口。Dock-only 配置忽略推迟，避免开机后无路可回。不在 `orderOut` 里隐藏 Dock 图标 | `AppPresenceTests`、`MainWindowOpenerTests`、`AppLifecycleTests` |
+
+状态：自动化测试通过；真实登录启动（重启/注销后 SMAppService 拉起）的外观验收仍待实机确认。

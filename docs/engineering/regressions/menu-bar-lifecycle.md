@@ -8,7 +8,8 @@
 
 - **至少一个入口永远存活。** 两个入口（Dock 图标、菜单栏图标）新装后都显示，用户可在设置里隐藏其一——但绝不能两个都藏。`AppPresenceSettings.normalized()` 在存储的组合两者皆无时恢复菜单栏图标；`allowingDockIconChange` / `allowingMenuBarIconChange` 拒绝去掉最后一个的变更，设置开关在该状态禁用而不是静默拒绝。手改配置或未来构建写出的双藏组合绝不能让运行中的 app 无路可回。
 - **只有菜单栏仍提供入口时，Dock 图标才跟随主窗口。** `AppPresencePolicy.showsDockIcon` 在两者都启用时返回窗口状态，在 Dock-only 配置下永远 `true`——那里图标是唯一入口，必须比窗口活得久。关窗切到 `.accessory`，重开（菜单栏、Dock 点击、深链）切回 `.regular`；`LSUIElement` 在 Info.plist 保持 `true`，策略在运行时应用。
-- **`willClose` 是唯一的关闭信号。** 登录启动路径 `hideRegularWindows` 里的 `orderOut` 不得隐藏 Dock 图标：隐藏的窗口不是关闭的窗口。
+- **登录启动只显示菜单栏图标。** `AppPresencePolicy.showsDockIcon` 的 `isDockIconDeferred` 在登录启动期间强制隐藏 Dock 图标，即使用户的两个入口都开着：SwiftUI 在登录启动时会自己建出主窗口并短暂成为 key/main，那不是用户要的窗口，`AppPresenceController.mainWindowVisibilityChanged(true)` 因此不能把它变成 `.regular`。只有 `MainWindowOpener.requestOpen`（菜单栏、Dock 点击、深链、Finder 重开）通过 `onUserRequest` 通告真实请求后才解除推迟，此后 Dock 图标照常跟随窗口。Dock-only 配置不受影响——那里图标是唯一入口，登录启动也必须显示。不要把这条规则实现成 `orderOut` 里隐藏 Dock 图标。
+- **`willClose` 是唯一的关闭信号。** 登录启动路径 `hideRegularWindows` 里的 `orderOut` 不得隐藏 Dock 图标：隐藏的窗口不是关闭的窗口（登录启动不出现 Dock 图标来自上面的 `isDockIconDeferred`，与 `orderOut` 无关）。
 - **status item 必须永远留下 item。** `MenuBarDisplayController.scheduleReinsert` 移除 item、等待、重装；离开那个移除窗口的每个出口——包括取消的睡眠——都必须恢复它，否则 `reinserting` 置位却无 item 无 task，图标消失直到重启（v1.2.2-beta.59 native-menu 改造后的实测事故）。`scheduleReinsert` 在下一轮前同步恢复；`selfHeal()`（由 `startWatchdog` 驱动）兜底。
 - **状态 item 能显示的每条警告都必须在首页点名。** 三角形是 `AwakeSessionManager.hasAttentionIssue`；`HomeView` 渲染同一 `attentionIssues` 列表，图标永远不能指向 app 无法解释的失败——包括 Awake 功能被关闭、其页面不可达之后。退役未用电源服务时出现的合盖失败保持 `ClosedLidSleepFailure.stage == .retirement`，绝不能被描述成失去睡眠保护。`HomeAttentionTests` 钉住图标/列表一致性与中英文案。
 

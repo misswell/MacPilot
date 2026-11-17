@@ -115,6 +115,33 @@ struct MainWindowOpenerTests {
         #expect(outcomes == [.raisedExistingWindow])
     }
 
+    /// 只有真正经过 `requestOpen` 的请求才算「用户要窗口」——登录启动时
+    /// SwiftUI 自己建出的窗口不经过这里，这正是它不该带出 Dock 图标的信号。
+    @Test func everyUserRequestIsAnnouncedOnceBeforeTheWindowAppears() {
+        let center = NotificationCenter()
+        let turns = Turns()
+        var requests = 0
+        let opener = MainWindowOpener(
+            center: center,
+            loadContent: {},
+            activate: {},
+            schedule: { turns.schedule($0) },
+            record: { _ in },
+            isWindowUsable: { _ in true }
+        )
+        opener.onUserRequest = { requests += 1 }
+        opener.attach(show: {})
+
+        center.post(name: .macPilotShowMainWindow, object: nil)
+
+        // 通告发生在开窗之前，Dock 图标不必等窗口真的可见才回来。
+        #expect(requests == 1)
+        #expect(turns.pending == 1)
+
+        turns.runAll()
+        #expect(requests == 1)
+    }
+
     @Test func aBurstOfRequestsRaisesTheWindowOnce() {
         let center = NotificationCenter()
         let turns = Turns()

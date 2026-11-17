@@ -66,9 +66,20 @@ struct AppPresenceSettings: Codable, Equatable {
 /// The exception is the Dock-only configuration: there the icon is the single
 /// way back into the app, so it has to outlive the window.
 enum AppPresencePolicy {
-    static func showsDockIcon(_ settings: AppPresenceSettings, isMainWindowOpen: Bool) -> Bool {
+    /// `isDockIconDeferred` is the login-launch case: the process was started by
+    /// the login item and the window it builds for itself is not a request from
+    /// the user, so the menu-bar icon is the only entry point until they ask
+    /// for the window. A Dock-only configuration still shows its icon — that
+    /// icon is the only way in.
+    static func showsDockIcon(
+        _ settings: AppPresenceSettings,
+        isMainWindowOpen: Bool,
+        isDockIconDeferred: Bool = false
+    ) -> Bool {
         guard settings.showsDockIcon else { return false }
-        return settings.showsMenuBarIcon ? isMainWindowOpen : true
+        guard settings.showsMenuBarIcon else { return true }
+        guard !isDockIconDeferred else { return false }
+        return isMainWindowOpen
     }
 }
 
@@ -88,6 +99,10 @@ final class AppPresenceController: ObservableObject {
     private let applyPolicy: @MainActor (NSApplication.ActivationPolicy) -> Void
     private var applyMenuBarIcon: (@MainActor (Bool) -> Void)?
     private var appliedMenuBarIcon: Bool?
+    /// True while a login launch keeps the Dock icon away: the window SwiftUI
+    /// builds on its own is not a request from the user, so only the menu-bar
+    /// icon is shown until they ask for the window.
+    private(set) var isDockIconDeferred: Bool
     private var hasFinishedLaunching: Bool
     private var launchSubscription: AppPresenceLaunchSubscription?
 
@@ -95,11 +110,13 @@ final class AppPresenceController: ObservableObject {
         settings: AppPresenceSettings = .standard,
         isMainWindowOpen: Bool = false,
         isLaunched: Bool? = nil,
+        defersDockIcon: Bool = false,
         notificationCenter: NotificationCenter = .default,
         applyPolicy: @escaping @MainActor (NSApplication.ActivationPolicy) -> Void = { NSApp.setActivationPolicy($0) }
     ) {
         self.settings = settings.normalized()
         self.isMainWindowOpen = isMainWindowOpen
+        self.isDockIconDeferred = defersDockIcon
         self.applyPolicy = applyPolicy
         hasFinishedLaunching = isLaunched ?? (NSApp?.isRunning == true)
         launchSubscription = AppPresenceLaunchSubscription(center: notificationCenter) { [weak self] in
@@ -132,6 +149,15 @@ final class AppPresenceController: ObservableObject {
         apply()
     }
 
+    /// The user asked for the main window (menu bar, Dock click, deep link,
+    /// Finder reopen). From then on the Dock icon follows the window like any
+    /// other session; the login launch itself never reaches here.
+    func mainWindowRequestedByUser() {
+        guard isDockIconDeferred else { return }
+        isDockIconDeferred = false
+        apply()
+    }
+
     private func didFinishLaunching() {
         hasFinishedLaunching = true
         // One-shot: a second notification must not resurrect a controller
@@ -148,7 +174,8 @@ final class AppPresenceController: ObservableObject {
         }
         let policy: NSApplication.ActivationPolicy = AppPresencePolicy.showsDockIcon(
             settings,
-            isMainWindowOpen: isMainWindowOpen
+            isMainWindowOpen: isMainWindowOpen,
+            isDockIconDeferred: isDockIconDeferred
         ) ? .regular : .accessory
         guard appliedActivationPolicy != policy else { return }
         appliedActivationPolicy = policy
