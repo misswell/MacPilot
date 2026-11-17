@@ -1,8 +1,8 @@
 # 截图标注实机验收记录
 
-- 日期：2026-11-17T05:03:49Z
+- 日期：2026-11-17T05:25:35Z
 - 系统：版本27.2.1（版号26B131）
-- 构建：b33f610
+- 构建：1c9bd9c
 - 方式：debug `.app` 以 `--acceptance-annotation` 启动；真实 AppKit 窗口、真实 NSEvent 鼠标/键盘、真实 NSPasteboard；跳过 MacPilotAppServices，不触发全局快捷键、配置写入、屏幕采集或 TCC 授权
 - 会话状态：已解锁
 - 范围：全编辑器与 Inline 工具条的真实 UI 组件；区域截图裁剪本身由固定测试图像代替
