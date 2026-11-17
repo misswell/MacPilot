@@ -234,10 +234,10 @@ enum MacPilotAcceptanceRunner {
                     // Fixed 900×680 editor: the slider sits at content
                     // x=534…600, y=650. Convert content points to screen.
                     widthStart = window.convertPoint(
-                        toScreen: NSPoint(x: 534, y: 650)
+                        toScreen: NSPoint(x: 240, y: 609)
                     )
                     widthEnd = window.convertPoint(
-                        toScreen: NSPoint(x: 600, y: 650)
+                        toScreen: NSPoint(x: 320, y: 609)
                     )
                 }
                 drag(window: window, fromScreen: widthStart, toScreen: widthEnd)
@@ -248,7 +248,7 @@ enum MacPilotAcceptanceRunner {
                 ).flatMap(accessibilityFrame(of:))
                 let colorPoint = colorSwatch.map {
                     CGPoint(x: $0.midX, y: $0.midY)
-                } ?? window.convertPoint(toScreen: NSPoint(x: 378, y: 650))
+                } ?? window.convertPoint(toScreen: NSPoint(x: 73, y: 609))
                 click(window: window, screenPoint: colorPoint)
             }
 
@@ -484,6 +484,7 @@ enum MacPilotAcceptanceRunner {
                 pressure: 1
             )!
         }
+        window.sendEvent(event(.mouseMoved))
         window.sendEvent(event(.leftMouseDown))
         window.sendEvent(event(.leftMouseUp))
         RunLoop.main.run(until: Date().addingTimeInterval(0.15))
@@ -509,6 +510,7 @@ enum MacPilotAcceptanceRunner {
                 pressure: 1
             )!
         }
+        window.sendEvent(event(.mouseMoved, startPoint))
         window.sendEvent(event(.leftMouseDown, startPoint))
         window.sendEvent(event(.leftMouseDragged, CGPoint(
             x: (startPoint.x + endPoint.x) / 2,

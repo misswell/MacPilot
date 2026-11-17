@@ -132,3 +132,13 @@
 | 两个入口都开启时，开机自启仍出现 Dock 图标：登录启动时 SwiftUI 自己建出主窗口并短暂成为 key/main，`didBecomeMain` 把 `mainWindowVisibilityChanged(true)` 喂给 presence，策略从 `.accessory` 切成 `.regular`；随后 `hideRegularWindows` 只是 `orderOut`，不触发 `willClose`，于是 Dock 图标留在整个会话里 | 新增 `AppPresencePolicy.showsDockIcon(..., isDockIconDeferred:)` 与 `AppPresenceController.mainWindowRequestedByUser()`：登录启动期间（`defersDockIcon = AppLaunchContext.wasLaunchedAtLogin`）Dock 图标推迟，窗口自己出现不算用户请求；只有 `MainWindowOpener.requestOpen` 经 `onUserRequest` 通告真实请求（菜单栏、Dock 点击、深链、Finder 重开）后才解除，之后照常跟随窗口。Dock-only 配置忽略推迟，避免开机后无路可回。不在 `orderOut` 里隐藏 Dock 图标 | `AppPresenceTests`、`MainWindowOpenerTests`、`AppLifecycleTests` |
 
 状态：自动化测试通过；真实登录启动（重启/注销后 SMAppService 拉起）的外观验收仍待实机确认。
+
+## 2026-11-17：截图工具栏功能回归与视觉整理（beta 待发布）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| 用户从 beta.102 升级后找不到截图上传：上传仍存在，但上一轮重构把它只留在「更多」菜单，Action Rail 没有直接入口 | 上传恢复为截图操作栏的直接按钮（`icloud.and.arrow.up`），继续使用原有 `ImageHostingUploadCoordinator`/Keychain/图床设置；「更多」菜单移除重复项。贴图右键上传保持不变 | `AnnotationInteractionParityTests.uploadIsADirectActionOnTheRailAgain` |
+| 完整编辑器的工具面板被颜色/线宽等属性控件挤到只剩一个可见图标，用户误以为大量工具被删 | standalone 完整编辑器拆为独立的两行：工具行（14 个工具 + 撤销/重做/清空）与属性行（颜色/线宽/透明度/填充/线型）；工具行获得完整宽度，所有工具可见，属性不再压缩工具 | 验收 App `01-full-editor-bottom-bar.png`、AX 工具树、`toolbarUsesTheSharedCardMetrics` |
+| 截图工具栏边距、圆角和图标风格不统一 | `CaptureChromeStyle` 统一为 30pt 圆角方形 chip（9pt 圆角）、10pt 卡内边距、7pt 行距、6pt 项距、18pt 分隔线；文字/计数/水印/聚光灯图标改为 `character.textbox`/`list.number`/`seal`/`viewfinder`；Copy & Close 使用合成的“双文档 + 勾选”图标 | `toolbarUsesTheSharedCardMetrics`、`SnapzyCaptureTests`、`05-inline-toolbar.png` |
+
+功能对照结论：以 `v1.2.2-beta.102` 为基线，`AreaSelectionAction`、`AppText` 键集、Quick Access/贴图上传菜单均没有功能删除；上传只是入口层级变化，已恢复为直接按钮。

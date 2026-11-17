@@ -5,7 +5,7 @@
 //  The visual language of the capture *tool*: the post-selection toolbar
 //  (`AreaSelectionActionBar`) and the annotation controls living inside it.  An
 //  adaptive `windowBackgroundColor` card with a hairline `labelColor` stroke, a
-//  soft downward shadow and circular glyph chips is right for a surface the user
+//  soft downward shadow and rounded-square glyph chips is right for a surface the user
 //  is still driving.  Because the fills are semantic, the native controls
 //  embedded in the card (segmented switch, checkbox, colour well, slider)
 //  resolve to the same appearance as the card itself.
@@ -26,10 +26,21 @@ import AppKit
 enum CaptureChromeStyle {
   // MARK: - Geometry
 
-  /// Side of a circular tool chip, and the height of a card row.
-  static let chipSide: CGFloat = 28
-  static var chipCornerRadius: CGFloat { chipSide / 2 }
-  static let cardCornerRadius: CGFloat = 10
+  /// Side of a rounded-square tool chip, and the height of a card row.
+  static let chipSide: CGFloat = 30
+  /// Toolbar chips use a rounded square rather than a circle: the straight
+  /// edges leave more visual room for the glyph and match the macOS 26
+  /// control language.
+  static let chipCornerRadius: CGFloat = 9
+  static let cardCornerRadius: CGFloat = 12
+
+  /// Shared card padding/row rhythm for the post-selection HUD. Keeping these
+  /// next to the chip metrics means the tool row, action row and properties
+  /// row cannot drift apart when the bar is retuned.
+  static let barContentInset = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+  static let barRowSpacing: CGFloat = 7
+  static let barItemSpacing: CGFloat = 6
+  static let barDividerHeight: CGFloat = 18
 
   /// Elevation of a card at rest.  SwiftUI writes these as `y: 2` (down);
   /// a layer in a non-flipped view needs the negated offset.

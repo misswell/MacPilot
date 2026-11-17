@@ -160,6 +160,43 @@ struct AnnotationInteractionParityTests {
         }
     }
 
+    @Test func uploadIsADirectActionOnTheRailAgain() throws {
+        _ = NSApplication.shared
+        var started: [AreaSelectionAction] = []
+        let bar = AreaSelectionActionBar { started.append($0) }
+        let upload = try #require(
+            bar.chipButtons.first {
+                $0.toolTip == AppText.value("scImageHostingUpload", language: .system)
+            }
+        )
+        #expect(!upload.isHiddenOrHasHiddenAncestor)
+        upload.performClick(nil)
+        #expect(started == [.upload])
+        #expect(
+            bar.makeMoreMenu().items.contains {
+                $0.title == AppText.value("scImageHostingUpload", language: .system)
+            } == false,
+            "the direct upload chip replaces the duplicate More item"
+        )
+    }
+
+    @Test func toolbarUsesTheSharedCardMetrics() throws {
+        _ = NSApplication.shared
+        let bar = AreaSelectionActionBar { _ in }
+        let root = try #require(bar.subviews.compactMap { $0 as? NSStackView }.first)
+        #expect(root.spacing == CaptureChromeStyle.barRowSpacing)
+        #expect(root.edgeInsets.top == CaptureChromeStyle.barContentInset.top)
+        #expect(root.edgeInsets.left == CaptureChromeStyle.barContentInset.left)
+        #expect(root.edgeInsets.bottom == CaptureChromeStyle.barContentInset.bottom)
+        #expect(root.edgeInsets.right == CaptureChromeStyle.barContentInset.right)
+
+        let toolRow = try #require(root.arrangedSubviews.first as? NSStackView)
+        #expect(toolRow.spacing == CaptureChromeStyle.barItemSpacing)
+        for chip in bar.chipButtons {
+            #expect(chip.layer?.cornerRadius == CaptureChromeStyle.chipCornerRadius)
+        }
+    }
+
     @Test func theShapePropertyRowKeepsTheFilledRectangleTool() throws {
         _ = NSApplication.shared
         let bar = AreaSelectionActionBar { _ in }

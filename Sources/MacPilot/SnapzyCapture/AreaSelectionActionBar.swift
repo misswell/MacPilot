@@ -106,8 +106,8 @@ final class AreaSelectionActionBar: NSView {
     static let copy = 10
     static let annotate = 12
     static let finish = 13
+    static let upload = 16
     /// 「更多」 menu items. The former right-hand column lives here now.
-    static let moreUpload = 21
     static let moreCrop = 22
     static let moreRefresh = 23
     static let moreAdjust = 24
@@ -131,9 +131,9 @@ final class AreaSelectionActionBar: NSView {
 
     rootStack.orientation = .vertical
     rootStack.alignment = .leading
-    rootStack.spacing = 8
+    rootStack.spacing = CaptureChromeStyle.barRowSpacing
     rootStack.detachesHiddenViews = true
-    rootStack.edgeInsets = NSEdgeInsets(top: 5, left: 8, bottom: 5, right: 8)
+    rootStack.edgeInsets = CaptureChromeStyle.barContentInset
     rootStack.translatesAutoresizingMaskIntoConstraints = false
     addSubview(rootStack)
     NSLayoutConstraint.activate([
@@ -267,7 +267,7 @@ final class AreaSelectionActionBar: NSView {
     let row = NSStackView()
     row.orientation = .horizontal
     row.alignment = .centerY
-    row.spacing = 4
+    row.spacing = CaptureChromeStyle.barItemSpacing
     row.detachesHiddenViews = true
 
     let grip = NSImageView(
@@ -281,8 +281,9 @@ final class AreaSelectionActionBar: NSView {
     grip.toolTip = AppText.value("scToolDragBar", language: .system)
     grip.translatesAutoresizingMaskIntoConstraints = false
     row.addArrangedSubview(grip)
-    grip.widthAnchor.constraint(equalToConstant: 12).isActive = true
-    grip.heightAnchor.constraint(equalToConstant: 18).isActive = true
+    grip.widthAnchor.constraint(equalToConstant: 14).isActive = true
+    grip.heightAnchor.constraint(equalToConstant: 20).isActive = true
+    row.setCustomSpacing(2, after: grip)
 
     // Every implemented tool gets its own button. Snapzy's InlineAreaControlDeck
     // groups tools with dividers only; it never hides a variant behind a
@@ -332,20 +333,32 @@ final class AreaSelectionActionBar: NSView {
     return row
   }
 
-  /// The action rail is its own row. OCR/pin/更多/save/copy must never displace
-  /// tool buttons or hide them: Snapzy keeps `InlineAreaActionRail` separate
-  /// from the tool deck for exactly this reason.
+  /// The action rail is its own row. OCR/pin/upload/更多/save/copy must never
+  /// displace tool buttons or hide them: Snapzy keeps
+  /// `InlineAreaActionRail` separate from the tool deck for exactly this
+  /// reason. A divider separates capture utilities from output actions.
   private func makeActionRow() -> NSView {
     let row = NSStackView()
     row.orientation = .horizontal
     row.alignment = .centerY
-    row.spacing = 4
+    row.spacing = CaptureChromeStyle.barItemSpacing
     row.detachesHiddenViews = true
 
     for actionView in [
       makeActionButton("text.viewfinder", titleKey: "scToolOCR", tag: BarTag.ocr),
       makeActionButton("pin", titleKey: "scPin", tag: BarTag.pin),
+      makeActionButton("icloud.and.arrow.up", titleKey: "scImageHostingUpload", tag: BarTag.upload),
       makeMoreButton(),
+    ] {
+      row.addArrangedSubview(actionView)
+      primaryActionViews.append(actionView)
+    }
+
+    let divider = makeDivider()
+    row.addArrangedSubview(divider)
+    primaryActionViews.append(divider)
+
+    for actionView in [
       makeActionButton("square.and.arrow.down", titleKey: "scToolSave", tag: BarTag.save),
       makeActionButton("doc.on.doc", titleKey: "scCopy", tag: BarTag.copy),
     ] {
@@ -354,7 +367,7 @@ final class AreaSelectionActionBar: NSView {
     }
 
     let copyAndClose = makeActionButton(
-      "doc.on.doc.badge.checkmark",
+      image: Self.copyAndCloseGlyph(),
       titleKey: "scCopyAndClose",
       tag: BarTag.copyAndClose
     )
@@ -377,7 +390,7 @@ final class AreaSelectionActionBar: NSView {
     separator.boxType = .separator
     separator.translatesAutoresizingMaskIntoConstraints = false
     separator.widthAnchor.constraint(equalToConstant: 1).isActive = true
-    separator.heightAnchor.constraint(equalToConstant: 20).isActive = true
+    separator.heightAnchor.constraint(equalToConstant: CaptureChromeStyle.barDividerHeight).isActive = true
     return separator
   }
 
@@ -429,8 +442,12 @@ final class AreaSelectionActionBar: NSView {
   }
 
   private func makeActionButton(_ symbolName: String, titleKey: String, tag: Int) -> NSButton {
+    makeActionButton(image: Self.chipGlyph(symbolName), titleKey: titleKey, tag: tag)
+  }
+
+  private func makeActionButton(image: NSImage, titleKey: String, tag: Int) -> NSButton {
     let button = makeChip(
-      symbolName: symbolName,
+      image: image,
       action: #selector(actionPressed(_:)),
       tooltipKey: titleKey
     )
@@ -462,7 +479,7 @@ final class AreaSelectionActionBar: NSView {
     let glyph = NSImage(
       systemSymbolName: symbolName,
       accessibilityDescription: nil
-    )?.withSymbolConfiguration(.init(pointSize: 12, weight: .bold))
+    )?.withSymbolConfiguration(.init(pointSize: 13.5, weight: .semibold))
     let image = NSImage(size: canvasSize, flipped: false) { _ in
       guard let glyph else { return true }
       let size = glyph.size
@@ -483,12 +500,52 @@ final class AreaSelectionActionBar: NSView {
     return image
   }
 
+  /// Copy & Close has no single SF Symbol that reads as "two documents plus a
+  /// check": draw the pair on one template canvas so the chip is never blank.
+  private static func copyAndCloseGlyph() -> NSImage {
+    let side = CaptureChromeStyle.chipSide
+    let canvasSize = NSSize(width: side, height: side)
+    let documents = NSImage(
+      systemSymbolName: "doc.on.doc",
+      accessibilityDescription: nil
+    )?.withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
+    let check = NSImage(
+      systemSymbolName: "checkmark.circle.fill",
+      accessibilityDescription: nil
+    )?.withSymbolConfiguration(.init(pointSize: 8, weight: .bold))
+    let image = NSImage(size: canvasSize, flipped: false) { _ in
+      documents?.draw(
+        in: NSRect(x: side * 0.12, y: side * 0.26, width: side * 0.60, height: side * 0.60),
+        from: .zero,
+        operation: .sourceOver,
+        fraction: 1
+      )
+      check?.draw(
+        in: NSRect(x: side * 0.54, y: side * 0.06, width: side * 0.40, height: side * 0.40),
+        from: .zero,
+        operation: .sourceOver,
+        fraction: 1
+      )
+      return true
+    }
+    image.isTemplate = true
+    return image
+  }
+
   private func makeChip(
     symbolName: String,
     action: Selector,
     tooltipKey: String
   ) -> NSButton {
-    let button = NSButton(image: Self.chipGlyph(symbolName), target: self, action: action)
+    makeChip(image: Self.chipGlyph(symbolName), action: action, tooltipKey: tooltipKey)
+  }
+
+  private func makeChip(
+    image: NSImage,
+    action: Selector,
+    tooltipKey: String
+  ) -> NSButton {
+    let button = NSButton(image: image, target: self, action: action)
     configureChip(button, tooltipKey: tooltipKey)
     return button
   }
@@ -541,7 +598,7 @@ final class AreaSelectionActionBar: NSView {
     row.orientation = .horizontal
     row.alignment = .centerY
     row.spacing = 8
-    row.edgeInsets = NSEdgeInsets(top: 4, left: 22, bottom: 4, right: 8)
+    row.edgeInsets = NSEdgeInsets(top: 4, left: 0, bottom: 2, right: 0)
 
     switch model.tool {
     case .rectangle, .filledRectangle, .ellipse:
@@ -983,6 +1040,7 @@ final class AreaSelectionActionBar: NSView {
     switch sender.tag {
     case BarTag.ocr: action = .ocr
     case BarTag.pin: action = .pin
+    case BarTag.upload: action = .upload
     case BarTag.save: action = .save
     case BarTag.close: action = .cancel
     case BarTag.copy: action = .copy
@@ -1013,11 +1071,6 @@ final class AreaSelectionActionBar: NSView {
   /// non-terminal and are applied when the session commits.
   func makeMoreMenu() -> NSMenu {
     let menu = NSMenu()
-    menu.addItem(makeMoreItem(
-      "icloud.and.arrow.up",
-      titleKey: "scImageHostingUpload",
-      tag: BarTag.moreUpload
-    ))
     if !isAnnotating {
       menu.addItem(makeMoreItem(
         "arrow.down.to.line.compact",
@@ -1090,7 +1143,6 @@ final class AreaSelectionActionBar: NSView {
   /// without popping a real menu on the non-activating panel.
   func handleMoreItem(tag: Int) {
     switch tag {
-    case BarTag.moreUpload: perform(.upload)
     case BarTag.moreCrop: perform(.annotateTool(.crop))
     case BarTag.moreRefresh: perform(.refreshCapture)
     case BarTag.moreScrolling: perform(.scrollingCapture)

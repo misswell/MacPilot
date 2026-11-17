@@ -5946,12 +5946,12 @@ enum SmartAnnotationTool: String, CaseIterable, Identifiable {
         case .arrow: return "arrow.up.right"
         case .line: return "line.diagonal"
         case .blur: return "eye.slash"
-        case .spotlight: return "circle.dashed.inset.filled"
-        case .counter: return "3.circle"
+        case .spotlight: return "viewfinder"
+        case .counter: return "list.number"
         case .highlighter: return "highlighter"
         case .pencil: return "pencil"
-        case .text: return "t.square"
-        case .watermark: return "text.badge.plus"
+        case .text: return "character.textbox"
+        case .watermark: return "seal"
         case .eraser: return "eraser"
         case .crop: return "crop"
         }
@@ -7158,13 +7158,31 @@ struct SmartAnnotationEditor: View {
 
     private var standaloneEditorBody: some View {
         VStack(spacing: 0) {
-            annotationToolbar(showsActions: false)
-                .padding(10)
+            annotationToolbar(showsActions: false, showsStyle: false)
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+            Divider()
+                .opacity(0.55)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+            annotationStyleBar
             GeometryReader { geometry in
                 annotationCanvas(in: geometry.size)
             }
             annotationActionBar
         }
+    }
+
+    /// The standalone properties row is separate from the tool deck, matching
+    /// Snapzy's InlineAreaPropertiesBar. Keeping it on its own line leaves the
+    /// full tool palette visible instead of squeezing it into one chip.
+    private var annotationStyleBar: some View {
+        HStack(spacing: 8) {
+            annotationStyleControls
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
     }
 
     private var embeddedEditorBody: some View {
@@ -7214,7 +7232,7 @@ struct SmartAnnotationEditor: View {
     }
 
     @ViewBuilder
-    private func annotationToolbar(showsActions: Bool) -> some View {
+    private func annotationToolbar(showsActions: Bool, showsStyle: Bool = true) -> some View {
         HStack(spacing: 6) {
             annotationToolPalette
             Button(AppText.value("scUndo", language: language), action: model.undo)
@@ -7231,7 +7249,9 @@ struct SmartAnnotationEditor: View {
                     model.removeAll()
                 }
             }
-            annotationStyleControls
+            if showsStyle {
+                annotationStyleControls
+            }
             Spacer(minLength: 0)
             if showsActions {
                 annotationActionButtons

@@ -99,7 +99,7 @@ struct CaptureEnhancementsTests {
     @Test func hudSpotlightToolBridgesIntoTheAnnotationModel() {
         #expect(AreaSelectionAnnotationTool.spotlight.smartAnnotationTool == .spotlight)
         #expect(SmartAnnotationTool.spotlight.titleKey == "scAnnotationSpotlight")
-        #expect(SmartAnnotationTool.spotlight.systemImage == "circle.dashed.inset.filled")
+        #expect(SmartAnnotationTool.spotlight.systemImage == "viewfinder")
     }
 
     // MARK: - Microphone level
