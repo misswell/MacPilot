@@ -1264,8 +1264,8 @@ nonisolated enum AreaSelectionBarLayout {
 
   /// Places the tool deck without covering the action column that hangs beside
   /// the screenshot. The default anchor is still below/above the selection; if
-  /// a small selection makes the wide deck run into the column, the deck moves
-  /// left of it, then above the selection, then to its right.
+  /// a small selection makes the wide deck run into the column, the deck first
+  /// moves above the selection at its centred x, then beside the column.
   static func resolve(
     selectionRect: CGRect,
     barSize: CGSize,
@@ -1290,9 +1290,12 @@ nonisolated enum AreaSelectionBarLayout {
       return insideBounds && !frame.intersects(railFrame) ? frame : nil
     }
     let spacing: CGFloat = 8
+    // Keeping the deck centred under the selection matters more than keeping
+    // it below: when the side column hangs into the below slot, the deck first
+    // moves above the selection at the same centred x, then beside the column.
     let candidates = [
-      candidate(x: railFrame.minX - spacing - barSize.width, y: base.minY),
       candidate(x: base.minX, y: selectionRect.maxY + gap),
+      candidate(x: railFrame.minX - spacing - barSize.width, y: base.minY),
       candidate(x: railFrame.maxX + spacing, y: base.minY),
       candidate(x: base.minX, y: railFrame.minY - spacing - barSize.height),
     ].compactMap { $0 }
