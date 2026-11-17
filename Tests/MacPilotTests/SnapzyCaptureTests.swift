@@ -1394,13 +1394,14 @@ struct SnapzyCaptureTests {
             }
         )
         #expect(!optionsRow.isHidden)
+        // The side action rail is a three-row block and owns the bar's minimum
+        // height; collapsing the properties row only removes the contextual
+        // controls, not the whole rail.
+        #expect(bar.intrinsicContentSize.height >= CaptureChromeStyle.chipSide * 3)
 
-        let expandedHeight = bar.intrinsicContentSize.height
         collapseButton.performClick(nil)
         #expect(optionsRow.isHidden)
-        let collapsedHeight = bar.intrinsicContentSize.height
-        // 收起前后的差值 = 选项行实际内容高度 + 行间距（intrinsic 高度按真实内容计算）
-        #expect(expandedHeight - collapsedHeight >= optionsRow.fittingSize.height + 8)
+        #expect(bar.intrinsicContentSize.height >= CaptureChromeStyle.chipSide * 3)
 
         let rectangleButton = try #require(
             buttons(in: bar).first {

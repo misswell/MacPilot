@@ -7528,6 +7528,13 @@ struct SmartAnnotationEditor: View {
     /// first responder. Without this gate SwiftUI's window-level shortcut wins
     /// over the field editor and Cmd+Z removes the last annotation instead of
     /// the last typed character.
+    /// The watermark tool shares the text-entry path but not its look: its
+    /// committed annotation is white, semi-transparent text with no white
+    /// bubble, so its editor uses a dark capsule with white ink.
+    nonisolated static func textEntryUsesDarkCapsule(for tool: SmartAnnotationTool) -> Bool {
+        tool == .watermark
+    }
+
     nonisolated static func undoShortcut(isEditingText: Bool) -> KeyboardShortcut? {
         isEditingText ? nil : KeyboardShortcut("z", modifiers: .command)
     }
@@ -7969,21 +7976,51 @@ struct SmartAnnotationEditor: View {
         dragPoints.removeAll(keepingCapacity: true)
     }
 
-    /// iShot-style in-place text entry: a white capsule at the click point.
-    /// Enter (or clicking elsewhere) commits the text; Esc cancels.
+    /// In-place text entry. The text tool gets a white capsule with black ink
+    /// (its committed annotation is also a white bubble); the watermark tool
+    /// gets a dark capsule with white ink (its committed annotation is white,
+    /// semi-transparent text without a bubble). Forcing the matching colour
+    /// scheme keeps the field legible in either system appearance.
     @ViewBuilder
     private func inlineTextEditorCapsule(in fitted: CGRect) -> some View {
         if showingTextEntry {
             let anchor = denormalized(textPoint, in: fitted)
             let fieldSize = Self.inlineTextFieldSize(for: pendingText, style: model.currentStyle)
-            TextField(AppText.value("scText", language: language), text: $pendingText)
+            let isWatermark = Self.textEntryUsesDarkCapsule(for: pendingTextTool)
+            let placeholder = AppText.value(
+                isWatermark ? "scAnnotationWatermarkTitle" : "scText",
+                language: language
+            )
+            let fieldFill = isWatermark ? Color.black.opacity(0.72) : Color.white
+            let fieldInk = isWatermark ? Color.white : Color.black
+            TextField(
+                "",
+                text: $pendingText,
+                prompt: Text(placeholder).foregroundColor(fieldInk.opacity(0.55))
+            )
                 .textFieldStyle(.plain)
                 .font(.system(size: Self.inlineTextFontSize(for: model.currentStyle), weight: .bold))
+                .foregroundStyle(fieldInk)
+                .tint(fieldInk)
+                .environment(\.colorScheme, isWatermark ? .dark : .light)
                 .frame(width: fieldSize.width, height: fieldSize.height, alignment: .leading)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: fieldSize.height * 0.4, style: .continuous))
+                .background(
+                    fieldFill,
+                    in: RoundedRectangle(cornerRadius: fieldSize.height * 0.4, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: fieldSize.height * 0.4, style: .continuous)
+                        .stroke(
+                            isWatermark ? Color.white.opacity(0.35) : Color.black.opacity(0.10),
+                            lineWidth: 1
+                        )
+                }
                 .shadow(color: Color.black.opacity(0.28), radius: 3, y: 1)
                 .offset(x: anchor.x, y: anchor.y - fieldSize.height)
                 .focused($inlineTextFocused)
+                .accessibilityLabel(
+                    AppText.value(isWatermark ? "scAnnotationWatermark" : "scAnnotationText", language: language)
+                )
                 .onSubmit(commitInlineText)
                 .onExitCommand { cancelInlineText() }
                 .onAppear {

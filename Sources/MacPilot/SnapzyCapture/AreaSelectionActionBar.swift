@@ -60,6 +60,7 @@ final class AreaSelectionActionBar: NSView {
 
   private let rootStack = NSStackView()
   private var primaryRow: NSStackView?
+  private var actionRail: NSStackView?
   private var optionsRow: NSView?
   private var undoButton: NSButton?
   private var redoButton: NSButton?
@@ -136,15 +137,32 @@ final class AreaSelectionActionBar: NSView {
     rootStack.edgeInsets = CaptureChromeStyle.barContentInset
     rootStack.translatesAutoresizingMaskIntoConstraints = false
     addSubview(rootStack)
+
+    let rail = makeActionRail()
+    rail.translatesAutoresizingMaskIntoConstraints = false
+    actionRail = rail
+    addSubview(rail)
+
+    let divider = NSBox()
+    divider.boxType = .separator
+    divider.translatesAutoresizingMaskIntoConstraints = false
+    addSubview(divider)
+
     NSLayoutConstraint.activate([
       rootStack.leadingAnchor.constraint(equalTo: leadingAnchor),
-      rootStack.trailingAnchor.constraint(equalTo: trailingAnchor),
       rootStack.topAnchor.constraint(equalTo: topAnchor),
       rootStack.bottomAnchor.constraint(equalTo: bottomAnchor),
+      rootStack.trailingAnchor.constraint(equalTo: divider.leadingAnchor, constant: -4),
+      divider.widthAnchor.constraint(equalToConstant: 1),
+      divider.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+      divider.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+      rail.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 6),
+      rail.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+      rail.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+      rail.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
     ])
 
     rootStack.addArrangedSubview(makePrimaryRow())
-    rootStack.addArrangedSubview(makeActionRow())
     applyStageVisibility()
   }
 
@@ -154,25 +172,12 @@ final class AreaSelectionActionBar: NSView {
   }
 
   override var intrinsicContentSize: NSSize {
-    let optionsVisible = !(optionsRow?.isHidden ?? true)
-    // 高度按行的实际内容计算：主行按钮最高 28pt、选项行随控件而定。
-    // 之前写死 38/36pt 行高会让声明的尺寸大于内容，NSStackView 顶部
-    // 对齐时多余空间全部落到工具条底部，看起来上下留白不对称。
-    let primaryHeight = primaryRow?.fittingSize.height ?? 0
-    let optionsHeight = optionsVisible ? (optionsRow?.fittingSize.height ?? 0) : 0
-    let contentHeight = optionsHeight > 0
-      ? primaryHeight + Self.rowSpacing + optionsHeight
-      : primaryHeight
-    // 宽度跟随实际内容：空闲时橡皮/撤销隐藏，标注会话中它们出现，
-    // 固定宽度会导致标注模式下内容溢出、空闲时右侧留白。
-    let insets = rootStack.edgeInsets
-    let primaryWidth = primaryRow?.fittingSize.width ?? 0
-    let optionsWidth = optionsVisible ? (optionsRow?.fittingSize.width ?? 0) : 0
-    let width = max(primaryWidth, optionsWidth) + insets.left + insets.right
-    return NSSize(
-      width: max(240, width),
-      height: contentHeight + insets.top + insets.bottom
-    )
+    let leftSize = rootStack.fittingSize
+    let railSize = actionRail?.fittingSize ?? .zero
+    // left | 4pt gap | 1pt divider | 6pt gap | side action rail | 10pt edge
+    let width = leftSize.width + 11 + railSize.width + 10
+    let height = max(leftSize.height, railSize.height + 16)
+    return NSSize(width: max(240, width), height: height)
   }
 
   private static let rowSpacing: CGFloat = 8
@@ -337,52 +342,56 @@ final class AreaSelectionActionBar: NSView {
   /// displace tool buttons or hide them: Snapzy keeps
   /// `InlineAreaActionRail` separate from the tool deck for exactly this
   /// reason. A divider separates capture utilities from output actions.
-  private func makeActionRow() -> NSView {
-    let row = NSStackView()
-    row.orientation = .horizontal
-    row.alignment = .centerY
-    row.spacing = CaptureChromeStyle.barItemSpacing
-    row.detachesHiddenViews = true
+  private func makeActionRail() -> NSStackView {
+    let rail = NSStackView()
+    rail.orientation = .vertical
+    rail.alignment = .leading
+    rail.spacing = CaptureChromeStyle.barItemSpacing
+    rail.detachesHiddenViews = true
 
-    for actionView in [
+    func actionRow(_ views: [NSView]) -> NSStackView {
+      let row = NSStackView()
+      row.orientation = .horizontal
+      row.alignment = .centerY
+      row.spacing = CaptureChromeStyle.barItemSpacing
+      row.detachesHiddenViews = true
+      for view in views { row.addArrangedSubview(view) }
+      return row
+    }
+
+    let utilityRow = actionRow([
       makeActionButton("text.viewfinder", titleKey: "scToolOCR", tag: BarTag.ocr),
       makeActionButton("pin", titleKey: "scPin", tag: BarTag.pin),
       makeActionButton("icloud.and.arrow.up", titleKey: "scImageHostingUpload", tag: BarTag.upload),
-      makeMoreButton(),
-    ] {
-      row.addArrangedSubview(actionView)
-      primaryActionViews.append(actionView)
-    }
-
-    let divider = makeDivider()
-    row.addArrangedSubview(divider)
-    primaryActionViews.append(divider)
-
-    for actionView in [
+    ])
+    let outputRow = actionRow([
       makeActionButton("square.and.arrow.down", titleKey: "scToolSave", tag: BarTag.save),
       makeActionButton("doc.on.doc", titleKey: "scCopy", tag: BarTag.copy),
-    ] {
-      row.addArrangedSubview(actionView)
-      primaryActionViews.append(actionView)
-    }
-
+      makeMoreButton(),
+    ])
     let copyAndClose = makeActionButton(
       image: Self.copyAndCloseGlyph(),
       titleKey: "scCopyAndClose",
       tag: BarTag.copyAndClose
     )
     copyAndClose.isHidden = true
-    row.addArrangedSubview(copyAndClose)
     copyAndCloseButton = copyAndClose
-
     let finish = makeActionButton("checkmark", titleKey: "scToolFinish", tag: BarTag.finish)
     finish.isHidden = true
-    row.addArrangedSubview(finish)
     completeButton = finish
-    row.addArrangedSubview(makeActionButton("xmark", titleKey: "scClose", tag: BarTag.close))
+    let terminalRow = actionRow([
+      copyAndClose,
+      finish,
+      makeActionButton("xmark", titleKey: "scClose", tag: BarTag.close),
+    ])
 
-    row.translatesAutoresizingMaskIntoConstraints = false
-    return row
+    for view in [utilityRow, outputRow, terminalRow] {
+      rail.addArrangedSubview(view)
+    }
+    for button in [utilityRow, outputRow, terminalRow].flatMap({ $0.arrangedSubviews }) {
+      primaryActionViews.append(button)
+    }
+    return rail
   }
 
   private func makeDivider() -> NSView {

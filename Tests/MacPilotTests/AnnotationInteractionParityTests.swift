@@ -180,6 +180,33 @@ struct AnnotationInteractionParityTests {
         )
     }
 
+    @Test func pinAndUploadLiveOnThePersistentSideRail() throws {
+        _ = NSApplication.shared
+        let bar = AreaSelectionActionBar { _ in }
+        let stacks = bar.subviews.compactMap { $0 as? NSStackView }
+        #expect(stacks.count >= 2, "left content stack plus the side action rail")
+        let rail = try #require(stacks.dropFirst().first)
+        #expect(rail.orientation == .vertical)
+        let tooltips = Set(
+            rail.subviews
+                .flatMap { buttons(in: $0) }
+                .compactMap(\.toolTip)
+        )
+        for key in ["scPin", "scImageHostingUpload", "scToolOCR", "scToolSave", "scCopy"] {
+            #expect(
+                tooltips.contains(AppText.value(key, language: .system)),
+                "\(key) must stay on the visible side rail"
+            )
+        }
+    }
+
+    @Test func watermarkTextEntryLooksDifferentFromTextEntry() {
+        #expect(SmartAnnotationEditor.textEntryUsesDarkCapsule(for: .watermark))
+        #expect(!SmartAnnotationEditor.textEntryUsesDarkCapsule(for: .text))
+        #expect(SmartAnnotationStyle.default(for: .watermark).color == .white)
+        #expect(SmartAnnotationStyle.default(for: .text).color != .white)
+    }
+
     @Test func toolbarUsesTheSharedCardMetrics() throws {
         _ = NSApplication.shared
         let bar = AreaSelectionActionBar { _ in }
