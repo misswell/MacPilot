@@ -17,7 +17,8 @@
 ## 环境
 
 - macOS：版本 27.2.1（版号 26B131）
-- 构建：`1c9bd9c`
+- 构建：`7a0ac34`（侧栏与文字/水印输入的最终验收；UI 修复提交 `3a9d8a5`）
+- 最近重跑：2026-11-17（beta.102 功能回归修复后的侧栏/输入框复核）
 - 会话状态：**已解锁**（`IOConsoleLocked = No`）
 
 ## 结果
@@ -34,19 +35,25 @@
 | 历史栈初始状态 | 通过 | 两个不同位置矩形，`annotations=2` |
 | Cmd+Z 撤销 | 通过 | `annotations=1`，见 `03-after-undo.png` |
 | Cmd+Shift+Z 重做 | 通过 | `annotations=2`，见 `04-after-redo.png` |
-| Inline 工具常驻 | 通过 | 13 个工具全部直接可见，见 `05-inline-toolbar.png` |
+| Inline 工具常驻 | 通过 | 13 个工具全部直接可见；OCR/贴图/上传/保存/复制/更多/关闭在截图右侧的竖向动作栏，见 `05-inline-toolbar.png` |
+| 动作栏竖排在截图右侧 | 通过 | `rail=(650,124,50,336)`，截图选区 `(120,120,520,340)`，动作栏在选区右侧且不遮挡选区 |
+| 工具栏与动作栏不重叠 | 通过 | 横栏自动避让 `bar=(38.5,21,683,83)` |
+| 文字工具输入框 | 通过 | 真实 `t` 键 + 鼠标点击打开输入，白底黑字，输入 `Test` 可读；提交后只绘制红色字形、没有背景板（见 `11-watermark-entry.png` 左上方），输入态见 `10-text-entry.png` |
+| 水印工具输入框 | 通过 | 真实 `w` 键 + 鼠标点击打开输入，深色底白字，输入 `Mark`，与文字输入框明显区分，见 `11-watermark-entry.png` |
+| 文字/水印提交 | 通过 | Return 提交后标注从 2 增加到 4 |
 | 工具栏在 1024×768 内可达 | 通过 | 靠右下角选区时 frame 仍在屏幕内 |
 | 工具栏在 1920×1080 内可达 | 通过 | 同上 |
 | 物理显示器数量 | 通过 | #1 1440×900@2x，#2 1920×1080@1x |
 | 工具栏落在显示器 #1 | 通过 | 真实窗口 frame 在 `visibleFrame` 内 |
 | 工具栏落在显示器 #2 | 通过 | 真实窗口 frame 在 `visibleFrame` 内，见 `09-toolbar-display-2.png` |
+| 动作栏落在显示器 #1/#2 | 通过 | 两台物理显示器上动作栏 frame 均在 `visibleFrame` 内且与横栏不重叠 |
 | 完整编辑器最小窗口 | 通过 | `minSize=(720, 448)`，底栏不被裁掉 |
 | Copy & Close 关闭编辑器 | 通过 | 窗口关闭 |
-| Copy & Close 写入剪贴板 | 通过 | 422,204 字节 PNG，见 `06-copy-and-close-clipboard.png` |
+| Copy & Close 写入剪贴板 | 通过 | 418,392 字节 PNG，见 `06-copy-and-close-clipboard.png` |
 | 区域选区 Copy 裁剪尺寸 | 通过 | 200×100 冻结图选 80×50，剪贴板得到 80×50，见 `07-area-selection-copy.png` |
 | 区域选区 Copy 成功后关闭 | 通过 | `dismissals=1` |
 
-结论：**§6.5 的撤销/重做、工具可见性、真实鼠标绘制/移动/缩放/颜色/线宽、复制关闭、物理双显示器工具栏可达、最小窗口、区域选区裁剪/关闭全部通过**。普通区域截图的冻结帧由固定测试图像代替，未调用 ScreenCaptureKit；屏幕采集权限与采集链路不在本次标注交互验收范围内。
+结论：**§6.5 的撤销/重做、工具可见性、真实鼠标绘制/移动/缩放/颜色/线宽、复制关闭、物理双显示器工具栏可达、最小窗口、区域选区裁剪/关闭，以及本轮补充的文字/水印真实输入与输入框对比度全部通过**。普通区域截图的冻结帧由固定测试图像代替，未调用 ScreenCaptureKit；屏幕采集权限与采集链路不在本次标注交互验收范围内。
 
 ## 截图证据
 
@@ -62,9 +69,17 @@
 
 ![重做后](assets/screenshot-annotation-parity/04-after-redo.png)
 
-Inline 工具条（13 个独立工具 + 撤销/重做 + 独立动作行）：
+Inline 工具条（13 个独立工具 + 撤销/重做在下方横栏；贴图/上传/保存/复制等竖向排在截图右侧）：
 
 ![Inline 工具条](assets/screenshot-annotation-parity/05-inline-toolbar.png)
+
+文字工具输入框（白底黑字，输入 `Test`；输入胶囊只用于打字）：
+
+![文字输入](assets/screenshot-annotation-parity/10-text-entry.png)
+
+水印工具输入框（深色底白字，输入 `Mark`；左上方已提交的 `Test` 只绘制字形、没有背景板）：
+
+![水印输入](assets/screenshot-annotation-parity/11-watermark-entry.png)
 
 Copy & Close 写入剪贴板的最终渲染：
 
