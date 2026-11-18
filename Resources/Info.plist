@@ -33,6 +33,23 @@
 	<integer>20</integer>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Image or PDF</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.image</string>
+				<string>public.camera-raw-image</string>
+				<string>com.adobe.pdf</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

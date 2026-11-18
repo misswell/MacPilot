@@ -144,3 +144,11 @@
 | 标注文字输入白底白字看不清；水印按钮与文字按钮输入框完全相同，用户不知道区别 | 文字工具使用白底黑字浅色胶囊，水印工具使用黑底白字深色胶囊，placeholder 分别为“文字”/“添加水印”；水印提交后是半透明白字，文字提交后也只有字形、不再绘制任何背景底板。文字/水印样式通过 `textEntryUsesDarkCapsule` 与渲染像素测试钉住 | `watermarkTextEntryLooksDifferentFromTextEntry`、`smartAnnotationTextIsBareGlyphsWithoutABackgroundPlate`、实机 `10-text-entry.png`/`11-watermark-entry.png` |
 
 功能对照结论：以 `v1.2.2-beta.102` 为基线，`AreaSelectionAction`、`AppText` 键集、Quick Access/贴图上传菜单均没有功能删除；上传只是入口层级变化，已恢复为直接按钮。
+
+## 2026-11-19：新增看图（未发布）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| 独立看图应用的进程级资源和启动入口不能直接用于常驻 MacPilot | 首页默认关闭；Runtime 空闲无解码资源；窗口共享按需 Session，关闭时取消并丢弃过期结果；Finder 等配置加载，文件不进入截图深链 | `ImageViewerLifecycleTests`、`ImageViewerFileRouterTests`、`ImageViewerConfigurationTests` |
+
+真实 Finder 打开、升级降级、打印、混合 DPI 与性能验收，见 [看图验收记录](acceptance/image-viewer.md)。

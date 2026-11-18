@@ -116,6 +116,7 @@ cp "$OCCLUSION_PATCH_BIN" "$APP/Contents/Resources/libMacPilotOcclusionPatch.dyl
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp Resources/DisplayControlThirdPartyNotices.txt "$APP/Contents/Resources/DisplayControlThirdPartyNotices.txt"
+cp Resources/LumaView-LICENSE.txt "$APP/Contents/Resources/LumaView-LICENSE.txt"
 # SMAppService.daemon(plistName:) requires the LaunchDaemon plist inside the
 # bundle at Contents/Library/LaunchDaemons. The helper keeps the same name and
 # Mach service in bridge mode so one registration serves both identities.

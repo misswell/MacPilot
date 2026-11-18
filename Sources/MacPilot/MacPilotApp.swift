@@ -169,9 +169,20 @@ final class MacPilotAppServices: ObservableObject {
         self.menuBar = controller
         self.presence = presence
         self.opener = opener
-        model.objectWillChange.merge(with: controller.objectWillChange)
+        model.objectWillChange.merge(with: controller.objectWillChange, model.imageViewer.objectWillChange)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &changes)
+        if let delegate = NSApp.delegate as? AppDelegate {
+            delegate.imageViewerFileRouter.attach { [weak model, weak opener] urls in
+                DispatchQueue.main.async {
+                    model?.openImageViewerDocuments(urls) {
+                        model?.requestSection(.home)
+                        model?.showAlert(model?.t("viewerEnablePrompt") ?? "")
+                        opener?.requestOpen()
+                    }
+                }
+            }
+        }
         DiagnosticLog.write("AppStartup", "services started after AppKit launch; login=\(AppLaunchContext.wasLaunchedAtLogin)")
     }
 }
@@ -197,6 +208,18 @@ private struct MainWindowSceneCommands: Commands {
                             AppChannel.installed() == .stable ? "installedStableChannel" : "installedBetaChannel"
                         ))
                     ])
+                }
+            }
+        }
+        if let model = startup.value?.model, let runtime = model.imageViewer.runtime {
+            CommandMenu(model.t("imageViewer")) {
+                Button(model.t("viewerOpenImage")) { runtime.chooseFiles() }
+                Button(model.t("viewerOpenFolder")) { runtime.chooseFolder() }
+                Button(model.t("viewerOpenBatch")) { runtime.chooseFiles(multiple: true) }
+                Divider()
+                ForEach(ImageViewerCommand.allCases) { command in
+                    Button(model.t(command.key)) { runtime.perform(command) }
+                        .disabled(!runtime.hasKeyDocument)
                 }
             }
         }
@@ -226,6 +249,7 @@ private struct MenuBarIconView: View {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    let imageViewerFileRouter = ImageViewerFileRouter()
     /// 登录启动期间为 true，用于隐藏主窗口，避免开机时窗口闪现。
     private var hideWindowDuringLaunch = false
 
@@ -307,10 +331,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var buffersDeepLinks = true
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls {
+        imageViewerFileRouter.receive(urls)
+        for url in urls where !url.isFileURL {
             if buffersDeepLinks { pendingDeepLinks.append(url) }
             NotificationCenter.default.post(name: .macPilotDeepLink, object: url)
         }
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        let received = imageViewerFileRouter.receive(filenames.map { URL(fileURLWithPath: $0) })
+        sender.reply(toOpenOrPrint: received ? .success : .failure)
     }
 
     func takePendingDeepLinks() -> [URL] {
@@ -334,7 +364,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Hide document/settings windows, never a status item's menu-bar window.
     private func hideRegularWindows() {
-        for window in NSApp.windows where window.canBecomeMain && !window.isKind(of: NSPanel.self) {
+        for window in NSApp.windows where window.canBecomeMain
+            && !(window is NSPanel) && !(window is ImageViewerDocumentWindow) {
             window.orderOut(nil)
         }
     }
@@ -1921,7 +1952,8 @@ enum AppText {
             localPortsChinese,
             versionManagerChinese,
             quickSearchChinese,
-            displayControlChinese
+            displayControlChinese,
+            imageViewerChinese
         ]
     }
 
@@ -1936,7 +1968,8 @@ enum AppText {
             localPortsEnglish,
             versionManagerEnglish,
             quickSearchEnglish,
-            displayControlEnglish
+            displayControlEnglish,
+            imageViewerEnglish
         ]
     }
 
@@ -2595,7 +2628,7 @@ final class MacPilotModel: ObservableObject {
             // Configurations written before the Home page represent an
             // explicit opt-in through their existing settings, so preserve
             // their visible/running feature set on the first launch.
-            enabledFeatures = Self.section([String].self, forKey: .enabledFeatures, in: container, default: MainSection.featureSections.filter { $0 != .displayControl }.map(\.rawValue), degraded: &degraded)
+            enabledFeatures = Self.section([String].self, forKey: .enabledFeatures, in: container, default: MainSection.legacyEnabledFeatures, degraded: &degraded)
             rules = Self.section([QuitRule].self, forKey: .rules, in: container, default: [], degraded: &degraded)
             isEnforcing = Self.section(Bool.self, forKey: .isEnforcing, in: container, default: true, degraded: &degraded)
             language = Self.section(AppLanguage.self, forKey: .language, in: container, default: .system, degraded: &degraded)
@@ -2743,7 +2776,7 @@ final class MacPilotModel: ObservableObject {
     /// True when macOS holds the registration but is waiting for the user to
     /// allow it in System Settings → General → Login Items & Extensions.
     @Published private(set) var loginItemNeedsApproval = false
-    @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; screenRecording.language = language; windowSwitcher.language = language; clipboard.language = language; quickSearch.language = language; displayControl.language = language; saveIfReady() } }
+    @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; screenRecording.language = language; windowSwitcher.language = language; clipboard.language = language; quickSearch.language = language; displayControl.language = language; imageViewer.language = language; saveIfReady() } }
     let ble = BLEUnlockModel()
     let updater = SoftwareUpdater()
     /// True while a version switch transaction owns the app: the settings UI
@@ -2823,6 +2856,7 @@ final class MacPilotModel: ObservableObject {
     /// 起 Spotlight 全部推迟到 `start()`。
     let quickSearch = QuickSearchModel()
     let displayControl = DisplayControlModel()
+    let imageViewer = ImageViewerFeature()
     /// The Dock and menu-bar icon switches. Persisted intent only; the
     /// controller that applies it lives in `MacPilotApp`, because it needs the
     /// status item that the app owns.
@@ -4429,6 +4463,13 @@ extension MacPilotModel {
         save()
     }
 
+    func openImageViewerDocuments(_ urls: [URL], ifDisabled: () -> Void) {
+        guard !hasShutdown else { return }
+        guard isFeatureEnabled(.imageViewer) else { ifDisabled(); return }
+        featureLifecycle.start(imageViewer.identifier)
+        imageViewer.runtime?.open(urls)
+    }
+
     /// 详情页不再有自己的总开关，这里的内部开关只是运行时的镜像：
     /// 用户从首页打开功能时把它打开，让 `activateFromConfiguration()` 能真正启动。
     private func prepareFeatureForUserEnable(_ section: MainSection) {
@@ -4461,7 +4502,7 @@ extension MacPilotModel {
             quickSearch.setEnabled(true)
         case .displayControl:
             displayControl.setEnabled(true)
-        case .home, .exit, .launch, .compression, .rightClick, .memoryMonitor, .cpuMonitor, .localPorts, .settings:
+        case .home, .exit, .launch, .compression, .rightClick, .memoryMonitor, .cpuMonitor, .localPorts, .imageViewer, .settings:
             break
         }
     }
@@ -4505,6 +4546,8 @@ extension MacPilotModel {
             if quickSearch.settings.isEnabled { featureLifecycle.start(quickSearch.identifier) }
         case .displayControl:
             if displayControl.settings.isEnabled { featureLifecycle.start(displayControl.identifier) }
+        case .imageViewer:
+            featureLifecycle.start(imageViewer.identifier)
         case .memoryMonitor, .cpuMonitor, .localPorts:
             break
         }
@@ -4549,6 +4592,8 @@ extension MacPilotModel {
             featureLifecycle.stop(quickSearch.identifier)
         case .displayControl:
             featureLifecycle.stop(displayControl.identifier)
+        case .imageViewer:
+            featureLifecycle.stop(imageViewer.identifier)
         case .memoryMonitor:
             featureLifecycle.stop("memoryMonitor")
             MemoryMonitorModel.clearMenuCache()
@@ -4566,7 +4611,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
     case home
     case exit, launch, awake, ble, remoteControl, inputSources, compression, capture, screenRecording
     case pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick
-    case dockGroups, memoryMonitor, cpuMonitor, localPorts, quickSearch, displayControl, settings
+    case dockGroups, memoryMonitor, cpuMonitor, localPorts, quickSearch, displayControl, imageViewer, settings
 
     var id: Self { self }
 
@@ -4593,6 +4638,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .localPorts: "localPorts"
         case .quickSearch: "quickSearch"
         case .displayControl: "displayControl"
+        case .imageViewer: "imageViewer"
         case .settings: "settings"
         }
     }
@@ -4620,6 +4666,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .localPorts: "network"
         case .quickSearch: "magnifyingglass.circle"
         case .displayControl: "display.2"
+        case .imageViewer: "photo.on.rectangle.angled"
         case .settings: "gearshape"
         }
     }
@@ -4635,11 +4682,15 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
     static let utilitySections: [MainSection] = [
         .compression, .capture, .screenRecording, .pictureInPicture,
         .windowSwitcher, .smoothScrolling, .clipboard, .rightClick,
-        .memoryMonitor, .cpuMonitor, .localPorts, .dockGroups, .quickSearch, .displayControl
+        .memoryMonitor, .cpuMonitor, .localPorts, .dockGroups, .quickSearch, .displayControl, .imageViewer
     ]
 
     static var featureSections: [MainSection] {
         automationSections + utilitySections
+    }
+
+    static var legacyEnabledFeatures: [String] {
+        featureSections.filter { $0 != .displayControl && $0 != .imageViewer }.map(\.rawValue)
     }
 
     var featureDescriptionKey: String {
@@ -4665,6 +4716,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .localPorts: "localPortsSubtitle"
         case .quickSearch: "quickSearchSubtitle"
         case .displayControl: "displayControlSubtitle"
+        case .imageViewer: "imageViewerSubtitle"
         }
     }
 }
@@ -4816,6 +4868,10 @@ struct ContentView: View {
             QuickSearchSettingsView(quickSearch: model.quickSearch)
         case .displayControl:
             DisplayControlSettingsView(control: model.displayControl)
+        case .imageViewer:
+            if let runtime = model.imageViewer.runtime {
+                ImageViewerHomeView(runtime: runtime, language: model.language)
+            }
         case .settings:
             SettingsView()
         }
@@ -6667,6 +6723,14 @@ struct MenuBarView: View {
         if model.isFeatureEnabled(.quickSearch) && model.quickSearch.settings.isEnabled {
             Divider()
             Button(model.t("quickSearchOpenNow")) { model.quickSearch.openPanel() }
+        }
+        if model.isFeatureEnabled(.imageViewer) {
+            Divider()
+            Menu(model.t("imageViewer")) {
+                Button(model.t("viewerOpenImage")) { deferCaptureAction { model.imageViewer.runtime?.chooseFiles() } }
+                Button(model.t("viewerOpenFolder")) { deferCaptureAction { model.imageViewer.runtime?.chooseFolder() } }
+                Button(model.t("viewerOpenBatch")) { deferCaptureAction { model.imageViewer.runtime?.chooseFiles(multiple: true) } }
+            }
         }
         if model.isFeatureEnabled(.capture) && model.screenCapture.settings.screenshotEnabled {
             Divider()

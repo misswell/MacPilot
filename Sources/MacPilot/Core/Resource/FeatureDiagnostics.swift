@@ -8,6 +8,11 @@ protocol FeatureResourceReporting {
     var diagnosticObserverCount: Int { get }
 }
 
+@MainActor
+protocol FeatureCacheReporting {
+    var diagnosticCacheBytes: Int { get }
+}
+
 struct FeatureDiagnosticInfo: Equatable {
     let identifier: String
     let startedAt: Date?
@@ -15,6 +20,7 @@ struct FeatureDiagnosticInfo: Equatable {
     let isRunning: Bool
     let taskCount: Int?
     let observerCount: Int?
+    let cacheBytes: Int?
     /// Process footprint at each lifecycle transition, not a claim of memory
     /// exclusively owned by this feature.
     let footprintAtStart: UInt64?
@@ -64,6 +70,7 @@ final class FeatureDiagnostics {
             isRunning: feature.isRunning,
             taskCount: resources?.diagnosticTaskCount,
             observerCount: resources?.diagnosticObserverCount,
+            cacheBytes: (feature as? FeatureCacheReporting)?.diagnosticCacheBytes,
             footprintAtStart: transition?.footprintAtStart,
             footprintAtStop: transition?.footprintAtStop
         )

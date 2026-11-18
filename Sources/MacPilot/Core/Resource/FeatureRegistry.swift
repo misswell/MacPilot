@@ -29,5 +29,6 @@ final class FeatureRegistry {
         manager.register(model.rightClickFeature)
         manager.register(model.quickSearch)
         manager.register(model.displayControl)
+        manager.register(model.imageViewer)
     }
 }

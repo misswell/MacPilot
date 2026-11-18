@@ -1,0 +1,45 @@
+extension AppText {
+    static let imageViewerChinese = [
+        "imageViewer": "看图", "imageViewerSubtitle": "在独立窗口浏览图片、动图和 PDF，关闭窗口即释放图片资源。",
+        "viewerOpen": "打开", "viewerOpenImage": "打开图片…", "viewerOpenFolder": "打开文件夹…",
+        "viewerOpenBatch": "批量打开图片…", "viewerDropHint": "也可拖入图片、PDF 或 Sketch 文件。",
+        "viewerRecents": "最近打开", "viewerNoRecents": "本次会话还没有打开图片。",
+        "viewerEnablePrompt": "请先在 MacPilot 首页打开「看图」，然后重新打开文件。",
+        "viewerLoading": "正在加载…", "viewerUnreadable": "无法读取此文件。请检查文件位置与访问权限。",
+        "viewerUnsupported": "当前 macOS 无法解码此格式。", "viewerDamaged": "此文件不完整或已损坏，无法显示。",
+        "viewerTooLarge": "此文件超过看图功能的安全大小限制。", "viewerLocked": "此 PDF 有密码保护，无法显示。",
+        "viewerSketchMissing": "无法读取 Sketch 文件中内嵌的预览。",
+        "viewerIndexError": "无法读取图片所在文件夹。", "viewerEmptyFolder": "这个文件夹中没有支持的图片或 PDF。",
+        "viewerIndexLimit": "仅索引前 20,000 项", "viewerName": "名称", "viewerType": "格式", "viewerFileSize": "文件大小",
+        "viewerDimensions": "尺寸", "viewerPage": "页码", "viewerDate": "拍摄时间", "viewerMake": "相机品牌",
+        "viewerCamera": "相机型号", "viewerLens": "镜头", "viewerAperture": "光圈", "viewerShutter": "快门",
+        "viewerISO": "ISO", "viewerFocal": "焦距", "viewerGPS": "拍摄位置",
+        "viewerPreviousPage": "上一页", "viewerNextPage": "下一页",
+        "viewerCommand_previous": "上一张", "viewerCommand_next": "下一张", "viewerCommand_zoomOut": "缩小",
+        "viewerCommand_fit": "适应窗口", "viewerCommand_zoomIn": "放大", "viewerCommand_actual": "实际尺寸",
+        "viewerCommand_left": "左旋转", "viewerCommand_right": "右旋转", "viewerCommand_info": "图片信息",
+        "viewerCommand_fullscreen": "切换全屏", "viewerCommand_printImage": "打印当前图片或页面…"
+    ]
+
+    static let imageViewerEnglish = [
+        "imageViewer": "Image Viewer", "imageViewerSubtitle": "Browse photos, animations, and PDFs in separate windows. Image resources are released when you close them.",
+        "viewerOpen": "Open", "viewerOpenImage": "Open Image…", "viewerOpenFolder": "Open Folder…",
+        "viewerOpenBatch": "Open Multiple Images…", "viewerDropHint": "You can also drop images, PDFs, or Sketch files here.",
+        "viewerRecents": "Recently Opened", "viewerNoRecents": "No images opened in this session.",
+        "viewerEnablePrompt": "Turn on Image Viewer on the MacPilot Home page, then open the file again.",
+        "viewerLoading": "Loading…", "viewerUnreadable": "This file could not be read. Check its location and permissions.",
+        "viewerUnsupported": "This version of macOS cannot decode this format.", "viewerDamaged": "The file is incomplete or damaged and cannot be displayed.",
+        "viewerTooLarge": "This file exceeds the viewer’s safe size limit.", "viewerLocked": "This PDF is password-protected and cannot be displayed.",
+        "viewerSketchMissing": "The embedded Sketch preview could not be read.",
+        "viewerIndexError": "The image folder could not be read.", "viewerEmptyFolder": "No supported images or PDFs were found in this folder.",
+        "viewerIndexLimit": "Limited to the first 20,000 items", "viewerName": "Name", "viewerType": "Format", "viewerFileSize": "File Size",
+        "viewerDimensions": "Dimensions", "viewerPage": "Page", "viewerDate": "Date Taken", "viewerMake": "Camera Make",
+        "viewerCamera": "Camera Model", "viewerLens": "Lens", "viewerAperture": "Aperture", "viewerShutter": "Shutter Speed",
+        "viewerISO": "ISO", "viewerFocal": "Focal Length", "viewerGPS": "Location",
+        "viewerPreviousPage": "Previous Page", "viewerNextPage": "Next Page",
+        "viewerCommand_previous": "Previous Image", "viewerCommand_next": "Next Image", "viewerCommand_zoomOut": "Zoom Out",
+        "viewerCommand_fit": "Fit to Window", "viewerCommand_zoomIn": "Zoom In", "viewerCommand_actual": "Actual Size",
+        "viewerCommand_left": "Rotate Left", "viewerCommand_right": "Rotate Right", "viewerCommand_info": "Image Information",
+        "viewerCommand_fullscreen": "Toggle Full Screen", "viewerCommand_printImage": "Print Current Image or Page…"
+    ]
+}

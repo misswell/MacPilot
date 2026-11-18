@@ -48,6 +48,37 @@
   ],
   "modules": [
     {
+      "id": "image-viewer",
+      "name": "看图资源、文档窗口及文件入口",
+      "doc": "docs/engineering/regressions/image-viewer.md",
+      "rules": [
+        {
+          "id": "img-001-session-ownership",
+          "module": "image-viewer",
+          "title": "按需会话和窗口隔离，取消过期解码和动画",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": ["Sources/MacPilot/ImageViewer/**", "Sources/MacPilot/Core/Resource/**", "Tests/MacPilotTests/ImageViewer*Tests.swift"],
+          "invariants": ["开关空闲不解码；最后关窗释放会话；独立窗共享索引，不共享视口或页码。"],
+          "test_filters": ["ImageViewerLifecycleTests", "ImageViewerWindowTests", "ImageViewerBrowserTests", "ImageViewerRenderingTests"],
+          "manual_checks": ["真实 5K、多窗口、混合 DPI、100/1000/10000 文件、格式夹具与 Instruments 释放检查。"],
+          "evidence_commits": []
+        },
+        {
+          "id": "img-002-document-routing-and-config",
+          "module": "image-viewer",
+          "title": "Finder 冷启动等配置就绪，不与截图深链混流；历史配置保持默认关闭",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": ["Sources/MacPilot/MacPilotApp.swift", "Sources/MacPilot/HomeView.swift", "Sources/MacPilot/ImageViewer/**", "Resources/Info.plist", "Resources/LumaView-LICENSE.txt", "Scripts/build-app.sh"],
+          "invariants": ["Finder 只作为 Alternate Viewer；保持深链广播和持久化键集。"],
+          "test_filters": ["ImageViewerFileRouterTests", "ImageViewerConfigurationTests", "AppLifecycleTests", "ConfigurationSchemaContractTests"],
+          "manual_checks": ["Finder 冷热打开、关闭时启用提示、正式包里类型注册和许可证、升级降级。"],
+          "evidence_commits": []
+        }
+      ]
+    },
+    {
       "id": "screenshot-reliability",
       "name": "截图状态、文件生命周期与捕获可靠性",
       "doc": "docs/engineering/regressions/screenshot-reliability.md",
