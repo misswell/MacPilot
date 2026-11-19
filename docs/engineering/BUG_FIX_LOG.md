@@ -164,3 +164,11 @@
 ## Finder 打开图片却只显示设置（未发布，待实机验收）
 
 关闭看图时外部请求走启用提示、SwiftUI 冷启动自动显示设置、扩展将图片标成目录 → 显式打开只建临时文档运行时，冷启动抑制设置的自动出现，扩展一次提交所选文件的真实 URL → `RightClickOpenWithTests`、`ImageViewerFileRouterTests`、`ImageViewerLifecycleTests`、`MainWindowOpenerTests`。
+
+## 看图窗口旁仍出现设置（未发布，待实机验收）
+
+上一版靠一次启动快照及一次隐藏，队列排空后至文档显示前也未区分 reopen → 只有显式设置请求才解除设置窗口抑制，文件交付完成前及图片窗口可见时拦住隐式设置入口 → `ImageViewerFileRouterTests`、`MainWindowOpenerTests`（`img-004-settings-explicit-open`）。
+
+## 看图设置：格式关联替代最近打开（未发布，待实机验收）
+
+移除最近文件状态；格式关联只读系统当前结果，显式选择后仅修改所选具体类型并回读确认，不改变注册等级、其他格式或首页开关 → `ImageViewerAssociationTests`（`img-005-format-associations`）。

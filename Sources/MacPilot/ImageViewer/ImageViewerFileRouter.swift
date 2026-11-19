@@ -4,7 +4,9 @@ import Foundation
 final class ImageViewerFileRouter {
     private var pending: [URL] = []
     private var handler: (([URL]) -> Void)?
+    private var deliveriesInProgress = 0
     var hasPendingDocuments: Bool { !pending.isEmpty }
+    var hasOutstandingDocuments: Bool { hasPendingDocuments || deliveriesInProgress > 0 }
 
     nonisolated static func documents(in urls: [URL]) -> [URL] {
         var seen: Set<URL> = []
@@ -26,11 +28,22 @@ final class ImageViewerFileRouter {
         return true
     }
 
-    func attach(_ handler: @escaping ([URL]) -> Void) {
+    func attach(
+        schedule: @escaping (@escaping @MainActor () -> Void) -> Void = { $0() },
+        _ handler: @escaping ([URL]) -> Void
+    ) {
         guard self.handler == nil else { return }
-        self.handler = handler
+        let deliver: ([URL]) -> Void = { [weak self] documents in
+            guard let self else { return }
+            self.deliveriesInProgress += 1
+            schedule { [weak self] in
+                defer { self?.deliveriesInProgress -= 1 }
+                handler(documents)
+            }
+        }
+        self.handler = deliver
         let documents = pending
         pending.removeAll()
-        if !documents.isEmpty { handler(documents) }
+        if !documents.isEmpty { deliver(documents) }
     }
 }

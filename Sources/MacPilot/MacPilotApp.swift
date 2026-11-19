@@ -50,7 +50,7 @@ struct MacPilotApp: App {
         let opener = MainWindowOpener(
             loadContent: { contentBox.model?.loadMainWindowContent() },
             activate: { NSApp.activate() },
-            waitsForLaunchIntent: !isAcceptanceRun
+            requiresExplicitOpen: !isAcceptanceRun
         )
         _mainWindowOpener = StateObject(wrappedValue: opener)
         _startup = StateObject(wrappedValue: AppLaunchBootstrap(
@@ -113,14 +113,17 @@ final class MacPilotAppServices: ObservableObject {
 
     fileprivate init(opener: MainWindowOpener, contentBox: MainWindowContentBox) {
         let delegate = contentBox.delegate ?? NSApp.delegate as? AppDelegate
-        let documentLaunch = delegate?.imageViewerFileRouter.hasPendingDocuments == true
-        let showsMainWindow = opener.hasExplicitOpenRequest || (!AppLaunchContext.wasLaunchedAtLogin && !documentLaunch)
-        let model = MacPilotModel(showsMainWindowAtLaunch: showsMainWindow, mainWindowOpener: opener)
+        let model = MacPilotModel(showsMainWindowAtLaunch: opener.hasExplicitOpenRequest, mainWindowOpener: opener)
         contentBox.model = model
         // The model's deep-link observer exists now; hand it the URLs that
         // arrived during launch before anything else can miss them.
         if let delegate {
-            for url in delegate.takePendingDeepLinks() {
+            let urls = delegate.takePendingDeepLinks()
+            if !urls.isEmpty, !AppLaunchContext.wasLaunchedAtLogin,
+               !delegate.imageViewerFileRouter.hasOutstandingDocuments, !opener.hasExplicitOpenRequest {
+                opener.requestOpen()
+            }
+            for url in urls {
                 NotificationCenter.default.post(name: .macPilotDeepLink, object: url)
             }
         }
@@ -187,12 +190,9 @@ final class MacPilotAppServices: ObservableObject {
         model.objectWillChange.merge(with: controller.objectWillChange, model.imageViewer.objectWillChange)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &changes)
-        opener.finishLaunch(showsMainWindow: !documentLaunch)
         if let delegate {
-            delegate.imageViewerFileRouter.attach { [weak model] urls in
-                DispatchQueue.main.async {
-                    model?.openImageViewerDocuments(urls)
-                }
+            delegate.imageViewerFileRouter.attach(schedule: { DispatchQueue.main.async(execute: $0) }) { [weak model] urls in
+                model?.openImageViewerDocuments(urls)
             }
         }
         DiagnosticLog.write("AppStartup", "services started after AppKit launch; login=\(AppLaunchContext.wasLaunchedAtLogin)")
@@ -264,6 +264,7 @@ private struct MenuBarIconView: View {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let imageViewerFileRouter = ImageViewerFileRouter()
+    var scheduleActivation: (@escaping @MainActor () -> Void) -> Void = { DispatchQueue.main.async(execute: $0) }
     /// 登录启动期间为 true，用于隐藏主窗口，避免开机时窗口闪现。
     private var hideWindowDuringLaunch = false
 
@@ -306,9 +307,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// go through the same path as the menu bar: the window may exist with no
     /// content, and only this notification rebuilds it.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        guard !imageViewerFileRouter.hasPendingDocuments else { return false }
-        NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
+        requestSettingsForActivation(in: sender)
+        return false
+    }
+
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        !AppLaunchContext.wasLaunchedAtLogin && !isOpeningOrShowingImage(in: sender)
+    }
+
+    func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        guard applicationShouldOpenUntitledFile(sender) else { return false }
+        requestSettingsForActivation(in: sender)
         return true
+    }
+
+    private var hasScheduledActivation = false
+
+    private func requestSettingsForActivation(in sender: NSApplication) {
+        guard !hasScheduledActivation, !isOpeningOrShowingImage(in: sender) else { return }
+        hasScheduledActivation = true
+        scheduleActivation { [weak self, weak sender] in
+            guard let self else { return }
+            self.hasScheduledActivation = false
+            guard let sender, !self.isOpeningOrShowingImage(in: sender) else { return }
+            NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
+        }
+    }
+
+    private func isOpeningOrShowingImage(in sender: NSApplication) -> Bool {
+        imageViewerFileRouter.hasOutstandingDocuments
+            || sender.windows.contains { $0 is ImageViewerDocumentWindow && ($0.isVisible || $0.isMiniaturized) }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

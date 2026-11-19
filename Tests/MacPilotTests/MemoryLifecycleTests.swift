@@ -84,22 +84,25 @@ struct MainWindowOpenerTests {
         }
     }
 
-    @Test func documentLaunchKeepsTheInitialSettingsWindowHidden() {
+    @Test func repeatedAutomaticSettingsAttachmentsStayHiddenUntilExplicitlyOpened() {
         _ = NSApplication.shared
         let turns = Turns()
         let opener = MainWindowOpener(
-            center: NotificationCenter(), loadContent: {}, activate: {}, waitsForLaunchIntent: true,
+            center: NotificationCenter(), loadContent: {}, activate: {}, requiresExplicitOpen: true,
             schedule: { turns.schedule($0) }, record: { _ in }
         )
         let window = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
         opener.attach(window: window)
         #expect(window.alphaValue == 0)
         #expect(!opener.acceptsMainWindowAppearance)
-        opener.finishLaunch(showsMainWindow: false)
-        #expect(window.alphaValue == 0)
         turns.runAll()
         #expect(!window.isVisible)
-        #expect(window.alphaValue == 1)
+        #expect(window.alphaValue == 0)
+        #expect(!opener.acceptsMainWindowAppearance)
+        opener.attach(window: window)
+        turns.runAll()
+        #expect(window.alphaValue == 0)
+        #expect(!opener.acceptsMainWindowAppearance)
         #expect(!opener.hasExplicitOpenRequest)
     }
 
@@ -109,11 +112,10 @@ struct MainWindowOpenerTests {
         var loads = 0
         var shows = 0
         let opener = MainWindowOpener(
-            center: NotificationCenter(), loadContent: { loads += 1 }, activate: {}, waitsForLaunchIntent: true,
+            center: NotificationCenter(), loadContent: { loads += 1 }, activate: {}, requiresExplicitOpen: true,
             schedule: { turns.schedule($0) }, record: { _ in }, isWindowUsable: { _ in true }
         )
         let window = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
-        opener.finishLaunch(showsMainWindow: false)
         opener.attach(window: window)
         #expect(window.alphaValue == 0)
         opener.attach { shows += 1 }
@@ -129,15 +131,22 @@ struct MainWindowOpenerTests {
         #expect(shows == 0)
     }
 
-    @Test func ordinaryLaunchRestoresTheSettingsWindowWithoutAnOpenRequest() {
-        _ = NSApplication.shared
-        let opener = MainWindowOpener(center: NotificationCenter(), loadContent: {}, activate: {}, waitsForLaunchIntent: true)
-        let window = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
-        opener.attach(window: window)
-        opener.finishLaunch(showsMainWindow: true)
-        #expect(window.alphaValue == 1)
+    @Test func explicitSettingsCanCreateAWindowAfterAnImageOnlyLaunch() {
+        let turns = Turns()
+        var loads = 0
+        var creations = 0
+        let opener = MainWindowOpener(
+            center: NotificationCenter(), loadContent: { loads += 1 }, activate: {}, requiresExplicitOpen: true,
+            schedule: { turns.schedule($0) }, record: { _ in }
+        )
+        opener.install(createWindow: { creations += 1 })
+        turns.runAll()
+        #expect(creations == 0)
+        opener.requestOpen()
+        turns.runAll()
+        #expect(loads == 1)
+        #expect(creations == 1)
         #expect(opener.acceptsMainWindowAppearance)
-        #expect(!opener.hasExplicitOpenRequest)
     }
 
     @Test func requestsRaiseOnlyAfterTheMenuTrackingLoopEnds() {

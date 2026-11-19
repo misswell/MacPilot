@@ -22,7 +22,6 @@ final class ImageViewerWindowController: NSWindowController, NSWindowDelegate, N
 
     var onClose: ((ImageViewerWindowController) -> Void)?
     var onOpen: (([URL]) -> Void)?
-    var onVisited: ((URL) -> Void)?
     var onFocusChange: (() -> Void)?
     private weak var session: ImageViewerSession?
     private let animation = ImageViewerAnimationController()
@@ -145,7 +144,6 @@ final class ImageViewerWindowController: NSWindowController, NSWindowDelegate, N
         window?.representedURL = browser.url
         window?.title = browser.url.lastPathComponent
         geometry = ImageViewerGeometry()
-        onVisited?(browser.url)
         reload()
         prefetch(direction: delta)
     }
@@ -319,7 +317,6 @@ final class ImageViewerWindowController: NSWindowController, NSWindowDelegate, N
         frame = nil
         onClose?(self)
         onClose = nil
-        onVisited = nil
         onOpen = nil
         onFocusChange = nil
     }

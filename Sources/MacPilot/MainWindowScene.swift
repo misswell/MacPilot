@@ -84,12 +84,7 @@ final class MainWindowOpener: NSObject, ObservableObject {
     /// lifetime: a closed window must not take the only way back with it.
     private var createWindow: (() -> Void)?
     private var pendingRequest = false
-    private enum InitialPresentation {
-        case waiting, suppress, normal
-    }
-
-    private var initialPresentation: InitialPresentation
-    var acceptsMainWindowAppearance: Bool { initialPresentation == .normal }
+    private(set) var acceptsMainWindowAppearance: Bool
     /// Newest request, and the one a reveal has already answered. A request
     /// that arrives while the window is still being built must not be answered
     /// twice — once by the attachment drain and once by its own turn.
@@ -106,7 +101,7 @@ final class MainWindowOpener: NSObject, ObservableObject {
         center: NotificationCenter = .default,
         loadContent: @escaping () -> Void,
         activate: @escaping () -> Void,
-        waitsForLaunchIntent: Bool = false,
+        requiresExplicitOpen: Bool = false,
         // The menu is still tracking when this runs; the next turn is the
         // first moment ordering the window front cannot be undone by the
         // menu closing again.
@@ -125,18 +120,19 @@ final class MainWindowOpener: NSObject, ObservableObject {
         self.schedule = schedule
         self.record = record
         self.isWindowUsable = isWindowUsable
-        initialPresentation = waitsForLaunchIntent ? .waiting : .normal
+        acceptsMainWindowAppearance = !requiresExplicitOpen
         super.init()
         center.addObserver(self, selector: #selector(requestOpen), name: .macPilotShowMainWindow, object: nil)
     }
 
     @objc func requestOpen() {
-        if initialPresentation != .normal { window?.alphaValue = 1 }
-        initialPresentation = .normal
+        let wasSuppressed = !acceptsMainWindowAppearance
+        acceptsMainWindowAppearance = true
         onUserRequest?()
         // Load first, while the menu is still closing: the window then appears
         // with its content instead of flashing empty.
         loadContent()
+        if wasSuppressed { window?.alphaValue = 1 }
         // Outstanding until a window is actually on screen; an attachment that
         // arrives meanwhile drains it.
         pendingRequest = true
@@ -148,25 +144,12 @@ final class MainWindowOpener: NSObject, ObservableObject {
         }
     }
 
-    func finishLaunch(showsMainWindow: Bool) {
-        guard initialPresentation == .waiting else { return }
-        if showsMainWindow {
-            initialPresentation = .normal
-            window?.alphaValue = 1
-        } else {
-            initialPresentation = .suppress
-            if let window { suppressAutomaticPresentation(of: window) }
-        }
-    }
-
     private func suppressAutomaticPresentation(of window: NSWindow) {
         window.alphaValue = 0
         schedule { [weak self, weak window] in
             guard let self, let window, self.window === window,
-                  self.initialPresentation == .suppress else { return }
+                  !self.acceptsMainWindowAppearance else { return }
             window.orderOut(nil)
-            window.alphaValue = 1
-            self.initialPresentation = .normal
         }
     }
 
@@ -215,11 +198,7 @@ final class MainWindowOpener: NSObject, ObservableObject {
         // keep the same window available for the next menu or Dock request.
         window.isReleasedWhenClosed = false
         self.window = window
-        switch initialPresentation {
-        case .waiting: window.alphaValue = 0
-        case .suppress: suppressAutomaticPresentation(of: window)
-        case .normal: break
-        }
+        if !acceptsMainWindowAppearance { suppressAutomaticPresentation(of: window) }
         attach { [weak window] in window?.makeKeyAndOrderFront(nil) }
     }
 

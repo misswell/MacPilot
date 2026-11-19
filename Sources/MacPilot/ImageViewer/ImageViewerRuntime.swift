@@ -4,7 +4,6 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class ImageViewerRuntime: ObservableObject {
-    @Published private(set) var recents: [URL] = []
     @Published private(set) var hasKeyDocument = false
     var language: AppLanguage {
         didSet { windows.all.forEach { $0.language = language } }
@@ -64,12 +63,10 @@ final class ImageViewerRuntime: ObservableObject {
                     self?.updateFocus()
                 }
                 document.onOpen = { [weak self] urls in self?.open(urls) }
-                document.onVisited = { [weak self] url in self?.remember(url) }
                 document.onFocusChange = { [weak self] in self?.updateFocus() }
                 windows.insert(document)
                 document.begin(show: presentWindows)
             }
-            remember(url)
         }
     }
 
@@ -97,10 +94,6 @@ final class ImageViewerRuntime: ObservableObject {
                 else { alert.runModal() }
             }
         }
-    }
-
-    private func remember(_ url: URL) {
-        recents = [url] + recents.filter { $0 != url }.prefix(19)
     }
 
     private func activeSession() -> ImageViewerSession {
@@ -142,7 +135,6 @@ final class ImageViewerRuntime: ObservableObject {
             window?.close()
         }
         session = nil
-        recents = []
         hasKeyDocument = false
     }
 }

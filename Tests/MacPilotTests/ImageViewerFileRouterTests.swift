@@ -46,12 +46,59 @@ struct ImageViewerFileRouterTests {
         #expect(!delegate.imageViewerFileRouter.hasPendingDocuments)
         delegate.application(app, open: photos)
         #expect(delegate.imageViewerFileRouter.hasPendingDocuments)
+        #expect(!delegate.applicationShouldOpenUntitledFile(app))
+        #expect(!delegate.applicationOpenUntitledFile(app))
         #expect(!delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false))
         #expect(delegate.takePendingDeepLinks().isEmpty)
         var received: [[URL]] = []
         delegate.imageViewerFileRouter.attach { received.append($0) }
         #expect(received == [photos])
         #expect(!delegate.imageViewerFileRouter.hasPendingDocuments)
+    }
+
+    @Test(arguments: [false, true])
+    func finderDeliverySuppressesReopenEvenAfterTheStartupBufferHasDrained(lateArrival: Bool) {
+        let delegate = AppDelegate()
+        let app = NSApplication.shared
+        let photo = URL(fileURLWithPath: "/tmp/finder-photo.jpg")
+        var scheduled: [@MainActor () -> Void] = []
+        var received: [URL] = []
+        if !lateArrival { delegate.application(app, open: [photo]) }
+        delegate.imageViewerFileRouter.attach(schedule: { scheduled.append($0) }) { urls in
+            #expect(!delegate.applicationOpenUntitledFile(app))
+            #expect(!delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false))
+            received.append(contentsOf: urls)
+        }
+        if lateArrival { delegate.application(app, open: [photo]) }
+        #expect(!delegate.imageViewerFileRouter.hasPendingDocuments)
+        #expect(delegate.imageViewerFileRouter.hasOutstandingDocuments)
+        #expect(!delegate.applicationShouldOpenUntitledFile(app))
+        #expect(!delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false))
+        for delivery in scheduled { delivery() }
+        #expect(received == [photo])
+        #expect(!delegate.imageViewerFileRouter.hasOutstandingDocuments)
+    }
+
+    @Test func aDocumentEventWinsOverAnActivationQueuedInTheSameTurn() {
+        let delegate = AppDelegate()
+        let app = NSApplication.shared
+        var scheduled: [@MainActor () -> Void] = []
+        delegate.scheduleActivation = { scheduled.append($0) }
+        var opens = 0
+        let opener = MainWindowOpener(loadContent: { opens += 1 }, activate: {}, schedule: { _ in }, record: { _ in })
+        withExtendedLifetime(opener) {
+            #expect(!delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false))
+            #expect(scheduled.count == 1)
+            delegate.application(app, open: [URL(fileURLWithPath: "/tmp/late-image.jpg")])
+            for action in scheduled { action() }
+            #expect(opens == 0)
+
+            delegate.imageViewerFileRouter.attach { _ in }
+            scheduled.removeAll()
+            #expect(!delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false))
+            for action in scheduled { action() }
+            #expect(opens == 1)
+        }
     }
 
     @Test func rejectsOrdinaryFoldersEvenWhenNamedLikeAnImage() throws {

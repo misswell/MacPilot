@@ -87,6 +87,30 @@
           "test_filters": ["RightClickOpenWithTests", "ImageViewerFileRouterTests", "ImageViewerLifecycleTests", "MainWindowOpenerTests", "AppLifecycleTests", "ImageViewerConfigurationTests"],
           "manual_checks": ["Finder 系统及扩展菜单，用关闭/开启功能、冷/热启动、JPG、PNG、HEIC、WebP、PDF 和五文件批量验证。"],
           "evidence_commits": []
+        },
+        {
+          "id": "img-004-settings-explicit-open",
+          "module": "image-viewer",
+          "title": "看图启动不允许设置窗口随文档一起出现",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": ["Sources/MacPilot/MacPilotApp.swift", "Sources/MacPilot/MainWindowScene.swift", "Sources/MacPilot/ImageViewer/ImageViewerFileRouter.swift"],
+          "invariants": ["暂存队列清空并不表示文档已显示；等待交付和图片窗口存在时不把 AppKit reopen 转成设置。", "窗口抑制不靠延时解除；显式设置仍经 MainWindowOpener 打开。"],
+          "test_filters": ["ImageViewerFileRouterTests", "MainWindowOpenerTests", "AppLifecycleTests", "AppPresenceTests"],
+          "manual_checks": ["冷启动打开图片时只出现文档窗口；重复打开、随后显式打开设置以及普通启动仍正常。"],
+          "evidence_commits": []
+        },
+        {
+          "id": "img-005-format-associations",
+          "module": "image-viewer",
+          "title": "按具体文件格式显式更改系统默认应用",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": ["Sources/MacPilot/ImageViewer/ImageViewerAssociation*.swift", "Sources/MacPilot/ImageViewer/ImageViewerHomeView.swift", "Resources/Info.plist", "Tests/MacPilotTests/ImageViewerAssociationTests.swift"],
+          "invariants": ["设置页打开和刷新只读，用户选择后才写单个具体内容类型；系统授权期间不并发改其他格式。", "回读系统确认生效；不引入第二套配置，不将 MacPilot 自动设为默认。"],
+          "test_filters": ["ImageViewerAssociationTests", "ImageViewerConfigurationTests", "ImageViewerFileRouterTests"],
+          "manual_checks": ["隔离桌面检查确认对话框、仅所选格式发生改变、双击打开及换回原应用。"],
+          "evidence_commits": []
         }
       ]
     },

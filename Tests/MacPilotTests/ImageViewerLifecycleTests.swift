@@ -136,7 +136,6 @@ struct ImageViewerLifecycleTests {
             runtime.open([file])
             #expect(runtime.windows.isEmpty)
             #expect(runtime.session == nil)
-            #expect(runtime.recents.isEmpty)
             #expect(document.isClosed)
             #expect(document.frame == nil)
             #expect(document.animationTimerCount == 0)

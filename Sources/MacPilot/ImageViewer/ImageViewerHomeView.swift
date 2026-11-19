@@ -23,19 +23,7 @@ struct ImageViewerHomeView: View {
                     Text(t("viewerDropHint")).font(.caption).foregroundStyle(.secondary)
                     Text(t("viewerFinderHint")).font(.caption).foregroundStyle(.secondary)
                 }
-                SettingsCard {
-                    Text(t("viewerRecents")).font(.headline)
-                    if runtime.recents.isEmpty {
-                        Text(t("viewerNoRecents")).font(.subheadline).foregroundStyle(.secondary)
-                    }
-                    ForEach(runtime.recents, id: \.self) { url in
-                        Button { runtime.open([url]) } label: {
-                            Label(url.lastPathComponent, systemImage: "photo")
-                                .lineLimit(1)
-                        }
-                        .help(url.path)
-                    }
-                }
+                ImageViewerAssociationCard(language: language)
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
         }
