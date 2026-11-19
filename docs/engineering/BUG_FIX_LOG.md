@@ -172,3 +172,11 @@
 ## 看图设置：格式关联替代最近打开（未发布，待实机验收）
 
 移除最近文件状态；格式关联只读系统当前结果，显式选择后仅修改所选具体类型并回读确认，不改变注册等级、其他格式或首页开关 → `ImageViewerAssociationTests`（`img-005-format-associations`）。
+
+## 2026-11-19：Beta 118 门禁的关联 URL 尾斜杠（未发布）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| macOS 15 的 `URL(filePath:directoryHint:.isDirectory)` 保留 `/Preview.app/`，生产规范化得到无尾斜杠 URL，三个关联用例把测试夹具与模型结果直接比较而失败；macOS 26 与本地未复现 | 夹具先走与 `ImageViewerAssociations.canonicalURL` 相同的 `standardizedFileURL.resolvingSymlinksInPath()` 再比较；不改生产关联逻辑，不加豁免 | `ImageViewerAssociationTests` |
+
+对照：`v1.2.2-beta.118` 的 Regression Gate（macos-15）失败 13 个断言，`dist` 跳过、未发布；修复随下一个 Beta 重新走全部门禁。

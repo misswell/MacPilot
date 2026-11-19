@@ -7,8 +7,12 @@ import UniformTypeIdentifiers
 struct ImageViewerAssociationTests {
     @MainActor
     private final class Workspace {
+        // Match the model's canonical form: macOS 15 keeps the directory slash
+        // on an unresolved URL, so comparing raw fixture URLs is not stable.
         let macPilot = URL(filePath: "/MacPilot.app", directoryHint: .isDirectory)
+            .standardizedFileURL.resolvingSymlinksInPath()
         let preview = URL(filePath: "/Preview.app", directoryHint: .isDirectory)
+            .standardizedFileURL.resolvingSymlinksInPath()
         var defaults: [UTType: URL] = [:]
         var writes: [(app: URL, type: UTType)] = []
         var apply: ((URL, UTType) async throws -> Void)?
