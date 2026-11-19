@@ -32,6 +32,16 @@
 
 `ResourceLifecycleTests`、`FeatureResourceLifecycleTests`、`MemoryLifecycleTests`、`MemoryMonitorTests`、`ProcessCacheTests`、`CPUMonitorTests`、`BLEUnlockPerformanceTests`、`QuickAccessPinPerformanceTests`、`DockGroupsPerformanceTests`、`MonitorMenuSnapshotCacheTests`、`Clipboard*` 隔离套件、`QuickAccessTests`。
 
+### 并发下的端口确认与远程空闲检测（perf-002）
+
+1. 根因：端口测试以扫描次数而非模拟进程状态决定监听是否存在；自动刷新可提前消耗扫描结果。远程测试要求真实 TCP 接收和 MainActor 在 3 秒内完成，无负载隔离或时钟控制。
+2. 历史：两个测试分别来自 `5395c85` 与 `3c40313`；与 `perf-001-unbounded-accumulation` 记载的 MainActor 时序问题同族。
+3. 旧测试断言正确，但以固定扫描次序和休眠驱动；单独通过不能说明全套稳定。
+4. 仅影响端口测试夹具与远程超时测试注入；保留实际 TCP 接收、端口再次验证、原超时/检查间隔和取消语义，不改协议、配置或系统状态。
+5. 先验证 Local Ports 和连接策略/集成套件，再跑选择器全量门禁及安全的普通全套。
+6. 端口用例覆盖确认前额外扫描，仍必须记录一次模拟 SIGKILL；远程用例验证收到真实回包后跨越旧截止时间仍保活，并在新截止时间超时。
+7. 此修复无系统/硬件行为变更，不需要真机锁屏、发真实信号或唤醒手机；看图发布的 GUI 验收不受此结论影响。
+
 ## 人工验收
 
 `Scripts/measure-memory.sh` 长时间运行对比基线；实机观察 pin 与 Dock 菜单/tooltip 的交互（模拟测试不可全替的 WindowServer 行为）。

@@ -130,7 +130,7 @@ final class RemoteConnection: Identifiable {
 
     /// Last time any byte arrived from this client. Outbound traffic does not
     /// count: the point is to notice a client that stopped talking.
-    private(set) var lastActivityAt = Date()
+    private(set) var lastActivityAt: Date
     private var idleWatchdog: Task<Void, Never>?
 
     /// Test seams: the defaults come from `RemoteConnectionIdlePolicy`, and
@@ -138,6 +138,7 @@ final class RemoteConnection: Identifiable {
     /// real heartbeat window.
     private let idleTimeoutOverride: TimeInterval?
     private let idleCheckInterval: TimeInterval
+    private let idleClock: () -> Date
 
     private static let defaultIdleCheckInterval: TimeInterval = 15
 
@@ -147,7 +148,8 @@ final class RemoteConnection: Identifiable {
         transport: RemoteTransport,
         host: RemoteConnectionHost,
         idleTimeout: TimeInterval? = nil,
-        idleCheckInterval: TimeInterval? = nil
+        idleCheckInterval: TimeInterval? = nil,
+        idleClock: @escaping () -> Date = Date.init
     ) {
         self.transport = transport
         self.host = host
@@ -160,19 +162,23 @@ final class RemoteConnection: Identifiable {
         self.remoteAddress = transport.remoteHost
         self.idleTimeoutOverride = idleTimeout
         self.idleCheckInterval = idleCheckInterval ?? Self.defaultIdleCheckInterval
+        self.idleClock = idleClock
+        self.lastActivityAt = idleClock()
     }
 
     convenience init(
         connection: NWConnection,
         host: RemoteConnectionHost,
         idleTimeout: TimeInterval? = nil,
-        idleCheckInterval: TimeInterval? = nil
+        idleCheckInterval: TimeInterval? = nil,
+        idleClock: @escaping () -> Date = Date.init
     ) {
         self.init(
             transport: NetworkRemoteTransport(connection: connection),
             host: host,
             idleTimeout: idleTimeout,
-            idleCheckInterval: idleCheckInterval
+            idleCheckInterval: idleCheckInterval,
+            idleClock: idleClock
         )
     }
 
@@ -191,7 +197,7 @@ final class RemoteConnection: Identifiable {
         transport.onStateChange = { [weak self] state in self?.handleTransportState(state) }
         transport.onReceive = { [weak self] data in
             guard let self, !self.isClosed else { return }
-            self.lastActivityAt = Date()
+            self.lastActivityAt = self.idleClock()
             self.buffer.append(data)
             self.processBuffer()
         }
@@ -225,17 +231,22 @@ final class RemoteConnection: Identifiable {
         let interval = idleCheckInterval
         idleWatchdog = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(interval))
-                guard let self, !self.isClosed else { return }
-                guard RemoteConnectionIdlePolicy.shouldReap(
-                    lastActivityAt: self.lastActivityAt,
-                    timeout: self.effectiveIdleTimeout
-                ) else { continue }
-                self.host?.remoteLog("connection idle timeout; closing silent client")
-                self.close()
-                return
+                do { try await Task.sleep(for: .seconds(interval)) } catch { return }
+                guard !Task.isCancelled, let self, !self.isClosed else { return }
+                self.checkIdleDeadline()
+                if self.isClosed { return }
             }
         }
+    }
+
+    func checkIdleDeadline() {
+        guard !isClosed, RemoteConnectionIdlePolicy.shouldReap(
+            lastActivityAt: lastActivityAt,
+            timeout: effectiveIdleTimeout,
+            now: idleClock()
+        ) else { return }
+        host?.remoteLog("connection idle timeout; closing silent client")
+        close()
     }
 
     private func handleTransportState(_ state: RemoteTransportState) {

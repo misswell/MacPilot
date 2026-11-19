@@ -207,16 +207,10 @@ struct LocalPortsModelTests {
 
     @Test func forceKillConfirmationSendsSigkill() async throws {
         let activity = fixtureActivity()
-        let sequence = ScanSequence(values: [
-            LocalPortSnapshot(activities: [activity]),
-            LocalPortSnapshot(activities: [activity]),
-            LocalPortSnapshot(activities: [activity]),
-            .empty,
-        ])
         let signals = SignalRecorder()
         let environment = LocalPortCloseEnvironment(
-            scan: { sequence.next() },
-            listenerScan: { [] },
+            scan: { LocalPortSnapshot(activities: signals.values.isEmpty ? [activity] : []) },
+            listenerScan: { signals.values.isEmpty ? [activity.listener] : [] },
             identity: { pid in LocalPortProcessIdentity(pid: pid, uid: 501, startSeconds: 100, startMicroseconds: 1, executablePath: CommandLine.arguments.first ?? "/usr/bin/true") },
             signal: { _, signal in signals.record(signal); return 0 },
             sleep: { _ in },
@@ -224,6 +218,7 @@ struct LocalPortsModelTests {
             currentPID: { 999 }
         )
         let model = LocalPortsModel(environment: environment)
+        defer { model.shutdown() }
 
         model.startVisibleSession()
         try await waitForRefresh(toFinish: model)
@@ -231,7 +226,12 @@ struct LocalPortsModelTests {
         for _ in 0..<100 where model.pendingClosePlan == nil {
             try await Task.sleep(for: .milliseconds(5))
         }
-        #expect(model.pendingClosePlan != nil)
+        try #require(model.pendingClosePlan != nil)
+
+        model.refreshNow()
+        try await waitForRefresh(toFinish: model)
+        try #require(!model.isRefreshing)
+        #expect(model.snapshot.activities.first?.process.pid == activity.process.pid)
 
         model.confirmClose(forceKill: true)
         for _ in 0..<100 where model.isClosing {
@@ -240,7 +240,6 @@ struct LocalPortsModelTests {
         #expect(signals.values == [Int32(SIGKILL)])
         #expect(model.lastCloseResult?.forceKill == true)
         #expect(model.lastCloseResult?.portFree == true)
-        model.shutdown()
     }
 
     private func makeEnvironment(
@@ -335,12 +334,12 @@ struct LocalPortsModelTests {
 
     private final class SignalRecorder: @unchecked Sendable {
         private let lock = NSLock()
-        private(set) var values: [Int32] = []
+        private var storage: [Int32] = []
+
+        var values: [Int32] { lock.withLock { storage } }
 
         func record(_ signal: Int32) {
-            lock.lock()
-            values.append(signal)
-            lock.unlock()
+            lock.withLock { storage.append(signal) }
         }
     }
 

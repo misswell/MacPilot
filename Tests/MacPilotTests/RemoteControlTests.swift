@@ -755,9 +755,15 @@ struct RemoteConnectionIdleWatchdogTests {
 
     private enum HarnessError: Error { case noPort }
 
+    @MainActor
+    private final class IdleClock {
+        var now = Date(timeIntervalSince1970: 1_000_000)
+    }
+
     private func startHarness(
         idleTimeout: TimeInterval,
-        idleCheckInterval: TimeInterval
+        idleCheckInterval: TimeInterval,
+        clock: IdleClock? = nil
     ) async throws -> Harness {
         let listener = try NWListener(using: NWParameters(tls: nil, tcp: NWProtocolTCP.Options()))
         let host = TestHost()
@@ -768,7 +774,8 @@ struct RemoteConnectionIdleWatchdogTests {
                     connection: nwConnection,
                     host: host,
                     idleTimeout: idleTimeout,
-                    idleCheckInterval: idleCheckInterval
+                    idleCheckInterval: idleCheckInterval,
+                    idleClock: { clock?.now ?? Date() }
                 )
                 box.connection = connection
                 connection.start()
@@ -1122,34 +1129,35 @@ struct RemoteConnectionIdleWatchdogTests {
     /// refreshes the deadline, so a healthy phone stays connected indefinitely.
     @Test("inbound traffic keeps refreshing the deadline")
     func inboundTrafficKeepsTheConnection() async throws {
-        let harness = try await startHarness(idleTimeout: 3, idleCheckInterval: 0.1)
-        defer { harness.listener.cancel() }
+        let clock = IdleClock()
+        let harness = try await startHarness(idleTimeout: 3, idleCheckInterval: 0.1, clock: clock)
+        defer { harness.listener.cancel(); harness.box.connection?.close() }
         let client = try await connectClient(to: harness.port)
         defer { client.cancel() }
         await waitUntil { harness.box.connection != nil }
         let connection = try #require(harness.box.connection)
 
         let before = connection.lastActivityAt
-        try await Task.sleep(for: .milliseconds(200))
-
-        // A well-formed hello: enough to prove the receive path stamps
-        // activity, and valid enough not to trip the protocol failure path.
+        clock.now = before.addingTimeInterval(2)
         let hello = RemoteHandshakeMessage(
             kind: .clientHello,
             clientID: UUID(),
             clientName: "Idle Watchdog Test",
             clientNonce: RemoteCrypto.randomData(count: RemoteCrypto.nonceLength)
         )
-        // `encodePlain` already length-prefixes the payload.
-        let frame = try RemoteFrameCodec.encodePlain(hello)
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            client.send(content: frame, completion: .contentProcessed { error in
-                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
-            })
-        }
-
-        await waitUntil { connection.lastActivityAt > before }
+        try await send(RemoteFrameCodec.encodePlain(hello), on: client)
+        let reply = try RemoteFrameCodec.decodePlain(RemoteHandshakeMessage.self, from: await receiveFrame(on: client))
+        #expect(reply.kind == .serverHello)
         #expect(connection.lastActivityAt > before)
+        #expect(connection.lastActivityAt == clock.now)
+
+        clock.now = before.addingTimeInterval(4)
+        connection.checkIdleDeadline()
         #expect(harness.host.closed == 0)
+
+        clock.now = before.addingTimeInterval(6)
+        connection.checkIdleDeadline()
+        #expect(harness.host.closed == 1)
+        #expect(harness.host.messages.contains { $0.contains("idle timeout") })
     }
 }

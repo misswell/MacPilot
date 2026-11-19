@@ -152,3 +152,11 @@
 | 独立看图应用的进程级资源和启动入口不能直接用于常驻 MacPilot | 首页默认关闭；Runtime 空闲无解码资源；窗口共享按需 Session，关闭时取消并丢弃过期结果；Finder 等配置加载，文件不进入截图深链 | `ImageViewerLifecycleTests`、`ImageViewerFileRouterTests`、`ImageViewerConfigurationTests` |
 
 真实 Finder 打开、升级降级、打印、混合 DPI 与性能验收，见 [看图验收记录](acceptance/image-viewer.md)。
+
+## 2026-11-19：并发测试中的端口信号与远程空闲截止时间（未发布）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| 普通全量测试下模拟 SIGKILL 没有发出，或远程 hello 尚未进接收路径就超时：前者夹具用扫描次数模拟进程是否存在，后者用 3 秒真实墙钟约束 MainActor 和本地 TCP | 端口用例在确认前主动插入扫描且夹具只随模拟信号改变；远程用例等待真实服务端响应，用受控时钟分别跨越旧、新截止时间，保留生产默认超时与检查间隔；不加豁免 | `LocalPortsModelTests.forceKillConfirmationSendsSigkill`、`RemoteConnectionIdleWatchdogTests.inboundTrafficKeepsTheConnection` |
+
+对照：看图之前的 `9b18182` 全套复现端口失败，远程用例当次通过。修复后两项在专项与并发全套中均通过；选择器安全门禁通过（无豁免），普通全套仍有四项已登记时序失败，不把该次全量结果记作通过。

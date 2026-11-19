@@ -1065,6 +1065,31 @@
       "doc": "docs/engineering/regressions/resource-performance.md",
       "rules": [
         {
+          "id": "perf-002-deterministic-async-regressions",
+          "module": "resource-performance",
+          "title": "全套并发下的端口刷新竞争与连接空闲时序",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/LocalPorts/LocalPortsModel.swift",
+            "Sources/MacPilotLocalPortsCore/LocalPortCloseService.swift",
+            "Sources/MacPilot/RemoteControl/RemoteConnection.swift",
+            "Sources/MacPilot/RemoteControl/RemoteConnectionIdlePolicy.swift",
+            "Tests/MacPilotTests/LocalPortsModelTests.swift",
+            "Tests/MacPilotTests/RemoteControlTests.swift"
+          ],
+          "invariants": [
+            "端口测试夹具的进程只随模拟信号停止，不因无关扫描次数消失。",
+            "真实收到数据应重置空闲截止时间；测试以收到服务端帧为同步点、以同一可控时钟跨越旧截止时间，并验证新截止时间确实会回收连接。"
+          ],
+          "test_filters": ["LocalPortsModelTests", "LocalPortCloseServiceTests", "RemoteConnectionIdlePolicyTests", "RemoteConnectionIdleWatchdogTests"],
+          "manual_checks": [],
+          "evidence_commits": [
+            { "sha": "5395c85", "date": "2026-10-21", "subject": "端口强制停止测试夹具" },
+            { "sha": "3c40313", "date": "2026-09-12", "subject": "远程连接空闲回收测试" }
+          ]
+        },
+        {
           "id": "perf-001-unbounded-accumulation",
           "module": "resource-performance",
           "title": "重复 scan 事件 / 定时器无界累积导致内存增长（同日两修）",
