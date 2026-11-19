@@ -4,10 +4,16 @@ import Foundation
 final class ImageViewerFileRouter {
     private var pending: [URL] = []
     private var handler: (([URL]) -> Void)?
+    var hasPendingDocuments: Bool { !pending.isEmpty }
 
     nonisolated static func documents(in urls: [URL]) -> [URL] {
         var seen: Set<URL> = []
-        return urls.filter(ImageViewerFileKind.isCandidate).map(\.standardizedFileURL)
+        return urls.filter {
+            guard ImageViewerFileKind.isCandidate($0) else { return false }
+            if $0.pathExtension.lowercased() == "sketch" { return true }
+            if $0.hasDirectoryPath { return false }
+            return (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true
+        }.map(\.standardizedFileURL)
             .filter { seen.insert($0).inserted }
     }
 

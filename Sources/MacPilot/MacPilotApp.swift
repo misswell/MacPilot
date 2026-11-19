@@ -18,6 +18,11 @@ extension Notification.Name {
 @MainActor
 private final class MainWindowContentBox {
     weak var model: MacPilotModel?
+    weak var delegate: AppDelegate?
+
+    func useDelegate(_ delegate: AppDelegate) {
+        self.delegate = delegate
+    }
 }
 
 @main
@@ -25,6 +30,7 @@ struct MacPilotApp: App {
     @StateObject private var startup: AppLaunchBootstrap<MacPilotAppServices>
     @StateObject private var mainWindowOpener: MainWindowOpener
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    private let contentBox: MainWindowContentBox
 
     init() {
         // Capture login-launch facts while the original parent still exists.
@@ -40,9 +46,11 @@ struct MacPilotApp: App {
         // first moment a reopen/deep link can request the window. Only the
         // models behind `AppLaunchBootstrap` wait for AppKit launch.
         let contentBox = MainWindowContentBox()
+        self.contentBox = contentBox
         let opener = MainWindowOpener(
             loadContent: { contentBox.model?.loadMainWindowContent() },
-            activate: { NSApp.activate() }
+            activate: { NSApp.activate() },
+            waitsForLaunchIntent: !isAcceptanceRun
         )
         _mainWindowOpener = StateObject(wrappedValue: opener)
         _startup = StateObject(wrappedValue: AppLaunchBootstrap(
@@ -53,12 +61,16 @@ struct MacPilotApp: App {
     }
 
     var body: some Scene {
+        let _ = contentBox.useDelegate(appDelegate)
         Window("MacPilot", id: "main") {
-            if let services = startup.value {
-                MainWindowRoot(opener: services.opener).environmentObject(services.model)
-            } else {
-                Color.clear.frame(minWidth: 900, minHeight: 620)
+            Group {
+                if let services = startup.value {
+                    MainWindowRoot(opener: services.opener).environmentObject(services.model)
+                } else {
+                    Color.clear.frame(minWidth: 900, minHeight: 620)
+                }
             }
+            .background(MainWindowAttachment(opener: mainWindowOpener))
         }
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands { MainWindowSceneCommands(startup: startup, opener: mainWindowOpener) }
@@ -100,11 +112,14 @@ final class MacPilotAppServices: ObservableObject {
     private var changes = Set<AnyCancellable>()
 
     fileprivate init(opener: MainWindowOpener, contentBox: MainWindowContentBox) {
-        let model = MacPilotModel()
+        let delegate = contentBox.delegate ?? NSApp.delegate as? AppDelegate
+        let documentLaunch = delegate?.imageViewerFileRouter.hasPendingDocuments == true
+        let showsMainWindow = opener.hasExplicitOpenRequest || (!AppLaunchContext.wasLaunchedAtLogin && !documentLaunch)
+        let model = MacPilotModel(showsMainWindowAtLaunch: showsMainWindow, mainWindowOpener: opener)
         contentBox.model = model
         // The model's deep-link observer exists now; hand it the URLs that
         // arrived during launch before anything else can miss them.
-        if let delegate = NSApp.delegate as? AppDelegate {
+        if let delegate {
             for url in delegate.takePendingDeepLinks() {
                 NotificationCenter.default.post(name: .macPilotDeepLink, object: url)
             }
@@ -172,14 +187,11 @@ final class MacPilotAppServices: ObservableObject {
         model.objectWillChange.merge(with: controller.objectWillChange, model.imageViewer.objectWillChange)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &changes)
-        if let delegate = NSApp.delegate as? AppDelegate {
-            delegate.imageViewerFileRouter.attach { [weak model, weak opener] urls in
+        opener.finishLaunch(showsMainWindow: !documentLaunch)
+        if let delegate {
+            delegate.imageViewerFileRouter.attach { [weak model] urls in
                 DispatchQueue.main.async {
-                    model?.openImageViewerDocuments(urls) {
-                        model?.requestSection(.home)
-                        model?.showAlert(model?.t("viewerEnablePrompt") ?? "")
-                        opener?.requestOpen()
-                    }
+                    model?.openImageViewerDocuments(urls)
                 }
             }
         }
@@ -213,10 +225,12 @@ private struct MainWindowSceneCommands: Commands {
         }
         if let model = startup.value?.model, let runtime = model.imageViewer.runtime {
             CommandMenu(model.t("imageViewer")) {
-                Button(model.t("viewerOpenImage")) { runtime.chooseFiles() }
-                Button(model.t("viewerOpenFolder")) { runtime.chooseFolder() }
-                Button(model.t("viewerOpenBatch")) { runtime.chooseFiles(multiple: true) }
-                Divider()
+                if model.isFeatureEnabled(.imageViewer) {
+                    Button(model.t("viewerOpenImage")) { runtime.chooseFiles() }
+                    Button(model.t("viewerOpenFolder")) { runtime.chooseFolder() }
+                    Button(model.t("viewerOpenBatch")) { runtime.chooseFiles(multiple: true) }
+                    Divider()
+                }
                 ForEach(ImageViewerCommand.allCases) { command in
                     Button(model.t(command.key)) { runtime.perform(command) }
                         .disabled(!runtime.hasKeyDocument)
@@ -292,6 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// go through the same path as the menu bar: the window may exist with no
     /// content, and only this notification rebuilds it.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard !imageViewerFileRouter.hasPendingDocuments else { return false }
         NotificationCenter.default.post(name: .macPilotShowMainWindow, object: nil)
         return true
     }
@@ -2865,7 +2880,7 @@ final class MacPilotModel: ObservableObject {
     /// both entry points are enabled. Seeded from the launch context so the
     /// first applied policy already matches the window that is about to
     /// appear — a login launch stays in the menu bar.
-    @Published private(set) var isMainWindowOpen = !AppLaunchContext.wasLaunchedAtLogin
+    @Published private(set) var isMainWindowOpen: Bool
     /// The live controller, once the App has created it. Weak so a released
     /// controller is never resurrected by a settings change.
     weak var presenceController: AppPresenceController?
@@ -2873,9 +2888,7 @@ final class MacPilotModel: ObservableObject {
     /// Whether the main window holds its settings UI, and which page it opens
     /// on. False content is the normal state of a menu-bar app: the window
     /// exists, and nothing else does.
-    @Published private(set) var mainContent = MainWindowContentState(
-        loadedAtLaunch: !AppLaunchContext.wasLaunchedAtLogin
-    )
+    @Published private(set) var mainContent: MainWindowContentState
     /// Page to show the next time the content is built, so closing the window
     /// no longer costs the user their place in it.
     var lastMainSection: MainSection = .home
@@ -2919,7 +2932,10 @@ final class MacPilotModel: ObservableObject {
     private let configurationURL: URL
     private let configurationStore: ConfigStore
 
-    init() {
+    init(showsMainWindowAtLaunch: Bool = !AppLaunchContext.wasLaunchedAtLogin,
+         mainWindowOpener: MainWindowOpener? = nil) {
+        isMainWindowOpen = showsMainWindowAtLaunch
+        mainContent = MainWindowContentState(loadedAtLaunch: showsMainWindowAtLaunch)
         // Resolve whatever a previous version switch left behind — pending
         // configuration restores and the updater's rollback bookkeeping —
         // before anything reads or writes configuration.
@@ -3063,10 +3079,11 @@ final class MacPilotModel: ObservableObject {
                 forName: name,
                 object: nil,
                 queue: .main
-            ) { [weak self] notification in
+            ) { [weak self, weak mainWindowOpener] notification in
                 guard let window = notification.object as? NSWindow else { return }
                 MainActor.assumeIsolated {
                     guard let self,
+                          mainWindowOpener?.acceptsMainWindowAppearance != false,
                           window.title == Self.mainWindowTitle,
                           window.canBecomeMain else { return }
                     self.loadMainWindowContent()
@@ -4463,11 +4480,10 @@ extension MacPilotModel {
         save()
     }
 
-    func openImageViewerDocuments(_ urls: [URL], ifDisabled: () -> Void) {
+    func openImageViewerDocuments(_ urls: [URL]) {
         guard !hasShutdown else { return }
-        guard isFeatureEnabled(.imageViewer) else { ifDisabled(); return }
-        featureLifecycle.start(imageViewer.identifier)
-        imageViewer.runtime?.open(urls)
+        if isFeatureEnabled(.imageViewer) { activateFeatureRuntime(.imageViewer) }
+        imageViewer.openDocuments(urls)
     }
 
     /// 详情页不再有自己的总开关，这里的内部开关只是运行时的镜像：
@@ -4547,6 +4563,7 @@ extension MacPilotModel {
         case .displayControl:
             if displayControl.settings.isEnabled { featureLifecycle.start(displayControl.identifier) }
         case .imageViewer:
+            imageViewer.keepRuntimeWhenIdle()
             featureLifecycle.start(imageViewer.identifier)
         case .memoryMonitor, .cpuMonitor, .localPorts:
             break

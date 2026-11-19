@@ -46,12 +46,11 @@ final class RightClickFileOperations {
         let appUrl = rcitem.url
         logger.debug("openApp: rid=\(rid) app=\(appUrl.path) target=\(target)")
 
-        for dirPath in target {
-            let path = RightClickIPCPath.fileSystemPath(dirPath)
-            let dir = URL(fileURLWithPath: path, isDirectory: true)
+        Self.openSelection(target, with: appUrl) { urls, applicationURL in
             let config = NSWorkspace.OpenConfiguration()
+            config.createsNewApplicationInstance = false
             let logger = self.logger
-            NSWorkspace.shared.open([dir], withApplicationAt: appUrl, configuration: config) { @Sendable [logger] runningApp, error in
+            NSWorkspace.shared.open(urls, withApplicationAt: applicationURL, configuration: config) { @Sendable [logger] runningApp, error in
                 if let error = error {
                     logger.error("Error opening with application: \(error.localizedDescription)")
                     logger.error("Error code: \((error as NSError).code), domain: \((error as NSError).domain)")
@@ -60,6 +59,14 @@ final class RightClickFileOperations {
                 }
             }
         }
+    }
+
+    static func openSelection(_ paths: [String], with applicationURL: URL, submit: ([URL], URL) -> Void) {
+        let urls = paths.filter { !$0.isEmpty }.map {
+            URL(filePath: RightClickIPCPath.fileSystemPath($0), directoryHint: .checkFileSystem)
+        }
+        guard !urls.isEmpty else { return }
+        submit(urls, applicationURL)
     }
 
     /// 按稳定的 action id 分发操作。

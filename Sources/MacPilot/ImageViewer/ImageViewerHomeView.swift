@@ -21,6 +21,7 @@ struct ImageViewerHomeView: View {
                         Button(t("viewerOpenBatch")) { runtime.chooseFiles(multiple: true) }
                     }
                     Text(t("viewerDropHint")).font(.caption).foregroundStyle(.secondary)
+                    Text(t("viewerFinderHint")).font(.caption).foregroundStyle(.secondary)
                 }
                 SettingsCard {
                     Text(t("viewerRecents")).font(.headline)

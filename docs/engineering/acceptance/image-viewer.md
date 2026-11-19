@@ -66,3 +66,9 @@ CPU 是相邻采样间隔的平均值，包含建立/销毁窗口的开销；关
 - 普通 `swift test`：1,958 项、229 套件，7 项失败（11 个断言/超时问题），不能称全绿。五项属于项目登记的定时波动：Snapzy 单帧超时、远程视频套接字、BLE 唤醒恢复、截图快捷键注册、画中画停滞检测。另外两项未列入白名单：`LocalPortsModelTests.forceKillConfirmationSendsSigkill`、`RemoteConnectionIdleWatchdogTests.inboundTrafficKeepsTheConnection`。七项逐个用 `--no-parallel` 复测均通过；未削弱断言或加豁免。原始结果：`/tmp/octoquit-imageviewer-full.log`。
 - 本地 Release 包：`/tmp/octoquit-imageviewer-package.YUEbVR/MacPilot.app`；Luna 验证 Developer ID 深度签名、固定指定要求、文档类型及随包许可证。没有公证或发布；没有替换或启动用户正在使用的副本。
 - 实机 Instruments、真实 Finder、混合 DPI、打印与旧版本升级降级尚无测量证据；未执行的项目不计入通过。远端 CI 与正式发行不等同于本地回归和本地应用包。
+
+## Finder 直接打开修复验收
+
+此修复之后，关闭首页看图也可用 Finder 一次性打开；上一版表中的「只显示启用提示」不再是预期。测试关闭和开启两种状态，分别从系统「打开方式」和已配置 MacPilot 的 Finder 扩展菜单打开 JPG、PNG、HEIC、WebP 及五张混合图片。先退出 MacPilot 做冷启动，再保持设置窗口已关闭/已打开分别试热启动。检查只打开文档、设置已开时不关窗、应用只运行一个实例、首页开关不变、关掉所有临时窗口后资源归零。再从菜单栏打开设置验证原入口，选择普通目录不进入看图。待在隔离桌面用本次构建执行，先前的本地包不包含此次修复。
+
+Luna 已通过 137 项专项测试及本地安全回归门禁（1,925 项，包含有条件跳过项）。真实 Finder/LaunchServices 冷热启动尚未验收。

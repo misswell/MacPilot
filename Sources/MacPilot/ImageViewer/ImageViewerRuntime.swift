@@ -15,6 +15,7 @@ final class ImageViewerRuntime: ObservableObject {
     private var pendingFolders: [URL: UUID] = [:]
     private var panel: NSOpenPanel?
     private let presentWindows: Bool
+    var onIdle: (() -> Void)?
 
     var taskCount: Int { (session?.taskCount ?? 0) + windows.all.reduce(0) { $0 + $1.animationTimerCount } }
 
@@ -113,6 +114,7 @@ final class ImageViewerRuntime: ObservableObject {
         guard windows.isEmpty, pendingFolders.isEmpty else { return }
         session?.close()
         session = nil
+        if !isClosed, panel == nil { onIdle?() }
     }
 
     private func updateFocus() {

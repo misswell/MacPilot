@@ -36,4 +36,35 @@ struct ImageViewerFileRouterTests {
         let urlTypes = try #require((info["CFBundleURLTypes"] as? [[String: Any]])?.first)
         #expect(urlTypes["CFBundleURLSchemes"] as? [String] == ["snapzy", "macpilot"])
     }
+
+    @Test func finderLaunchBuffersFiveDocumentsButDoesNotRequestSettings() throws {
+        let delegate = AppDelegate()
+        let app = NSApplication.shared
+        let photos = ["jpg", "png", "heic", "webp", "pdf"].enumerated().map {
+            URL(fileURLWithPath: "/tmp/cold-launch-\($0.offset).\($0.element)")
+        }
+        #expect(!delegate.imageViewerFileRouter.hasPendingDocuments)
+        delegate.application(app, open: photos)
+        #expect(delegate.imageViewerFileRouter.hasPendingDocuments)
+        #expect(!delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false))
+        #expect(delegate.takePendingDeepLinks().isEmpty)
+        var received: [[URL]] = []
+        delegate.imageViewerFileRouter.attach { received.append($0) }
+        #expect(received == [photos])
+        #expect(!delegate.imageViewerFileRouter.hasPendingDocuments)
+    }
+
+    @Test func rejectsOrdinaryFoldersEvenWhenNamedLikeAnImage() throws {
+        try ImageViewerFixture.withFolder { folder in
+            let misleading = folder.appendingPathComponent("album.jpg", isDirectory: true)
+            try FileManager.default.createDirectory(at: misleading, withIntermediateDirectories: false)
+            let unmarked = URL(filePath: misleading.path, directoryHint: .notDirectory)
+            let sketch = folder.appendingPathComponent("document.sketch", isDirectory: true)
+            try FileManager.default.createDirectory(at: sketch, withIntermediateDirectories: false)
+            let router = ImageViewerFileRouter()
+            #expect(!router.receive([folder, unmarked]))
+            #expect(!router.hasPendingDocuments)
+            #expect(router.receive([sketch]))
+        }
+    }
 }

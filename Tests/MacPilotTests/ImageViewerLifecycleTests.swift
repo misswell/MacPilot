@@ -11,6 +11,58 @@ struct ImageViewerLifecycleTests {
         #expect(!ImageViewerSession.canPrefetch(URL(fileURLWithPath: "/test/animation.webp")))
     }
 
+    @Test func openingWhileDisabledUsesOneRuntimeForTheBatchAndReleasesItAfterTheLastWindow() throws {
+        _ = NSApplication.shared
+        let registry = FeatureLifecycleManager()
+        let feature = ImageViewerFeature { ImageViewerRuntime(language: $0, presentWindows: false) }
+        registry.register(feature)
+        try ImageViewerFixture.withFolder { folder in
+            let photos = try (1...5).map { try ImageViewerFixture.image(in: folder, named: "\($0).png") }
+            feature.openDocuments([folder])
+            #expect(!feature.isRunning)
+            feature.openDocuments(photos + [photos[0]])
+            let runtime = try #require(feature.runtime)
+            let windows = runtime.windows.all
+            #expect(windows.count == 5)
+            #expect(Set(windows.map(\.browser.url)) == Set(photos))
+            let session = try #require(runtime.session)
+            for window in windows.dropLast() { window.window?.close() }
+            #expect(feature.runtime === runtime)
+            #expect(runtime.session === session)
+            windows.last?.window?.close()
+            #expect(feature.runtime == nil)
+            #expect(runtime.isClosed)
+            #expect(session.isClosed)
+            #expect(registry.diagnostics().first?.taskCount == 0)
+            #expect(registry.diagnostics().first?.observerCount == 0)
+            #expect(registry.diagnostics().first?.cacheBytes == 0)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func enabledViewerKeepsTheRuntimeWhetherEnabledBeforeOrDuringExternalOpen(enableDuringOpen: Bool) throws {
+        _ = NSApplication.shared
+        let feature = ImageViewerFeature { ImageViewerRuntime(language: $0, presentWindows: false) }
+        let registry = FeatureLifecycleManager()
+        registry.register(feature)
+        defer { registry.stopAll() }
+        try ImageViewerFixture.withFolder { folder in
+            let photo = try ImageViewerFixture.image(in: folder, named: "image.png")
+            if !enableDuringOpen { registry.start(feature.identifier) }
+            feature.openDocuments([photo])
+            let runtime = try #require(feature.runtime)
+            if enableDuringOpen {
+                feature.keepRuntimeWhenIdle()
+                registry.start(feature.identifier)
+            }
+            runtime.windows.all.first?.window?.close()
+            #expect(feature.runtime === runtime)
+            #expect(runtime.session == nil)
+            registry.stopAll()
+            #expect(feature.runtime == nil)
+        }
+    }
+
     @Test func registeringAndCyclingTheFeatureDoesNotAllocateSessionResources() throws {
         let registry = FeatureLifecycleManager()
         let feature = ImageViewerFeature()

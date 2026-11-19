@@ -84,10 +84,17 @@ final class MainWindowOpener: NSObject, ObservableObject {
     /// lifetime: a closed window must not take the only way back with it.
     private var createWindow: (() -> Void)?
     private var pendingRequest = false
+    private enum InitialPresentation {
+        case waiting, suppress, normal
+    }
+
+    private var initialPresentation: InitialPresentation
+    var acceptsMainWindowAppearance: Bool { initialPresentation == .normal }
     /// Newest request, and the one a reveal has already answered. A request
     /// that arrives while the window is still being built must not be answered
     /// twice — once by the attachment drain and once by its own turn.
     private var latestRequest = 0
+    var hasExplicitOpenRequest: Bool { latestRequest != 0 }
     private var answeredRequest = 0
     private(set) var lastOutcome: Outcome?
     /// Told whenever the window is asked for on purpose (menu bar, Dock click,
@@ -99,6 +106,7 @@ final class MainWindowOpener: NSObject, ObservableObject {
         center: NotificationCenter = .default,
         loadContent: @escaping () -> Void,
         activate: @escaping () -> Void,
+        waitsForLaunchIntent: Bool = false,
         // The menu is still tracking when this runs; the next turn is the
         // first moment ordering the window front cannot be undone by the
         // menu closing again.
@@ -117,11 +125,14 @@ final class MainWindowOpener: NSObject, ObservableObject {
         self.schedule = schedule
         self.record = record
         self.isWindowUsable = isWindowUsable
+        initialPresentation = waitsForLaunchIntent ? .waiting : .normal
         super.init()
         center.addObserver(self, selector: #selector(requestOpen), name: .macPilotShowMainWindow, object: nil)
     }
 
     @objc func requestOpen() {
+        if initialPresentation != .normal { window?.alphaValue = 1 }
+        initialPresentation = .normal
         onUserRequest?()
         // Load first, while the menu is still closing: the window then appears
         // with its content instead of flashing empty.
@@ -134,6 +145,28 @@ final class MainWindowOpener: NSObject, ObservableObject {
         schedule { [weak self] in
             guard let self, self.latestRequest == token else { return }
             self.reveal(answer: token)
+        }
+    }
+
+    func finishLaunch(showsMainWindow: Bool) {
+        guard initialPresentation == .waiting else { return }
+        if showsMainWindow {
+            initialPresentation = .normal
+            window?.alphaValue = 1
+        } else {
+            initialPresentation = .suppress
+            if let window { suppressAutomaticPresentation(of: window) }
+        }
+    }
+
+    private func suppressAutomaticPresentation(of window: NSWindow) {
+        window.alphaValue = 0
+        schedule { [weak self, weak window] in
+            guard let self, let window, self.window === window,
+                  self.initialPresentation == .suppress else { return }
+            window.orderOut(nil)
+            window.alphaValue = 1
+            self.initialPresentation = .normal
         }
     }
 
@@ -182,6 +215,11 @@ final class MainWindowOpener: NSObject, ObservableObject {
         // keep the same window available for the next menu or Dock request.
         window.isReleasedWhenClosed = false
         self.window = window
+        switch initialPresentation {
+        case .waiting: window.alphaValue = 0
+        case .suppress: suppressAutomaticPresentation(of: window)
+        case .normal: break
+        }
         attach { [weak window] in window?.makeKeyAndOrderFront(nil) }
     }
 
@@ -214,7 +252,7 @@ final class MainWindowOpener: NSObject, ObservableObject {
     }
 }
 
-private struct MainWindowAttachment: NSViewRepresentable {
+struct MainWindowAttachment: NSViewRepresentable {
     let opener: MainWindowOpener
 
     func makeNSView(context: Context) -> WindowAttachmentView {
@@ -263,7 +301,6 @@ struct MainWindowRoot: View {
             }
         }
         .frame(minWidth: 900, minHeight: 620)
-        .background(MainWindowAttachment(opener: opener))
         // The opener outlives this view, so the scene's only way to rebuild a
         // window it dropped has to outlive it too.
         .onAppear {

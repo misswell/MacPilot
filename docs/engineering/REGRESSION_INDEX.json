@@ -75,6 +75,18 @@
           "test_filters": ["ImageViewerFileRouterTests", "ImageViewerConfigurationTests", "AppLifecycleTests", "ConfigurationSchemaContractTests"],
           "manual_checks": ["Finder 冷热打开、关闭时启用提示、正式包里类型注册和许可证、升级降级。"],
           "evidence_commits": []
+        },
+        {
+          "id": "img-003-direct-finder-open",
+          "module": "image-viewer",
+          "title": "Finder 直接打开图片，不让设置窗口替代文档",
+          "status": "confirmed-potential",
+          "risk_level": "high",
+          "affected_paths": ["Sources/MacPilot/MacPilotApp.swift", "Sources/MacPilot/MainWindowScene.swift", "Sources/MacPilot/ImageViewer/**", "Sources/MacPilotRightClickKit/RightClickFileOperations.swift", "Sources/MacPilotFinderSync/MacPilotFinderSyncExt.swift", "Tests/MacPilotRightClickKitTests/RightClickOpenWithTests.swift"],
+          "invariants": ["外部文档启动不抬设置窗口；显式设置请求和已打开的设置不受影响。", "关闭时允许临时打开，最后关窗清理 Runtime 且不持久化开关。", "扩展以一次 LaunchServices 调用传完整真实文件 URL，不把文件标为目录。"],
+          "test_filters": ["RightClickOpenWithTests", "ImageViewerFileRouterTests", "ImageViewerLifecycleTests", "MainWindowOpenerTests", "AppLifecycleTests", "ImageViewerConfigurationTests"],
+          "manual_checks": ["Finder 系统及扩展菜单，用关闭/开启功能、冷/热启动、JPG、PNG、HEIC、WebP、PDF 和五文件批量验证。"],
+          "evidence_commits": []
         }
       ]
     },
