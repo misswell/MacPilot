@@ -28,10 +28,12 @@ class ImageViewerCanvas: NSView {
                     self.setNeedsDisplay(self.bounds)
                 }
             }
+            scrollGesture = ImageViewerScrollGesture()
             setNeedsDisplay(bounds)
         }
     }
     private var redraw: AnyCancellable?
+    private var scrollGesture = ImageViewerScrollGesture()
 
     override var isOpaque: Bool { true }
 
@@ -81,8 +83,25 @@ class ImageViewerCanvas: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard event.scrollingDeltaY != 0 else { return }
-        zoom(exp(min(1.0, max(-1.0, event.scrollingDeltaY * 0.025))), event: event)
+        guard let controller else { return }
+        let behavior = controller.settings.scrollBehavior
+        let optionPressed = event.modifierFlags.contains(.option)
+        let navigates = behavior == .scrollNavigates ? !optionPressed : optionPressed
+        switch scrollGesture.action(
+            deltaY: event.scrollingDeltaY,
+            isPrecise: event.hasPreciseScrollingDeltas,
+            phase: event.phase,
+            momentumPhase: event.momentumPhase,
+            timestamp: event.timestamp,
+            navigates: navigates
+        ) {
+        case .navigate(let direction):
+            controller.perform(direction < 0 ? .previous : .next)
+        case .zoom(let factor):
+            zoom(factor, event: event)
+        case .ignored:
+            break
+        }
     }
 
     override func magnify(with event: NSEvent) {

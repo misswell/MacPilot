@@ -19,6 +19,9 @@ final class ImageViewerWindowController: NSWindowController, NSWindowDelegate, N
     @Published var language: AppLanguage {
         didSet { window?.toolbar?.items.forEach(configureToolbarItem) }
     }
+    /// Read by the canvas at event time, so changing the mode applies to the
+    /// next scroll without rebuilding the view.
+    var settings: ImageViewerSettings
 
     var onClose: ((ImageViewerWindowController) -> Void)?
     var onOpen: (([URL]) -> Void)?
@@ -42,9 +45,11 @@ final class ImageViewerWindowController: NSWindowController, NSWindowDelegate, N
         frame.map { Int((geometry.pointScale($0.originalSize, in: viewport, backing: backing) * backing * 100).rounded()) }
     }
 
-    init(url: URL, session: ImageViewerSession, language: AppLanguage) {
+    init(url: URL, session: ImageViewerSession, language: AppLanguage,
+         settings: ImageViewerSettings = ImageViewerSettings()) {
         self.session = session
         self.language = language
+        self.settings = settings
         folder = url.deletingLastPathComponent()
         browser = ImageViewerBrowserStore(url: url)
         let document = ImageViewerDocumentWindow(

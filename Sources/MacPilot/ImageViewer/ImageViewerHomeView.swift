@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ImageViewerHomeView: View {
     @ObservedObject var runtime: ImageViewerRuntime
+    @ObservedObject var feature: ImageViewerFeature
     let language: AppLanguage
 
     private func t(_ key: String) -> String { AppText.value(key, language: language) }
@@ -22,6 +23,23 @@ struct ImageViewerHomeView: View {
                     }
                     Text(t("viewerDropHint")).font(.caption).foregroundStyle(.secondary)
                     Text(t("viewerFinderHint")).font(.caption).foregroundStyle(.secondary)
+                }
+                SettingsCard {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(t("viewerScrollGesture")).font(.subheadline.weight(.medium))
+                        Picker(t("viewerScrollGesture"), selection: Binding(
+                            get: { feature.settings.scrollBehavior },
+                            set: { feature.setScrollBehavior($0) }
+                        )) {
+                            ForEach(ImageViewerScrollBehavior.allCases) { behavior in
+                                Text(t(behavior.titleKey)).tag(behavior)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityLabel(t("viewerScrollGesture"))
+                        Text(t("viewerScrollHint")).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 ImageViewerAssociationCard(language: language)
             }

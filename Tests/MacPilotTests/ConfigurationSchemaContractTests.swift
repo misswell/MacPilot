@@ -37,8 +37,15 @@ struct ConfigurationSchemaContractTests {
                 "bleUnlock", "fileCompression", "screenCapture", "screenRecording",
                 "pictureInPicture", "inputSources", "windowSwitcher", "smoothScrolling",
                 "clipboard", "awake", "awakeTriggers", "awakeProfiles", "remoteControl",
-                "dockGroups", "quickSearch", "displayControl", "appPresence"
+                "dockGroups", "quickSearch", "displayControl", "appPresence", "imageViewer"
             ]
+        )
+    }
+
+    @Test func imageViewerSettingsEncodeEveryHistoricalKey() throws {
+        try assertEncodedKeys(
+            of: ImageViewerSettings(),
+            supersetOf: ["scrollBehavior"]
         )
     }
 

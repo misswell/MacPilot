@@ -8,6 +8,9 @@ final class ImageViewerRuntime: ObservableObject {
     var language: AppLanguage {
         didSet { windows.all.forEach { $0.language = language } }
     }
+    var settings: ImageViewerSettings {
+        didSet { windows.all.forEach { $0.settings = settings } }
+    }
     private(set) var session: ImageViewerSession?
     private(set) var windows = ImageViewerWindowRegistry()
     private(set) var isClosed = false
@@ -18,8 +21,9 @@ final class ImageViewerRuntime: ObservableObject {
 
     var taskCount: Int { (session?.taskCount ?? 0) + windows.all.reduce(0) { $0 + $1.animationTimerCount } }
 
-    init(language: AppLanguage, presentWindows: Bool = true) {
+    init(language: AppLanguage, settings: ImageViewerSettings = ImageViewerSettings(), presentWindows: Bool = true) {
         self.language = language
+        self.settings = settings
         self.presentWindows = presentWindows
     }
 
@@ -56,7 +60,9 @@ final class ImageViewerRuntime: ObservableObject {
                 current.reload()
                 if presentWindows { current.reveal() }
             } else {
-                let document = ImageViewerWindowController(url: url, session: activeSession(), language: language)
+                let document = ImageViewerWindowController(
+                    url: url, session: activeSession(), language: language, settings: settings
+                )
                 document.onClose = { [weak self] closed in
                     self?.windows.remove(closed)
                     self?.releaseIdleSession()

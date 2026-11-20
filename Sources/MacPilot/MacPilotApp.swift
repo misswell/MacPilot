@@ -2614,6 +2614,7 @@ final class MacPilotModel: ObservableObject {
         /// The two system entry points. Both are on by default and may never
         /// both be off (see `AppPresenceSettings`).
         var appPresence: AppPresenceSettings
+        var imageViewer: ImageViewerSettings
 
         /// Spelled out because the custom `init(from:)` suppresses the
         /// synthesized conformance, and `launchesAtLoginWasStored` must stay a
@@ -2627,10 +2628,10 @@ final class MacPilotModel: ObservableObject {
             case screenCapture, screenRecording, pictureInPicture
             case inputSources, windowSwitcher, smoothScrolling, clipboard
             case awake, awakeTriggers, awakeProfiles, remoteControl, dockGroups, quickSearch, displayControl
-            case appPresence
+            case appPresence, imageViewer
         }
 
-        init(enabledFeatures: Set<MainSection>, rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, launchesAtLogin: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, updateChannel: AppChannel = .stable, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], awakeProfiles: [AwakeSessionProfile], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings, quickSearch: QuickSearchSettings, displayControl: DisplayControlSettings = DisplayControlSettings(), appPresence: AppPresenceSettings = .standard) {
+        init(enabledFeatures: Set<MainSection>, rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, launchesAtLogin: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, updateChannel: AppChannel = .stable, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], awakeProfiles: [AwakeSessionProfile], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings, quickSearch: QuickSearchSettings, displayControl: DisplayControlSettings = DisplayControlSettings(), appPresence: AppPresenceSettings = .standard, imageViewer: ImageViewerSettings = ImageViewerSettings()) {
             version = ConfigurationSchema.currentVersion
             self.enabledFeatures = enabledFeatures.map(\.rawValue).sorted()
             self.rules = rules
@@ -2659,6 +2660,7 @@ final class MacPilotModel: ObservableObject {
             self.quickSearch = quickSearch
             self.displayControl = displayControl
             self.appPresence = appPresence
+            self.imageViewer = imageViewer
         }
 
         /// Not encoded: sections that existed on disk but could not be decoded
@@ -2703,6 +2705,7 @@ final class MacPilotModel: ObservableObject {
             quickSearch = Self.section(QuickSearchSettings.self, forKey: .quickSearch, in: container, default: QuickSearchSettings(), degraded: &degraded)
             displayControl = Self.section(DisplayControlSettings.self, forKey: .displayControl, in: container, default: DisplayControlSettings(), degraded: &degraded)
             appPresence = Self.section(AppPresenceSettings.self, forKey: .appPresence, in: container, default: .standard, degraded: &degraded)
+            imageViewer = Self.section(ImageViewerSettings.self, forKey: .imageViewer, in: container, default: ImageViewerSettings(), degraded: &degraded)
             unreadableSections = degraded
         }
 
@@ -2759,6 +2762,7 @@ final class MacPilotModel: ObservableObject {
             try container.encode(quickSearch, forKey: .quickSearch)
             try container.encode(displayControl, forKey: .displayControl)
             try container.encode(appPresence, forKey: .appPresence)
+            try container.encode(imageViewer, forKey: .imageViewer)
         }
 
         /// 首页开关是功能唯一的开关，详情页不再保留自己的总开关（`docs/UI_DESIGN.md`）。
@@ -3197,6 +3201,7 @@ final class MacPilotModel: ObservableObject {
         clipboard.persist = { [weak self] in self?.saveIfReady() }
         quickSearch.persist = { [weak self] in self?.saveIfReady() }
         quickSearch.language = language
+        imageViewer.persist = { [weak self] in self?.saveIfReady() }
         displayControl.language = language
         displayControl.persist = { [weak self] in self?.saveIfReady() }
         displayControl.recoveryShortcutConflict = { [weak self] in
@@ -4060,6 +4065,7 @@ final class MacPilotModel: ObservableObject {
         dockGroups.applyLoadedSettings(configuration.dockGroups)
         quickSearch.applyLoadedSettings(configuration.quickSearch, activate: false)
         displayControl.applyLoadedSettings(configuration.displayControl)
+        imageViewer.applyLoadedSettings(configuration.imageViewer)
         appPresence = configuration.appPresence.normalized()
     }
 
@@ -4106,7 +4112,8 @@ final class MacPilotModel: ObservableObject {
             dockGroups: dockGroups.settings,
             quickSearch: quickSearch.settings,
             displayControl: displayControl.settings,
-            appPresence: appPresence
+            appPresence: appPresence,
+            imageViewer: imageViewer.settings
         )
         let data: Data
         do {
@@ -4920,7 +4927,7 @@ struct ContentView: View {
             DisplayControlSettingsView(control: model.displayControl)
         case .imageViewer:
             if let runtime = model.imageViewer.runtime {
-                ImageViewerHomeView(runtime: runtime, language: model.language)
+                ImageViewerHomeView(runtime: runtime, feature: model.imageViewer, language: model.language)
             }
         case .settings:
             SettingsView()

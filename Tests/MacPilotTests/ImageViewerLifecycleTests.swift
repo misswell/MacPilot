@@ -142,4 +142,33 @@ struct ImageViewerLifecycleTests {
             #expect(runtime.taskCount == 0)
         }
     }
+
+    @Test func scrollBehaviorReachesOpenAndNewWindowsAndOnlyUserChangesPersist() throws {
+        _ = NSApplication.shared
+        let feature = ImageViewerFeature { ImageViewerRuntime(language: $0, presentWindows: false) }
+        defer { feature.stop() }
+        try ImageViewerFixture.withFolder { folder in
+            let first = try ImageViewerFixture.image(in: folder, named: "1.png")
+            let second = try ImageViewerFixture.image(in: folder, named: "2.png")
+            feature.start()
+            feature.openDocuments([first])
+            let runtime = try #require(feature.runtime)
+            let firstWindow = try #require(runtime.windows.all.first)
+            #expect(firstWindow.settings.scrollBehavior == .optionScrollNavigates)
+
+            var saves = 0
+            feature.persist = { saves += 1 }
+            feature.setScrollBehavior(.scrollNavigates)
+            #expect(saves == 1)
+            #expect(runtime.settings.scrollBehavior == .scrollNavigates)
+            #expect(firstWindow.settings.scrollBehavior == .scrollNavigates)
+
+            feature.openDocuments([second])
+            #expect(runtime.windows.all.allSatisfy { $0.settings.scrollBehavior == .scrollNavigates })
+
+            feature.applyLoadedSettings(ImageViewerSettings(scrollBehavior: .optionScrollNavigates))
+            #expect(saves == 1)
+            #expect(runtime.windows.all.allSatisfy { $0.settings.scrollBehavior == .optionScrollNavigates })
+        }
+    }
 }

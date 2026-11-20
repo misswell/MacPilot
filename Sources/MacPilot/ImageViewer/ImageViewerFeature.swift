@@ -7,7 +7,9 @@ final class ImageViewerFeature: ObservableObject, ManagedFeature, FeatureResourc
     var language: AppLanguage = .system {
         didSet { runtime?.language = language }
     }
+    @Published private(set) var settings = ImageViewerSettings()
     @Published private(set) var runtime: ImageViewerRuntime?
+    var persist: (() -> Void)?
     private var changes: AnyCancellable?
     private let makeRuntime: (AppLanguage) -> ImageViewerRuntime
     private var keepsRuntimeWhenIdle = false
@@ -29,6 +31,20 @@ final class ImageViewerFeature: ObservableObject, ManagedFeature, FeatureResourc
         keepsRuntimeWhenIdle = true
     }
 
+    func applyLoadedSettings(_ settings: ImageViewerSettings) {
+        self.settings = settings
+        runtime?.settings = settings
+    }
+
+    func setScrollBehavior(_ behavior: ImageViewerScrollBehavior) {
+        guard settings.scrollBehavior != behavior else { return }
+        var updated = settings
+        updated.scrollBehavior = behavior
+        settings = updated
+        runtime?.settings = updated
+        persist?()
+    }
+
     func openDocuments(_ urls: [URL]) {
         let documents = ImageViewerFileRouter.documents(in: urls)
         guard !documents.isEmpty else { return }
@@ -39,6 +55,7 @@ final class ImageViewerFeature: ObservableObject, ManagedFeature, FeatureResourc
     private func ensureRuntime() {
         guard runtime == nil else { return }
         let newRuntime = makeRuntime(language)
+        newRuntime.settings = settings
         newRuntime.onIdle = { [weak self, weak newRuntime] in
             guard let self, let newRuntime, self.runtime === newRuntime, !self.keepsRuntimeWhenIdle else { return }
             self.stop()
