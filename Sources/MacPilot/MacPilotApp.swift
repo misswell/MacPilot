@@ -73,6 +73,9 @@ struct MacPilotApp: App {
             .background(MainWindowAttachment(opener: mainWindowOpener))
         }
         .windowToolbarStyle(.unified(showsTitle: false))
+        // File URLs belong to the application delegate. Settings is opened by
+        // the opener, including when an explicit deep link requests it.
+        .handlesExternalEvents(matching: [])
         .commands { MainWindowSceneCommands(startup: startup, opener: mainWindowOpener) }
 
         MenuBarExtra(isInserted: Binding(
@@ -3079,12 +3082,11 @@ final class MacPilotModel: ObservableObject {
             forName: NSWindow.willCloseNotification,
             object: nil,
             queue: .main
-        ) { [weak self] notification in
+        ) { [weak self, weak mainWindowOpener] notification in
             guard let window = notification.object as? NSWindow else { return }
             MainActor.assumeIsolated {
                 guard let self,
-                      window.title == Self.mainWindowTitle,
-                      window.canBecomeMain else { return }
+                      mainWindowOpener?.owns(window) ?? Self.isSettingsWindowCandidate(window) else { return }
                 // Deferred one main-actor turn so the window is never blanked
                 // while it is still animating closed. The token makes that turn
                 // safe to lose: a reopen in the meantime owns the content now.
@@ -3112,8 +3114,7 @@ final class MacPilotModel: ObservableObject {
                 MainActor.assumeIsolated {
                     guard let self,
                           mainWindowOpener?.acceptsMainWindowAppearance != false,
-                          window.title == Self.mainWindowTitle,
-                          window.canBecomeMain else { return }
+                          mainWindowOpener?.owns(window) ?? Self.isSettingsWindowCandidate(window) else { return }
                     self.loadMainWindowContent()
                     // A window that came back is a visible window again: the
                     // Dock icon returns with it.
@@ -4418,7 +4419,11 @@ extension MacPilotModel {
 
     /// The main window, when the scene has one. Panels are never candidates.
     var mainWindow: NSWindow? {
-        NSApp.windows.first { $0.title == Self.mainWindowTitle && $0.canBecomeMain }
+        NSApp.windows.first(where: Self.isSettingsWindowCandidate)
+    }
+
+    private static func isSettingsWindowCandidate(_ window: NSWindow) -> Bool {
+        window.title == mainWindowTitle && window.canBecomeMain && !(window is ImageViewerDocumentWindow)
     }
 
     func loadMainWindowContent() {

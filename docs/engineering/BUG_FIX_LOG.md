@@ -180,3 +180,7 @@
 | macOS 15 的 `URL(filePath:directoryHint:.isDirectory)` 保留 `/Preview.app/`，生产规范化得到无尾斜杠 URL，三个关联用例把测试夹具与模型结果直接比较而失败；macOS 26 与本地未复现 | 夹具先走与 `ImageViewerAssociations.canonicalURL` 相同的 `standardizedFileURL.resolvingSymlinksInPath()` 再比较；不改生产关联逻辑，不加豁免 | `ImageViewerAssociationTests` |
 
 对照：`v1.2.2-beta.118` 的 Regression Gate（macos-15）失败 13 个断言，`dist` 跳过、未发布；修复随下一个 Beta 重新走全部门禁。
+
+## 2026-11-20：看图空白和设置、Dock 一起弹出（待 Finder 实机验收）
+
+设置首次打开后一直允许隐式显示，画布也没直接收到解码帧变化 → 关闭设置即收回窗口显示许可，只有实际设置窗口驱动 Dock；画布随解码帧和变换重绘 → `MainWindowOpenerTests.closingSettingsRevokesPermissionForTheNextAutomaticPresentation`、`ImageViewerWindowTests.decodedPhotoAndRotationInvalidateTheNativeCanvas`。

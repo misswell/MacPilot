@@ -4,6 +4,15 @@ import Testing
 
 @MainActor
 struct ImageViewerWindowTests {
+    private final class CanvasProbe: ImageViewerCanvas {
+        var requestedRedraw = false
+
+        override func setNeedsDisplay(_ invalidRect: NSRect) {
+            super.setNeedsDisplay(invalidRect)
+            requestedRedraw = true
+        }
+    }
+
     @Test func actualPixelsUseTheWindowScaleAndRotationChangesFitWithoutStretching() {
         let original = CGSize(width: 1000, height: 500)
         let viewport = CGSize(width: 250, height: 200)
@@ -48,5 +57,36 @@ struct ImageViewerWindowTests {
         #expect(animation.completedLoops == 1)
         animation.reset()
         #expect(animation.completedLoops == 0)
+    }
+
+    @Test func decodedPhotoAndRotationInvalidateTheNativeCanvas() async throws {
+        _ = NSApplication.shared
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let session = ImageViewerSession(observePressure: false)
+        let file = try ImageViewerFixture.image(in: folder, named: "image.png")
+        let document = ImageViewerWindowController(url: file, session: session, language: .english)
+        defer {
+            document.dispose()
+            session.close()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let canvas = CanvasProbe(frame: NSRect(x: 0, y: 0, width: 240, height: 160))
+        canvas.controller = document
+        document.begin(show: false)
+        // Observe the AppKit invalidation request without showing a window.
+        canvas.requestedRedraw = false
+
+        let deadline = ContinuousClock.now + .seconds(5)
+        while document.loading && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let rendered = try #require(document.frame)
+        #expect(rendered.originalSize == CGSize(width: 1200, height: 800))
+        #expect(canvas.requestedRedraw)
+
+        canvas.requestedRedraw = false
+        document.perform(.right)
+        #expect(canvas.requestedRedraw)
     }
 }

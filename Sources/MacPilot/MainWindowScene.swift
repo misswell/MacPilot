@@ -78,6 +78,7 @@ final class MainWindowOpener: NSObject, ObservableObject {
     private let schedule: @MainActor (@escaping @MainActor () -> Void) -> Void
     private let record: @MainActor (Outcome) -> Void
     private let isWindowUsable: @MainActor (NSWindow) -> Bool
+    private let requiresExplicitOpen: Bool
     private var window: NSWindow?
     private var raise: (() -> Void)?
     /// SwiftUI's `openWindow(id:)` for the main scene, kept for the process
@@ -89,7 +90,7 @@ final class MainWindowOpener: NSObject, ObservableObject {
     /// that arrives while the window is still being built must not be answered
     /// twice — once by the attachment drain and once by its own turn.
     private var latestRequest = 0
-    var hasExplicitOpenRequest: Bool { latestRequest != 0 }
+    var hasExplicitOpenRequest: Bool { acceptsMainWindowAppearance && latestRequest != 0 }
     private var answeredRequest = 0
     private(set) var lastOutcome: Outcome?
     /// Told whenever the window is asked for on purpose (menu bar, Dock click,
@@ -120,9 +121,14 @@ final class MainWindowOpener: NSObject, ObservableObject {
         self.schedule = schedule
         self.record = record
         self.isWindowUsable = isWindowUsable
+        self.requiresExplicitOpen = requiresExplicitOpen
         acceptsMainWindowAppearance = !requiresExplicitOpen
         super.init()
         center.addObserver(self, selector: #selector(requestOpen), name: .macPilotShowMainWindow, object: nil)
+        center.addObserver(self, selector: #selector(settingsWillClose(_:)), name: NSWindow.willCloseNotification, object: nil)
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification] {
+            center.addObserver(self, selector: #selector(settingsBecameActive(_:)), name: name, object: nil)
+        }
     }
 
     @objc func requestOpen() {
@@ -153,10 +159,23 @@ final class MainWindowOpener: NSObject, ObservableObject {
         }
     }
 
+    func owns(_ window: NSWindow) -> Bool { self.window === window }
+
+    @objc private func settingsWillClose(_ notification: Notification) {
+        guard requiresExplicitOpen, let window = notification.object as? NSWindow, owns(window) else { return }
+        acceptsMainWindowAppearance = false
+        pendingRequest = false
+    }
+
+    @objc private func settingsBecameActive(_ notification: Notification) {
+        guard !acceptsMainWindowAppearance, let window = notification.object as? NSWindow, owns(window) else { return }
+        suppressAutomaticPresentation(of: window)
+    }
+
     /// Ends the request with a window on screen: raise the one we own, or have
     /// the scene build a new one.
     private func reveal(answer token: Int) {
-        guard answeredRequest != token else { return }
+        guard acceptsMainWindowAppearance, answeredRequest != token else { return }
         answeredRequest = token
         revealNow()
     }
@@ -197,6 +216,7 @@ final class MainWindowOpener: NSObject, ObservableObject {
         // SwiftUI can discard the content on close, but the resident app must
         // keep the same window available for the next menu or Dock request.
         window.isReleasedWhenClosed = false
+        if requiresExplicitOpen { window.isRestorable = false }
         self.window = window
         if !acceptsMainWindowAppearance { suppressAutomaticPresentation(of: window) }
         attach { [weak window] in window?.makeKeyAndOrderFront(nil) }

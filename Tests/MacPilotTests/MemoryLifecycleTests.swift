@@ -149,6 +149,34 @@ struct MainWindowOpenerTests {
         #expect(opener.acceptsMainWindowAppearance)
     }
 
+    @Test func closingSettingsRevokesPermissionForTheNextAutomaticPresentation() {
+        _ = NSApplication.shared
+        let center = NotificationCenter()
+        let turns = Turns()
+        let opener = MainWindowOpener(
+            center: center, loadContent: {}, activate: {}, requiresExplicitOpen: true,
+            schedule: { turns.schedule($0) }, record: { _ in }
+        )
+        let settings = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        opener.attach(window: settings)
+        opener.requestOpen()
+        #expect(opener.acceptsMainWindowAppearance)
+
+        let document = ImageViewerDocumentWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        center.post(name: NSWindow.willCloseNotification, object: document)
+        #expect(opener.acceptsMainWindowAppearance)
+        center.post(name: NSWindow.willCloseNotification, object: settings)
+        #expect(!opener.acceptsMainWindowAppearance)
+
+        center.post(name: NSWindow.didBecomeKeyNotification, object: settings)
+        turns.runAll()
+        #expect(settings.alphaValue == 0)
+        #expect(!settings.isVisible)
+        opener.requestOpen()
+        #expect(opener.acceptsMainWindowAppearance)
+        #expect(settings.alphaValue == 1)
+    }
+
     @Test func requestsRaiseOnlyAfterTheMenuTrackingLoopEnds() {
         let center = NotificationCenter()
         let turns = Turns()

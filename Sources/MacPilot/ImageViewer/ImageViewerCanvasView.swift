@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 struct ImageViewerCanvasView: NSViewRepresentable {
@@ -12,12 +13,25 @@ struct ImageViewerCanvasView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: ImageViewerCanvas, context: Context) {
-        view.needsDisplay = true
+        if view.controller !== controller { view.controller = controller }
     }
 }
 
-final class ImageViewerCanvas: NSView {
-    weak var controller: ImageViewerWindowController?
+class ImageViewerCanvas: NSView {
+    weak var controller: ImageViewerWindowController? {
+        didSet {
+            // SwiftUI can reuse the representable when its controller reference
+            // is unchanged. The native canvas still needs each frame and transform.
+            redraw = controller.map { controller in
+                controller.$frame.combineLatest(controller.$geometry).sink { [weak self] _ in
+                    guard let self else { return }
+                    self.setNeedsDisplay(self.bounds)
+                }
+            }
+            setNeedsDisplay(bounds)
+        }
+    }
+    private var redraw: AnyCancellable?
 
     override var isOpaque: Bool { true }
 
