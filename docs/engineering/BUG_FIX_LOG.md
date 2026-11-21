@@ -1,5 +1,9 @@
 # 问题与修复速记
 
+## 2026-11-20：快速滚动鼠标只切一张（未发布，待鼠标实机验收）
+
+鼠标滚轮的 0.1 秒冷却丢弃了快速连续事件 → 每个非精确非零滚动事件各翻一张，不按时间合并；触控板一次手势一张及缩放映射不变 → `ImageViewerScrollGestureTests.everyMouseWheelNotchNavigatesEvenDuringARapidScroll`（旧实现复现失败后通过）、`img-006-scroll-gesture-mapping`。
+
 每次修复追加一行：**现象/根因 → 修复与不变量 → 自动回归**。旧历史见 [目录册](REGRESSION_CATALOG.md)；未解决、未发布、待实机验收分开标明。
 
 ## 2026-11-13：登录启动恢复（beta.102 已发布，待实机重启验收）

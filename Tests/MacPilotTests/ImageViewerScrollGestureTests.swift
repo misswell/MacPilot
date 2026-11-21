@@ -96,7 +96,7 @@ struct ImageViewerScrollGestureTests {
         )
     }
 
-    @Test func wheelNotchesRespectTheCooldown() {
+    @Test func everyMouseWheelNotchNavigatesEvenDuringARapidScroll() {
         var gesture = ImageViewerScrollGesture()
         #expect(
             gesture.action(
@@ -108,7 +108,7 @@ struct ImageViewerScrollGestureTests {
             gesture.action(
                 deltaY: -3, isPrecise: false, phase: [], momentumPhase: [],
                 timestamp: 20.05, navigates: true
-            ) == .ignored
+            ) == .navigate(1)
         )
         #expect(
             gesture.action(

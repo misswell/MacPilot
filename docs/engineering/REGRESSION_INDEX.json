@@ -119,7 +119,7 @@
           "status": "confirmed-potential",
           "risk_level": "high",
           "affected_paths": ["Sources/MacPilot/ImageViewer/ImageViewerScrollGesture.swift", "Sources/MacPilot/ImageViewer/ImageViewerSettings.swift", "Sources/MacPilot/ImageViewer/ImageViewerCanvasView.swift", "Sources/MacPilot/ImageViewer/ImageViewerHomeView.swift", "Sources/MacPilot/ImageViewer/ImageViewerFeature.swift", "Sources/MacPilot/ImageViewer/ImageViewerRuntime.swift", "Sources/MacPilot/MacPilotApp.swift", "Sources/MacPilot/Core/Resource/ConfigStore.swift", "Tests/MacPilotTests/ImageViewerScrollGestureTests.swift", "Tests/MacPilotTests/ImageViewerConfigurationTests.swift"],
-          "invariants": ["每个滚轮事件只属于翻页或缩放之一：用户选择的手势翻页，另一个滚轮手势缩放。", "触控板一次手势最多翻一张，惯性事件不翻页；鼠标滚轮按格响应并受冷却限制。", "设置保存在 imageViewer 节，未知枚举回落默认，不改变其他配置或首页开关。", "上一张/下一张按钮、方向键、pinch 与现有缩放锚点保持不变。"],
+          "invariants": ["每个滚轮事件只属于翻页或缩放之一：用户选择的手势翻页，另一个滚轮手势缩放。", "触控板一次手势最多翻一张，惯性事件不翻页；鼠标滚轮按格响应并受冷却限制。", "修正上一项中已确认的鼠标冷却缺陷：每个鼠标滚轮非零事件各翻一张，不按时间合并快速滚动；触控板单步限制不变。", "设置保存在 imageViewer 节，未知枚举回落默认，不改变其他配置或首页开关。", "上一张/下一张按钮、方向键、pinch 与现有缩放锚点保持不变。"],
           "test_filters": ["ImageViewerScrollGestureTests", "ImageViewerConfigurationTests", "ImageViewerLifecycleTests", "ImageViewerWindowTests", "ConfigurationSchemaContractTests", "ConfigStoreTests"],
           "manual_checks": ["鼠标滚轮与触控板分别验证两种模式、Option 切换、首尾边界、缩放锚点、重启后保留设置。"],
           "evidence_commits": []

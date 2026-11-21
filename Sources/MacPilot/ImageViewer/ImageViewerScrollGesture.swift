@@ -11,17 +11,15 @@ enum ImageViewerScrollAction: Equatable {
 ///
 /// Navigation is deliberately limited to one image per trackpad gesture: a
 /// single flick must not race through a folder. A mouse wheel has no gesture
-/// phases, so one notch is one step with a short cooldown for drivers that
-/// repeat or smooth an event.
+/// phases, so every nonzero event is one step. Dropping events by time makes
+/// a quick wheel flick lose images.
 struct ImageViewerScrollGesture {
     static let preciseThreshold: CGFloat = 16
-    static let wheelCooldown: TimeInterval = 0.1
     static let gestureGap: TimeInterval = 0.25
 
     private var accumulatedY: CGFloat = 0
     private var consumedGesture = false
     private var lastEventAt: TimeInterval = -.infinity
-    private var lastWheelStepAt: TimeInterval = -.infinity
     private var wasNavigating = false
 
     mutating func action(
@@ -68,8 +66,7 @@ struct ImageViewerScrollGesture {
             } else {
                 action = .ignored
             }
-        } else if deltaY != 0, timestamp - lastWheelStepAt >= Self.wheelCooldown {
-            lastWheelStepAt = timestamp
+        } else if deltaY != 0 {
             action = .navigate(Self.direction(for: deltaY))
         } else {
             action = .ignored
