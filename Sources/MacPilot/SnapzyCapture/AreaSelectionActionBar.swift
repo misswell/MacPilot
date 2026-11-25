@@ -759,10 +759,14 @@ final class AreaSelectionActionBar: NSView {
       parent.addSubview(bubble)
     }
 
-    let labelSize = label.intrinsicContentSize
+    // `intrinsicContentSize` is the label's bare glyph width. An
+    // `NSTextField` also reserves its cell's internal padding; sizing the
+    // label from the bare width truncated almost every Chinese title into
+    // “…” (filled rectangle, eraser, actions, drag handle).
+    let labelSize = label.sizeThatFits(NSSize(width: 1_000, height: 1_000))
     let bubbleSize = CGSize(
-      width: ceil(labelSize.width) + 12,
-      height: ceil(labelSize.height) + 5
+      width: ceil(labelSize.width) + 14,
+      height: ceil(labelSize.height) + 6
     )
     let sourceFrame = parent.convert(source.bounds, from: source)
     let parentBounds = parent.bounds
@@ -784,9 +788,9 @@ final class AreaSelectionActionBar: NSView {
     bubble.frame = CGRect(origin: origin, size: bubbleSize)
     label.frame = CGRect(
       x: 6,
-      y: 2.5,
+      y: 3,
       width: bubbleSize.width - 12,
-      height: bubbleSize.height - 5
+      height: bubbleSize.height - 6
     )
     bubble.isHidden = false
     bubble.superview?.addSubview(bubble, positioned: .above, relativeTo: nil)

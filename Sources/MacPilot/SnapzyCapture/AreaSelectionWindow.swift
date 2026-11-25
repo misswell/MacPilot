@@ -1032,6 +1032,12 @@ final class AreaSelectionOverlayView: NSView {
     editorView.layer?.masksToBounds = false
     embeddedAnnotationView = editorView
     addSubview(editorView, positioned: .above, relativeTo: nil)
+    // The editor is a full-selection canvas and was added last, so AppKit's
+    // hit-testing put it above the HUD cards even though their layers had a
+    // higher zPosition. Dragging the deck inside the selection then landed on
+    // the canvas instead of the grip. Re-raise the cards after every editor
+    // installation; layer order alone is not hit-test order.
+    bringSelectionActionBarsToFront()
     editorView.frame = selectionFrame
     editorView.layoutSubtreeIfNeeded()
 
@@ -1093,7 +1099,17 @@ final class AreaSelectionOverlayView: NSView {
     let binding = AreaSelectionActionBar.AnnotationBinding(model: model, commit: commit)
     selectionActionBar?.bindAnnotationSession(binding)
     selectionActionRail?.bindAnnotationSession(binding)
+    bringSelectionActionBarsToFront()
     positionSelectionActionBars()
+  }
+
+  private func bringSelectionActionBarsToFront() {
+    if let selectionActionRail {
+      addSubview(selectionActionRail, positioned: .above, relativeTo: nil)
+    }
+    if let selectionActionBar {
+      addSubview(selectionActionBar, positioned: .above, relativeTo: nil)
+    }
   }
 
   /// Mirrors the output-style toggle state into the action column's 「更多」

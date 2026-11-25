@@ -198,3 +198,12 @@
 | 文字输入框画在点击点上方（`anchor.y - fieldHeight`），提交后的字形从点击点向下画，输入态与最终位置上下差一整行；空框固定 28pt 高，输入后又按 12/6pt padding 放大，和字形范围不一致；文字不能缩放 | 输入框改为与最终字形相同的 top-leading 锚点；非空时宽高按真实字体度量（无 28pt 地板），字体按截图宽度/显示缩放和 `SmartAnnotationRenderer` 使用同一公式；右下角新增缩放把手，拖动时按比例改 `textScale`，提交的样式随标注进入 Undo/Redo，导出的字号同步变化 | `SnapzyCaptureTests.textEntryFieldUsesTheExactGlyphBoundsAfterTyping`、`typedTextAndFinalGlyphsShareTheSameTopLeadingAnchor`、`inlineTextFontMatchesTheRenderedImageAtAnyDisplayScale`、`draggingTheTextFieldHandleScalesTheTextWithItsBox`；`AnnotationInteractionParityTests.aResizedTextEntryKeepsItsScaleThroughUndoAndRedo` |
 
 状态：自动化测试通过；非激活面板上的悬停气泡、真实鼠标拖动、文字输入/缩放与导出像素一致性仍需实机验收。
+
+## 2026-11-25：截图标注工具栏层级与 hover 标题省略号（beta 124 待发布）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| 工具栏拖进截图选区后拖不动：内嵌标注画布最后 `addSubview`，AppKit 命中测试按 subview 顺序而不看 layer `zPosition`，鼠标落在画布而不是拖动 grip | `showEmbeddedAnnotationEditor` 与 `attachAnnotationSession` 安装画布后重新把动作栏、工具卡抬到 subview 最前；layer z 只负责绘制层级，命中测试必须单独保证。工具卡拖进选区后仍能接收拖动 | `SnapzyCaptureTests.deckInsideSelectionStaysAboveTheInlineCanvasForHitTesting` |
+| 悬停名称大多数显示成“……”。气泡用 `NSTextField.intrinsicContentSize` 算宽度，但那只是裸字形宽，不包含 `NSTextFieldCell` 的内边距；标签帧比实际文本窄 3–4pt，被截断 | 气泡宽度改用 `sizeThatFits`（含 cell 内边距）并多留 2pt；标签帧必须不小于实测文本宽度，禁止把中文工具名截成省略号 | `SnapzyCaptureTests.hoveringAToolbarChipNamesItWithoutTheSystemTooltipTimer` |
+
+状态：自动化测试通过；工具栏在真实选区内拖动与悬停气泡外观仍需实机验收。

@@ -67,7 +67,8 @@
 - **属性区默认展开**：颜色、线宽、透明度、填充、线型按当前工具显示；每个新的标注会话重新展开，切换工具不得自动收起或展开用户已选择的折叠状态；点击当前已选工具是重新展开的显式入口。
 - **文字输入对比度与无背景标注**：文字工具的输入胶囊必须是白底黑字（light color scheme），水印工具必须使用深色胶囊+白字（dark color scheme）且 placeholder 明确为“添加水印”；禁止让 TextField 继承系统 appearance 后在白色胶囊上画白字。提交后的文字标注不得绘制白色背景板或胶囊，只绘制文字字形本身；水印仍是半透明白字。画布预览和 `SmartAnnotationRenderer` 必须使用同一外观，否则导出会重新长出背景。
 - **输入框与最终字形同坐标、同尺寸**：文字/水印输入框必须从点击点 top-leading 开始，不能画在点击点上方；非空输入框的宽高必须由最终渲染所用的字体度量，输入字体与 `SmartAnnotationRenderer` 的 `max(base, imageWidth / divisor) × lineWidthScale × textScale` 公式一致。输入框允许用右下角把手同比缩放，缩放值存入标注样式并随 Undo/Redo 保存；禁止出现“输入态一个位置/大小、导出后另一个位置/大小”。
-- **工具栏悬停名称与可拖动**：截图选区的非激活面板不能依赖 AppKit 原生 tooltip 计时器；每个图标 chip 与拖动 grip 必须在 hover 时由工具栏自己绘制标题气泡，同时保留 `toolTip`/accessibility label。拖动 grip 必须实际移动工具卡，位置以相对自动锚点的用户偏移保存；`layout()`、属性行伸缩或模型刷新不得把用户拖走的工具卡弹回并重新盖住选区。偏移必须限制在屏幕边界内。
+- **工具栏悬停名称与可拖动**：截图选区的非激活面板不能依赖 AppKit 原生 tooltip 计时器；每个图标 chip 与拖动 grip 必须在 hover 时由工具栏自己绘制标题气泡，同时保留 `toolTip`/accessibility label。气泡宽度必须用 `NSTextField.sizeThatFits`（包含 cell 内边距）而不是裸 `intrinsicContentSize`，否则中文标题会被截断成“……”。拖动 grip 必须实际移动工具卡，位置以相对自动锚点的用户偏移保存；`layout()`、属性行伸缩或模型刷新不得把用户拖走的工具卡弹回并重新盖住选区。偏移必须限制在屏幕边界内。
+- **工具卡必须高于内嵌标注画布参与命中测试**：`AreaSelectionOverlayView` 的内嵌编辑器是覆盖整个选区的 subview；AppKit 的命中测试按 subview 顺序，`layer.zPosition` 只影响绘制。每次 `showEmbeddedAnnotationEditor`/`attachAnnotationSession` 后都要把动作栏与工具卡重新抬到 subview 最前，确保工具卡拖进选区后拖动 grip 仍先于画布接收鼠标事件。
 - **Undo/Redo 由历史栈决定**：按钮状态只能看 `model.canUndo` / `model.canRedo`，禁止用 `annotations.isEmpty`。删除最后一个对象、清空全部标注之后 Undo 仍然可用；Undo 后 Redo 可用；任何新编辑清空 Redo。
 - **每次用户可感知的编辑都可撤销**：新增、橡皮删除、移动、缩放、颜色/线宽/透明度/填充/线型修改、清空、文本提交、计数重排都进同一份文档快照；快照必须包含 `annotations`、逐对象样式、`stylesByTool` 与序号，否则撤销后属性栏和下一笔的默认样式会停留在被撤销的值。连续拖动/滑块必须合并为一步：样式修改按 `(tool, selected, field)` 合并，`endStyleEditing()` 在控件释放时结束合并；拖拽/缩放走 `beginEditing/updateAnnotation/endEditing` 事务。
 - **唯一历史实现**：`SmartAnnotationModel` 是唯一历史源（旧的 `SmartAnnotationHistory` 值类型 seam 已删除），工具栏、快捷键、画布手势调用同一组方法。

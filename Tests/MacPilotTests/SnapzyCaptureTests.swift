@@ -773,6 +773,22 @@ struct SnapzyCaptureTests {
         chip.mouseEntered(with: enter)
         #expect(bar.visibleHoverTitle == title)
 
+        func allSubviews(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(allSubviews)
+        }
+        let label = try #require(
+            allSubviews(container)
+                .compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == title }
+        )
+        // The cell reserves internal padding beyond the bare glyph width.
+        // Sizing the bubble from `intrinsicContentSize` truncated the title.
+        let textWidth = label.sizeThatFits(NSSize(width: 1_000, height: 1_000)).width
+        #expect(
+            label.frame.width >= textWidth,
+            "the hover title must not collapse into an ellipsis"
+        )
+
         let exit = try #require(
             NSEvent.enterExitEvent(
                 with: .mouseExited,
@@ -861,6 +877,90 @@ struct SnapzyCaptureTests {
         let moved = deck.frame.origin
         window.overlayView.layout()
         #expect(deck.frame.origin == moved, "a later layout pass must not snap the deck back")
+    }
+
+    @Test @MainActor func deckInsideSelectionStaysAboveTheInlineCanvasForHitTesting() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+        let selection = CGRect(
+            x: screen.frame.minX + 160,
+            y: screen.frame.minY + 200,
+            width: 420,
+            height: 300
+        )
+        window.overlayView.showSelectionResult(
+            screenRect: selection,
+            showsActions: true,
+            actionHandler: { _ in }
+        )
+        let deck = try #require(
+            window.overlayView.subviews.compactMap { $0 as? AreaSelectionActionBar }
+                .first {
+                    $0.chipButtons.contains {
+                        $0.toolTip == AppText.value("scAnnotationRectangle", language: .system)
+                    }
+                }
+        )
+        let rail = try #require(
+            window.overlayView.subviews.compactMap { $0 as? AreaSelectionActionBar }
+                .first {
+                    $0.chipButtons.contains {
+                        $0.toolTip == AppText.value("scPin", language: .system)
+                    }
+                }
+        )
+        let localSelection = CGRect(
+            x: selection.minX - screen.frame.minX,
+            y: selection.minY - screen.frame.minY,
+            width: selection.width,
+            height: selection.height
+        )
+        deck.frame.origin = CGPoint(
+            x: localSelection.midX - deck.frame.width / 2,
+            y: localSelection.midY - deck.frame.height / 2
+        )
+        deck.layoutSubtreeIfNeeded()
+        #expect(deck.frame.intersects(localSelection))
+
+        let inlineCanvas = NSView(frame: .zero)
+        window.overlayView.showEmbeddedAnnotationEditor(
+            inlineCanvas,
+            screenRect: selection,
+            showsToolbar: false
+        )
+
+        let editorIndex = try #require(
+            window.overlayView.subviews.firstIndex { $0 === inlineCanvas }
+        )
+        let deckIndex = try #require(
+            window.overlayView.subviews.firstIndex { $0 === deck }
+        )
+        let railIndex = try #require(
+            window.overlayView.subviews.firstIndex { $0 === rail }
+        )
+        #expect(railIndex > editorIndex)
+        #expect(deckIndex > editorIndex)
+
+        func allSubviews(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(allSubviews)
+        }
+        let handle = try #require(
+            allSubviews(deck).first {
+                $0.toolTip == AppText.value("scToolDragBar", language: .system)
+            }
+        )
+        let handleFrame = handle.convert(handle.bounds, to: window.contentView)
+        let hit = window.overlayView.hitTest(
+            NSPoint(x: handleFrame.midX, y: handleFrame.midY)
+        )
+        let hitDescription = hit.map { String(describing: type(of: $0)) } ?? "nil"
+        #expect(
+            hit === handle || hit?.isDescendant(of: deck) == true,
+            "the drag grip, not the full-selection canvas, must win the hit test (hit=\(hitDescription))"
+        )
     }
 
     @Test @MainActor func annotationEditorToolbarIsMountedOutsideTheSelectedFrame() throws {
