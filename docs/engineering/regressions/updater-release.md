@@ -32,6 +32,7 @@
 - tag workflow 恰需六个 Actions secrets（`APPLE_CERTIFICATE_P12`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_DEVELOPER_ID`、`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`）。app-specific 密码绝不进聊天/命令参数；泄露立即吊销。
 - 本地 `MACPILOT_NOTARY_PROFILE` 可选且用前必须核验（`xcrun notarytool history --keychain-profile <profile>`）；不要因上次成功就假设某 profile 存在。
 - 推送的 tag ≠ 已发布：必须核验 Actions `dist` job 与 `gh release view <tag>` 都成功且 ZIP 资产存在。绝不移动/覆盖已推送的版本 tag；发布修复用新 patch 版本。
+- GitHub macOS runner 的磁盘余量不足以在三次构建后再次复制 app 并创建 DMG。`dist` 的 universal notarized ZIP 定稿后、`build-dmg.sh` 之前必须回收 `.build`、`build` 与 `DerivedData`；清理对象只能是可重建缓存，不能删除 app、签名 ZIP、公证票据或 Release 资产。
 
 ## 必跑测试
 

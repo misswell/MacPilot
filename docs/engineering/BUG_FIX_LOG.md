@@ -215,3 +215,11 @@
 | 用户认为【文字】和【水印】没有区别。根因：`SmartAnnotation.watermark` 只存一个文字插入点，渲染器也调用同一套 `drawText`；默认只是白字、透明度 0.76，既没有区域、旋转，也没有低透明度，实际就是第二个文字工具 | 水印改为区域标注 `.watermark(String, CGRect)`：默认区域为画布 42%×18%，以点击点为中心并夹在画布内；默认白字、22% 透明度、居中 -24° 倾斜、带轻微阴影；输入态显示虚线区域框、输入框放在区域中心，提交后文字在区域内居中倾斜；区域可像其他盒状标注一样移动/缩放，预览与 `SmartAnnotationRenderer` 使用同一几何 | `AnnotationInteractionParityTests.watermarkTextEntryLooksDifferentFromTextEntry`、`watermarkUsesARegionAndDefaultTextUsesAPoint`；`ScreenCaptureTests.watermarkRendersAFaintCenteredRegionMark`；实机 `11-watermark-entry.png` 的虚线区域 |
 
 状态：自动化测试与真实 AppKit 输入态验收通过；最终导出的水印观感仍需实机截图确认。
+
+## 2026-11-25：Beta 125 发布在 DMG 阶段磁盘耗尽（待 beta 126 发布）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| `v1.2.2-beta.125` 的 `dist` 连续两次在 `hdiutil create` 报 `No space left on device`，发布未生成；流水线先做了 arm64、x86_64 和 universal 三次构建，`.build`/`build` 留下多 GB 缓存，DMG 还要复制整个 app 并创建临时读写镜像 | `release-common.yml` 在 universal `distribute-app.sh` 完成、app 与 ZIP 已定稿后，先打印磁盘余量并删除 `.build`、`build`、`DerivedData`，再执行 `build-dmg.sh`；清理只针对可重建缓存，不触碰 app、ZIP、签名或公证产物。已推送的 `beta.125` tag 保持不动，修复用新 beta tag 发布 | `SigningRequirementTests`、`python3 Tests/Release/stapler-retry-tests.py`，以及下一次 `dist` 的 DMG 生成与 Release 资产核验 |
+
+状态：修复已进入新 beta；上一失败 tag 不移动，不作为已发布版本。

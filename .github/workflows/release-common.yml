@@ -91,6 +91,16 @@ jobs:
           MACPILOT_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           ./Scripts/distribute-app.sh
+          # Each distributable invocation leaves multi-gigabyte SwiftPM/Xcode
+          # build caches. The DMG step copies the whole app into a staging
+          # folder and then asks hdiutil for another read/write image; on
+          # GitHub's macOS runner that has repeatedly ended in "No space left
+          # on device". The app and notarized ZIP are already final, so the
+          # caches are safe to reclaim before packaging the DMG.
+          df -h /
+          rm -rf .build build
+          rm -rf "$HOME/Library/Developer/Xcode/DerivedData"
+          df -h /
           ./Scripts/build-dmg.sh
 
       - name: Verify the published designated requirement
