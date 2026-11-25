@@ -870,7 +870,10 @@ struct ScreenCaptureTests {
                     CGPoint(x: 0.2, y: 0.75),
                     CGPoint(x: 0.3, y: 0.8)
                 ]),
-                .watermark("MacPilot", CGPoint(x: 0.55, y: 0.75))
+                .watermark(
+                    "MacPilot",
+                    CGRect(x: 0.35, y: 0.6, width: 0.5, height: 0.25)
+                )
             ]
         ))
         #expect(rendered.width == source.width)
@@ -911,6 +914,51 @@ struct ScreenCaptureTests {
         }
         #expect(redPixels > 20, "the text glyphs must still be rendered")
         #expect(whitePixels < 20, "the text must not paint a white background plate")
+    }
+
+    @Test func watermarkRendersAFaintCenteredRegionMark() throws {
+        let source = try #require(makeTestImage(width: 320, height: 200, color: .black))
+        let region = CGRect(x: 0.25, y: 0.35, width: 0.5, height: 0.3)
+        let rendered = try #require(SmartAnnotationRenderer.render(
+            image: source,
+            annotations: [.watermark("WATERMARK", region)],
+            styles: [.default(for: .watermark)]
+        ))
+        let bitmap = NSBitmapImageRep(cgImage: rendered)
+        var changedPixels = 0
+        var opaqueWhitePixels = 0
+        var minX = bitmap.pixelsWide
+        var minY = bitmap.pixelsHigh
+        var maxX = 0
+        var maxY = 0
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y)?
+                    .usingColorSpace(.deviceRGB) else { continue }
+                let luminance = max(color.redComponent, color.greenComponent, color.blueComponent)
+                if luminance > 0.05 {
+                    changedPixels += 1
+                    minX = min(minX, x)
+                    minY = min(minY, y)
+                    maxX = max(maxX, x)
+                    maxY = max(maxY, y)
+                }
+                if color.redComponent > 0.9,
+                   color.greenComponent > 0.9,
+                   color.blueComponent > 0.9 {
+                    opaqueWhitePixels += 1
+                }
+            }
+        }
+
+        #expect(changedPixels > 20)
+        #expect(opaqueWhitePixels == 0, "a watermark must stay semi-transparent")
+        if changedPixels > 0 {
+            #expect(abs(CGFloat(minX + maxX) / 2 - 160) < 24)
+            #expect(abs(CGFloat(minY + maxY) / 2 - 100) < 24)
+            #expect(maxX - minX <= Int(region.width * 320) + 2)
+            #expect(maxY - minY <= Int(region.height * 200) + 2)
+        }
     }
 
     @Test func highlighterFillsTheDraggedRectangleAndRemainsEditable() throws {

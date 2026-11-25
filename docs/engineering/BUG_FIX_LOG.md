@@ -207,3 +207,11 @@
 | 悬停名称大多数显示成“……”。气泡用 `NSTextField.intrinsicContentSize` 算宽度，但那只是裸字形宽，不包含 `NSTextFieldCell` 的内边距；标签帧比实际文本窄 3–4pt，被截断 | 气泡宽度改用 `sizeThatFits`（含 cell 内边距）并多留 2pt；标签帧必须不小于实测文本宽度，禁止把中文工具名截成省略号 | `SnapzyCaptureTests.hoveringAToolbarChipNamesItWithoutTheSystemTooltipTimer` |
 
 状态：自动化测试通过；工具栏在真实选区内拖动与悬停气泡外观仍需实机验收。
+
+## 2026-11-25：水印工具与文字工具几乎相同（beta 125 待发布）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| 用户认为【文字】和【水印】没有区别。根因：`SmartAnnotation.watermark` 只存一个文字插入点，渲染器也调用同一套 `drawText`；默认只是白字、透明度 0.76，既没有区域、旋转，也没有低透明度，实际就是第二个文字工具 | 水印改为区域标注 `.watermark(String, CGRect)`：默认区域为画布 42%×18%，以点击点为中心并夹在画布内；默认白字、22% 透明度、居中 -24° 倾斜、带轻微阴影；输入态显示虚线区域框、输入框放在区域中心，提交后文字在区域内居中倾斜；区域可像其他盒状标注一样移动/缩放，预览与 `SmartAnnotationRenderer` 使用同一几何 | `AnnotationInteractionParityTests.watermarkTextEntryLooksDifferentFromTextEntry`、`watermarkUsesARegionAndDefaultTextUsesAPoint`；`ScreenCaptureTests.watermarkRendersAFaintCenteredRegionMark`；实机 `11-watermark-entry.png` 的虚线区域 |
+
+状态：自动化测试与真实 AppKit 输入态验收通过；最终导出的水印观感仍需实机截图确认。

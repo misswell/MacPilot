@@ -6173,7 +6173,11 @@ struct SmartAnnotationStyle: Equatable, Sendable {
         case .highlighter:
             return Self(lineWidth: 14, opacity: 0.45, color: .red)
         case .watermark:
-            return Self(lineWidth: 3, opacity: 0.76, color: .white)
+            // A watermark is deliberately a faint, large diagonal mark, not
+            // another opaque text label. This matches Snapzy's watermark
+            // defaults (white, 0.22 opacity) and keeps it visually distinct
+            // from the text tool even on light screenshots.
+            return Self(lineWidth: 3, opacity: 0.22, color: .white)
         case .filledRectangle:
             return Self(fillEnabled: true)
         default:
@@ -6194,7 +6198,10 @@ enum SmartAnnotation: Equatable {
     case highlighter(CGPoint, CGPoint)
     case pencil([CGPoint])
     case text(String, CGPoint)
-    case watermark(String, CGPoint)
+    /// Watermark glyphs live inside a normalized region, not at a text
+    /// insertion point: the mark is centered, faint and tilted inside that
+    /// band, so it cannot be mistaken for the plain text tool.
+    case watermark(String, CGRect)
     case crop(CGRect)
 }
 
@@ -6279,8 +6286,10 @@ extension SmartAnnotation {
         case .counter(_, let point):
             let radius: CGFloat = 0.035
             return CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
-        case .text(_, let point), .watermark(_, let point):
+        case .text(_, let point):
             return CGRect(x: point.x, y: point.y, width: 0.24, height: 0.1)
+        case .watermark(_, let bounds):
+            return bounds.standardized
         case .pencil(let points):
             guard let first = points.first else { return .zero }
             let result = points.dropFirst().reduce(
@@ -6323,7 +6332,8 @@ extension SmartAnnotation {
         case .highlighter(let start, let end): return .highlighter(move(start), move(end))
         case .pencil(let points): return .pencil(points.map(move))
         case .text(let text, let point): return .text(text, move(point))
-        case .watermark(let text, let point): return .watermark(text, move(point))
+        case .watermark(let text, let bounds):
+            return .watermark(text, bounds.offsetBy(dx: delta.x, dy: delta.y))
         case .crop(let value): return .crop(value.offsetBy(dx: delta.x, dy: delta.y))
         }
     }
@@ -6356,7 +6366,7 @@ extension SmartAnnotation {
         case .highlighter(let start, let end): return .highlighter(map(start), map(end))
         case .pencil(let points): return .pencil(points.map(map))
         case .text(let text, let point): return .text(text, map(point))
-        case .watermark(let text, let point): return .watermark(text, map(point))
+        case .watermark(let text, _): return .watermark(text, target)
         }
     }
 
@@ -7086,6 +7096,7 @@ struct SmartAnnotationEditor: View {
     @State private var pendingText = ""
     @State private var textPoint = CGPoint.zero
     @State private var pendingTextTool: SmartAnnotationTool = .text
+    @State private var pendingWatermarkBounds: CGRect?
     /// Multiplier relative to the style's current text size. The bottom-right
     /// handle changes this while typing; commit stores the resulting style with
     /// the annotation so preview, export and Undo agree.
@@ -7612,8 +7623,8 @@ struct SmartAnnotationEditor: View {
         displayWidth: CGFloat? = nil
     ) -> CGFloat {
         let sizeScale = max(0.75, min(1.5, style.lineWidth / 3))
-        let base: CGFloat = tool == .watermark ? 16 : 18
-        let widthDivisor: CGFloat = tool == .watermark ? 42 : 35
+        let base: CGFloat = tool == .watermark ? 24 : 18
+        let widthDivisor: CGFloat = tool == .watermark ? 32 : 35
         let renderFontSize = max(base, (imageWidth ?? 0) / widthDivisor)
             * sizeScale
             * style.textScale
@@ -7657,6 +7668,19 @@ struct SmartAnnotationEditor: View {
         var result = style
         result.textScale = min(4, max(0.25, style.textScale * scale))
         return result
+    }
+
+    /// The watermark is a region annotation (42% × 18% of the canvas,
+    /// centered at the click), matching Snapzy's click-to-place default. The
+    /// mark itself is centered and tilted inside this region.
+    nonisolated static func defaultWatermarkBounds(
+        centeredAt point: CGPoint
+    ) -> CGRect {
+        let width: CGFloat = 0.42
+        let height: CGFloat = 0.18
+        let x = min(max(0, point.x - width / 2), 1 - width)
+        let y = min(max(0, point.y - height / 2), 1 - height)
+        return CGRect(x: x, y: y, width: width, height: height)
     }
 
     private func annotationCanvas(in availableSize: CGSize) -> some View {
@@ -8007,10 +8031,15 @@ struct SmartAnnotationEditor: View {
             // typing before a field exists, so every character is lost.
             textPoint = normalized(end, in: fitted)
             pendingTextTool = .text
+            pendingWatermarkBounds = nil
             showingTextEntry = true
         case .watermark:
-            textPoint = normalized(end, in: fitted)
+            let clickPoint = normalized(end, in: fitted)
+            textPoint = clickPoint
             pendingTextTool = .watermark
+            pendingWatermarkBounds = Self.defaultWatermarkBounds(
+                centeredAt: clickPoint
+            )
             showingTextEntry = true
         }
         return nil
@@ -8073,8 +8102,13 @@ struct SmartAnnotationEditor: View {
     @ViewBuilder
     private func inlineTextEditorCapsule(in fitted: CGRect) -> some View {
         if showingTextEntry {
-            let anchor = denormalized(textPoint, in: fitted)
             let isWatermark = Self.textEntryUsesDarkCapsule(for: pendingTextTool)
+            let watermarkBounds = pendingTextTool == .watermark
+                ? pendingWatermarkBounds
+                : nil
+            let anchor = watermarkBounds.map {
+                denormalized(CGPoint(x: $0.midX, y: $0.midY), in: fitted)
+            } ?? denormalized(textPoint, in: fitted)
             let entryStyle = Self.inlineTextEntryStyle(
                 from: model.currentStyle,
                 scale: textEntryScale
@@ -8086,10 +8120,14 @@ struct SmartAnnotationEditor: View {
                 imageWidth: CGFloat(image.width),
                 displayWidth: fitted.width
             )
-            let fieldFrame = Self.inlineTextFieldFrame(
-                anchor: anchor,
-                size: fieldSize
-            )
+            let fieldFrame = watermarkBounds == nil
+                ? Self.inlineTextFieldFrame(anchor: anchor, size: fieldSize)
+                : CGRect(
+                    x: anchor.x - fieldSize.width / 2,
+                    y: anchor.y - fieldSize.height / 2,
+                    width: fieldSize.width,
+                    height: fieldSize.height
+                )
             let fontSize = Self.inlineTextFontSize(
                 for: entryStyle,
                 tool: pendingTextTool,
@@ -8103,6 +8141,11 @@ struct SmartAnnotationEditor: View {
             let fieldFill = isWatermark ? Color.black.opacity(0.72) : Color.white
             let fieldInk = isWatermark ? Color.white : Color.black
             ZStack(alignment: .topLeading) {
+                if let watermarkBounds {
+                    watermarkEntryGuide(
+                        in: denormalized(watermarkBounds, in: fitted)
+                    )
+                }
                 TextField(
                     "",
                     text: $pendingText,
@@ -8166,6 +8209,21 @@ struct SmartAnnotationEditor: View {
         }
     }
 
+    private func watermarkEntryGuide(in rect: CGRect) -> some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(Color.white.opacity(0.035))
+            .frame(width: rect.width, height: rect.height)
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(
+                        Color.white.opacity(0.62),
+                        style: StrokeStyle(lineWidth: 1, dash: [6, 4])
+                    )
+            }
+            .offset(x: rect.minX, y: rect.minY)
+            .allowsHitTesting(false)
+    }
+
     private func inlineTextResizeHandle(
         fieldFrame: CGRect,
         fieldSize: CGSize
@@ -8227,11 +8285,16 @@ struct SmartAnnotationEditor: View {
                 scale: textEntryScale
             )
             let annotation: SmartAnnotation = pendingTextTool == .watermark
-                ? .watermark(pendingText, textPoint)
+                ? .watermark(
+                    pendingText,
+                    pendingWatermarkBounds
+                        ?? Self.defaultWatermarkBounds(centeredAt: textPoint)
+                )
                 : .text(pendingText, textPoint)
             model.append(annotation, style: style)
         }
         pendingText = ""
+        pendingWatermarkBounds = nil
         inlineTextFocused = false
         showingTextEntry = false
         textEntryScale = 1
@@ -8241,6 +8304,7 @@ struct SmartAnnotationEditor: View {
 
     private func cancelInlineText() {
         pendingText = ""
+        pendingWatermarkBounds = nil
         inlineTextFocused = false
         showingTextEntry = false
         textEntryScale = 1
@@ -8485,18 +8549,13 @@ struct SmartAnnotationEditor: View {
                 in: rect,
                 context: &context
             )
-        case .watermark(let text, let point):
-            let fontSize = Self.inlineTextFontSize(
-                for: style,
-                tool: .watermark,
-                imageWidth: CGFloat(image.width),
-                displayWidth: rect.width
-            )
-            context.draw(
-                Text(text).font(.system(size: fontSize, weight: .medium))
-                    .foregroundColor(style.color.swiftUIColor.opacity(style.opacity)),
-                at: denormalized(point, in: rect),
-                anchor: .topLeading
+        case .watermark(let text, let bounds):
+            drawWatermarkAnnotation(
+                text,
+                in: denormalized(bounds, in: rect),
+                style: style,
+                canvasWidth: rect.width,
+                context: &context
             )
         case .crop:
             break
@@ -8528,6 +8587,32 @@ struct SmartAnnotationEditor: View {
                 .foregroundColor(style.color.swiftUIColor.opacity(style.opacity)),
             at: point,
             anchor: .topLeading
+        )
+    }
+
+    private func drawWatermarkAnnotation(
+        _ text: String,
+        in bounds: CGRect,
+        style: SmartAnnotationStyle,
+        canvasWidth: CGFloat,
+        context: inout GraphicsContext
+    ) {
+        guard !text.isEmpty, bounds.width > 0, bounds.height > 0 else { return }
+        let fontSize = Self.inlineTextFontSize(
+            for: style,
+            tool: .watermark,
+            imageWidth: CGFloat(image.width),
+            displayWidth: canvasWidth
+        )
+        var local = context
+        local.clip(to: Path(bounds))
+        local.translateBy(x: bounds.midX, y: bounds.midY)
+        local.rotate(by: .degrees(-24))
+        local.draw(
+            Text(text).font(.system(size: fontSize, weight: .medium))
+                .foregroundColor(style.color.swiftUIColor.opacity(style.opacity)),
+            at: .zero,
+            anchor: .center
         )
     }
 
@@ -8940,15 +9025,13 @@ enum SmartAnnotationRenderer {
                 width: bounds.width,
                 style: style
             )
-        case .watermark(let text, let location):
-            drawText(
+        case .watermark(let text, let value):
+            drawWatermark(
                 text,
-                at: point(location, in: bounds, canvas: canvas),
+                in: rect(value, in: bounds, canvas: canvas),
                 in: context,
-                color: style.color.nsColor,
                 width: bounds.width,
-                style: style,
-                watermark: true
+                style: style
             )
         case .crop:
             break
@@ -9016,19 +9099,18 @@ enum SmartAnnotationRenderer {
         color: NSColor,
         width: CGFloat,
         style: SmartAnnotationStyle,
-        watermark: Bool = false,
         counter: Bool = false
     ) {
         let graphics = NSGraphicsContext(cgContext: context, flipped: false)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = graphics
         let sizeScale = max(0.75, min(1.5, style.lineWidth / 3))
-        let baseFontSize = counter ? max(12, width / 70) : (watermark ? max(16, width / 42) : max(18, width / 35))
+        let baseFontSize = counter ? max(12, width / 70) : max(18, width / 35)
         let fontSize = baseFontSize * sizeScale * style.textScale
         let attributes: [NSAttributedString.Key: Any] = [
             .font: counter
                 ? NSFont.boldSystemFont(ofSize: fontSize)
-                : (watermark ? NSFont.systemFont(ofSize: fontSize, weight: .medium) : NSFont.boldSystemFont(ofSize: fontSize)),
+                : NSFont.boldSystemFont(ofSize: fontSize),
             .foregroundColor: color.withAlphaComponent(color.alphaComponent * style.opacity)
         ]
         let size = (text as NSString).size(withAttributes: attributes)
@@ -9036,6 +9118,50 @@ enum SmartAnnotationRenderer {
         // Text is drawn directly on the pixels. There is deliberately no white
         // capsule behind it: the annotation is just the glyphs the user typed.
         (text as NSString).draw(at: CGPoint(x: point.x, y: originY), withAttributes: attributes)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private static func drawWatermark(
+        _ text: String,
+        in bounds: CGRect,
+        in context: CGContext,
+        width: CGFloat,
+        style: SmartAnnotationStyle
+    ) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, bounds.width > 0, bounds.height > 0 else { return }
+
+        let graphics = NSGraphicsContext(cgContext: context, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphics
+        let sizeScale = max(0.75, min(1.5, style.lineWidth / 3))
+        let fontSize = max(24, width / 32) * sizeScale * style.textScale
+        let textColor = style.color.nsColor.withAlphaComponent(
+            style.color.nsColor.alphaComponent * style.opacity
+        )
+        let shadow = NSShadow()
+        shadow.shadowBlurRadius = max(1, fontSize * 0.04)
+        shadow.shadowOffset = .zero
+        shadow.shadowColor = NSColor.black.withAlphaComponent(
+            min(style.opacity * 0.35, 0.12)
+        )
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: fontSize, weight: .medium),
+            .foregroundColor: textColor,
+            .kern: fontSize * 0.04,
+            .shadow: shadow,
+        ]
+        let size = (trimmed as NSString).size(withAttributes: attributes)
+
+        context.saveGState()
+        context.clip(to: bounds)
+        context.translateBy(x: bounds.midX, y: bounds.midY)
+        context.rotate(by: -24 * CGFloat.pi / 180)
+        (trimmed as NSString).draw(
+            at: CGPoint(x: -size.width / 2, y: -size.height / 2),
+            withAttributes: attributes
+        )
+        context.restoreGState()
         NSGraphicsContext.restoreGraphicsState()
     }
 

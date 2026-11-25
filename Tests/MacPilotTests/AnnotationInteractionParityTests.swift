@@ -214,7 +214,37 @@ struct AnnotationInteractionParityTests {
         #expect(SmartAnnotationEditor.textEntryUsesDarkCapsule(for: .watermark))
         #expect(!SmartAnnotationEditor.textEntryUsesDarkCapsule(for: .text))
         #expect(SmartAnnotationStyle.default(for: .watermark).color == .white)
+        #expect(SmartAnnotationStyle.default(for: .watermark).opacity <= 0.25)
         #expect(SmartAnnotationStyle.default(for: .text).color != .white)
+    }
+
+    @Test func watermarkUsesARegionAndDefaultTextUsesAPoint() {
+        let watermark = SmartAnnotationEditor.defaultWatermarkBounds(
+            centeredAt: CGPoint(x: 0.5, y: 0.5)
+        )
+        #expect(abs(watermark.width - 0.42) < 0.0001)
+        #expect(abs(watermark.height - 0.18) < 0.0001)
+        #expect(abs(watermark.midX - 0.5) < 0.0001)
+        #expect(abs(watermark.midY - 0.5) < 0.0001)
+
+        let nearEdge = SmartAnnotationEditor.defaultWatermarkBounds(
+            centeredAt: CGPoint(x: 0.01, y: 0.99)
+        )
+        #expect(nearEdge.minX >= 0)
+        #expect(nearEdge.maxX <= 1)
+        #expect(nearEdge.minY >= 0)
+        #expect(nearEdge.maxY <= 1)
+
+        let mark = SmartAnnotation.watermark("Mark", watermark)
+        #expect(mark.normalizedBounds == watermark)
+        #expect(mark.hitTest(CGPoint(x: watermark.midX, y: watermark.midY)))
+        let moved = mark.translated(by: CGPoint(x: 0.1, y: 0.05))
+        #expect(moved.normalizedBounds == watermark.offsetBy(dx: 0.1, dy: 0.05))
+        let resized = mark.resized(
+            from: watermark,
+            to: CGRect(x: 0.1, y: 0.2, width: 0.4, height: 0.2)
+        )
+        #expect(resized.normalizedBounds == CGRect(x: 0.1, y: 0.2, width: 0.4, height: 0.2))
     }
 
     @Test func toolbarUsesTheSharedCardMetrics() throws {
