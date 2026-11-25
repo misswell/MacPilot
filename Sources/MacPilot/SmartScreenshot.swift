@@ -6148,19 +6148,24 @@ struct SmartAnnotationStyle: Equatable, Sendable {
     var color: SmartAnnotationColor
     var fillEnabled: Bool
     var lineStyle: SmartAnnotationLineStyle
+    /// Text-only scale. The inline text editor can be resized after the click;
+    /// that resize must survive into the rendered pixels and Undo snapshots.
+    var textScale: CGFloat
 
     init(
         lineWidth: CGFloat = 3,
         opacity: CGFloat = 1,
         color: SmartAnnotationColor = .red,
         fillEnabled: Bool = false,
-        lineStyle: SmartAnnotationLineStyle = .solid
+        lineStyle: SmartAnnotationLineStyle = .solid,
+        textScale: CGFloat = 1
     ) {
         self.lineWidth = min(48, max(1, lineWidth))
         self.opacity = min(1, max(0.05, opacity))
         self.color = color
         self.fillEnabled = fillEnabled
         self.lineStyle = lineStyle
+        self.textScale = min(4, max(0.25, textScale))
     }
 
     static func `default`(for tool: SmartAnnotationTool) -> Self {
@@ -6542,11 +6547,14 @@ final class SmartAnnotationModel: ObservableObject {
         }
     }
 
-    func append(_ annotation: SmartAnnotation) {
+    func append(
+        _ annotation: SmartAnnotation,
+        style: SmartAnnotationStyle? = nil
+    ) {
         commitActiveMutation()
         recordUndoPoint()
         annotations.append(annotation)
-        annotationStyles.append(currentStyle)
+        annotationStyles.append(style ?? currentStyle)
         if case .counter = annotation { nextCounter += 1 }
         selectedIndex = annotations.indices.last
         currentStyle = annotationStyles.last ?? currentStyle
@@ -7078,6 +7086,12 @@ struct SmartAnnotationEditor: View {
     @State private var pendingText = ""
     @State private var textPoint = CGPoint.zero
     @State private var pendingTextTool: SmartAnnotationTool = .text
+    /// Multiplier relative to the style's current text size. The bottom-right
+    /// handle changes this while typing; commit stores the resulting style with
+    /// the annotation so preview, export and Undo agree.
+    @State private var textEntryScale: CGFloat = 1
+    @State private var textEntryDragStartScale: CGFloat?
+    @State private var textEntryDragStartSize: CGSize?
     @State private var editingIndex: Int?
     @State private var editingStart: CGPoint?
     @State private var editingOriginal: SmartAnnotation?
@@ -7553,21 +7567,96 @@ struct SmartAnnotationEditor: View {
 
     nonisolated static func inlineTextFieldSize(
         for text: String,
-        style: SmartAnnotationStyle
+        style: SmartAnnotationStyle,
+        tool: SmartAnnotationTool = .text,
+        imageWidth: CGFloat? = nil,
+        displayWidth: CGFloat? = nil
     ) -> CGSize {
-        let font = NSFont.boldSystemFont(ofSize: inlineTextFontSize(for: style))
+        let fontSize = inlineTextFontSize(
+            for: style,
+            tool: tool,
+            imageWidth: imageWidth,
+            displayWidth: displayWidth
+        )
+        let font = NSFont.systemFont(
+            ofSize: fontSize,
+            weight: tool == .watermark ? .medium : .bold
+        )
         let measured = (text as NSString).size(withAttributes: [.font: font])
         let height = max(measured.height, font.ascender - font.descender + font.leading)
+        guard !text.isEmpty else {
+            return CGSize(
+                // An empty field still needs a reliable first-click target.
+                width: max(40, ceil(measured.width) + 12),
+                height: max(28, ceil(height) + 6)
+            )
+        }
         return CGSize(
-            // Keep an empty field large enough to receive the first click;
-            // once text is entered it grows with the measured content.
-            width: max(40, ceil(measured.width) + 12),
-            height: max(28, ceil(height) + 6)
+            // Once text exists the editor is exactly the glyph bounds. The
+            // old fixed 28 pt floor made the input capsule visibly larger
+            // than the text that replaced it.
+            width: max(2, ceil(measured.width) + 2),
+            height: max(10, ceil(height))
         )
     }
 
-    nonisolated private static func inlineTextFontSize(for style: SmartAnnotationStyle) -> CGFloat {
-        18 * max(0.75, min(1.5, style.lineWidth / 3))
+    /// The field and the canvas must use the same point size the renderer will
+    /// use for the final image. The renderer scales its base font with the
+    /// screenshot width (`max(18, width/35)`); the inline editor lives in the
+    /// fitted display, so that size has to be scaled back down by the same
+    /// factor.
+    nonisolated static func inlineTextFontSize(
+        for style: SmartAnnotationStyle,
+        tool: SmartAnnotationTool = .text,
+        imageWidth: CGFloat? = nil,
+        displayWidth: CGFloat? = nil
+    ) -> CGFloat {
+        let sizeScale = max(0.75, min(1.5, style.lineWidth / 3))
+        let base: CGFloat = tool == .watermark ? 16 : 18
+        let widthDivisor: CGFloat = tool == .watermark ? 42 : 35
+        let renderFontSize = max(base, (imageWidth ?? 0) / widthDivisor)
+            * sizeScale
+            * style.textScale
+        guard let imageWidth, imageWidth > 0, let displayWidth else {
+            return renderFontSize
+        }
+        return renderFontSize * displayWidth / imageWidth
+    }
+
+    /// Top-leading in both spaces: the click point is where the first glyph
+    /// starts while typing and where the committed glyphs are painted.
+    nonisolated static func inlineTextFieldFrame(
+        anchor: CGPoint,
+        size: CGSize
+    ) -> CGRect {
+        CGRect(origin: anchor, size: size)
+    }
+
+    /// A bottom-right handle scales the text instead of merely stretching the
+    /// white input capsule: the committed glyph box must stay identical.
+    nonisolated static func inlineTextScale(
+        startingScale: CGFloat,
+        fieldSize: CGSize,
+        translation: CGSize
+    ) -> CGFloat {
+        let initialDistance = hypot(
+            max(1, fieldSize.width),
+            max(1, fieldSize.height)
+        )
+        let nextDistance = hypot(
+            max(1, fieldSize.width + translation.width),
+            max(1, fieldSize.height + translation.height)
+        )
+        return min(4, max(0.25, startingScale * nextDistance / initialDistance))
+    }
+
+    nonisolated static func inlineTextEntryStyle(
+        from style: SmartAnnotationStyle,
+        scale: CGFloat
+    ) -> SmartAnnotationStyle {
+        var result = style
+        result.textScale = min(4, max(0.25, style.textScale * scale))
+        return result
     }
 
     private func annotationCanvas(in availableSize: CGSize) -> some View {
@@ -7985,71 +8074,178 @@ struct SmartAnnotationEditor: View {
     private func inlineTextEditorCapsule(in fitted: CGRect) -> some View {
         if showingTextEntry {
             let anchor = denormalized(textPoint, in: fitted)
-            let fieldSize = Self.inlineTextFieldSize(for: pendingText, style: model.currentStyle)
             let isWatermark = Self.textEntryUsesDarkCapsule(for: pendingTextTool)
+            let entryStyle = Self.inlineTextEntryStyle(
+                from: model.currentStyle,
+                scale: textEntryScale
+            )
+            let fieldSize = Self.inlineTextFieldSize(
+                for: pendingText,
+                style: entryStyle,
+                tool: pendingTextTool,
+                imageWidth: CGFloat(image.width),
+                displayWidth: fitted.width
+            )
+            let fieldFrame = Self.inlineTextFieldFrame(
+                anchor: anchor,
+                size: fieldSize
+            )
+            let fontSize = Self.inlineTextFontSize(
+                for: entryStyle,
+                tool: pendingTextTool,
+                imageWidth: CGFloat(image.width),
+                displayWidth: fitted.width
+            )
             let placeholder = AppText.value(
                 isWatermark ? "scAnnotationWatermarkTitle" : "scText",
                 language: language
             )
             let fieldFill = isWatermark ? Color.black.opacity(0.72) : Color.white
             let fieldInk = isWatermark ? Color.white : Color.black
-            TextField(
-                "",
-                text: $pendingText,
-                prompt: Text(placeholder).foregroundColor(fieldInk.opacity(0.55))
-            )
-                .textFieldStyle(.plain)
-                .font(.system(size: Self.inlineTextFontSize(for: model.currentStyle), weight: .bold))
-                .foregroundStyle(fieldInk)
-                .tint(fieldInk)
-                .environment(\.colorScheme, isWatermark ? .dark : .light)
-                .frame(width: fieldSize.width, height: fieldSize.height, alignment: .leading)
-                .background(
-                    fieldFill,
-                    in: RoundedRectangle(cornerRadius: fieldSize.height * 0.4, style: .continuous)
+            ZStack(alignment: .topLeading) {
+                TextField(
+                    "",
+                    text: $pendingText,
+                    prompt: Text(placeholder).foregroundColor(fieldInk.opacity(0.55))
                 )
-                .overlay {
-                    RoundedRectangle(cornerRadius: fieldSize.height * 0.4, style: .continuous)
+                    .textFieldStyle(.plain)
+                    .font(
+                        .system(
+                            size: fontSize,
+                            weight: isWatermark ? .medium : .bold
+                        )
+                    )
+                    .foregroundStyle(fieldInk)
+                    .tint(fieldInk)
+                    .environment(\.colorScheme, isWatermark ? .dark : .light)
+                    .frame(
+                        width: fieldSize.width,
+                        height: fieldSize.height,
+                        alignment: .topLeading
+                    )
+                    .background(
+                        fieldFill,
+                        in: RoundedRectangle(
+                            cornerRadius: max(3, min(8, fieldSize.height * 0.28)),
+                            style: .continuous
+                        )
+                    )
+                    .overlay {
+                        RoundedRectangle(
+                            cornerRadius: max(3, min(8, fieldSize.height * 0.28)),
+                            style: .continuous
+                        )
                         .stroke(
                             isWatermark ? Color.white.opacity(0.35) : Color.black.opacity(0.10),
                             lineWidth: 1
                         )
-                }
-                .shadow(color: Color.black.opacity(0.28), radius: 3, y: 1)
-                .offset(x: anchor.x, y: anchor.y - fieldSize.height)
-                .focused($inlineTextFocused)
-                .accessibilityLabel(
-                    AppText.value(isWatermark ? "scAnnotationWatermark" : "scAnnotationText", language: language)
-                )
-                .onSubmit(commitInlineText)
-                .onExitCommand { cancelInlineText() }
-                .onAppear {
-                    pendingText = ""
-                    DispatchQueue.main.async {
-                        guard showingTextEntry else { return }
-                        inlineTextFocused = true
                     }
+                    .shadow(color: Color.black.opacity(0.28), radius: 3, y: 1)
+                    .offset(x: fieldFrame.minX, y: fieldFrame.minY)
+                    .focused($inlineTextFocused)
+                    .accessibilityLabel(
+                        AppText.value(isWatermark ? "scAnnotationWatermark" : "scAnnotationText", language: language)
+                    )
+                    .onSubmit(commitInlineText)
+                    .onExitCommand { cancelInlineText() }
+                    .onAppear {
+                        pendingText = ""
+                        textEntryScale = 1
+                        textEntryDragStartScale = nil
+                        textEntryDragStartSize = nil
+                        DispatchQueue.main.async {
+                            guard showingTextEntry else { return }
+                            inlineTextFocused = true
+                        }
+                    }
+
+                if !pendingText.isEmpty {
+                    inlineTextResizeHandle(fieldFrame: fieldFrame, fieldSize: fieldSize)
                 }
+            }
         }
+    }
+
+    private func inlineTextResizeHandle(
+        fieldFrame: CGRect,
+        fieldSize: CGSize
+    ) -> some View {
+        let side: CGFloat = 11
+        return RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(Color.white.opacity(0.96))
+            .frame(width: side, height: side)
+            .overlay {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .stroke(Color.black.opacity(0.45), lineWidth: 1)
+            }
+            .overlay {
+                Image(systemName: "arrow.down.right")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.72))
+            }
+            .shadow(color: Color.black.opacity(0.25), radius: 2, y: 1)
+            .offset(
+                x: max(0, fieldFrame.maxX - side + 1),
+                y: max(0, fieldFrame.maxY - side + 1)
+            )
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if textEntryDragStartScale == nil {
+                            textEntryDragStartScale = textEntryScale
+                            textEntryDragStartSize = fieldSize
+                        }
+                        guard let startScale = textEntryDragStartScale,
+                              let startSize = textEntryDragStartSize else { return }
+                        textEntryScale = Self.inlineTextScale(
+                            startingScale: startScale,
+                            fieldSize: startSize,
+                            translation: value.translation
+                        )
+                    }
+                    .onEnded { _ in
+                        textEntryDragStartScale = nil
+                        textEntryDragStartSize = nil
+                    }
+            )
+            .help(AppText.value("scToolSize", language: language))
+            .accessibilityLabel(AppText.value("scToolSize", language: language))
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.crosshair.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+            }
     }
 
     private func commitInlineText() {
         guard showingTextEntry else { return }
         if !pendingText.isEmpty {
+            let style = Self.inlineTextEntryStyle(
+                from: model.currentStyle,
+                scale: textEntryScale
+            )
             let annotation: SmartAnnotation = pendingTextTool == .watermark
                 ? .watermark(pendingText, textPoint)
                 : .text(pendingText, textPoint)
-            model.append(annotation)
+            model.append(annotation, style: style)
         }
         pendingText = ""
         inlineTextFocused = false
         showingTextEntry = false
+        textEntryScale = 1
+        textEntryDragStartScale = nil
+        textEntryDragStartSize = nil
     }
 
     private func cancelInlineText() {
         pendingText = ""
         inlineTextFocused = false
         showingTextEntry = false
+        textEntryScale = 1
+        textEntryDragStartScale = nil
+        textEntryDragStartSize = nil
     }
 
     private func normalized(_ point: CGPoint, in rect: CGRect) -> CGPoint {
@@ -8286,11 +8482,18 @@ struct SmartAnnotationEditor: View {
                 text,
                 at: denormalized(point, in: rect),
                 style: style,
+                in: rect,
                 context: &context
             )
         case .watermark(let text, let point):
+            let fontSize = Self.inlineTextFontSize(
+                for: style,
+                tool: .watermark,
+                imageWidth: CGFloat(image.width),
+                displayWidth: rect.width
+            )
             context.draw(
-                Text(text).font(.system(size: 16 * max(0.75, min(1.5, style.lineWidth / 3)), weight: .medium))
+                Text(text).font(.system(size: fontSize, weight: .medium))
                     .foregroundColor(style.color.swiftUIColor.opacity(style.opacity)),
                 at: denormalized(point, in: rect),
                 anchor: .topLeading
@@ -8311,9 +8514,15 @@ struct SmartAnnotationEditor: View {
         _ text: String,
         at point: CGPoint,
         style: SmartAnnotationStyle,
+        in rect: CGRect,
         context: inout GraphicsContext
     ) {
-        let fontSize = 18 * max(0.75, min(1.5, style.lineWidth / 3))
+        let fontSize = Self.inlineTextFontSize(
+            for: style,
+            tool: .text,
+            imageWidth: CGFloat(image.width),
+            displayWidth: rect.width
+        )
         context.draw(
             Text(text).font(.system(size: fontSize, weight: .bold))
                 .foregroundColor(style.color.swiftUIColor.opacity(style.opacity)),
@@ -8815,7 +9024,7 @@ enum SmartAnnotationRenderer {
         NSGraphicsContext.current = graphics
         let sizeScale = max(0.75, min(1.5, style.lineWidth / 3))
         let baseFontSize = counter ? max(12, width / 70) : (watermark ? max(16, width / 42) : max(18, width / 35))
-        let fontSize = baseFontSize * sizeScale
+        let fontSize = baseFontSize * sizeScale * style.textScale
         let attributes: [NSAttributedString.Key: Any] = [
             .font: counter
                 ? NSFont.boldSystemFont(ofSize: fontSize)

@@ -188,3 +188,13 @@
 ## 2026-11-20：看图空白和设置、Dock 一起弹出（待 Finder 实机验收）
 
 设置首次打开后一直允许隐式显示，画布也没直接收到解码帧变化 → 关闭设置即收回窗口显示许可，只有实际设置窗口驱动 Dock；画布随解码帧和变换重绘 → `MainWindowOpenerTests.closingSettingsRevokesPermissionForTheNextAutomaticPresentation`、`ImageViewerWindowTests.decodedPhotoAndRotationInvalidateTheNativeCanvas`。
+
+## 2026-11-25：截图标注工具栏悬停名称、拖动与文字输入框（待实机验收）
+
+| 现象 / 根因 | 修复与不变量 | 回归入口 |
+|---|---|---|
+| 截图选区工具栏只有图标；AppKit 原生 `toolTip` 依赖系统提示计时器，非激活的选区面板不保证弹出，用户无法确认每个图标做什么 | 工具/动作 chip 与拖动 grip 增加自己的 hover tracking area，由工具栏在选区窗口内绘制标题气泡（无需系统 tooltip 计时器）；`toolTip` 与 accessibility label 仍保留 | `SnapzyCaptureTests.hoveringAToolbarChipNamesItWithoutTheSystemTooltipTimer` |
+| 工具栏左侧的「拖动工具栏」只是一张 `NSImageView`，没有任何拖动实现；工具栏落到选区内部时无法移开，挡住要标注的区域 | 新增专用拖动 grip：`mouseDown/Dragged` 按窗口坐标增量移动工具卡；`AreaSelectionOverlayView` 把用户偏移保存为相对自动锚点的 `actionBarDragOffset`，并在每次 `layout()`/属性行伸缩后重新套用、限制在屏幕内，避免拖动后自动弹回 | `SnapzyCaptureTests.toolbarDragHandleMovesTheDeckAndRelayoutKeepsTheUsersPlacement` |
+| 文字输入框画在点击点上方（`anchor.y - fieldHeight`），提交后的字形从点击点向下画，输入态与最终位置上下差一整行；空框固定 28pt 高，输入后又按 12/6pt padding 放大，和字形范围不一致；文字不能缩放 | 输入框改为与最终字形相同的 top-leading 锚点；非空时宽高按真实字体度量（无 28pt 地板），字体按截图宽度/显示缩放和 `SmartAnnotationRenderer` 使用同一公式；右下角新增缩放把手，拖动时按比例改 `textScale`，提交的样式随标注进入 Undo/Redo，导出的字号同步变化 | `SnapzyCaptureTests.textEntryFieldUsesTheExactGlyphBoundsAfterTyping`、`typedTextAndFinalGlyphsShareTheSameTopLeadingAnchor`、`inlineTextFontMatchesTheRenderedImageAtAnyDisplayScale`、`draggingTheTextFieldHandleScalesTheTextWithItsBox`；`AnnotationInteractionParityTests.aResizedTextEntryKeepsItsScaleThroughUndoAndRedo` |
+
+状态：自动化测试通过；非激活面板上的悬停气泡、真实鼠标拖动、文字输入/缩放与导出像素一致性仍需实机验收。

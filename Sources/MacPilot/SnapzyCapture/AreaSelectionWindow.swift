@@ -399,6 +399,10 @@ final class AreaSelectionOverlayView: NSView {
   private var selectionActionBar: AreaSelectionActionBar?
   private var selectionActionRail: AreaSelectionActionBar?
   private var recordingSelectionActionBar: NSView?
+  /// User drag from the tool deck's grip, stored relative to the automatic
+  /// placement so layout changes (the options row expanding, model updates)
+  /// cannot snap the deck back over the screenshot.
+  private var actionBarDragOffset = CGSize.zero
 
   private enum SelectionHandle: CaseIterable {
     case topLeft
@@ -879,6 +883,7 @@ final class AreaSelectionOverlayView: NSView {
     finalizedSelectionDrag = nil
     finalizedSelectionRect = convertToLocalRect(screenRect).intersection(bounds)
     finalizedPixelSize = pixelSize
+    actionBarDragOffset = .zero
     pendingSelectionStartPoint = nil
     hideMagnifier()
     hideSizeIndicator()
@@ -891,6 +896,9 @@ final class AreaSelectionOverlayView: NSView {
       let actionBar = AreaSelectionActionBar(mode: .tools, onAction: actionHandler)
       actionBar.layoutDidChange = { [weak self] in
         self?.positionSelectionActionBars()
+      }
+      actionBar.onMoveToolbar = { [weak self] delta in
+        self?.moveSelectionActionBar(by: delta)
       }
       actionBar.layer?.zPosition = 100
       selectionActionBar = actionBar
@@ -1141,6 +1149,7 @@ final class AreaSelectionOverlayView: NSView {
     selectionActionBar = nil
     selectionActionRail = nil
     recordingSelectionActionBar = nil
+    actionBarDragOffset = .zero
   }
 
   private func removeEmbeddedAnnotationEditor() {
@@ -1280,7 +1289,7 @@ final class AreaSelectionOverlayView: NSView {
       railFrame = nil
     }
     if let bar = selectionActionBar {
-      bar.frame = if let railFrame {
+      let baseFrame = if let railFrame {
         AreaSelectionBarLayout.resolve(
           selectionRect: rect,
           barSize: bar.intrinsicContentSize,
@@ -1294,7 +1303,53 @@ final class AreaSelectionOverlayView: NSView {
           bounds: bounds.size
         )
       }
+      bar.frame = constrainedActionBarFrame(
+        baseFrame.offsetBy(dx: actionBarDragOffset.width, dy: actionBarDragOffset.height)
+      )
     }
+  }
+
+  /// The grip moves the deck freely inside the overlay. Offsets are stored
+  /// against the automatic anchor, not the live frame, so a later layout pass
+  /// keeps the user's placement instead of undoing the drag.
+  private func moveSelectionActionBar(by delta: CGSize) {
+    guard let rect = finalizedSelectionRect, let bar = selectionActionBar else { return }
+    let railFrame = selectionActionRail?.frame
+    let baseFrame = if let railFrame {
+      AreaSelectionBarLayout.resolve(
+        selectionRect: rect,
+        barSize: bar.intrinsicContentSize,
+        bounds: bounds.size,
+        avoiding: railFrame
+      )
+    } else {
+      AreaSelectionBarLayout.resolve(
+        selectionRect: rect,
+        barSize: bar.intrinsicContentSize,
+        bounds: bounds.size
+      )
+    }
+    let proposed = bar.frame.offsetBy(dx: delta.width, dy: delta.height)
+    let constrained = constrainedActionBarFrame(proposed)
+    bar.frame = constrained
+    actionBarDragOffset = CGSize(
+      width: constrained.minX - baseFrame.minX,
+      height: constrained.minY - baseFrame.minY
+    )
+  }
+
+  private func constrainedActionBarFrame(_ frame: CGRect) -> CGRect {
+    let margin = AreaSelectionBarLayout.edgeMargin
+    var result = frame
+    result.origin.x = min(
+      max(margin, result.origin.x),
+      max(margin, bounds.width - result.width - margin)
+    )
+    result.origin.y = min(
+      max(margin, result.origin.y),
+      max(margin, bounds.height - result.height - margin)
+    )
+    return result
   }
 
   func activatePendingSelectionIfNeeded() {

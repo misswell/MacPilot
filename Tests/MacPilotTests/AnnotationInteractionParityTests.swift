@@ -377,6 +377,21 @@ struct AnnotationInteractionParityTests {
         #expect(model.annotations.count == 3)
     }
 
+    @Test func aResizedTextEntryKeepsItsScaleThroughUndoAndRedo() {
+        let model = SmartAnnotationModel(initialTool: .text)
+        let grew = SmartAnnotationEditor.inlineTextEntryStyle(
+            from: model.currentStyle,
+            scale: 1.8
+        )
+        model.append(.text("Hello", CGPoint(x: 0.2, y: 0.2)), style: grew)
+        #expect(abs(model.style(at: 0).textScale - 1.8) < 0.0001)
+
+        model.undo()
+        #expect(model.annotations.isEmpty)
+        model.redo()
+        #expect(abs(model.style(at: 0).textScale - 1.8) < 0.0001)
+    }
+
     @Test func opacityAndLineStyleChangesAreUndoable() {
         let model = SmartAnnotationModel(initialTool: .rectangle)
         model.append(.rectangle(CGRect(x: 0.1, y: 0.1, width: 0.3, height: 0.3)))

@@ -747,6 +747,122 @@ struct SnapzyCaptureTests {
         #expect(!deck.frame.intersects(rail.frame), "the deck and the column must not overlap")
     }
 
+    @Test @MainActor func hoveringAToolbarChipNamesItWithoutTheSystemTooltipTimer() throws {
+        _ = NSApplication.shared
+        let bar = AreaSelectionActionBar { _ in }
+        let container = NSView(frame: CGRect(x: 0, y: 0, width: 900, height: 160))
+        container.addSubview(bar)
+        bar.frame = CGRect(origin: CGPoint(x: 20, y: 40), size: bar.intrinsicContentSize)
+        bar.layoutSubtreeIfNeeded()
+
+        let title = AppText.value("scAnnotationText", language: .system)
+        let chip = try #require(bar.chipButtons.first { $0.toolTip == title })
+        let enter = try #require(
+            NSEvent.enterExitEvent(
+                with: .mouseEntered,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 0,
+                trackingNumber: 0,
+                userData: nil
+            )
+        )
+        chip.mouseEntered(with: enter)
+        #expect(bar.visibleHoverTitle == title)
+
+        let exit = try #require(
+            NSEvent.enterExitEvent(
+                with: .mouseExited,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 0,
+                trackingNumber: 0,
+                userData: nil
+            )
+        )
+        chip.mouseExited(with: exit)
+        #expect(bar.visibleHoverTitle == nil)
+    }
+
+    @Test @MainActor func toolbarDragHandleMovesTheDeckAndRelayoutKeepsTheUsersPlacement() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { return }
+
+        let window = AreaSelectionWindow(screen: screen, pooled: true)
+        defer { window.close() }
+        let selection = CGRect(
+            x: screen.frame.minX + 160,
+            y: screen.frame.minY + 200,
+            width: 320,
+            height: 220
+        )
+        window.overlayView.showSelectionResult(
+            screenRect: selection,
+            showsActions: true,
+            actionHandler: { _ in }
+        )
+
+        let deck = try #require(
+            window.overlayView.subviews.compactMap { $0 as? AreaSelectionActionBar }
+                .first {
+                    $0.chipButtons.contains {
+                        $0.toolTip == AppText.value("scAnnotationRectangle", language: .system)
+                    }
+                }
+        )
+        let dragTitle = AppText.value("scToolDragBar", language: .system)
+        func allSubviews(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(allSubviews)
+        }
+        let handle = try #require(
+            allSubviews(deck).first { $0.toolTip == dragTitle }
+        )
+        let original = deck.frame
+        let topLeft = handle.convert(handle.bounds, to: window.contentView).origin
+        func event(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
+            try #require(
+                NSEvent.mouseEvent(
+                    with: type,
+                    location: point,
+                    modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber,
+                    context: nil,
+                    eventNumber: 0,
+                    clickCount: 1,
+                    pressure: type == .leftMouseUp ? 0 : 1
+                )
+            )
+        }
+        handle.mouseDown(with: try event(.leftMouseDown, at: topLeft))
+        handle.mouseDragged(
+            with: try event(
+                .leftMouseDragged,
+                at: NSPoint(x: topLeft.x + 34, y: topLeft.y + 22)
+            )
+        )
+        handle.mouseUp(
+            with: try event(
+                .leftMouseUp,
+                at: NSPoint(x: topLeft.x + 34, y: topLeft.y + 22)
+            )
+        )
+
+        #expect(deck.frame.origin != original.origin)
+        #expect(abs(deck.frame.minX - original.minX - 34) < 0.5)
+        #expect(abs(deck.frame.minY - original.minY - 22) < 0.5)
+
+        let moved = deck.frame.origin
+        window.overlayView.layout()
+        #expect(deck.frame.origin == moved, "a later layout pass must not snap the deck back")
+    }
+
     @Test @MainActor func annotationEditorToolbarIsMountedOutsideTheSelectedFrame() throws {
         _ = NSApplication.shared
         guard let screen = NSScreen.main else { return }
@@ -1479,6 +1595,65 @@ struct SnapzyCaptureTests {
         )
         #expect(size.width >= 40)
         #expect(size.height >= 28)
+    }
+
+    @Test func textEntryFieldUsesTheExactGlyphBoundsAfterTyping() {
+        let style = SmartAnnotationStyle.default(for: .text)
+        let size = SmartAnnotationEditor.inlineTextFieldSize(
+            for: "Test",
+            style: style
+        )
+        let font = NSFont.boldSystemFont(ofSize: SmartAnnotationEditor.inlineTextFontSize(for: style))
+        let measured = ("Test" as NSString).size(withAttributes: [.font: font])
+        let lineHeight = max(measured.height, font.ascender - font.descender + font.leading)
+        #expect(size.width == max(2, ceil(measured.width) + 2))
+        #expect(size.height == max(10, ceil(lineHeight)))
+        #expect(size.height < 28, "the typed box no longer keeps the empty-field floor")
+    }
+
+    @Test func typedTextAndFinalGlyphsShareTheSameTopLeadingAnchor() {
+        let anchor = CGPoint(x: 0.3, y: 0.4)
+        let size = SmartAnnotationEditor.inlineTextFieldSize(
+            for: "Hello",
+            style: .default(for: .text)
+        )
+        let frame = SmartAnnotationEditor.inlineTextFieldFrame(
+            anchor: anchor,
+            size: size
+        )
+        #expect(frame.origin == anchor)
+        #expect(frame.maxY == anchor.y + size.height)
+    }
+
+    @Test func inlineTextFontMatchesTheRenderedImageAtAnyDisplayScale() {
+        let style = SmartAnnotationStyle.default(for: .text)
+        let imageWidth: CGFloat = 2_560
+        let displayWidth: CGFloat = 800
+        let font = SmartAnnotationEditor.inlineTextFontSize(
+            for: style,
+            imageWidth: imageWidth,
+            displayWidth: displayWidth
+        )
+        let expected = max(18, imageWidth / 35)
+            * max(0.75, min(1.5, style.lineWidth / 3))
+            * displayWidth / imageWidth
+        #expect(abs(font - expected) < 0.001)
+    }
+
+    @Test func draggingTheTextFieldHandleScalesTheTextWithItsBox() {
+        let size = CGSize(width: 60, height: 24)
+        let enlarged = SmartAnnotationEditor.inlineTextScale(
+            startingScale: 1,
+            fieldSize: size,
+            translation: CGSize(width: 60, height: 24)
+        )
+        let reduced = SmartAnnotationEditor.inlineTextScale(
+            startingScale: 1,
+            fieldSize: size,
+            translation: CGSize(width: -30, height: -12)
+        )
+        #expect(enlarged > 1.5)
+        #expect(reduced < 0.8)
     }
 
     @Test @MainActor func undoRedoControlsTrackTheHistoryStacksNotTheAnnotationCount() throws {

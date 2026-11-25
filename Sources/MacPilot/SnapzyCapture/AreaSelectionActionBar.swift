@@ -32,6 +32,113 @@
 import AppKit
 import Combine
 
+/// An NSButton cannot show a native tooltip reliably while it lives in the
+/// non-activating screenshot overlay: the overlay never becomes the active app,
+/// so AppKit's tooltip timer is not guaranteed to fire. This chip reports its
+/// own hover state and lets the bar draw the same title immediately, in the
+/// overlay's own window.
+@MainActor
+private final class AreaSelectionHoverChipButton: NSButton {
+  var onHoverTitleChange: ((String?) -> Void)?
+  private var hoverTrackingArea: NSTrackingArea?
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let hoverTrackingArea {
+      removeTrackingArea(hoverTrackingArea)
+    }
+    let area = NSTrackingArea(
+      rect: bounds,
+      options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+      owner: self,
+      userInfo: nil
+    )
+    addTrackingArea(area)
+    hoverTrackingArea = area
+  }
+
+  override func mouseEntered(with event: NSEvent) {
+    super.mouseEntered(with: event)
+    onHoverTitleChange?(toolTip)
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    super.mouseExited(with: event)
+    onHoverTitleChange?(nil)
+  }
+
+  override func acceptsFirstMouse(for _: NSEvent?) -> Bool {
+    true
+  }
+}
+
+/// The horizontal grip at the leading edge of the tool deck. Screenshot
+/// overlays are non-activating, so this must handle drags itself instead of
+/// relying on `NSWindow.isMovableByWindowBackground` (the window is locked to
+/// the display and must stay that way).
+@MainActor
+private final class AreaSelectionToolbarDragHandle: NSImageView {
+  var onDragDelta: ((CGSize) -> Void)?
+  var onHoverTitleChange: ((String?) -> Void)?
+  private var lastDragWindowPoint: NSPoint?
+  private var hoverTrackingArea: NSTrackingArea?
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let hoverTrackingArea {
+      removeTrackingArea(hoverTrackingArea)
+    }
+    let area = NSTrackingArea(
+      rect: bounds,
+      options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+      owner: self,
+      userInfo: nil
+    )
+    addTrackingArea(area)
+    hoverTrackingArea = area
+  }
+
+  override func resetCursorRects() {
+    super.resetCursorRects()
+    addCursorRect(bounds, cursor: .openHand)
+  }
+
+  override func acceptsFirstMouse(for _: NSEvent?) -> Bool {
+    true
+  }
+
+  override func mouseDown(with event: NSEvent) {
+    lastDragWindowPoint = event.locationInWindow
+    onHoverTitleChange?(nil)
+    NSCursor.closedHand.set()
+  }
+
+  override func mouseDragged(with event: NSEvent) {
+    guard let previous = lastDragWindowPoint else { return }
+    let current = event.locationInWindow
+    lastDragWindowPoint = current
+    onDragDelta?(
+      CGSize(width: current.x - previous.x, height: current.y - previous.y)
+    )
+  }
+
+  override func mouseUp(with event: NSEvent) {
+    lastDragWindowPoint = nil
+    NSCursor.openHand.set()
+    onHoverTitleChange?(toolTip)
+  }
+
+  override func mouseEntered(with event: NSEvent) {
+    super.mouseEntered(with: event)
+    onHoverTitleChange?(toolTip)
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    super.mouseExited(with: event)
+    onHoverTitleChange?(nil)
+  }
+}
+
 @MainActor
 final class AreaSelectionActionBar: NSView {
   /// One AppKit card renders in two roles: the horizontal tool deck below the
@@ -57,6 +164,10 @@ final class AreaSelectionActionBar: NSView {
   /// Invoked when the bar's size changes (options row appears/disappears) so
   /// the overlay can re-anchor the bars around the selected frame.
   var layoutDidChange: (() -> Void)?
+  /// Invoked on the drag grip with a window-coordinate delta. The host owns the
+  /// placement offset so expanding/collapsing the properties row cannot snap
+  /// a user-moved deck back to its original anchor.
+  var onMoveToolbar: ((CGSize) -> Void)?
 
   private let mode: Mode
   private let onAction: (AreaSelectionAction) -> Void
@@ -92,6 +203,9 @@ final class AreaSelectionActionBar: NSView {
   /// can assert they come out of `CaptureChromeStyle` rather than ad-hoc
   /// numbers.
   var chipButtons: [NSButton] = []
+  private var hoverBubble: NSView?
+  private var hoverBubbleLabel: NSTextField?
+  private(set) var visibleHoverTitle: String?
   private var toolDisplayButtons: [SmartAnnotationTool: NSButton] = [:]
   private var toolTagMap: [Int: SmartAnnotationTool] = [:]
   /// The tool the options row was last built for. Selecting an existing
@@ -202,6 +316,18 @@ final class AreaSelectionActionBar: NSView {
     resolveChromeColors()
   }
 
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    if window == nil {
+      removeHoverBubble()
+    }
+  }
+
+  override func removeFromSuperview() {
+    removeHoverBubble()
+    super.removeFromSuperview()
+  }
+
   private func resolveChromeColors() {
     // Semantic colours only flatten to concrete RGB when they are resolved, so
     // resolve them inside this view's appearance rather than the process one.
@@ -288,15 +414,24 @@ final class AreaSelectionActionBar: NSView {
     row.spacing = CaptureChromeStyle.barItemSpacing
     row.detachesHiddenViews = true
 
-    let grip = NSImageView(
-      image: NSImage(
-        systemSymbolName: "line.3.horizontal",
-        accessibilityDescription: AppText.value("scToolDragBar", language: .system)
-      ) ?? NSImage()
-    )
+    let dragTitle = AppText.value("scToolDragBar", language: .system)
+    let grip = AreaSelectionToolbarDragHandle(frame: .zero)
+    grip.image = NSImage(
+      systemSymbolName: "line.3.horizontal",
+      accessibilityDescription: dragTitle
+    ) ?? NSImage()
     grip.contentTintColor = CaptureChromeStyle.glyphFaint
     grip.imageScaling = .scaleProportionallyDown
-    grip.toolTip = AppText.value("scToolDragBar", language: .system)
+    grip.toolTip = dragTitle
+    grip.setAccessibilityLabel(dragTitle)
+    grip.onDragDelta = { [weak self] delta in
+      self?.hideHoverTitle()
+      self?.onMoveToolbar?(delta)
+    }
+    grip.onHoverTitleChange = { [weak self, weak grip] title in
+      guard let self, let grip else { return }
+      self.updateHoverTitle(title, over: grip)
+    }
     grip.translatesAutoresizingMaskIntoConstraints = false
     row.addArrangedSubview(grip)
     grip.widthAnchor.constraint(equalToConstant: 14).isActive = true
@@ -555,7 +690,14 @@ final class AreaSelectionActionBar: NSView {
     action: Selector,
     tooltipKey: String
   ) -> NSButton {
-    let button = NSButton(image: image, target: self, action: action)
+    let button = AreaSelectionHoverChipButton(frame: .zero)
+    button.image = image
+    button.target = self
+    button.action = action
+    button.onHoverTitleChange = { [weak self, weak button] title in
+      guard let self, let button else { return }
+      self.updateHoverTitle(title, over: button)
+    }
     configureChip(button, tooltipKey: tooltipKey)
     return button
   }
@@ -575,6 +717,91 @@ final class AreaSelectionActionBar: NSView {
     button.heightAnchor.constraint(equalToConstant: CaptureChromeStyle.chipSide).isActive = true
     chipButtons.append(button)
     refreshChips()
+  }
+
+  // MARK: - Hover Titles
+
+  /// Native `toolTip` is still installed for accessibility and for hosts that
+  /// do activate (the standalone editor). This bubble is the visible path in
+  /// the screenshot overlay, whose panel deliberately never activates the app.
+  private func updateHoverTitle(_ title: String?, over source: NSView) {
+    guard let title, !title.isEmpty, let parent = superview ?? source.superview else {
+      hideHoverTitle()
+      return
+    }
+    visibleHoverTitle = title
+
+    let label = hoverBubbleLabel ?? {
+      let label = NSTextField(labelWithString: "")
+      label.font = .systemFont(ofSize: 11, weight: .medium)
+      label.textColor = .white
+      label.alignment = .center
+      label.lineBreakMode = .byTruncatingTail
+      hoverBubbleLabel = label
+      return label
+    }()
+    label.stringValue = title
+
+    let bubble = hoverBubble ?? {
+      let bubble = NSView(frame: .zero)
+      bubble.wantsLayer = true
+      bubble.layer?.backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 0.94).cgColor
+      bubble.layer?.cornerRadius = 5
+      bubble.layer?.borderWidth = 1
+      bubble.layer?.borderColor = NSColor.white.withAlphaComponent(0.16).cgColor
+      bubble.layer?.zPosition = 1_000
+      bubble.addSubview(label)
+      hoverBubble = bubble
+      return bubble
+    }()
+    if bubble.superview !== parent {
+      bubble.removeFromSuperview()
+      parent.addSubview(bubble)
+    }
+
+    let labelSize = label.intrinsicContentSize
+    let bubbleSize = CGSize(
+      width: ceil(labelSize.width) + 12,
+      height: ceil(labelSize.height) + 5
+    )
+    let sourceFrame = parent.convert(source.bounds, from: source)
+    let parentBounds = parent.bounds
+    var origin = CGPoint(
+      x: sourceFrame.midX - bubbleSize.width / 2,
+      y: sourceFrame.minY - 6 - bubbleSize.height
+    )
+    if origin.y < parentBounds.minY + 4 {
+      origin.y = sourceFrame.maxY + 6
+    }
+    origin.x = min(
+      max(parentBounds.minX + 4, origin.x),
+      max(parentBounds.minX + 4, parentBounds.maxX - bubbleSize.width - 4)
+    )
+    origin.y = min(
+      max(parentBounds.minY + 4, origin.y),
+      max(parentBounds.minY + 4, parentBounds.maxY - bubbleSize.height - 4)
+    )
+    bubble.frame = CGRect(origin: origin, size: bubbleSize)
+    label.frame = CGRect(
+      x: 6,
+      y: 2.5,
+      width: bubbleSize.width - 12,
+      height: bubbleSize.height - 5
+    )
+    bubble.isHidden = false
+    bubble.superview?.addSubview(bubble, positioned: .above, relativeTo: nil)
+  }
+
+  private func hideHoverTitle() {
+    visibleHoverTitle = nil
+    hoverBubble?.isHidden = true
+  }
+
+  private func removeHoverBubble() {
+    visibleHoverTitle = nil
+    hoverBubble?.removeFromSuperview()
+    hoverBubble = nil
+    hoverBubbleLabel = nil
   }
 
   // MARK: - Row Two: Contextual Options
