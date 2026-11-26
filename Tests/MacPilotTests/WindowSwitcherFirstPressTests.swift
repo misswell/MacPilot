@@ -304,9 +304,25 @@ struct WindowSwitcherFirstPressTests {
         #expect(recorder.lines.isEmpty)
     }
 
+    @Test func aHealthyTapStillReportsSecureInputTransitionsWithinTheSameApp() {
+        let host = FakeTapHealthHost()
+        let watchdog = WindowSwitcherTapHealthWatchdog(host: host, log: { _ in })
+
+        host.systemSecureInputActive = true
+        #expect(watchdog.check(reason: "periodic") == .healthy)
+        #expect(host.reportedSecureInputActive)
+
+        host.systemSecureInputActive = false
+        #expect(watchdog.check(reason: "periodic") == .healthy)
+        #expect(!host.reportedSecureInputActive)
+        #expect(host.reenableCount == 0)
+        #expect(host.rebuildCount == 0)
+    }
+
     @Test func aStoppedOrDisabledFeatureIsNeverRepaired() {
         let host = FakeTapHealthHost()
         host.armed = false
+        host.systemSecureInputActive = true
         let watchdog = WindowSwitcherTapHealthWatchdog(
             host: host,
             log: { _ in Issue.record("An unarmed watchdog must not log") }
@@ -315,6 +331,7 @@ struct WindowSwitcherFirstPressTests {
         #expect(watchdog.check(reason: "periodic") == .notArmed)
         #expect(host.reenableCount == 0)
         #expect(host.rebuildCount == 0)
+        #expect(!host.reportedSecureInputActive)
     }
 
     @Test func thePeriodicPassRepairsADeadTapAndStopsWithTheFeature() async throws {
@@ -380,6 +397,38 @@ struct WindowSwitcherFirstPressTests {
         #expect(checks == stoppedChecks)
     }
 
+    @Test func secureInputCancelsAnInterruptedShortcutButPreservesAMouseSession() {
+        var systemSecureInputActive = false
+        let pending = WindowSwitcherPendingSessionLifecycle()
+        let model = WindowSwitcherModel(
+            isTrusted: { false },
+            isSecureInputEnabled: { systemSecureInputActive },
+            pendingSessionLifecycle: pending
+        )
+        model.activateFromConfiguration()
+        defer { model.shutdown() }
+
+        pending.begin(WindowSwitcherPendingSession(reverse: false, manual: false))
+        systemSecureInputActive = true
+        model.refreshSecureInputState()
+        #expect(model.isSecureInputActive)
+        #expect(pending.pending == nil)
+
+        systemSecureInputActive = false
+        model.refreshSecureInputState()
+        #expect(!model.isSecureInputActive)
+        pending.begin(WindowSwitcherPendingSession(reverse: false, manual: true))
+        systemSecureInputActive = true
+        model.refreshSecureInputState()
+        #expect(model.isSecureInputActive)
+        #expect(pending.pending?.manual == true)
+
+        model.shutdown()
+        model.refreshSecureInputState()
+        #expect(!model.isSecureInputActive)
+        #expect(pending.pending == nil)
+    }
+
     // MARK: - Fixtures
 
     private func record(
@@ -438,9 +487,15 @@ private final class FakeTapHealthHost: WindowSwitcherTapHealthHost {
     var reenableCount = 0
     var rebuildCount = 0
     var tapHealthInstallCount = 1
+    var systemSecureInputActive = false
+    private(set) var reportedSecureInputActive = false
 
     var tapHealthIsArmed: Bool { armed }
     var tapHealthHasEventTap: Bool { hasTap }
+
+    func refreshSecureInputState() {
+        reportedSecureInputActive = systemSecureInputActive
+    }
 
     func tapHealthIsTapEnabled() -> Bool { hasTap && tapEnabled }
 

@@ -979,6 +979,7 @@ protocol WindowSwitcherTapHealthHost: AnyObject {
     var tapHealthHasEventTap: Bool { get }
     /// Monotonic count of installed taps; proves a repair never duplicates one.
     var tapHealthInstallCount: Int { get }
+    func refreshSecureInputState()
     func tapHealthIsTapEnabled() -> Bool
     /// Returns whether the tap reports enabled after the in-place re-enable.
     func tapHealthReenableTap() -> Bool
@@ -1050,6 +1051,8 @@ final class WindowSwitcherTapHealthWatchdog {
             reportedMissingTapFailure = false
             return .notArmed
         }
+        // WindowServer can stop delivering keys while the tap stays enabled.
+        host.refreshSecureInputState()
         guard host.tapHealthHasEventTap else {
             let rebuilt = host.tapHealthRebuildTap()
             if rebuilt || !reportedMissingTapFailure {
@@ -1188,11 +1191,8 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     /// never fires, so the page must say that instead of showing a ready
     /// permission badge next to a dead shortcut.
     @Published private(set) var eventTapDenial: EventTapDenial?
-    /// macOS withholds every keyboard event from session taps while Secure
-    /// Event Input is on (password fields, some terminals, some IMEs). The tap
-    /// stays "healthy" and ⌥Tab simply never arrives — the "switcher stopped
-    /// working after switching apps" report. Naming it is the only repair the
-    /// app can offer, because no API lets it override that switch.
+    /// macOS withholds keyboard events from session taps during Secure Event
+    /// Input. The menu and Home page offer mouse switching during that pause.
     @Published private(set) var isSecureInputActive = false
 
     var language: AppLanguage = .system
@@ -1210,7 +1210,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private var inventoryRefreshDebounceTask: Task<Void, Never>?
     private var inventoryRevision = 0
     private var inventorySignature: Int?
-    private let pendingSessionLifecycle = WindowSwitcherPendingSessionLifecycle()
+    private let pendingSessionLifecycle: WindowSwitcherPendingSessionLifecycle
     private var thumbnailTask: Task<Void, Never>?
     private var thumbnailRevision = 0
     private var thumbnailTaskWindowIDs: Set<String> = []
@@ -1236,6 +1236,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private let workspaceObservers = ObserverBag()
     private var focusObservers: [pid_t: AXObserver] = [:]
     private var manualDismissTask: Task<Void, Never>?
+    private var shortcutCommitTask: Task<Void, Never>?
     private var panelIdleTask: Task<Void, Never>?
     private var memoryPressureToken: UUID?
     private var panelController: WindowSwitcherPanelController?
@@ -1262,9 +1263,16 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     var panelIsBuilt: Bool { panelController?.panelIsBuilt ?? false }
 
     private let isTrusted: () -> Bool
+    private let isSecureInputEnabled: () -> Bool
 
-    init(isTrusted: @escaping () -> Bool = { AXIsProcessTrusted() }) {
+    init(
+        isTrusted: @escaping () -> Bool = { AXIsProcessTrusted() },
+        isSecureInputEnabled: @escaping () -> Bool = { IsSecureEventInputEnabled() },
+        pendingSessionLifecycle: WindowSwitcherPendingSessionLifecycle = WindowSwitcherPendingSessionLifecycle()
+    ) {
         self.isTrusted = isTrusted
+        self.isSecureInputEnabled = isSecureInputEnabled
+        self.pendingSessionLifecycle = pendingSessionLifecycle
         hasAccessibilityPermission = isTrusted()
         noteApplicationActivation(NSWorkspace.shared.frontmostApplication)
     }
@@ -1414,6 +1422,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         // The feature is off, so a leftover denial must not outlive it and
         // greet the next enable with a stale banner.
         recordDenial(nil, logInstall: false)
+        if isSecureInputActive { isSecureInputActive = false }
         removeWorkspaceObservers()
         removeFocusObservers()
         clearThumbnailCache()
@@ -1513,7 +1522,9 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     }
 
     func showSwitcherNow() {
-        guard settings.isEnabled else { return }
+        guard tapHealthIsArmed else { return }
+        refreshSecureInputState()
+        cancelShortcutSession()
         _ = beginSession(reverse: false, manual: true)
     }
 
@@ -1579,6 +1590,11 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
             guard keyCode == 48 else { return false } // Tab
             let optionPressed = flags.contains(.maskAlternate)
             let reverse = flags.contains(.maskShift)
+            if isSecureInputActive, optionPressed, !isAutorepeat {
+                // Recheck after the tap returns when the first shortcut arrives
+                // between health passes.
+                DispatchQueue.main.async { [weak self] in self?.refreshSecureInputState() }
+            }
             if isShowing {
                 cycleSelection(reverse: reverse)
                 tabIsDown = true
@@ -1807,6 +1823,8 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     }
 
     private func finishSession(commit: Bool) {
+        shortcutCommitTask?.cancel()
+        shortcutCommitTask = nil
         manualDismissTask?.cancel()
         manualDismissTask = nil
         pendingSessionLifecycle.cancel()
@@ -1838,12 +1856,22 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         finishSession(commit: false)
     }
 
+    private func cancelShortcutSession() {
+        // Secure input can swallow the release that would end the shortcut.
+        if pendingSessionLifecycle.pending?.manual == false { cancelPendingSession() }
+        if isShowing, !isManualSession { cancelSession() }
+        tabIsDown = false
+        consumeTabKeyUp = false
+        consumeEscapeKeyUp = false
+    }
+
     private func finishSessionAfterEventTap() {
         // Do not run activation, cache pruning, or panel teardown inside the
         // CGEvent tap callback. Returning promptly keeps other keyboard and
         // scroll taps from hitting macOS's timeout watchdog.
-        Task { @MainActor [weak self] in
-            guard let self, self.isShowing else { return }
+        guard shortcutCommitTask == nil else { return }
+        shortcutCommitTask = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled, self.isShowing else { return }
             self.finishSession(commit: true)
         }
     }
@@ -1924,13 +1952,9 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                         // once it has actually stayed in the foreground, so they don't get
                         // inserted into the middle of an Alt+Tab cycle.
                         self.scheduleActivationConfirmation(application)
-                        // Another app can hold Secure Event Input while it is
-                        // frontmost; that is the common way ⌥Tab "stops
-                        // working after switching apps".
-                        self.refreshSecureInputState()
                         // A tap can die while another app owns the session. Every
                         // activation is a cheap health check; it logs nothing while
-                        // the tap is healthy.
+                        // the state is unchanged.
                         self.tapHealthWatchdog?.check(reason: "activation")
                     }
                     if name == NSWorkspace.didWakeNotification || name == NSWorkspace.screensDidWakeNotification {
@@ -1938,6 +1962,9 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                         // session tap disabled.
                         DiagnosticLog.write("WindowSwitcher", "System woke; checking event tap health")
                         self.tapHealthWatchdog?.check(reason: "wake")
+                    }
+                    if name == NSWorkspace.didTerminateApplicationNotification, self.isSecureInputActive {
+                        self.tapHealthWatchdog?.check(reason: "application exit")
                     }
                     self.requestInventoryRefresh(priority: .utility)
                 }
@@ -2708,15 +2735,16 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     /// Secure Event Input is session-global and set by whichever app owns it;
     /// record transitions so a "shortcut does nothing" report has evidence.
     func refreshSecureInputState() {
-        let active = IsSecureEventInputEnabled()
+        guard tapHealthIsArmed else { return }
+        let active = isSecureInputEnabled()
         guard active != isSecureInputActive else { return }
         isSecureInputActive = active
+        if active { cancelShortcutSession() }
         DiagnosticLog.write(
             "WindowSwitcher",
             active
                 ? "Secure event input enabled: macOS withholds keyboard events from session taps, ⌥Tab cannot fire"
-                : "Secure event input disabled: session taps receive keyboard events again",
-            level: active ? .warning : .info
+                : "Secure event input disabled: macOS lifted the keyboard delivery restriction"
         )
     }
 
@@ -3257,19 +3285,21 @@ struct WindowSwitcherSettingsView: View {
 
                     if windowSwitcher.isSecureInputActive {
                         Divider()
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Image(systemName: "keyboard.badge.exclamationmark")
-                                .foregroundStyle(.orange)
-                            Text(model.t("windowSwitcherSecureInputHint"))
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                        InlineWarningBox {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Label(model.t("windowSwitcherSecureInputTitle"), systemImage: "keyboard.badge.exclamationmark")
+                                    .font(.headline)
+                                Text(model.t("windowSwitcherSecureInputHint"))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
 
                     Divider()
 
-                    Button(model.t("windowSwitcherTestNow")) {
+                    Button(model.t(windowSwitcher.isSecureInputActive ? "windowSwitcherMouseSwitch" : "windowSwitcherTestNow")) {
                         windowSwitcher.showSwitcherNow()
                     }
                     .disabled(!windowSwitcher.settings.isEnabled || !windowSwitcher.hasAccessibilityPermission)

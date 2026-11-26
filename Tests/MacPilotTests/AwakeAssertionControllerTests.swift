@@ -182,7 +182,7 @@ struct AwakeAssertionControllerTests {
         #expect(manager.isActive)
         #expect(!manager.isKeepingAwake)
         #expect(MenuBarIcon.systemImage(awakeActive: manager.isKeepingAwake, enforcing: false,
-            awakeFailed: manager.hasAttentionIssue) == "exclamationmark.triangle")
+            needsAttention: manager.hasAttentionIssue) == "exclamationmark.triangle")
         // The warning icon must have a matching row on the Home page.
         #expect(manager.attentionIssues == [.assertion(manager.lastAssertionFailure!)])
         api.createErrorType = nil

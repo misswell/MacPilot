@@ -376,6 +376,39 @@
             "核对系统已有授权与进程实际能力；不把模拟权限恢复当成 tccd 重启恢复验收。"
           ],
           "evidence_commits": []
+        },
+        {
+          "id": "win-003-secure-input-switcher",
+          "module": "window-lifecycle",
+          "title": "键盘监听仍启用但安全输入暂停 ⌥Tab",
+          "status": "confirmed-recurring",
+          "risk_level": "high",
+          "affected_paths": [
+            "Sources/MacPilot/WindowSwitcher.swift",
+            "Sources/MacPilot/MacPilotApp.swift",
+            "Sources/MacPilot/HomeAttention.swift",
+            "Sources/MacPilot/HomeView.swift"
+          ],
+          "invariants": [
+            "窗口切换启用期间，每次监听健康检查都要采样安全键盘输入，包含监听仍启用和前台应用未切换的情况。功能停止后清除状态。",
+            "保护开始时取消中断的快捷键会话。鼠标选择继续使用同一窗口清单和置前流程。保护结束后按键恢复时清除暂停提示。",
+            "原生菜单每次打开时采样状态，鼠标动作在菜单跟踪结束后打开面板。首页与图标共享告警列表。",
+            "使用系统公开状态 API，保留系统键盘保护。只为状态变化记录发布版诊断日志。"
+          ],
+          "test_filters": [
+            "WindowSwitcherFirstPressTests",
+            "WindowSwitcherTests",
+            "HomeAttentionTests",
+            "MenuBarOwnedMenuTests",
+            "MenuBarMenuSessionTests"
+          ],
+          "extra_test_commands": [],
+          "manual_checks": [
+            "在同一前台应用进入和离开测试密码输入框，确认暂停提示随系统状态更新。安全输入期间从原生菜单用鼠标选择窗口，解除保护后第一轮 ⌥Tab 可用。"
+          ],
+          "evidence_commits": [
+            { "sha": "ff77174", "date": "2026-11-03", "subject": "name secure event input when the switcher sees no keys" }
+          ]
         }
       ]
     },

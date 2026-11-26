@@ -38,3 +38,11 @@
 - `WindowSwitcherModel.tapHealthIsArmed` 只看运行意图；首次 AX=false 不是关闭功能。恢复路径必须继续调用实际权限检查；持续失败只记录一次，关闭功能立即停止。
 - `MainWindow` 的打开结果必须在 Release 诊断级别也能落盘，否则现场无法区分 action 丢失与 window 创建失败。
 - 自动回归：`AppLifecycleTests`、`MainWindowOpenerTests`、`WindowSwitcherFirstPressTests`、`SmoothScrollRecoveryTests`。现场 tccd 100024 与修复边界见 [启动分析](../REBOOT_RECOVERY_2026-11-13.md)；真实重启验收仍须另做。
+
+## 安全键盘输入期间的窗口切换（win-003-secure-input-switcher）
+
+- 系统可以在监听器仍启用时停止发送键盘事件。检查监听健康时也要读取安全输入状态，覆盖同一应用内开始或结束保护的情况。沿用功能自己的定期检查和应用激活、唤醒入口。停用功能时清除状态。
+- 观察到保护开始时，丢弃可能已失去按键释放事件的快捷键会话。保留鼠标会话和窗口筛选、排序、置前路径。下一次收到 ⌥Tab 时重新确认状态，恢复提示无需等待下一次定期检查。
+- 原生菜单打开时读取当前状态，然后生成固定快照。点击鼠标切换在菜单跟踪结束后显示面板。图标与首页使用同一警告列表，设置页说明暂停原因。
+- 通过公开的 `IsSecureEventInputEnabled` 查询系统状态。发布版为进入和退出各记录一条诊断。保持 macOS 键盘输入保护。
+- 自动回归覆盖启用着的监听器、同应用内的保护转换、未完成快捷键、鼠标会话、停用清理及双语告警。真机用测试密码框验证原生菜单和解除保护后的第一轮 ⌥Tab。

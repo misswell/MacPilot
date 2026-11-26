@@ -9,6 +9,7 @@ struct HomeView: View {
     /// Observed directly: the menu-bar warning icon's failures live on this
     /// nested model, and the Home card must disappear the moment they clear.
     @ObservedObject var awake: AwakeSessionManager
+    @ObservedObject var windowSwitcher: WindowSwitcherModel
 
     /// 单张功能卡片的最小宽度。窗口默认宽度下正好两列，拉宽后自动三列。
     private static let tileMinimumWidth: CGFloat = 250
@@ -52,7 +53,7 @@ struct HomeView: View {
     /// 视觉上与远程网络提示一致：页面级橙色内联提示框，不再套一层卡片。
     @ViewBuilder
     private var attentionNotice: some View {
-        let issues = awake.attentionIssues
+        let issues = model.homeAttentionIssues
         if !issues.isEmpty {
             InlineWarningBox {
                 VStack(alignment: .leading, spacing: 10) {
@@ -104,7 +105,13 @@ struct HomeView: View {
 
     @ViewBuilder
     private func attentionAction(_ issue: HomeAttentionIssue) -> some View {
-        if model.isSectionAvailable(.awake) {
+        if case .windowSwitcherSecureInput = issue {
+            Button(model.t("windowSwitcherMouseSwitch")) {
+                windowSwitcher.showSwitcherNow()
+            }
+            .controlSize(.small)
+            .disabled(!windowSwitcher.hasAccessibilityPermission)
+        } else if model.isSectionAvailable(.awake) {
             Button(model.t("homeNeedsAttentionOpenAwake")) {
                 model.requestSection(.awake)
             }

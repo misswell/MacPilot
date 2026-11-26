@@ -1,5 +1,9 @@
 # 问题与修复速记
 
+## 2026-11-26：安全键盘输入期间的窗口切换
+
+⌥Tab 无响应时系统仍将监听器标为启用，定期检查遗漏了键盘保护 → 在现有检查中采样保护状态，丢弃中断的快捷键会话，菜单和首页提供鼠标切换，系统恢复投递后清除暂停提示 → `win-003-secure-input-switcher`、`WindowSwitcherFirstPressTests`、`HomeAttentionTests`。新构建的原生菜单点击及安全输入转换待隔离桌面验收。
+
 ## 2026-11-20：快速滚动鼠标只切一张（未发布，待鼠标实机验收）
 
 鼠标滚轮的 0.1 秒冷却丢弃了快速连续事件 → 每个非精确非零滚动事件各翻一张，不按时间合并；触控板一次手势一张及缩放映射不变 → `ImageViewerScrollGestureTests.everyMouseWheelNotchNavigatesEvenDuringARapidScroll`（旧实现复现失败后通过）、`img-006-scroll-gesture-mapping`。

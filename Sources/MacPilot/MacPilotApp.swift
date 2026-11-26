@@ -137,6 +137,7 @@ final class MacPilotAppServices: ObservableObject {
         if #available(macOS 14.4, *) {
             controller = MenuBarDisplayController(menuFactory: { [weak model] context in
                 guard let model else { return NSMenu() }
+                model.windowSwitcher.refreshSecureInputState()
                 // Sample once per popup. The displayed AppKit tree stays fixed
                 // while tracking; the next popup gets fresh monitor rows.
                 if model.isFeatureEnabled(.memoryMonitor) { _ = MemoryMonitorModel.menuSnapshot() }
@@ -155,7 +156,7 @@ final class MacPilotAppServices: ObservableObject {
                     enforcing: model.isFeatureEnabled(.exit) && model.isEnforcing,
                     // The Home page explains exactly this list, never a
                     // hand-picked subset.
-                    awakeFailed: model.awake.hasAttentionIssue
+                    needsAttention: !model.homeAttentionIssues.isEmpty
                 )
             })
         } else {
@@ -170,6 +171,9 @@ final class MacPilotAppServices: ObservableObject {
         }
         controller.observeIconChanges(model.objectWillChange.eraseToAnyPublisher())
         controller.observeIconChanges(model.awake.objectWillChange.eraseToAnyPublisher())
+        controller.observeIconChanges(
+            model.windowSwitcher.$isSecureInputActive.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
+        )
         controller.startWatchdog()
         // Apply both switches from the moment the app finishes launching. The
         // Dock icon also has to follow the main window, so a fresh launch with
@@ -244,8 +248,8 @@ private struct MainWindowSceneCommands: Commands {
 }
 
 enum MenuBarIcon {
-    static func systemImage(awakeActive: Bool, enforcing: Bool, awakeFailed: Bool = false) -> String {
-        if awakeFailed { return "exclamationmark.triangle" }
+    static func systemImage(awakeActive: Bool, enforcing: Bool, needsAttention: Bool = false) -> String {
+        if needsAttention { return "exclamationmark.triangle" }
         return awakeActive ? "sun.max.fill" : (enforcing ? "timer" : "pause.circle")
     }
 }
@@ -253,12 +257,13 @@ enum MenuBarIcon {
 private struct MenuBarIconView: View {
     @ObservedObject var awake: AwakeSessionManager
     @ObservedObject var model: MacPilotModel
+    let needsAttention: Bool
 
     var body: some View {
         Image(systemName: MenuBarIcon.systemImage(
             awakeActive: awake.isKeepingAwake,
             enforcing: model.isFeatureEnabled(.exit) && model.isEnforcing,
-            awakeFailed: awake.hasAttentionIssue
+            needsAttention: needsAttention
         ))
         .contentShape(Rectangle())
     }
@@ -683,7 +688,7 @@ enum AppText {
         "homeFeatureHint": "首页开关控制功能入口和后台运行。打开后，功能会出现在左侧菜单中。",
         "homeEnabledCount": "已启用 %d 个功能", "homeAutomation": "自动化", "homeUtilities": "效率工具",
         "homeNeedsAttention": "需要处理",
-        "homeNeedsAttentionHint": "「保持唤醒」报告了下面的问题，菜单栏的警告图标表示的就是它们；修复前，相关保护可能不会生效。",
+        "homeNeedsAttentionHint": "这里列出菜单栏警告的原因。",
         "homeNeedsAttentionOpenAwake": "查看「保持唤醒」",
         "homeNeedsAttentionRetryCleanup": "重新尝试释放",
         "awakeIssueSystemSleepTitle": "无法阻止系统休眠",
@@ -1172,7 +1177,9 @@ enum AppText {
         "smoothScrollingExcludedAppReverse": "反转方向",
         "smoothScrollingRemoveExcludedApp": "移除排除应用",
         "eventTapRetry": "重新检测",
-        "windowSwitcherSecureInputHint": "系统当前开启了「安全键盘输入」，macOS 不会把键盘事件交给事件捕获，所以 ⌥Tab 不响应。占用它的应用（密码输入框、部分终端或输入法）结束后会自动恢复，不需要重启。",
+        "windowSwitcherSecureInputTitle": "安全键盘输入期间，⌥Tab 暂停",
+        "windowSwitcherMouseSwitch": "用鼠标切换窗口",
+        "windowSwitcherSecureInputHint": "可以用鼠标切换窗口。macOS 解除键盘输入保护后，快捷键会自动恢复。",
         "eventTapDeniedMissingTitle": "等待辅助功能授权",
         "eventTapDeniedMissingDetail": "系统还没有允许 MacPilot 读取并改写滚轮与键盘事件。授权后功能会自动恢复，不需要重启应用。",
         "eventTapDeniedSystemTitle": "系统拒绝了事件捕获",
@@ -2024,7 +2031,7 @@ enum AppText {
             "homeFeatureHint": "These switches control each feature's sidebar entry and background runtime. Turn one on to add it to the sidebar.",
             "homeEnabledCount": "%d features enabled", "homeAutomation": "Automation", "homeUtilities": "Utilities",
             "homeNeedsAttention": "Needs attention",
-            "homeNeedsAttentionHint": "Awake reported the problems below — they are what the warning icon in the menu bar refers to. Related protection may not work until they are fixed.",
+            "homeNeedsAttentionHint": "These are the reasons for the warning in the menu bar.",
             "homeNeedsAttentionOpenAwake": "Open Awake",
             "homeNeedsAttentionRetryCleanup": "Retry release",
             "awakeIssueSystemSleepTitle": "System sleep is not blocked",
@@ -2511,7 +2518,9 @@ enum AppText {
             "smoothScrollingExcludedAppReverse": "Reverse direction",
             "smoothScrollingRemoveExcludedApp": "Remove excluded application",
             "eventTapRetry": "Check again",
-            "windowSwitcherSecureInputHint": "Secure Event Input is on, so macOS withholds keyboard events from event taps and ⌥Tab cannot fire. It resumes on its own once the app holding it finishes (a password field, some terminals or IMEs) — no restart needed.",
+            "windowSwitcherSecureInputTitle": "⌥Tab paused by Secure Event Input",
+            "windowSwitcherMouseSwitch": "Switch Windows with Mouse",
+            "windowSwitcherSecureInputHint": "You can switch windows with the mouse. The shortcut resumes when macOS releases keyboard input protection.",
             "eventTapDeniedMissingTitle": "Waiting for Accessibility access",
             "eventTapDeniedMissingDetail": "macOS has not allowed MacPilot to read and rewrite wheel and keyboard events yet. The feature resumes on its own once access is granted; no restart is needed.",
             "eventTapDeniedSystemTitle": "The system refused event taps",
@@ -4875,7 +4884,7 @@ struct ContentView: View {
     private var sectionContent: some View {
         switch section {
         case .home:
-            HomeView(awake: model.awake)
+            HomeView(awake: model.awake, windowSwitcher: model.windowSwitcher)
         case .exit:
             header
             enforcementStatus
@@ -6739,7 +6748,11 @@ struct MenuBarView: View {
         // pops the fixed `MenuBarMenuSession` snapshot; its SwiftUI label only
         // needs the icon, never the command tree. On the fallback path the
         // `MenuBarExtra` menu owns the click and reads this same command tree.
-        if isMenuContent { menuContent } else { MenuBarIconView(awake: awake, model: model) }
+        if isMenuContent {
+            menuContent
+        } else {
+            MenuBarIconView(awake: awake, model: model, needsAttention: !model.homeAttentionIssues.isEmpty)
+        }
     }
 
     @ViewBuilder
@@ -6763,8 +6776,13 @@ struct MenuBarView: View {
         }
         if model.isFeatureEnabled(.windowSwitcher) && windowSwitcher.settings.isEnabled {
             Divider()
-            Button(model.t("windowSwitcherTestNow")) { windowSwitcher.showSwitcherNow() }
-                .disabled(!windowSwitcher.hasAccessibilityPermission)
+            if windowSwitcher.isSecureInputActive {
+                Text(model.t("windowSwitcherSecureInputTitle"))
+            }
+            Button(model.t(windowSwitcher.isSecureInputActive ? "windowSwitcherMouseSwitch" : "windowSwitcherTestNow")) {
+                deferCaptureAction { windowSwitcher.showSwitcherNow() }
+            }
+            .disabled(!windowSwitcher.hasAccessibilityPermission)
         }
         if model.isFeatureEnabled(.clipboard) && clipboard.settings.isEnabled {
             Divider()

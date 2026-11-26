@@ -1,19 +1,16 @@
 import Foundation
 
-/// One explainable problem behind the menu-bar warning icon.
-///
-/// `MenuBarIcon` draws a warning triangle whenever Awake reports a failed power
-/// assertion or a failed closed-lid service. Those failures used to be named
-/// only on the Awake page — which is unreachable while the feature is switched
-/// off, and says nothing at all about a service that failed to retire. The Home
-/// page renders these entries, built from the same two values as the icon, so a
-/// visible warning always has an explanation somewhere in the app.
+/// One explainable problem shared by the Home page and menu-bar warning icon.
+/// Awake failures remain visible even after the feature is disabled.
 enum HomeAttentionIssue: Equatable, Identifiable, Sendable {
     case assertion(AwakeAssertionFailure)
     case closedLid(ClosedLidSleepFailure)
+    case windowSwitcherSecureInput
 
     var id: String {
         switch self {
+        case .windowSwitcherSecureInput:
+            "windowSwitcher.secureInput"
         case .assertion(let failure):
             "assertion.\(failure.kind.rawValue)"
         case .closedLid(let failure):
@@ -24,17 +21,22 @@ enum HomeAttentionIssue: Equatable, Identifiable, Sendable {
     /// The failures the menu bar collapses into one warning icon.
     static func active(
         assertionFailure: AwakeAssertionFailure?,
-        closedLidFailure: ClosedLidSleepFailure?
+        closedLidFailure: ClosedLidSleepFailure?,
+        windowSwitcherEnabled: Bool = false,
+        secureInputActive: Bool = false
     ) -> [HomeAttentionIssue] {
         var issues: [HomeAttentionIssue] = []
         if let assertionFailure { issues.append(.assertion(assertionFailure)) }
         if let closedLidFailure { issues.append(.closedLid(closedLidFailure)) }
+        if windowSwitcherEnabled && secureInputActive { issues.append(.windowSwitcherSecureInput) }
         return issues
     }
 
     /// The headline of the Home page row.
     var titleKey: String {
         switch self {
+        case .windowSwitcherSecureInput:
+            "windowSwitcherSecureInputTitle"
         case .assertion(let failure):
             failure.kind == .systemSleep ? "awakeIssueSystemSleepTitle" : "awakeIssueDisplaySleepTitle"
         case .closedLid(let failure):
@@ -45,6 +47,8 @@ enum HomeAttentionIssue: Equatable, Identifiable, Sendable {
     /// What the failure means for the user, in their language.
     var detailKey: String {
         switch self {
+        case .windowSwitcherSecureInput:
+            return "windowSwitcherSecureInputHint"
         case .assertion(let failure):
             return failure.kind == .systemSleep ? "awakeIssueSystemSleepDetail" : "awakeIssueDisplaySleepDetail"
         case .closedLid(let failure):
@@ -66,6 +70,8 @@ enum HomeAttentionIssue: Equatable, Identifiable, Sendable {
     /// Values interpolated into `detailKey`; empty when it takes none.
     var detailArguments: [CVarArg] {
         switch self {
+        case .windowSwitcherSecureInput:
+            []
         case .assertion(let failure):
             [failure.code]
         case .closedLid(let failure):
@@ -94,4 +100,16 @@ extension AwakeSessionManager {
     }
 
     var hasAttentionIssue: Bool { !attentionIssues.isEmpty }
+}
+
+@MainActor
+extension MacPilotModel {
+    var homeAttentionIssues: [HomeAttentionIssue] {
+        HomeAttentionIssue.active(
+            assertionFailure: awake.lastAssertionFailure,
+            closedLidFailure: awake.lastClosedLidFailure,
+            windowSwitcherEnabled: isFeatureEnabled(.windowSwitcher) && windowSwitcher.settings.isEnabled,
+            secureInputActive: windowSwitcher.isSecureInputActive
+        )
+    }
 }

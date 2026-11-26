@@ -27,7 +27,7 @@ struct HomeAttentionTests {
         let issues = HomeAttentionIssue.active(assertionFailure: nil, closedLidFailure: nil)
         #expect(issues.isEmpty)
         #expect(MenuBarIcon.systemImage(awakeActive: false, enforcing: false,
-            awakeFailed: !issues.isEmpty) == "pause.circle")
+            needsAttention: !issues.isEmpty) == "pause.circle")
     }
 
     @Test func eachFailureAddsExactlyOneRowAndTheWarningIcon() {
@@ -38,13 +38,51 @@ struct HomeAttentionTests {
             )
             #expect(issues == [issue])
             #expect(MenuBarIcon.systemImage(awakeActive: false, enforcing: false,
-                awakeFailed: !issues.isEmpty) == "exclamationmark.triangle")
+                needsAttention: !issues.isEmpty) == "exclamationmark.triangle")
         }
         let both = HomeAttentionIssue.active(
             assertionFailure: .init(kind: .systemSleep, operation: "create", code: "code"),
             closedLidFailure: .requestFailed("diagnostic")
         )
         #expect(both.count == 2)
+    }
+
+    @Test func secureInputWarningFollowsFeatureGateAndCombinesWithAwakeFailures() {
+        for enabled in [false, true] {
+            for protected in [false, true] {
+                let issues = HomeAttentionIssue.active(
+                    assertionFailure: nil, closedLidFailure: nil,
+                    windowSwitcherEnabled: enabled, secureInputActive: protected
+                )
+                let expected = enabled && protected
+                #expect(issues.contains(.windowSwitcherSecureInput) == expected)
+                #expect(MenuBarIcon.systemImage(awakeActive: false, enforcing: false,
+                    needsAttention: !issues.isEmpty) == (expected ? "exclamationmark.triangle" : "pause.circle"))
+            }
+        }
+        let retirement = ClosedLidSleepFailure.requestFailed("diagnostic").duringRetirement()
+        let combined = HomeAttentionIssue.active(
+            assertionFailure: .init(kind: .systemSleep, operation: "create", code: "code"),
+            closedLidFailure: retirement, windowSwitcherEnabled: true, secureInputActive: true
+        )
+        #expect(combined.count == 3)
+        #expect(combined.contains(.closedLid(retirement)))
+        #expect(combined.contains(.windowSwitcherSecureInput))
+        #expect(MenuBarIcon.systemImage(awakeActive: true, enforcing: true,
+            needsAttention: !combined.isEmpty) == "exclamationmark.triangle")
+    }
+
+    @Test func secureInputCopyAndMouseActionAreLocalized() {
+        let issue = HomeAttentionIssue.windowSwitcherSecureInput
+        for key in [issue.titleKey, issue.detailKey, "windowSwitcherMouseSwitch"] {
+            let chinese = AppText.value(key, language: .simplifiedChinese)
+            let english = AppText.value(key, language: .english)
+            #expect(chinese != key)
+            #expect(english != key)
+            #expect(chinese != english)
+        }
+        #expect(issue.detailArguments.isEmpty)
+        #expect(issue.diagnosticMessage == nil)
     }
 
     @Test func systemAndDisplayAssertionFailuresGetTheirOwnRows() {
