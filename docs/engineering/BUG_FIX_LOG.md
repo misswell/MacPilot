@@ -1,5 +1,11 @@
 # 问题与修复速记
 
+## 2026-11-27：安全键盘输入下继续使用 ⌥Tab
+
+beta.127 在系统保护持续时只有鼠标入口。现场无可见密码框时，macOS 仍报告保护开启且监听器显示启用 → 改由系统注册两个方向的快捷键，保护期间直接切换一次，解除后沿用按住 Option 浏览。首页警告按 ⌥Tab 实际可用通路显示 → `win-003-secure-input-switcher`、`WindowSwitcherFirstPressTests`、`CarbonHotKeyRoutingTests`。现场已验证保护开启时系统接受两个注册，真实按键与窗口置前待隔离桌面验收。
+
+重叠快捷键被占用 → 「抢回快捷键」重试冲突组合并重新置顶键盘监听。按系统返回值提示仍占用，读取到真实快捷键才确认监听接管 → `WindowSwitcherFirstPressTests.reclaimRetriesRegistrationAndListenerWithoutClaimingAnOccupiedShortcut`、`HomeAttentionTests`。与另一真实应用同时争用的验收待完成。
+
 ## 2026-11-26：安全键盘输入期间的窗口切换
 
 ⌥Tab 无响应时系统仍将监听器标为启用，定期检查遗漏了键盘保护 → 在现有检查中采样保护状态，丢弃中断的快捷键会话，菜单和首页提供鼠标切换，系统恢复投递后清除暂停提示 → `win-003-secure-input-switcher`、`WindowSwitcherFirstPressTests`、`HomeAttentionTests`。新构建的原生菜单点击及安全输入转换待隔离桌面验收。

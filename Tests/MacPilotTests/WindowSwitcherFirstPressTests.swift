@@ -429,6 +429,148 @@ struct WindowSwitcherFirstPressTests {
         #expect(pending.pending == nil)
     }
 
+    @Test func aRegisteredShortcutCommitsUnderSecureInputWithoutRawKeyboardEvents() {
+        let hotKeys = FakeWindowSwitcherHotKeys()
+        let pending = WindowSwitcherPendingSessionLifecycle()
+        var systemSecureInputActive = true
+        let model = WindowSwitcherModel(
+            isTrusted: { true },
+            isSecureInputEnabled: { systemSecureInputActive },
+            pendingSessionLifecycle: pending,
+            hotKeys: hotKeys,
+            makeEventTap: { _, _ in nil },
+            fallbackInventory: { [] }
+        )
+        model.activateFromConfiguration()
+        defer { model.shutdown() }
+        #expect(model.activeEventTapCount == 0)
+        #expect(model.isSecureInputActive)
+        #expect(!model.isShortcutBlockedBySecureInput)
+
+        hotKeys.press(.forward)
+        #expect(pending.pending?.reverse == false)
+        #expect(pending.pending?.commitWhenReady == true)
+        #expect(!model.panelIsBuilt)
+        #expect(!model.handleEventTapEvent(
+            typeRawValue: CGEventType.keyDown.rawValue, keyCode: 48,
+            flagsRawValue: CGEventFlags.maskAlternate.rawValue, isAutorepeat: false
+        ))
+        #expect(pending.pending?.additionalSelectionOffset == 0)
+        hotKeys.press(.reverse)
+        #expect(pending.pending?.reverse == true)
+        #expect(pending.pending?.commitWhenReady == true)
+
+        hotKeys.available = [.reverse]
+        model.refreshPermissionStatus()
+        #expect(model.isShortcutBlockedBySecureInput)
+        #expect(HomeAttentionIssue.active(
+            assertionFailure: nil, closedLidFailure: nil, windowSwitcherEnabled: true,
+            shortcutBlockedBySecureInput: model.isShortcutBlockedBySecureInput
+        ) == [.windowSwitcherSecureInput])
+
+        pending.cancel()
+        systemSecureInputActive = false
+        model.refreshSecureInputState()
+        #expect(!model.isShortcutBlockedBySecureInput)
+        #expect(model.handleEventTapEvent(
+            typeRawValue: CGEventType.keyDown.rawValue, keyCode: 48,
+            flagsRawValue: CGEventFlags.maskAlternate.rawValue, isAutorepeat: false
+        ))
+        #expect(pending.pending?.commitWhenReady == false)
+        #expect(model.handleEventTapEvent(
+            typeRawValue: CGEventType.flagsChanged.rawValue, keyCode: 58, flagsRawValue: 0, isAutorepeat: false
+        ))
+        #expect(pending.pending?.commitWhenReady == true)
+
+        let latePress = hotKeys.onPress
+        model.shutdown()
+        latePress?(.reverse)
+        #expect(hotKeys.onPress == nil)
+        #expect(pending.pending == nil)
+        #expect(!model.hasRegisteredShortcut)
+        #expect(!model.isShortcutBlockedBySecureInput)
+    }
+
+    @Test func registeredShortcutUsesHeldOptionOnlyWhenRawEventsCanArrive() {
+        let canBrowseDuringProtection = WindowSwitcherRegisteredShortcut.canBrowse(
+            secureInputActive: true, tapEnabled: true, optionHeld: readOptionUnexpectedly()
+        )
+        let canBrowseWithoutTap = WindowSwitcherRegisteredShortcut.canBrowse(
+            secureInputActive: false, tapEnabled: false, optionHeld: readOptionUnexpectedly()
+        )
+        #expect(!canBrowseDuringProtection)
+        #expect(!canBrowseWithoutTap)
+        #expect(WindowSwitcherRegisteredShortcut.canBrowse(
+            secureInputActive: false, tapEnabled: true, optionHeld: true
+        ))
+        #expect(!WindowSwitcherRegisteredShortcut.canBrowse(
+            secureInputActive: false, tapEnabled: true, optionHeld: false
+        ))
+    }
+
+    @Test func reclaimRetriesRegistrationAndListenerWithoutClaimingAnOccupiedShortcut() {
+        let hotKeys = FakeWindowSwitcherHotKeys()
+        hotKeys.available = [.reverse]
+        hotKeys.conflicts = [.forward]
+        var tapInstallAttempts = 0
+        let model = WindowSwitcherModel(
+            isTrusted: { true },
+            isSecureInputEnabled: { true },
+            hotKeys: hotKeys,
+            makeEventTap: { _, _ in
+                tapInstallAttempts += 1
+                return nil
+            },
+            fallbackInventory: { [] }
+        )
+        model.activateFromConfiguration()
+        defer { model.shutdown() }
+        #expect(model.shortcutReclaimStatus == nil)
+        #expect(model.shortcutRegistration.conflicts == [.forward])
+
+        model.reclaimShortcut()
+        #expect(model.shortcutReclaimStatus == .occupied)
+        #expect(hotKeys.registrationAttempts == 2)
+        #expect(tapInstallAttempts == 2)
+        #expect(model.isShortcutBlockedBySecureInput)
+
+        hotKeys.conflicts = []
+        model.reclaimShortcut()
+        #expect(model.shortcutReclaimStatus == .unavailable)
+
+        hotKeys.available = [.forward, .reverse]
+        model.reclaimShortcut()
+        #expect(model.shortcutReclaimStatus == .registered)
+        #expect(!model.isShortcutBlockedBySecureInput)
+        #expect(hotKeys.registrationAttempts == 4)
+        #expect(tapInstallAttempts == 4)
+
+        model.shutdown()
+        model.reclaimShortcut()
+        #expect(model.shortcutReclaimStatus == nil)
+        #expect(tapInstallAttempts == 4)
+    }
+
+    @Test func aDirectSwitchUsesTheSameOrderAndCanSelectWithNoFrontmostWindow() {
+        #expect(WindowSwitcherSelection.sessionIndex(
+            count: 4, currentIndex: 1, reverse: false, additionalOffset: 0, commitWithoutBrowsing: true
+        ) == 2)
+        #expect(WindowSwitcherSelection.sessionIndex(
+            count: 4, currentIndex: 1, reverse: true, additionalOffset: 0, commitWithoutBrowsing: true
+        ) == 0)
+        #expect(WindowSwitcherSelection.sessionIndex(
+            count: 4, currentIndex: nil, reverse: true, additionalOffset: 0, commitWithoutBrowsing: true
+        ) == 3)
+        #expect(WindowSwitcherSelection.sessionIndex(
+            count: 4, currentIndex: nil, reverse: false, additionalOffset: 0, commitWithoutBrowsing: false
+        ) == nil)
+    }
+
+    private func readOptionUnexpectedly() -> Bool {
+        Issue.record("A direct switch must not sample modifier state")
+        return true
+    }
+
     // MARK: - Fixtures
 
     private func record(
@@ -513,4 +655,22 @@ private final class FakeTapHealthHost: WindowSwitcherTapHealthHost {
         tapEnabled = true
         return true
     }
+}
+
+@MainActor
+private final class FakeWindowSwitcherHotKeys: WindowSwitcherHotKeyRegistering {
+    var available = Set(WindowSwitcherShortcutDirection.allCases)
+    var conflicts: Set<WindowSwitcherShortcutDirection> = []
+    private(set) var registrationAttempts = 0
+    private(set) var onPress: (@MainActor (WindowSwitcherShortcutDirection) -> Void)?
+
+    func register(onPress: @escaping @MainActor (WindowSwitcherShortcutDirection) -> Void) -> WindowSwitcherShortcutRegistration {
+        registrationAttempts += 1
+        self.onPress = onPress
+        return WindowSwitcherShortcutRegistration(registered: available, conflicts: conflicts)
+    }
+
+    func unregister() { onPress = nil }
+
+    func press(_ direction: WindowSwitcherShortcutDirection) { onPress?(direction) }
 }

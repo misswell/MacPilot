@@ -144,6 +144,24 @@ enum WindowSwitcherSelection {
         return wrappedIndex(current + offset, count: count)
     }
 
+    static func sessionIndex(
+        count: Int,
+        currentIndex: Int?,
+        reverse: Bool,
+        additionalOffset: Int,
+        commitWithoutBrowsing: Bool
+    ) -> Int? {
+        guard count > 0 else { return nil }
+        if let initialIndex = initialIndex(count: count, currentIndex: currentIndex, reverse: reverse) {
+            return cycledIndex(current: initialIndex, count: count, offset: additionalOffset)
+        }
+        let start = reverse ? count - 1 : 0
+        if additionalOffset != 0 {
+            return cycledIndex(current: start, count: count, offset: max(0, additionalOffset - 1))
+        }
+        return commitWithoutBrowsing ? start : nil
+    }
+
     private static func wrappedIndex(_ index: Int, count: Int) -> Int {
         let remainder = index % count
         return remainder >= 0 ? remainder : remainder + count
@@ -927,6 +945,12 @@ enum WindowSwitcherPendingSessionSource: String, Equatable {
 }
 
 enum WindowSwitcherEventTapRouting {
+    static func shortcutDirection(flags: CGEventFlags) -> WindowSwitcherShortcutDirection? {
+        guard flags.contains(.maskAlternate),
+              flags.intersection([.maskCommand, .maskControl]).isEmpty else { return nil }
+        return flags.contains(.maskShift) ? .reverse : .forward
+    }
+
     /// What the callback should do with one event. `.tapDisabled` is decided
     /// before any key code is looked at: the system's disable event arrives as
     /// an event-tap type, not as a keystroke, and it must be repaired even when
@@ -956,6 +980,24 @@ enum WindowSwitcherEventTapRouting {
             return false
         }
     }
+}
+
+enum WindowSwitcherRegisteredShortcut {
+    static func canBrowse(
+        secureInputActive: Bool,
+        tapEnabled: Bool,
+        optionHeld: @autoclosure () -> Bool
+    ) -> Bool {
+        !secureInputActive && tapEnabled && optionHeld()
+    }
+}
+
+enum WindowSwitcherShortcutReclaimStatus: String {
+    case registered = "windowSwitcherReclaimRegistered"
+    case awaitingPress = "windowSwitcherReclaimAwaitingPress"
+    case verified = "windowSwitcherReclaimVerified"
+    case occupied = "windowSwitcherReclaimOccupied"
+    case unavailable = "windowSwitcherReclaimUnavailable"
 }
 
 // MARK: - Event tap health watchdog
@@ -1187,13 +1229,22 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private(set) var selectedItemID: String?
     private(set) var isShowing = false
     @Published private(set) var hasAccessibilityPermission = false
-    /// Why the ⌥Tab tap is missing, when it is. Without the tap the shortcut
-    /// never fires, so the page must say that instead of showing a ready
-    /// permission badge next to a dead shortcut.
+    /// Why the raw keyboard path cannot track the hold-to-browse gesture.
     @Published private(set) var eventTapDenial: EventTapDenial?
-    /// macOS withholds keyboard events from session taps during Secure Event
-    /// Input. The menu and Home page offer mouse switching during that pause.
     @Published private(set) var isSecureInputActive = false
+    @Published private(set) var shortcutRegistration = WindowSwitcherShortcutRegistration()
+    // Nil until the user asks to reclaim the shortcut.
+    @Published private var didVerifyReclaim: Bool?
+
+    var hasRegisteredShortcut: Bool { shortcutRegistration.registered.contains(.forward) }
+    var isShortcutBlockedBySecureInput: Bool { isSecureInputActive && !hasRegisteredShortcut }
+
+    var shortcutReclaimStatus: WindowSwitcherShortcutReclaimStatus? {
+        guard let didVerifyReclaim else { return nil }
+        if hasRegisteredShortcut { return .registered }
+        if !isSecureInputActive, tapHealthIsTapEnabled() { return didVerifyReclaim ? .verified : .awaitingPress }
+        return shortcutRegistration.conflicts.contains(.forward) ? .occupied : .unavailable
+    }
 
     var language: AppLanguage = .system
     var persist: (() -> Void)?
@@ -1226,6 +1277,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
     private var eventTapContext: WindowSwitcherEventTapContext?
+    private let hotKeys: (any WindowSwitcherHotKeyRegistering)?
     /// Monotonic install count. The watchdog logs it so a repair can be told
     /// apart from a duplicate tap.
     private var eventTapInstallCount = 0
@@ -1264,15 +1316,32 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
 
     private let isTrusted: () -> Bool
     private let isSecureInputEnabled: () -> Bool
+    private let makeEventTap: (CGEventMask, UnsafeMutableRawPointer) -> CFMachPort?
+    private let fallbackInventory: (() -> [WindowSwitcherItem])?
 
     init(
         isTrusted: @escaping () -> Bool = { AXIsProcessTrusted() },
         isSecureInputEnabled: @escaping () -> Bool = { IsSecureEventInputEnabled() },
-        pendingSessionLifecycle: WindowSwitcherPendingSessionLifecycle = WindowSwitcherPendingSessionLifecycle()
+        pendingSessionLifecycle: WindowSwitcherPendingSessionLifecycle = WindowSwitcherPendingSessionLifecycle(),
+        hotKeys: (any WindowSwitcherHotKeyRegistering)? = nil,
+        makeEventTap: @escaping (CGEventMask, UnsafeMutableRawPointer) -> CFMachPort? = { mask, context in
+            CGEvent.tapCreate(
+                tap: .cgSessionEventTap,
+                place: .headInsertEventTap,
+                options: .defaultTap,
+                eventsOfInterest: mask,
+                callback: windowSwitcherEventTapCallback,
+                userInfo: context
+            )
+        },
+        fallbackInventory: (() -> [WindowSwitcherItem])? = nil
     ) {
         self.isTrusted = isTrusted
         self.isSecureInputEnabled = isSecureInputEnabled
         self.pendingSessionLifecycle = pendingSessionLifecycle
+        self.hotKeys = hotKeys
+        self.makeEventTap = makeEventTap
+        self.fallbackInventory = fallbackInventory
         hasAccessibilityPermission = isTrusted()
         noteApplicationActivation(NSWorkspace.shared.frontmostApplication)
     }
@@ -1423,6 +1492,8 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         // greet the next enable with a stale banner.
         recordDenial(nil, logInstall: false)
         if isSecureInputActive { isSecureInputActive = false }
+        didVerifyReclaim = nil
+        refreshRegisteredShortcuts()
         removeWorkspaceObservers()
         removeFocusObservers()
         clearThumbnailCache()
@@ -1492,6 +1563,15 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
     func retryEventTap() {
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
         refreshPermissionStatus()
+    }
+
+    /// Reapply this app's shortcut and put its session tap at the head again.
+    /// The system decides whether a chord registered by another process is free.
+    func reclaimShortcut() {
+        guard tapHealthIsArmed else { return }
+        cancelShortcutSession()
+        didVerifyReclaim = false
+        refreshEventTap()
     }
 
     func requestAccessibility() {
@@ -1571,7 +1651,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         AppText.value(key, language: language, arguments: arguments)
     }
 
-    fileprivate func handleEventTapEvent(
+    func handleEventTapEvent(
         typeRawValue: CGEventType.RawValue,
         keyCode: Int64,
         flagsRawValue: CGEventFlags.RawValue,
@@ -1588,33 +1668,23 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                 return true
             }
             guard keyCode == 48 else { return false } // Tab
-            let optionPressed = flags.contains(.maskAlternate)
-            let reverse = flags.contains(.maskShift)
-            if isSecureInputActive, optionPressed, !isAutorepeat {
+            let direction = WindowSwitcherEventTapRouting.shortcutDirection(flags: flags)
+            // A registered chord belongs to the system shortcut handler. It
+            // can arrive before or after translation to a Carbon event.
+            if let direction, shortcutRegistration.registered.contains(direction) { return false }
+            if isSecureInputActive, direction != nil, !isAutorepeat {
                 // Recheck after the tap returns when the first shortcut arrives
                 // between health passes.
                 DispatchQueue.main.async { [weak self] in self?.refreshSecureInputState() }
             }
-            if isShowing {
-                cycleSelection(reverse: reverse)
-                tabIsDown = true
-                return true
-            }
-            if pendingSessionLifecycle.pending != nil {
-                pendingSessionLifecycle.adjustPendingSelection(reverse: reverse)
-                tabIsDown = true
-                return true
-            }
-            guard settings.isEnabled,
-                  optionPressed,
-                  !flags.contains(.maskCommand),
-                  !flags.contains(.maskControl) else { return false }
-            guard beginSession(reverse: reverse, manual: false) else { return false }
+            guard isShowing || pendingSessionLifecycle.pending != nil || direction != nil else { return false }
+            guard browseOnShortcutPress(reverse: flags.contains(.maskShift)) else { return false }
             tabIsDown = true
+            if direction == .forward, didVerifyReclaim == false { didVerifyReclaim = true }
             return true
 
         case .keyUp:
-            if keyCode == 48, isShowing || pendingSessionLifecycle.pending != nil || consumeTabKeyUp {
+            if keyCode == 48, tabIsDown || consumeTabKeyUp {
                 tabIsDown = false
                 consumeTabKeyUp = false
                 return true
@@ -1645,10 +1715,42 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         }
     }
 
-    private func beginSession(reverse: Bool, manual: Bool) -> Bool {
+    private func browseOnShortcutPress(reverse: Bool) -> Bool {
+        guard tapHealthIsArmed else { return false }
+        if isShowing {
+            cycleSelection(reverse: reverse)
+        } else if pendingSessionLifecycle.pending != nil {
+            pendingSessionLifecycle.adjustPendingSelection(reverse: reverse)
+        } else {
+            return beginSession(reverse: reverse, manual: false)
+        }
+        return true
+    }
+
+    private func handleRegisteredShortcut(_ direction: WindowSwitcherShortcutDirection) {
+        guard tapHealthIsArmed, hasAccessibilityPermission,
+              shortcutRegistration.registered.contains(direction) else { return }
+        refreshSecureInputState()
+        let reverse = direction == .reverse
+        if WindowSwitcherRegisteredShortcut.canBrowse(
+            secureInputActive: isSecureInputActive,
+            tapEnabled: tapHealthIsTapEnabled(),
+            optionHeld: NSEvent.modifierFlags.contains(.option)
+        ) {
+            _ = browseOnShortcutPress(reverse: reverse)
+            return
+        }
+        // The system delivered a shortcut command. Switch once even when
+        // the raw key-up or modifier-change events are unavailable.
+        cancelSession()
+        cancelPendingSession()
+        _ = beginSession(reverse: reverse, manual: false, commitWhenReady: true)
+    }
+
+    private func beginSession(reverse: Bool, manual: Bool, commitWhenReady: Bool = false) -> Bool {
         guard isRuntimeActive else { return false }
         guard !isShowing else { return true }
-        let startedAt = CFAbsoluteTimeGetCurrent()
+        let session = WindowSwitcherPendingSession(reverse: reverse, manual: manual, commitWhenReady: commitWhenReady)
         let cached = orderedForSession(cachedWindows)
         // A cold start must not swallow the press. The accessibility inventory
         // can take seconds on a machine with many applications, so when the
@@ -1664,14 +1766,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                 "WindowSwitcher",
                 "Session began: \(inventoryDescription(cached))"
             )
-            showSession(
-                cached,
-                reverse: reverse,
-                manual: manual,
-                additionalSelectionOffset: 0,
-                startedAt: startedAt,
-                cacheHit: true
-            )
+            presentSession(cached, session: session, cacheHit: true)
             return true
         case .showWindowServerFallback:
             DiagnosticLog.write(
@@ -1679,12 +1774,9 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                 "Session cold start: AX inventory empty; presenting window-server fallback "
                     + "(\(fallback.count) windows) \(inventoryDescription(fallback))"
             )
-            showSession(
+            presentSession(
                 fallback,
-                reverse: reverse,
-                manual: manual,
-                additionalSelectionOffset: 0,
-                startedAt: startedAt,
+                session: session,
                 cacheHit: false,
                 windowServerFallback: true
             )
@@ -1697,11 +1789,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                 "WindowSwitcher",
                 "Session waiting for inventory: cached and window-server snapshots are both empty"
             )
-            pendingSessionLifecycle.begin(WindowSwitcherPendingSession(
-                reverse: reverse,
-                manual: manual,
-                startedAt: startedAt
-            ))
+            pendingSessionLifecycle.begin(session)
             requestInventoryRefresh(priority: .userInitiated)
             schedulePendingSessionFallback()
             return true
@@ -1710,6 +1798,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
 
     /// Cheap, AX-free snapshot used only to keep the first press visible.
     private func windowServerFallbackSnapshot() -> [WindowSwitcherItem] {
+        if let fallbackInventory { return fallbackInventory() }
         let excludedWindowIDs: Set<CGWindowID> = panelController?.panelWindowID.map { [$0] } ?? []
         let scan = WindowSwitcherInventory.scanWindowServer()
         return WindowSwitcherWindowServerInventory.snapshot(
@@ -1726,47 +1815,32 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         items.map { "\($0.appName):\($0.id)" }.joined(separator: ", ")
     }
 
-    private func showSession(
+    private func presentSession(
         _ snapshot: [WindowSwitcherItem],
-        reverse: Bool,
-        manual: Bool,
-        additionalSelectionOffset: Int,
-        startedAt: CFAbsoluteTime,
+        session: WindowSwitcherPendingSession,
         cacheHit: Bool,
         windowServerFallback: Bool = false
     ) {
-        let currentIndex = currentWindowIndex(in: snapshot)
-        let initialIndex = WindowSwitcherSelection.initialIndex(
+        let resolvedIndex = WindowSwitcherSelection.sessionIndex(
             count: snapshot.count,
-            currentIndex: currentIndex,
-            reverse: reverse
+            currentIndex: currentWindowIndex(in: snapshot),
+            reverse: session.reverse,
+            additionalOffset: session.additionalSelectionOffset,
+            commitWithoutBrowsing: session.commitWhenReady
         )
-        let resolvedIndex: Int?
-        if let initialIndex {
-            resolvedIndex = WindowSwitcherSelection.cycledIndex(
-                current: initialIndex,
-                count: snapshot.count,
-                offset: additionalSelectionOffset
-            ) ?? initialIndex
-        } else if additionalSelectionOffset != 0 {
-            let start = reverse ? snapshot.count - 1 : 0
-            resolvedIndex = WindowSwitcherSelection.cycledIndex(
-                current: start,
-                count: snapshot.count,
-                offset: max(0, additionalSelectionOffset - 1)
-            )
-        } else {
-            resolvedIndex = nil
+        if session.commitWhenReady {
+            if let resolvedIndex { scheduleFocus(snapshot[resolvedIndex]) }
+            return
         }
         updatePanelContents(snapshot, selectedIndex: resolvedIndex)
-        isManualSession = manual
+        isManualSession = session.manual
         isShowingWindowServerFallback = windowServerFallback
         isShowing = true
         resetMouseSelectionLock()
         panelController = panelController ?? WindowSwitcherPanelController(model: self)
         panelIdleTask?.cancel()
         panelController?.show()
-        reportPresentationLatency(startedAt: startedAt, cacheHit: cacheHit)
+        reportPresentationLatency(startedAt: session.startedAt, cacheHit: cacheHit)
         refreshThumbnails(
             for: snapshot,
             selectedIndex: selectedIndex
@@ -1774,7 +1848,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         // Cached previews are shown instantly above; the highlighted tile is
         // still re-captured so it never displays stale content.
         scheduleSelectedThumbnailRefresh()
-        if manual {
+        if session.manual {
             manualDismissTask?.cancel()
             manualDismissTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(8))
@@ -1963,8 +2037,11 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                         DiagnosticLog.write("WindowSwitcher", "System woke; checking event tap health")
                         self.tapHealthWatchdog?.check(reason: "wake")
                     }
-                    if name == NSWorkspace.didTerminateApplicationNotification, self.isSecureInputActive {
-                        self.tapHealthWatchdog?.check(reason: "application exit")
+                    if name == NSWorkspace.didTerminateApplicationNotification {
+                        self.refreshRegisteredShortcuts()
+                        if self.isSecureInputActive {
+                            self.tapHealthWatchdog?.check(reason: "application exit")
+                        }
                     }
                     self.requestInventoryRefresh(priority: .utility)
                 }
@@ -2336,45 +2413,12 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
             "Pending session resolved after \(waitedMilliseconds) ms via \(source.rawValue) "
                 + "(\(snapshot.count) windows)"
         )
-        let ordered = orderedForSession(snapshot)
-        let currentIndex = currentWindowIndex(in: ordered)
-        let initialIndex = WindowSwitcherSelection.initialIndex(
-            count: ordered.count,
-            currentIndex: currentIndex,
-            reverse: pending.reverse
+        presentSession(
+            orderedForSession(snapshot),
+            session: pending,
+            cacheHit: false,
+            windowServerFallback: source == .windowServerFallback
         )
-        let resolvedIndex: Int?
-        if let initialIndex {
-            resolvedIndex = WindowSwitcherSelection.cycledIndex(
-                current: initialIndex,
-                count: ordered.count,
-                offset: pending.additionalSelectionOffset
-            ) ?? initialIndex
-        } else if pending.additionalSelectionOffset != 0 {
-            let start = pending.reverse ? ordered.count - 1 : 0
-            resolvedIndex = WindowSwitcherSelection.cycledIndex(
-                current: start,
-                count: ordered.count,
-                offset: max(0, pending.additionalSelectionOffset - 1)
-            )
-        } else {
-            resolvedIndex = nil
-        }
-        if pending.commitWhenReady {
-            if let resolvedIndex, ordered.indices.contains(resolvedIndex) {
-                scheduleFocus(ordered[resolvedIndex])
-            }
-        } else {
-            showSession(
-                ordered,
-                reverse: pending.reverse,
-                manual: pending.manual,
-                additionalSelectionOffset: pending.additionalSelectionOffset,
-                startedAt: pending.startedAt,
-                cacheHit: false,
-                windowServerFallback: source == .windowServerFallback
-            )
-        }
     }
 
     /// `pendingSession` promised the user a session because the press was
@@ -2690,13 +2734,15 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
 
     private func refreshEventTap() {
         hasAccessibilityPermission = isTrusted()
+        refreshRegisteredShortcuts()
         refreshSecureInputState()
-        removeEventTap()
         guard isRuntimeActive, settings.isEnabled else {
+            removeEventTap()
             recordDenial(nil, logInstall: false)
             return
         }
         guard hasAccessibilityPermission else {
+            removeEventTap()
             recordDenial(.accessibilityMissing)
             return
         }
@@ -2705,23 +2751,19 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         let eventMask = (CGEventMask(1) << CGEventType.keyDown.rawValue)
             | (CGEventMask(1) << CGEventType.keyUp.rawValue)
             | (CGEventMask(1) << CGEventType.flagsChanged.rawValue)
-        guard let eventTap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: eventMask,
-            callback: windowSwitcherEventTapCallback,
-            userInfo: Unmanaged.passUnretained(context).toOpaque()
-        ), let source = CFMachPortCreateRunLoopSource(nil, eventTap, 0) else {
-            // Accessibility is listed, yet WindowServer refuses the session
-            // tap ("Sender lacks privileges to install non-process event taps"
-            // in the unified log). Nothing in the app can grant that; the tap
-            // heals as soon as the system allows it again, so the retry ladder
-            // stays armed and the page names the real repair.
-            recordDenial(.systemDenied)
+        guard let eventTap = makeEventTap(eventMask, Unmanaged.passUnretained(context).toOpaque()) else {
+            recordFailedTapInstall()
+            return
+        }
+        guard let source = CFMachPortCreateRunLoopSource(nil, eventTap, 0) else {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+            CFMachPortInvalidate(eventTap)
+            recordFailedTapInstall()
             return
         }
 
+        removeEventTap()
+        if didVerifyReclaim == true { didVerifyReclaim = false }
         eventTapInstallCount += 1
         eventTapContext = context
         self.eventTap = eventTap
@@ -2730,6 +2772,32 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
         recordDenial(nil)
+    }
+
+    private func recordFailedTapInstall() {
+        // A failed attempt to move to the front leaves an existing working
+        // listener in place.
+        if !tapHealthIsTapEnabled() {
+            // Accessibility is listed, yet WindowServer refuses the session
+            // tap. Keep retrying the tap so the hold-to-browse gesture returns
+            // as soon as WindowServer allows it again.
+            removeEventTap()
+            recordDenial(.systemDenied)
+        }
+    }
+
+    private func refreshRegisteredShortcuts() {
+        guard let hotKeys else { return }
+        let registration: WindowSwitcherShortcutRegistration
+        if tapHealthIsArmed, hasAccessibilityPermission {
+            registration = hotKeys.register { [weak self] direction in
+                self?.handleRegisteredShortcut(direction)
+            }
+        } else {
+            hotKeys.unregister()
+            registration = WindowSwitcherShortcutRegistration()
+        }
+        if shortcutRegistration != registration { shortcutRegistration = registration }
     }
 
     /// Secure Event Input is session-global and set by whichever app owns it;
@@ -2743,7 +2811,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
         DiagnosticLog.write(
             "WindowSwitcher",
             active
-                ? "Secure event input enabled: macOS withholds keyboard events from session taps, ⌥Tab cannot fire"
+                ? "Secure event input enabled: hold-to-browse paused; registered ⌥Tab available=\(hasRegisteredShortcut)"
                 : "Secure event input disabled: macOS lifted the keyboard delivery restriction"
         )
     }
@@ -2776,7 +2844,7 @@ final class WindowSwitcherModel: ObservableObject, ManagedFeature, FeatureResour
                 "WindowSwitcher",
                 "Tap refused by WindowServer although Accessibility is granted "
                     + "(Sender lacks privileges to install non-process event taps); "
-                    + "⌥Tab stays off until the system allows the tap again",
+                    + "registered ⌥Tab available=\(hasRegisteredShortcut)",
                 level: .warning
             )
         }
@@ -3152,6 +3220,30 @@ struct WindowSwitcherSettingsView: View {
                 }
 
                 SettingsCard {
+                    HStack {
+                        Label(model.t("windowSwitcherShortcut"), systemImage: "keyboard")
+                            .font(.headline)
+                        Spacer()
+                        Button(model.t("windowSwitcherReclaimShortcut")) {
+                            windowSwitcher.reclaimShortcut()
+                        }
+                    }
+                    let conflicts = windowSwitcher.shortcutRegistration.conflicts
+                    if !conflicts.isEmpty {
+                        let shortcut = model.t("windowSwitcherShortcut")
+                        let names = WindowSwitcherShortcutDirection.allCases.filter(conflicts.contains)
+                            .map { $0 == .forward ? shortcut : "⇧" + shortcut }
+                        Text(model.t("windowSwitcherShortcutConflict", names.joined(separator: " / ")))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let status = windowSwitcher.shortcutReclaimStatus {
+                        Text(model.t(status.rawValue))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Divider()
                     Toggle(
                         model.t("windowSwitcherIncludeMinimized"),
                         isOn: Binding(
@@ -3260,7 +3352,9 @@ struct WindowSwitcherSettingsView: View {
                             .foregroundStyle(.orange)
                             Text(
                                 denial == .systemDenied
-                                    ? model.t("windowSwitcherEventTapDeniedSystemDetail")
+                                    ? model.t(windowSwitcher.hasRegisteredShortcut
+                                        ? "windowSwitcherTapUnavailableHint"
+                                        : "windowSwitcherEventTapDeniedSystemDetail")
                                     : model.t("eventTapDeniedMissingDetail")
                             )
                             .font(.subheadline)
@@ -3283,7 +3377,7 @@ struct WindowSwitcherSettingsView: View {
                             .foregroundStyle(.green)
                     }
 
-                    if windowSwitcher.isSecureInputActive {
+                    if windowSwitcher.isShortcutBlockedBySecureInput {
                         Divider()
                         InlineWarningBox {
                             VStack(alignment: .leading, spacing: 5) {
@@ -3295,11 +3389,17 @@ struct WindowSwitcherSettingsView: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
+                    } else if windowSwitcher.isSecureInputActive, windowSwitcher.hasRegisteredShortcut {
+                        Divider()
+                        Text(model.t("windowSwitcherDirectShortcutHint"))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Divider()
 
-                    Button(model.t(windowSwitcher.isSecureInputActive ? "windowSwitcherMouseSwitch" : "windowSwitcherTestNow")) {
+                    Button(model.t(windowSwitcher.isShortcutBlockedBySecureInput ? "windowSwitcherMouseSwitch" : "windowSwitcherTestNow")) {
                         windowSwitcher.showSwitcherNow()
                     }
                     .disabled(!windowSwitcher.settings.isEnabled || !windowSwitcher.hasAccessibilityPermission)

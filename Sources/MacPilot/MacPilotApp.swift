@@ -116,7 +116,11 @@ final class MacPilotAppServices: ObservableObject {
 
     fileprivate init(opener: MainWindowOpener, contentBox: MainWindowContentBox) {
         let delegate = contentBox.delegate ?? NSApp.delegate as? AppDelegate
-        let model = MacPilotModel(showsMainWindowAtLaunch: opener.hasExplicitOpenRequest, mainWindowOpener: opener)
+        let model = MacPilotModel(
+            showsMainWindowAtLaunch: opener.hasExplicitOpenRequest,
+            mainWindowOpener: opener,
+            windowSwitcher: WindowSwitcherModel(hotKeys: WindowSwitcherHotKeys())
+        )
         contentBox.model = model
         // The model's deep-link observer exists now; hand it the URLs that
         // arrived during launch before anything else can miss them.
@@ -172,7 +176,12 @@ final class MacPilotAppServices: ObservableObject {
         controller.observeIconChanges(model.objectWillChange.eraseToAnyPublisher())
         controller.observeIconChanges(model.awake.objectWillChange.eraseToAnyPublisher())
         controller.observeIconChanges(
-            model.windowSwitcher.$isSecureInputActive.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
+            model.windowSwitcher.$isSecureInputActive
+                .combineLatest(model.windowSwitcher.$shortcutRegistration)
+                .map { active, registration in active && !registration.registered.contains(.forward) }
+                .removeDuplicates()
+                .map { _ in () }
+                .eraseToAnyPublisher()
         )
         controller.startWatchdog()
         // Apply both switches from the moment the app finishes launching. The
@@ -1177,9 +1186,18 @@ enum AppText {
         "smoothScrollingExcludedAppReverse": "反转方向",
         "smoothScrollingRemoveExcludedApp": "移除排除应用",
         "eventTapRetry": "重新检测",
-        "windowSwitcherSecureInputTitle": "安全键盘输入期间，⌥Tab 暂停",
+        "windowSwitcherSecureInputTitle": "安全键盘输入期间，⌥Tab 暂时不可用",
         "windowSwitcherMouseSwitch": "用鼠标切换窗口",
-        "windowSwitcherSecureInputHint": "可以用鼠标切换窗口。macOS 解除键盘输入保护后，快捷键会自动恢复。",
+        "windowSwitcherSecureInputHint": "macOS 正在保护键盘输入，系统快捷键暂不可用。你可以重新申请 ⌥Tab，或用鼠标切换。",
+        "windowSwitcherDirectShortcutHint": "按一次 ⌥Tab 直接切换窗口。系统解除键盘输入保护后，按住 Option 连续选择会自动恢复。",
+        "windowSwitcherTapUnavailableHint": "按一次 ⌥Tab 仍可切换窗口。重新检测键盘监听，可恢复按住 Option 连续选择。",
+        "windowSwitcherReclaimShortcut": "抢回快捷键",
+        "windowSwitcherShortcutConflict": "macOS 报告 %@ 已被占用。",
+        "windowSwitcherReclaimRegistered": "macOS 已为 MacPilot 注册 ⌥Tab。",
+        "windowSwitcherReclaimAwaitingPress": "请按一次 ⌥Tab，确认 MacPilot 能收到快捷键。",
+        "windowSwitcherReclaimVerified": "MacPilot 已收到 ⌥Tab。",
+        "windowSwitcherReclaimOccupied": "⌥Tab 仍被占用。解除占用后可以再试。",
+        "windowSwitcherReclaimUnavailable": "暂时无法接收 ⌥Tab。可以用鼠标切换窗口。",
         "eventTapDeniedMissingTitle": "等待辅助功能授权",
         "eventTapDeniedMissingDetail": "系统还没有允许 MacPilot 读取并改写滚轮与键盘事件。授权后功能会自动恢复，不需要重启应用。",
         "eventTapDeniedSystemTitle": "系统拒绝了事件捕获",
@@ -2518,9 +2536,18 @@ enum AppText {
             "smoothScrollingExcludedAppReverse": "Reverse direction",
             "smoothScrollingRemoveExcludedApp": "Remove excluded application",
             "eventTapRetry": "Check again",
-            "windowSwitcherSecureInputTitle": "⌥Tab paused by Secure Event Input",
+            "windowSwitcherSecureInputTitle": "⌥Tab unavailable during Secure Event Input",
             "windowSwitcherMouseSwitch": "Switch Windows with Mouse",
-            "windowSwitcherSecureInputHint": "You can switch windows with the mouse. The shortcut resumes when macOS releases keyboard input protection.",
+            "windowSwitcherSecureInputHint": "macOS is protecting keyboard input and the system shortcut is unavailable. You can reclaim ⌥Tab or switch with the mouse.",
+            "windowSwitcherDirectShortcutHint": "Press ⌥Tab once to switch windows. Holding Option to browse resumes when macOS releases keyboard input protection.",
+            "windowSwitcherTapUnavailableHint": "Press ⌥Tab once to switch windows. Recheck keyboard access to restore holding Option to browse.",
+            "windowSwitcherReclaimShortcut": "Reclaim Shortcut",
+            "windowSwitcherShortcutConflict": "macOS reports that %@ is already in use.",
+            "windowSwitcherReclaimRegistered": "macOS registered ⌥Tab for MacPilot.",
+            "windowSwitcherReclaimAwaitingPress": "Press ⌥Tab once to check that MacPilot receives the shortcut.",
+            "windowSwitcherReclaimVerified": "MacPilot received ⌥Tab.",
+            "windowSwitcherReclaimOccupied": "⌥Tab is still in use. Try again when it becomes available.",
+            "windowSwitcherReclaimUnavailable": "⌥Tab is temporarily unavailable. You can switch windows with the mouse.",
             "eventTapDeniedMissingTitle": "Waiting for Accessibility access",
             "eventTapDeniedMissingDetail": "macOS has not allowed MacPilot to read and rewrite wheel and keyboard events yet. The feature resumes on its own once access is granted; no restart is needed.",
             "eventTapDeniedSystemTitle": "The system refused event taps",
@@ -2854,7 +2881,7 @@ final class MacPilotModel: ObservableObject {
     /// 用户不再需要重启应用。
     let screenPermissionWatcher = ScreenRecordingPermissionWatcher()
     let inputSources = InputSourceModel()
-    let windowSwitcher = WindowSwitcherModel()
+    let windowSwitcher: WindowSwitcherModel
     let smoothScrolling = SmoothScrollModel()
     let clipboard = ClipboardModel()
     /// Awake sessions plus the privileged closed-lid power service. The
@@ -2977,7 +3004,9 @@ final class MacPilotModel: ObservableObject {
     private let configurationStore: ConfigStore
 
     init(showsMainWindowAtLaunch: Bool = !AppLaunchContext.wasLaunchedAtLogin,
-         mainWindowOpener: MainWindowOpener? = nil) {
+         mainWindowOpener: MainWindowOpener? = nil,
+         windowSwitcher: WindowSwitcherModel = WindowSwitcherModel()) {
+        self.windowSwitcher = windowSwitcher
         isMainWindowOpen = showsMainWindowAtLaunch
         mainContent = MainWindowContentState(loadedAtLaunch: showsMainWindowAtLaunch)
         // Resolve whatever a previous version switch left behind — pending
@@ -6776,10 +6805,18 @@ struct MenuBarView: View {
         }
         if model.isFeatureEnabled(.windowSwitcher) && windowSwitcher.settings.isEnabled {
             Divider()
-            if windowSwitcher.isSecureInputActive {
+            let shortcutBlocked = windowSwitcher.isShortcutBlockedBySecureInput
+            if shortcutBlocked {
                 Text(model.t("windowSwitcherSecureInputTitle"))
             }
-            Button(model.t(windowSwitcher.isSecureInputActive ? "windowSwitcherMouseSwitch" : "windowSwitcherTestNow")) {
+            if shortcutBlocked || !windowSwitcher.shortcutRegistration.conflicts.isEmpty {
+                Button(model.t("windowSwitcherReclaimShortcut")) {
+                    deferCaptureAction { windowSwitcher.reclaimShortcut() }
+                    model.requestSection(.windowSwitcher)
+                    showMainWindow()
+                }
+            }
+            Button(model.t(shortcutBlocked ? "windowSwitcherMouseSwitch" : "windowSwitcherTestNow")) {
                 deferCaptureAction { windowSwitcher.showSwitcherNow() }
             }
             .disabled(!windowSwitcher.hasAccessibilityPermission)

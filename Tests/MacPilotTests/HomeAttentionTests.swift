@@ -52,7 +52,7 @@ struct HomeAttentionTests {
             for protected in [false, true] {
                 let issues = HomeAttentionIssue.active(
                     assertionFailure: nil, closedLidFailure: nil,
-                    windowSwitcherEnabled: enabled, secureInputActive: protected
+                    windowSwitcherEnabled: enabled, shortcutBlockedBySecureInput: protected
                 )
                 let expected = enabled && protected
                 #expect(issues.contains(.windowSwitcherSecureInput) == expected)
@@ -63,7 +63,7 @@ struct HomeAttentionTests {
         let retirement = ClosedLidSleepFailure.requestFailed("diagnostic").duringRetirement()
         let combined = HomeAttentionIssue.active(
             assertionFailure: .init(kind: .systemSleep, operation: "create", code: "code"),
-            closedLidFailure: retirement, windowSwitcherEnabled: true, secureInputActive: true
+            closedLidFailure: retirement, windowSwitcherEnabled: true, shortcutBlockedBySecureInput: true
         )
         #expect(combined.count == 3)
         #expect(combined.contains(.closedLid(retirement)))
@@ -74,7 +74,8 @@ struct HomeAttentionTests {
 
     @Test func secureInputCopyAndMouseActionAreLocalized() {
         let issue = HomeAttentionIssue.windowSwitcherSecureInput
-        for key in [issue.titleKey, issue.detailKey, "windowSwitcherMouseSwitch"] {
+        for key in [issue.titleKey, issue.detailKey, "windowSwitcherMouseSwitch",
+                    "windowSwitcherDirectShortcutHint", "windowSwitcherTapUnavailableHint"] {
             let chinese = AppText.value(key, language: .simplifiedChinese)
             let english = AppText.value(key, language: .english)
             #expect(chinese != key)
@@ -83,6 +84,19 @@ struct HomeAttentionTests {
         }
         #expect(issue.detailArguments.isEmpty)
         #expect(issue.diagnosticMessage == nil)
+    }
+
+    @Test func shortcutRecoveryExplainsEveryOutcomeInBothLanguages() {
+        let outcomes: [WindowSwitcherShortcutReclaimStatus] = [
+            .registered, .awaitingPress, .verified, .occupied, .unavailable
+        ]
+        for key in outcomes.map(\.rawValue) + ["windowSwitcherReclaimShortcut", "windowSwitcherShortcutConflict"] {
+            let chinese = AppText.value(key, language: .simplifiedChinese, arguments: ["⌥Tab"])
+            let english = AppText.value(key, language: .english, arguments: ["⌥Tab"])
+            #expect(chinese != key)
+            #expect(english != key)
+            #expect(chinese != english)
+        }
     }
 
     @Test func systemAndDisplayAssertionFailuresGetTheirOwnRows() {

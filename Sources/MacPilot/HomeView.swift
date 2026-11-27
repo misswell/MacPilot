@@ -106,11 +106,17 @@ struct HomeView: View {
     @ViewBuilder
     private func attentionAction(_ issue: HomeAttentionIssue) -> some View {
         if case .windowSwitcherSecureInput = issue {
-            Button(model.t("windowSwitcherMouseSwitch")) {
-                windowSwitcher.showSwitcherNow()
+            VStack(alignment: .trailing, spacing: 6) {
+                Button(model.t("windowSwitcherReclaimShortcut")) {
+                    windowSwitcher.reclaimShortcut()
+                    model.requestSection(.windowSwitcher)
+                }
+                Button(model.t("windowSwitcherMouseSwitch")) {
+                    windowSwitcher.showSwitcherNow()
+                }
+                .disabled(!windowSwitcher.hasAccessibilityPermission)
             }
             .controlSize(.small)
-            .disabled(!windowSwitcher.hasAccessibilityPermission)
         } else if model.isSectionAvailable(.awake) {
             Button(model.t("homeNeedsAttentionOpenAwake")) {
                 model.requestSection(.awake)

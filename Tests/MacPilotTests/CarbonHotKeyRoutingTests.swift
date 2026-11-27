@@ -5,6 +5,60 @@ import Testing
 @Suite(.serialized)
 struct CarbonHotKeyRoutingTests {
     @Test @MainActor
+    func windowSwitcherRoutesOwnDirectionsAndPassesForeignEvents() throws {
+        var received: [WindowSwitcherShortcutDirection] = []
+        let context = WindowSwitcherHotKeyContext { received.append($0) }
+        context.activeDirections = Set(WindowSwitcherShortcutDirection.allCases)
+        let pointer = Unmanaged.passUnretained(context).toOpaque()
+
+        let downstream = DownstreamHotKeyProbe()
+        var downstreamHandler: EventHandlerRef?
+        var eventType = hotKeyEventType
+        try #require(InstallEventHandler(GetApplicationEventTarget(), downstreamScreenshotHotKeyHandler, 1, &eventType, Unmanaged.passUnretained(downstream).toOpaque(), &downstreamHandler) == noErr)
+        let installedDownstream = try #require(downstreamHandler)
+        defer { RemoveEventHandler(installedDownstream) }
+
+        var handler: EventHandlerRef?
+        try #require(InstallEventHandler(GetApplicationEventTarget(), windowSwitcherHotKeyEventHandler, 1, &eventType, pointer, &handler) == noErr)
+        let installed = try #require(handler)
+        defer { RemoveEventHandler(installed) }
+
+        for direction in WindowSwitcherShortcutDirection.allCases {
+            let event = try makeHotKeyEvent(signature: WindowSwitcherHotKeys.signature, identifier: direction.rawValue)
+            defer { ReleaseEvent(event) }
+            #expect(SendEventToEventTarget(event, GetApplicationEventTarget()) == noErr)
+        }
+        #expect(received == [.forward, .reverse])
+        #expect(!downstream.didReceiveEvent)
+
+        for (signature, id) in [(OSType(0x4D504341), UInt32(1)), (WindowSwitcherHotKeys.signature, UInt32(99))] {
+            let event = try makeHotKeyEvent(signature: signature, identifier: id)
+            defer { ReleaseEvent(event) }
+            downstream.didReceiveEvent = false
+            #expect(SendEventToEventTarget(event, GetApplicationEventTarget()) == noErr)
+            #expect(downstream.didReceiveEvent)
+        }
+        #expect(received == [.forward, .reverse])
+
+        var otherKind: EventRef?
+        try #require(CreateEvent(nil, OSType(kEventClassKeyboard), UInt32(kEventHotKeyReleased), 0, 0, &otherKind) == noErr)
+        let released = try #require(otherKind)
+        defer { ReleaseEvent(released) }
+        #expect(windowSwitcherHotKeyEventHandler(nil, released, pointer) == OSStatus(eventNotHandledErr))
+        var otherClass: EventRef?
+        try #require(CreateEvent(nil, OSType(kEventClassMouse), UInt32(kEventHotKeyPressed), 0, 0, &otherClass) == noErr)
+        let mouse = try #require(otherClass)
+        defer { ReleaseEvent(mouse) }
+        #expect(windowSwitcherHotKeyEventHandler(nil, mouse, pointer) == OSStatus(eventNotHandledErr))
+
+        context.onPress = nil
+        let stopped = try makeHotKeyEvent(signature: WindowSwitcherHotKeys.signature, identifier: 1)
+        defer { ReleaseEvent(stopped) }
+        #expect(windowSwitcherHotKeyEventHandler(nil, stopped, pointer) == OSStatus(eventNotHandledErr))
+        #expect(received == [.forward, .reverse])
+    }
+
+    @Test @MainActor
     func screenshotHotKeyPassesThroughClipboardHandler() throws {
         let event = try makeHotKeyEvent(
             signature: OSType(0x4D504341), // "MPCA"

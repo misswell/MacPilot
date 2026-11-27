@@ -23,12 +23,12 @@ enum HomeAttentionIssue: Equatable, Identifiable, Sendable {
         assertionFailure: AwakeAssertionFailure?,
         closedLidFailure: ClosedLidSleepFailure?,
         windowSwitcherEnabled: Bool = false,
-        secureInputActive: Bool = false
+        shortcutBlockedBySecureInput: Bool = false
     ) -> [HomeAttentionIssue] {
         var issues: [HomeAttentionIssue] = []
         if let assertionFailure { issues.append(.assertion(assertionFailure)) }
         if let closedLidFailure { issues.append(.closedLid(closedLidFailure)) }
-        if windowSwitcherEnabled && secureInputActive { issues.append(.windowSwitcherSecureInput) }
+        if windowSwitcherEnabled && shortcutBlockedBySecureInput { issues.append(.windowSwitcherSecureInput) }
         return issues
     }
 
@@ -109,7 +109,7 @@ extension MacPilotModel {
             assertionFailure: awake.lastAssertionFailure,
             closedLidFailure: awake.lastClosedLidFailure,
             windowSwitcherEnabled: isFeatureEnabled(.windowSwitcher) && windowSwitcher.settings.isEnabled,
-            secureInputActive: windowSwitcher.isSecureInputActive
+            shortcutBlockedBySecureInput: windowSwitcher.isShortcutBlockedBySecureInput
         )
     }
 }

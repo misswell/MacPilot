@@ -385,6 +385,7 @@
           "risk_level": "high",
           "affected_paths": [
             "Sources/MacPilot/WindowSwitcher.swift",
+            "Sources/MacPilot/WindowSwitcherHotKeys.swift",
             "Sources/MacPilot/MacPilotApp.swift",
             "Sources/MacPilot/HomeAttention.swift",
             "Sources/MacPilot/HomeView.swift"
@@ -393,18 +394,24 @@
             "窗口切换启用期间，每次监听健康检查都要采样安全键盘输入，包含监听仍启用和前台应用未切换的情况。功能停止后清除状态。",
             "保护开始时取消中断的快捷键会话。鼠标选择继续使用同一窗口清单和置前流程。保护结束后按键恢复时清除暂停提示。",
             "原生菜单每次打开时采样状态，鼠标动作在菜单跟踪结束后打开面板。首页与图标共享告警列表。",
-            "使用系统公开状态 API，保留系统键盘保护。只为状态变化记录发布版诊断日志。"
+            "使用系统公开状态 API，保留系统键盘保护。只为状态变化记录发布版诊断日志。",
+            "由系统注册 ⌥Tab 与 ⇧⌥Tab。安全输入或监听不可用时，每个已注册动作直接选择一次。监听可用时保留按住 Option 浏览与释放提交。",
+            "同一按键由一条输入路径处理。仅在保护导致 ⌥Tab 没有可用通路时显示暂停警告。停止功能时注销两个系统快捷键。",
+            "用户选择抢回快捷键时重新申请缺失的系统注册，并将新监听插到队首。替换失败保留仍在工作的监听。其他进程仍占用时按系统结果反馈，由实际接收 ⌥Tab 确认监听路径。"
           ],
           "test_filters": [
             "WindowSwitcherFirstPressTests",
             "WindowSwitcherTests",
+            "CarbonHotKeyRoutingTests",
             "HomeAttentionTests",
             "MenuBarOwnedMenuTests",
             "MenuBarMenuSessionTests"
           ],
           "extra_test_commands": [],
           "manual_checks": [
-            "在同一前台应用进入和离开测试密码输入框，确认暂停提示随系统状态更新。安全输入期间从原生菜单用鼠标选择窗口，解除保护后第一轮 ⌥Tab 可用。"
+            "在同一前台应用进入和离开测试密码输入框，确认暂停提示随系统状态更新。安全输入期间从原生菜单用鼠标选择窗口，解除保护后第一轮 ⌥Tab 可用。",
+            "隔离桌面验证保护期间的 ⌥Tab/⇧⌥Tab 各切换一次及解除后的按住 Option 连续浏览。",
+            "由测试应用占用组合键，在设置页点击抢回。检查系统仍占用时的反馈，解除占用后再次抢回并确认收到实际按键。"
           ],
           "evidence_commits": [
             { "sha": "ff77174", "date": "2026-11-03", "subject": "name secure event input when the switcher sees no keys" }

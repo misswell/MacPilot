@@ -11,7 +11,7 @@
 - **登录启动只显示菜单栏图标。** `AppPresencePolicy.showsDockIcon` 的 `isDockIconDeferred` 在登录启动期间强制隐藏 Dock 图标，即使用户的两个入口都开着：SwiftUI 在登录启动时会自己建出主窗口并短暂成为 key/main，那不是用户要的窗口，`AppPresenceController.mainWindowVisibilityChanged(true)` 因此不能把它变成 `.regular`。只有 `MainWindowOpener.requestOpen`（菜单栏、Dock 点击、深链、Finder 重开）通过 `onUserRequest` 通告真实请求后才解除推迟，此后 Dock 图标照常跟随窗口。Dock-only 配置不受影响——那里图标是唯一入口，登录启动也必须显示。不要把这条规则实现成 `orderOut` 里隐藏 Dock 图标。
 - **`willClose` 是唯一的关闭信号。** 登录启动路径 `hideRegularWindows` 里的 `orderOut` 不得隐藏 Dock 图标：隐藏的窗口不是关闭的窗口（登录启动不出现 Dock 图标来自上面的 `isDockIconDeferred`，与 `orderOut` 无关）。
 - **status item 必须永远留下 item。** `MenuBarDisplayController.scheduleReinsert` 移除 item、等待、重装；离开那个移除窗口的每个出口——包括取消的睡眠——都必须恢复它，否则 `reinserting` 置位却无 item 无 task，图标消失直到重启（v1.2.2-beta.59 native-menu 改造后的实测事故）。`scheduleReinsert` 在下一轮前同步恢复；`selfHeal()`（由 `startWatchdog` 驱动）兜底。
-- **状态 item 能显示的每条警告都必须在首页点名。** 三角形和 `HomeView` 读取同一个 `MacPilotModel.homeAttentionIssues` 列表。Awake 关闭后的清理失败仍显示，使用 `ClosedLidSleepFailure.stage == .retirement` 的文案。窗口切换启用且系统保护键盘时，显示 ⌥Tab 暂停和鼠标切换入口。`HomeAttentionTests` 钉住图标/列表一致性与中英文案。
+- **状态 item 能显示的每条警告都必须在首页点名。** 三角形和 `HomeView` 读取同一个 `MacPilotModel.homeAttentionIssues` 列表。Awake 关闭后的清理失败仍显示，使用 `ClosedLidSleepFailure.stage == .retirement` 的文案。窗口切换启用、系统保护键盘且 ⌥Tab 系统注册失败时，显示快捷键暂停和鼠标切换入口。`HomeAttentionTests` 钉住图标/列表一致性与中英文案。
 
 ### 菜单定位与动作分发
 
